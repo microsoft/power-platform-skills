@@ -23,6 +23,9 @@ Load the matching reference only when the active operation needs it.
 - No browser runtime verification, React Native Web setup, route crawling, or Metro/localhost
   HTTP probes. Requested runtime diagnosis uses `/debug-app` with captured Metro terminal output.
   Static intent/source-preview checks are allowed, but are not native runtime verification.
+- HTML preview delivery stops after generation, static checks and opening/linking for the user.
+  Do not automatically run post-preview browser tests, capture screenshots or collect review
+  evidence. Browser testing requires a separate explicit user request; absence is not a gate.
 - Keep scratch files inside the project, never in system temporary directories. No tokens,
   secrets, or current-user identity in plan, memory bank, telemetry or committed configuration.
 

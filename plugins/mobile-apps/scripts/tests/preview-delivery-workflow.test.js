@@ -9,7 +9,6 @@ const root = path.resolve(__dirname, '../..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const preview = read('skills/preview-screens/SKILL.md');
 const intent = read('skills/preview-screens/references/intent-authoring.md');
-const review = read('shared/references/rendered-preview-review.md');
 
 test('preview selection demonstrates the primary work without a fixed screen or domain template', () => {
   const spec = read('shared/references/screen-planning/spec-contract.md');
@@ -46,66 +45,68 @@ test('simulation UI is outside app frames without pretending native controls exe
   assert.match(preview, /outside `data-preview-screen-id` frames/);
   assert.match(preview, /normal app controls must not pretend to execute native success/);
   assert.match(preview, /Native-only — not executed in browser/);
-  assert.match(review, /preview-only scenario controls and explanations outside the app composition/);
   assert.match(read('skills/create-mobile-app/references/phase-09-build.md'),
     /Keep preview-only scenario controls out of native UI/);
 });
 
-test('a failed browser adapter triggers independent discovery rather than repeated profile retries', () => {
-  assert.match(review, /tools actually advertised by the host/);
-  assert.match(review, /shared\/integrated\s+browser page, then another independent available browser adapter/);
-  assert.match(review, /One failed adapter does not mean all browser tools are unavailable/);
-  assert.match(review, /Calling `tabs` after\s+`navigate` on the same locked adapter is not an independent fallback/);
-  assert.match(review, /Never terminate the user's browser, delete profile locks/);
-  assert.match(review, /bypass a tool's access restriction/);
-  assert.match(review, /Respect browser\s+opt-out/);
-  assert.match(preview, /If all independent available browser paths fail/);
-  assert.match(preview, /File opening\s+is not rendered verification/);
+test('ordinary preview delivery opens or links without launching browser tests', () => {
+  assert.match(preview, /## 6 — Open and report/);
+  assert.match(preview, /Honor `visual_companion: no` and legacy `skip`/);
+  assert.match(preview, /open or reload the preview for the user/);
+  assert.match(preview, /If page opening fails, use the OS opener/);
+  assert.match(preview, /Stop after delivery/);
+  assert.match(preview, /Do not automatically run Playwright\/browser interactions, screenshot\s+capture/);
+  assert.match(preview, /Browser testing runs only when the user explicitly requests it as a separate task/);
+  assert.match(preview, /absence of browser testing is not a failure or concern gate/);
+  assert.match(preview, /do not imply automatic testing happened/);
 });
 
-test('rendered review uses current screenshots and interactions, a bounded repair and no beauty score', () => {
-  assert.match(review, /Capture and inspect screenshots of every required frame/);
-  assert.match(review, /after internal\s+scrolling where needed/);
-  assert.match(review, /normal pointer\s+and keyboard actions/);
-  assert.match(review, /No forced\s+click or direct handler injection/);
-  assert.match(review, /one focused repair pass/);
-  assert.match(review, /old observations must not be silently restamped/);
-  assert.match(review, /not a new design\/data authority or a\s+beauty score/);
-  assert.match(review, /cannot independently authenticate them or judge the image contents/);
-  assert.match(review, /`complete` means the declared current review coverage is complete/);
+test('static authoring review keeps design and correctness without screenshot evidence requirements', () => {
+  assert.match(intent, /## Authoring review/);
+  assert.match(intent, /source checks, not browser observations/);
+  assert.match(intent, /Do not automatically run interactions/);
+  assert.match(intent, /absence\s+of browser testing does not block completion/);
+  assert.match(intent, /Static checks cannot establish effective rendered hit areas/);
+  assert.match(preview, /Static checks before handoff/);
+  assert.match(preview, /preview-provenance\.js/);
+  assert.match(preview, /--require-source/);
 });
 
-test('review evidence gate is wired through design, preview, create, edit and native handoff', () => {
+test('removed review gate has no remaining workflow dependencies', () => {
+  for (const file of [
+    'scripts/validate-preview-review.js',
+    'scripts/tests/validate-preview-review.test.js',
+    'shared/references/rendered-preview-review.md',
+  ]) assert.equal(fs.existsSync(path.join(root, file)), false, `${file} must be removed`);
   for (const file of [
     'skills/preview-screens/SKILL.md',
     'skills/preview-screens/references/intent-authoring.md',
     'skills/design-system/SKILL.md',
     'skills/create-mobile-app/references/phase-04-design.md',
+    'skills/create-mobile-app/references/phase-09-build.md',
     'skills/edit-app/SKILL.md',
+    'skills/design-system/references/refresh-flow.md',
     'shared/references/native-visual-review.md',
-  ]) assert.ok(read(file).includes('rendered-preview-review.md'), `${file} must execute the shared review`);
-  for (const flag of ['--fingerprint', '--review', '--mode', '--screen-id', '--viewport', '--theme', '--require-source']) {
-    assert.ok(review.includes(flag), `missing executable review input: ${flag}`);
+    'shared/memory-bank.md',
+    'AGENTS.md',
+    'README.md',
+  ]) {
+    assert.doesNotMatch(read(file),
+      /rendered-preview-review\.md|validate-preview-review\.js|\breview_path\b|\breview_status\b|intent-preview-review\.json|implementation-preview-review\.json/,
+      `${file} still depends on the removed gate`);
   }
-  for (const file of ['skills/design-system/SKILL.md', 'skills/preview-screens/SKILL.md', 'skills/edit-app/SKILL.md']) {
-    assert.ok(read(file).includes('review_path'), `${file} must return review evidence`);
-    assert.ok(read(file).includes('review_status'), `${file} must preserve review status`);
-  }
-  assert.match(read('skills/create-mobile-app/references/phase-09-build.md'), /validate-preview-review\.js/);
-  assert.match(review, /DONE_WITH_CONCERNS: visual review incomplete/);
-  assert.match(review, /remaining required failure returns `BLOCKED`/);
-  assert.match(review, /explicit decision to proceed with that\s+unverified scope, but cannot relabel it verified/);
 });
 
-test('evidence example starts unverified rather than pre-approving unobserved screenshots', () => {
-  const block = review.match(/```json\n([\s\S]*?)\n```/);
-  assert.ok(block);
-  const record = JSON.parse(block[1]);
-  assert.equal(record.version, 1);
-  assert.equal(record.observations[0].status, 'unverified');
-  assert.deepEqual(record.observations[0].screenshots, []);
-  assert.equal(record.observations[0].interaction, '');
-  assert.match(review, /Never prefill successful observations/);
+test('source validation and foreground approval remain separate from optional browser testing', () => {
+  const design = read('skills/design-system/SKILL.md');
+  assert.match(design, /`DONE` requires both brand files, the intent preview and required static\/changed-file checks/);
+  assert.match(design, /Only foreground approves through an actual available host question tool/);
+  assert.match(design, /No browser testing is required/);
+  assert.match(read('shared/shared-instructions.md'), /Browser testing requires a separate explicit user request/);
+  const build = read('skills/create-mobile-app/references/phase-09-build.md');
+  for (const gate of ['npx tsc --noEmit', 'check-routes.js', 'validate-mobile-files.js']) {
+    assert.ok(build.includes(gate), `removal must preserve ${gate}`);
+  }
 });
 
 test('benchmarks preserve first-pass results without copying reference style into generation', () => {
@@ -117,9 +118,9 @@ test('benchmarks preserve first-pass results without copying reference style int
   assert.match(evaluation, /Do not require\s+the benchmark's brand color, domain fields, navigation or card layout/);
 });
 
-test('new rendered review reference resolves its local Markdown links', () => {
+test('remaining preview and evaluation references resolve their local Markdown links', () => {
   const files = [
-    'shared/references/rendered-preview-review.md',
+    'shared/references/native-visual-review.md',
     'shared/references/ux-generation-evaluation.md',
     'skills/preview-screens/references/intent-authoring.md',
   ];
@@ -147,27 +148,18 @@ test('entry quality is task-led rather than a domain layout or fuller fixture', 
 
 test('preview fidelity includes distinct records, compound filters and reset after edits', () => {
   assert.match(intent, /Keep one local scenario state/);
-  assert.match(intent, /Test two distinct records/);
+  assert.match(intent, /Model two distinct records/);
   assert.match(intent, /read-only\/completed variant/);
   assert.match(intent, /not only show a\s+"saved" message/);
   assert.match(intent, /recheck its source in every scope/);
-  assert.match(intent, /Exercise compound filters/);
+  assert.match(intent, /Include compound filters/);
   assert.match(intent, /reset after edits/);
-  assert.match(intent, /"Control visible" or "still available" is not evidence/);
+  assert.match(intent, /Handler presence is not evidence/);
 });
 
-test('review calibrates real captures and binds each observation instead of bulk-restamping', () => {
-  assert.match(review, /First capture one complete frame/);
-  assert.match(review, /Open saved files as well as tool-returned images/);
-  assert.match(review, /Measure the usable app frame separately/);
-  assert.match(review, /or alter DOM\/CSS\/theme state/);
-  assert.match(review, /Each inspected observation records its own\s+`previewSha256`/);
-  assert.match(review, /measured `renderedViewport`/);
-  assert.match(review, /"sha256": "<hash of inspected image bytes>"/);
-  assert.match(review, /changing the top-level hash cannot refresh\s+old observations/);
-  assert.match(review, /Do not copy one\s+case's successful checks into untested viewport\/theme cases/);
-  assert.match(review, /Collect findings across the selected screens before editing/);
-  assert.match(review, /Freeze candidate source\/HTML bytes before the final\s+review matrix/);
-  assert.match(review, /Report evidence coverage, observed usability and user acceptance separately/);
-  assert.match(preview, /Check computed colors on the element that owns the theme/);
+test('manual evaluations do not reactivate automatic post-preview testing', () => {
+  const evaluation = read('shared/references/ux-generation-evaluation.md');
+  assert.match(evaluation, /runs only when a maintainer explicitly requests it/);
+  assert.match(evaluation, /Ordinary HTML preview delivery does not trigger browser tests/);
+  assert.match(preview, /Check theme selector ownership and inheritance in the stylesheet/);
 });

@@ -32,7 +32,7 @@ Never copy `_design_preview.html` to `preview.html` or present stale intent as i
 
 **Implementation:** discover visible `app/**/*.tsx`, excluding `_layout.tsx`, `+not-found.tsx`, dot directories, OAuth callbacks, and auth-only redirects. Read layouts separately for navigation/theme context. Match screen IDs/routes to the plan where present, but actual source determines what exists. Preserve all discovered screens by default; an explicit requested journey/screen subset may narrow scope. Order by primary journey entry and action sequence, not home-plus-two-details.
 
-For post-build/edit quality review, use complete affected screens under [native presentation handoff](../../shared/references/native-visual-review.md). A component-only request is allowed but cannot satisfy the full-screen gate; report that scope as unverified.
+For post-build/edit source fidelity review, use complete affected screens under [native presentation handoff](../../shared/references/native-visual-review.md). A component-only request stays component-scoped; do not claim it covers full screens.
 
 Keep preview navigation controls distinct from app navigation. Use valid stable IDs, human-readable labels, and an entry screen that makes the task obvious. Include every intermediate destination necessary for the selected journey (or explicitly label out-of-scope destinations); never leave a required action as a dead button.
 
@@ -55,7 +55,7 @@ Do not execute arbitrary imported config, application services, auth code, or bu
 
 **Telemetry checkpoint: `render_screen_preview_frames`**
 
-**Intent:** choose composition from the approved purpose and per-screen decisions. Layout delta (or standalone brand Components) supplies provisional visual intent until visual approval, not a frozen layout. Follow the [rendered experience review](references/intent-authoring.md#rendered-experience-review) before handoff. Hierarchy, layout, media, and density may differ where the tasks differ. Token constraints do not mandate identical cards or a fixed template.
+**Intent:** choose composition from the approved purpose and per-screen decisions. Layout delta (or standalone brand Components) supplies provisional visual intent until visual approval, not a frozen layout. Follow the [authoring review](references/intent-authoring.md#authoring-review) before handoff. Hierarchy, layout, media, and density may differ where the tasks differ. Token constraints do not mandate identical cards or a fixed template.
 
 **Implementation:** read the full selected screen TSX and its referenced local UI components/hooks as needed to understand rendered branches, navigation targets, action availability, and state feedback. Convert the actual JSX/Tamagui tree, dimensions, styles, and typography to HTML. Preserve source shortcomings and report them; the preview does not fix source.
 
@@ -67,7 +67,7 @@ For either mode:
 4. Native-only controls retain the intended product affordance and a truthful `Native-only — not executed in browser` indication. Put simulation controls such as "Use illustrative GPS state", upload toggles and test explanations in separate preview chrome, outside `data-preview-screen-id` frames. Scenario controls select realistic captured/ready/error states; normal app controls must not pretend to execute native success.
 5. Preserve meaningful media proportions and crop using local illustrative assets or verified, appropriately licensed public HTTPS image URLs, including CDNs, under the media-source policy. Provide accessible alternatives and loading/error fallbacks; local downloads are not mandatory. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
 6. Use semantic buttons/links/inputs, associated labels, keyboard operation, visible focus, text plus color for status, and contrast-tested pairs. Allow scrolling/reflow, text zoom, and reduced motion. Avoid double safe-area padding.
-7. Keep unchanged screen/input/image nodes mounted. Selected-tab taps are no-ops; update only affected rows/counts/dialog state and preserve focus/scroll. Verify filter-empty recovery and return navigation without flicker or restarting every image request. Use the optional [stable local updates](../../shared/references/tamagui-html-mapping.md#stable-local-updates) pattern without adding a renderer framework.
+7. Keep unchanged screen/input/image nodes mounted. Selected-tab taps are no-ops; update only affected rows/counts/dialog state and preserve focus/scroll. Author filter-empty recovery and return navigation without restarting every image request. Use the optional [stable local updates](../../shared/references/tamagui-html-mapping.md#stable-local-updates) pattern without adding a renderer framework.
 
 **Device geometry:** when given a device reference, match its width and height (measure the device,
 not the surrounding screenshot) and identify the usable app area inside it. If dimensions are
@@ -78,10 +78,11 @@ separately from decorative bezels, system/app chrome and the scrolling viewport.
 at the same usable width; disclose reference estimates rather than silently widening the app.
 Do not stretch frames with grid columns or shorten them using
 browser `vh` to fit above the fold. Scroll content inside the device; keep app chrome consistent.
-If the review canvas cannot fit the devices, wrap or use a switcher. Test narrow reflow separately
-at 320px without claiming it is the original device size. Report measured frame/content dimensions.
+If the review canvas cannot fit the devices, wrap or use a switcher. Support narrow reflow
+at 320px without claiming it is the original device size. Report configured dimensions, not
+measured geometry unless measurements were actually requested and performed.
 
-No live service calls, browser-script storage writes, credentials, CDN scripts, analytics, remote font dependencies, or handlers pretending to save/upload to the tenant. Review tools may write only the selected HTML and project-local screenshot/review evidence. Declared verified HTTPS image requests are allowed; disclose their network dependency. Local simulation is not an app test.
+No live service calls, browser-script storage writes, credentials, CDN scripts, analytics, remote font dependencies, or handlers pretending to save/upload to the tenant. Write only the selected HTML. Declared verified HTTPS image requests are allowed; disclose their network dependency. Local simulation is not an app test.
 
 ## 5 — Assemble and check
 
@@ -103,13 +104,13 @@ selected screen and its consumed local UI/theme/font inputs. Repeat `--require-s
 exact files. A missing required source returns `mismatch` even when recorded hashes are fresh;
 the check is read-only and never grants visual approval or proves dependency completeness.
 
-**Hard checks before handoff:**
+**Static checks before handoff:**
 
 - Safety: external content escaped for its output context; no executable imported content, secrets, unexpected network calls, or production mutations.
-  Compare observed requests with declared image sources/validated redirects; remote image media
-  is allowed, remote executable scripts are not. Verify image errors preserve layout and usable data.
+  Check declared image sources and error/fallback handlers; remote image media is allowed,
+  remote executable scripts are not. Static review does not observe actual network traffic.
 - Links: unique screen/control IDs; every internal navigation target exists; external links are safe and intentional; no broken required journey destinations.
-- Required actions: primary journey can reach its completion and relevant recovery/reset; implementation gaps are visible, not fabricated.
+- Required actions: inspect handlers and destinations for primary completion and recovery/reset; implementation gaps are visible, not fabricated. Do not report these paths as browser-tested.
 - Domain behavior: the illustrative transition follows the approved actor/preconditions and
   updates only intended state/records. Preserve independent states and any explicitly approved coupling.
 - First use: top-level entries open the planned task surface or justified singleton;
@@ -117,42 +118,34 @@ the check is read-only and never grants visual approval or proves dependency com
   useful return path. Include scanning only when approved. Do not auto-switch explicit filters.
 - Accessibility: controls have names/labels, keyboard/focus behavior, usable targets, readable contrast, non-color status cues, and no clipped essential content.
 - Token coherence: all CSS variable references resolve in every offered theme; compare representative surface/text/accent and typography values against actual resolved inputs.
-  Check computed colors on the element that owns the theme, not just variable declarations;
+  Check theme selector ownership and inheritance in the stylesheet;
   inherited text/background can retain the old theme when overrides live on a descendant.
-- Experience evidence (intent): compare rendered context, hierarchy, decision/read evidence,
+- Experience intent: compare authored context, hierarchy, decision/read evidence,
   media proportions, action placement, usable first viewport and initial-state consistency
   against approved task requirements and the current visual-intent proposal, not a frozen
   early layout suggestion.
-  Use the linked review's bounded repair and unavailable-tool rules; do not certify this from
-  HTML structure or successful handlers alone.
+  Repair source-level inconsistencies without claiming rendered or native verification.
 
 Composition variety, resemblance to a named style, accent ratios, card counts, and screenshot similarity are **advisory**, not blocking tests. Check whether choices serve the task; do not enforce decorative sameness or diversity.
 
-## 6 — Open, exercise, report
+## 6 — Open and report
 
 **Telemetry checkpoint: `open_screen_preview`**
 
-Honor `visual_companion: no` and legacy `skip` even on standalone invocation: print the file link without auto-opening. Otherwise use available browser tools first: reuse an existing page, open the preview, inspect the accessibility snapshot, exercise every scope/filter binding, top-level entry/filter-empty recovery, exact-record lookup and primary actions/back/reset, toggle resolved themes, compare the wide three-screen canvas, and check 320px reflow. Screenshots supplement these checks; they do not replace interaction.
-Follow [rendered preview review](../../shared/references/rendered-preview-review.md) for browser
-adapter fallback and the preview-bound evidence gate. A locked profile or one unavailable
-adapter is not proof that all browser tools are unavailable. Record actual independent attempts.
-Reload the page from disk after regeneration and check provenance before taking screenshots. For implementation, review the full selected screens against current source and accepted design using the native handoff reference; isolated icons are not evidence for their surrounding screens.
-Do not mistake your own scripted interactions for spontaneous app flicker. Announce tests that change a shared inspection tab, or use a separate clearly labeled verification tab; preserve the user's inspection state.
-For intent, inspect an actual screenshot of every selected screen's initial state, its internal
-scrolling and bottom actions, at the target device size, at 320px reflow, and in every offered
-theme. Normal click/keyboard actions must work: forced clicks or injected handler calls are not
-evidence of reachability. Respect opt-out; unavailable screenshots are unverified, not passed.
+Honor `visual_companion: no` and legacy `skip`: print the file link without auto-opening.
+Otherwise open or reload the preview for the user, reusing a suitable page when available.
+If page opening fails, use the OS opener (`open`, `xdg-open`, or PowerShell `Start-Process`)
+with safely quoted paths, or provide the file link. Do not install browsers or alter profile locks.
 
-If all independent available browser paths fail or opening is declined, use the OS opener
-(`open`, `xdg-open`, or PowerShell `Start-Process`) with safely quoted paths, or print the link.
-Do not install a browser/testing framework, kill browsers or delete profile locks. File opening
-is not rendered verification: report the precise missing cases as visual review incomplete.
-State that browser interaction was not verified when only file/static checks were possible.
+Stop after delivery. Do not automatically run Playwright/browser interactions, screenshot
+capture, viewport/theme matrices, browser-adapter discovery loops or review-evidence collection.
+Browser testing runs only when the user explicitly requests it as a separate task; opening
+the HTML or requesting a preview alone is not that request. No screenshot or review record
+is required for completion, and absence of browser testing is not a failure or concern gate.
 
-Return output path, mode, selected screens/scenario, checks actually run, and known gaps. For intent include the compact per-screen review evidence and any repairs; missing visual evidence returns `DONE_WITH_CONCERNS`, not a claimed visual pass. For implementation report source shortcomings rather than improving the preview to hide them. Say “source-derived implementation approximation” after build, never “native app verified.”
-Full-screen visual handoffs also return `review_path`, `review_status` and the result of
-`validate-preview-review.js`; only `complete` establishes declared review coverage. Report
-that separately from observed usability findings and user acceptance; do not translate a
-coverage count into "all UX checks passed."
+Return output path, mode, selected screens/scenario, static checks actually run and known source
+gaps. State that browser interaction was not verified; do not imply automatic testing happened.
+For implementation report source shortcomings rather than improving the preview to hide them.
+Say “source-derived implementation approximation” after build, never “native app verified.”
 
 Source is read-only: do not modify TSX, services, configs, plan, or memory bank from this skill. The caller persists selection/approval. Re-running replaces only that mode's HTML; generating intent never overwrites implementation and vice versa.

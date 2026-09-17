@@ -32,7 +32,7 @@ screen_spec: <this screen's approved compact spec, when available inline>
 service_signatures: <only actual generated methods/types this screen consumes>
 token_context: <relevant brand/token roles and negatives>
 journey_context: <relevant Primary journeys row and action/outcome/recovery>
-design_reference: <accepted preview path + relevant screen/state + observed review row, or explicit no-design/unverified status>
+design_reference: <accepted preview path + relevant screen/state + approved spec, or explicit no-design/no-preview status>
 component_interfaces: <actual shared paths/exports + typed props/state contracts consumed by this screen>
 data_coverage: <resolved supporting fields/derivations/operations for this screen's required facts and actions>
 Scope: assigned screen only; shared/layout changes return NEEDS_CONTEXT to foreground.
@@ -147,14 +147,18 @@ Use `/preview-screens --mode implementation` for complete affected screens and t
 journey, not only a component gallery. It reads built TSX/config/local components and writes
 `preview.html`; do not substitute `_design_preview.html` or improve the HTML to hide source drift.
 Record/check its source provenance and inspect typography, media resolution, repeated-item
-alignment, header/Back, tabs/footer and primary action placement at matching usable viewports.
+alignment, header/Back, tabs/footer and primary action placement in the implemented source
+against the accepted design and approved specs. Source checks do not verify rendered geometry.
 The accepted design is the minimum baseline, not a promise tied to a particular model.
-Require the implementation-mode rendered-review record and `validate-preview-review.js` result
-for the complete affected screens. Keep preview-only scenario controls out of native UI and
+No browser testing, screenshots or review-evidence records are required for this handoff.
+Keep preview-only scenario controls out of native UI and
 preserve actual icon/media/grouping treatments, not only component names and token colors.
 
-Honor explicit preview opt-out and `visual_companion` (which controls opening). Unavailable
-rendered evidence or component-only scope must remain `DONE_WITH_CONCERNS` / unverified, not a
-visual pass. Keep static, rendered-approximation and native-device results separate. Continue
-to launch only after structural gates pass and remaining concerns are surfaced; never imply
-native verification from HTML or idle Metro output.
+Honor explicit preview opt-out and `visual_companion` (which controls opening). Missing browser
+observations do not block ordinary delivery or require `DONE_WITH_CONCERNS`; an explicit
+component-only request does not establish full-screen visual quality. Deliver the actual preview
+link for manual review; do not automatically exercise or capture it after HTML generation.
+Browser testing runs only when the user explicitly requests it as a separate task.
+Keep static, rendered-approximation and native-device results separate; unobserved rendering
+remains unverified. Continue to launch only after structural gates pass and remaining concerns
+are surfaced; never imply native verification from HTML or idle Metro output.

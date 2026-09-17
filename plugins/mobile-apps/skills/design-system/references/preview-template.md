@@ -24,6 +24,8 @@ Both advertised themes must use resolved values; define every CSS variable used.
 
 Write semantic, keyboard-operable HTML with labels, visible focus, non-color state cues, and reflow. Component demos may simulate local state; native actions stay labeled placeholders. No service calls, tenant writes, imported scripts, or analytics.
 
-Respect `visual_companion`; use existing browser tools to inspect relevant states when available. Otherwise provide the link and report the browser-validation gap.
+Respect `visual_companion`; open the gallery for the user or provide its link. Do not automatically
+exercise controls, capture screenshots or require browser-review evidence. A gallery request alone
+is not a request for browser testing; keep static checks and user acceptance separate.
 
 The gallery supplements `_design_preview.html`; it never replaces the primary-journey intent review and must not be presented as source-derived `preview.html`. Record its optional path only if actually generated.

@@ -65,6 +65,13 @@ test('reachable design and preview phases retain their existing checkpoint names
   }
 });
 
+test('optional gallery delivery also avoids automatic post-HTML testing', () => {
+  const gallery = read('skills/design-system/references/preview-template.md');
+  assert.match(gallery, /open the gallery for the user or provide its link/);
+  assert.match(gallery, /Do not automatically\s+exercise controls, capture screenshots/);
+  assert.match(gallery, /gallery request alone\s+is not a request for browser testing/);
+});
+
 test('design handoff keeps decisions and approval provenance in the foreground memory contract', () => {
   assert.match(design, /Missing product decisions → `NEEDS_CONTEXT`/);
   assert.match(design, /Only foreground approves through an actual available host question tool/);
@@ -216,7 +223,7 @@ test('intent authoring uses compact product context and three main screens witho
   assert.match(intent, /Back\s+restores the originating scope\/filter\/selection/);
   assert.match(intent, /Reset restores the exact initial scenario/);
   assert.match(intent, /desktop and 320px widths/);
-  assert.match(intent, /Do not report these checks from source inspection alone/);
+  assert.match(intent, /source checks, not browser observations/);
   assert.match(mapping, /implementation previews only/);
   const handoff = read('skills/create-mobile-app/references/phase-04-design.md');
   assert.match(handoff, /planned connector\s+reads\/writes, approved native capabilities/);
@@ -232,10 +239,10 @@ test('device references set both dimensions without changing the app composition
   assert.match(preview, /Measure usable content\s+separately from decorative bezels/);
   assert.match(preview, /Do not stretch frames with grid columns or shorten them using\s+browser `vh`/);
   assert.match(preview, /Scroll content inside the device/);
-  assert.match(preview, /Report measured frame\/content dimensions/);
+  assert.match(preview, /Report configured dimensions, not\s+measured geometry/);
   assert.match(preview, /place decorative bezels outside that area/);
   assert.match(preview, /Compare references\s+at the same usable width/);
-  assert.match(intent, /Inspect every selected screen/);
+  assert.match(intent, /Review every selected screen's source/);
   assert.match(intent, /not only an empty-state screenshot/);
   assert.match(intent, /without resizing their device geometry/);
 });
@@ -302,13 +309,13 @@ test('task-specific presentation is realized once and passed through create and 
   assert.match(edit, /a prettier preview alone is not an implemented edit/);
 });
 
-test('rendered handoff checks effective density and truthfully separates style acceptance from verification', () => {
+test('source handoff preserves density guidance without requiring rendered verification', () => {
   const review = read('shared/references/native-visual-review.md');
   assert.match(intent, /Density and typography/);
-  assert.match(intent, /computed box and normal pointer\/keyboard reachability/);
-  assert.match(intent, /User\s+acceptance of appearance does not turn missing screenshots, failed checks or native simulations/);
+  assert.match(intent, /Static checks cannot establish effective rendered hit areas/);
+  assert.match(intent, /absence\s+of browser testing does not block completion/);
   assert.match(intent, /compact review chrome, not repeated pinned/);
-  assert.match(review, /Screen\/state \| accepted presentation \| actual source\/component \| observed result \| remaining gap/);
+  assert.doesNotMatch(review, /validate-preview-review\.js|rendered-preview-review\.md/);
   assert.match(review, /matching palette or component interface is not\s+evidence/);
 });
 
@@ -362,9 +369,9 @@ test('intent state fidelity distinguishes illustrative selection from normal fir
   assert.match(intent, /initial state to \*\*Preview selection\*\*/);
   assert.match(intent, /scope\/filter,\s+selected record, data state and outcome stage/);
   assert.match(intent, /Reset restores those exact values, not merely the route/);
-  assert.match(intent, /separately exercise the app's first-entry\s+scope from Data\/Navigation/);
+  assert.match(intent, /separately describe the app's first-entry\s+scope from Data\/Navigation/);
   assert.match(intent, /Do not switch to All or add records/);
-  assert.match(intent, /every offered filter and search with an expected match and no-match result/);
+  assert.match(intent, /every offered filter and search with matching and no-match states/);
   assert.match(intent, /loaded-page count must not\s+be presented as a whole-dataset count/);
 });
 
@@ -379,7 +386,7 @@ test('image media permits verified HTTPS sources without granting executable or 
   assert.match(intent, /local assets or verified licensed HTTPS imagery/);
   assert.match(mapping, /local or verified public HTTPS imagery/);
   assert.match(media, /do not\s+authorize CDN JavaScript, remote executable HTML, analytics\/tracking, remote fonts, live tenant\s+calls, business API calls or production writes/);
-  assert.match(preview, /Compare observed requests with declared image sources\/validated redirects/);
+  assert.match(preview, /Check declared image sources and error\/fallback handlers/);
   assert.doesNotMatch(intent, /no external resources\/network calls/);
   assert.match(media, /Source-derived previews must not fabricate missing source handlers or media fallbacks/);
 });
@@ -447,57 +454,41 @@ test('connector guard allows remote image component sources but still blocks dir
   }
 });
 
-test('rendered experience evidence is required without making decoration a quality gate', () => {
-  const review = intent.split('## Rendered experience review\n')[1]
+test('static experience review preserves design guidance without a screenshot gate', () => {
+  const review = intent.split('## Authoring review\n')[1]
     ?.split('\n## Approval and implementation handoff')[0];
   assert.ok(review);
   for (const check of ['Context', 'Hierarchy', 'Decision/read evidence',
     'Media proportions (when relevant)', 'Usable first viewport', 'Action placement', 'State fidelity']) {
-    assert.ok(review.includes(`| ${check} |`), `missing observed experience check: ${check}`);
+    assert.ok(review.includes(`| ${check} |`), `missing authoring check: ${check}`);
   }
-  assert.match(preview, /Experience evidence \(intent\)/);
-  assert.match(review, /every selected screen, not just Home/);
-  assert.match(review, /actual screenshots\s+alongside normal browser interaction/);
-  assert.match(review, /320px\s+reflow and every offered theme/);
-  assert.match(review, /No fixed hero, image, palette, card\s+count, density or screenshot-similarity target/);
-  assert.match(review, /Genuine empty\/error scenarios pass/);
-  assert.match(review, /Screen\/state \| viewport\/theme \| observed/);
-  assert.match(review, /pass\/fail\/unverified \+ reason \| repair\/recheck/);
-  assert.match(review, /not "looks polished"/);
-  assert.match(review, /Do not create a score file/);
-  assert.match(preview, /forced clicks or injected handler calls are not\s+evidence of reachability/);
+  assert.match(preview, /Experience intent:/);
+  assert.match(review, /not a screenshot-based test, beauty score or additional user gate/);
+  assert.match(review, /No fixed hero, image, palette, card count, density or similarity target/);
+  assert.match(review, /Static checks cannot establish/);
+  assert.match(preview, /Browser testing runs only when the user explicitly requests it/);
 });
 
-test('rendered review distinguishes subject, container, bezel and chrome without fixed ratios', () => {
-  const review = intent.split('## Rendered experience review\n')[1];
-  assert.match(review, /Measure the \*\*visible subject\*\*, media container, usable app width\/height and scrolling viewport/);
-  assert.match(review, /SVG viewBox includes transparent\/internal whitespace/);
-  assert.match(review, /CSS\s+dimensions do not establish the subject's prominence/);
-  assert.match(review, /explicitly labeled estimate if the visible bounds cannot be measured precisely/);
-  assert.match(review, /compare designs at the same usable\s+width/);
-  assert.match(review, /height relative to the scrolling viewport\s+and which task content it displaces/);
-  assert.match(review, /shorten, remove or retain it based on\s+the job, not a universal percentage/);
-  assert.match(review, /More records,\s+larger containers or an added hero are not evidence of better design/);
-  assert.match(review, /do not invent metadata to make it appear richer/);
-  assert.match(review, /subject\/container proportions when media matters/);
+test('authoring review preserves media and viewport intent without fabricated measurements', () => {
+  const review = intent.split('## Authoring review\n')[1];
+  assert.match(review, /Preserve the target geometry and usable text\/controls/);
+  assert.match(review, /Asset choice, intended crop and reserved dimensions/);
+  assert.match(review, /No fixed hero, image, palette, card count, density or similarity target/);
+  assert.match(review, /Long content and large text may scroll/);
+  assert.match(preview, /Report configured dimensions, not\s+measured geometry/);
   const builder = read('agents/references/screen-builder/design-api.md');
   assert.match(builder, /visible\s+media-subject scale/);
   assert.match(builder, /not a superseded provisional planner suggestion/);
 });
 
-test('experience repairs are bounded and cannot fabricate validation or approval', () => {
-  assert.match(intent, /one focused repair pass/);
-  assert.match(intent, /rerun the affected\s+visual and interaction checks/);
-  assert.match(intent, /known failure remaining after the\s+repair returns `BLOCKED: intent experience review failed`/);
-  assert.match(intent, /change returns `NEEDS_CONTEXT` for foreground approval/);
-  assert.match(intent, /opening was declined.*unverified and return `DONE_WITH_CONCERNS`/);
-  assert.match(intent, /No repair is required after\s+a clean review/);
-  assert.match(intent, /cannot guarantee aesthetic preference or native runtime behavior/);
+test('source repairs preserve approvals without automatic browser verification', () => {
+  assert.match(intent, /Repair source inconsistencies before delivery/);
+  assert.match(intent, /changes return `NEEDS_CONTEXT` to foreground/);
+  assert.match(intent, /absence\s+of browser testing does not block completion or require an evidence file/);
   assert.match(preview, /For implementation report source shortcomings rather than improving the preview/);
-  assert.match(design, /Passing markup\/interaction tests alone is not visual approval/);
+  assert.match(design, /Passing source checks alone is not visual approval/);
   const handoff = read('skills/create-mobile-app/references/phase-04-design.md');
-  assert.match(handoff, /per-screen rendered experience evidence/);
-  assert.match(handoff, /known unresolved review\s+failure blocks progression/);
+  assert.doesNotMatch(handoff, /validate-preview-review\.js|\breview_path\b|\breview_status\b/);
   assert.match(handoff, /accepted first-viewport content order and below-fold access in Layout delta/);
 });
 
@@ -507,7 +498,7 @@ test('journey contract requires coherent interactions without an archetype quota
   assert.match(preview, /Reset restores the initial scenario/);
   assert.match(preview, /Implementation mock actions must correspond to handlers\/states present in source/);
   assert.match(preview, /Native-only — not executed in browser/);
-  assert.match(preview, /Hard checks before handoff/);
+  assert.match(preview, /Static checks before handoff/);
   for (const category of ['Safety:', 'Links:', 'Required actions:', 'Accessibility:', 'Token coherence:']) {
     assert.ok(preview.includes(category), `missing execution check: ${category}`);
   }

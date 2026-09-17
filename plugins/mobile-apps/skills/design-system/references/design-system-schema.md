@@ -40,7 +40,8 @@ and action semantics. Foreground realizes these as components before builders; n
 alone are not implementations. One-screen treatments may remain local. No component quota.>
 <Choose a visible treatment, not only a component name: leading/supporting identity, coherent
 groups, row/action emphasis, appropriate separation, recognizable icons and meaningful media.
-Rendered review tests that realization; native components are not a later beautification step.>
+Preserve that realization in source and the preview delivered for user review; native components
+are not a later beautification step. No automatic screenshot review is required.>
 
 ## Motion
 <Functional purpose or none; reduced-motion behavior>

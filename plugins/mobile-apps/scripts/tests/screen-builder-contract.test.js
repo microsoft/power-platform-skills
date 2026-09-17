@@ -57,10 +57,11 @@ test('AI may create task-specific components without being constrained to sample
 });
 
 test('builders consume concrete accepted presentation and realized shared interfaces', () => {
-  assert.match(entry, /`design_reference` supplies the accepted\s+preview screen\/state and observed review row/);
-  assert.match(entry, /explicit no-design\/unverified status/);
+  assert.match(entry, /`design_reference` supplies the accepted preview path, relevant screen\/state and approved spec/);
+  assert.match(entry, /explicit no-design\/no-preview status/);
   assert.match(entry, /`component_interfaces` names actual shared exports\/props/);
   assert.match(entry, /Match actual shared components to the accepted recipes/);
   assert.match(entry, /missing exports return to foreground/);
   assert.match(entry, /style acceptance does not verify an unobserved screen or native control/);
+  assert.match(entry, /No browser evidence is required/);
 });

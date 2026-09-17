@@ -199,15 +199,11 @@ phase and pending work so the next invocation can verify and resume it.
   requires orientation, relevant work/content and a clear next step, not a universal Home
   layout or fuller sample list. Shared illustrative state keeps different selections,
   edits, results and reset consistent across frames.
-- [Rendered review](shared/references/rendered-preview-review.md) exercises actual screenshots
-  and interactions, tries an independent advertised browser path after adapter failure, and
-  records preview-bound evidence before visual sign-off. Its validator checks declared coverage
-  and freshness, not aesthetic quality or native behavior. Scenario controls stay outside app
-  frames, and missing imagery is not represented as a completed media design.
-  Passing review cases bind their own preview hash and measured app-frame dimensions;
-  saved screenshots also bind inspected image-byte hashes. Older records missing those
-  declarations are incomplete, never automatically upgraded. Calibrate one readable capture
-  before collecting the matrix; coverage, usability findings and user approval are separate.
+- Preview delivery generates the HTML, performs static/source-freshness checks and opens or links
+  it for the user. It does not automatically run Playwright/browser interactions, capture
+  screenshots or require review-evidence records. Browser testing is a separate task only when
+  explicitly requested. User approval and static checks never imply browser/native verification.
+  Scenario controls stay outside app frames, and missing imagery is not presented as finished media.
 - Native package boundaries, generated-service ownership, accessibility,
   explicit approvals, and phase validation remain required.
 - Minimum product UX includes confirmed domain transitions, useful first-entry

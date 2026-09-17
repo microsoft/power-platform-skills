@@ -8,7 +8,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '../..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
-test('create and edit own strict source checks and full-screen presentation handoffs', () => {
+test('create and edit retain strict source checks without requiring post-preview browser tests', () => {
   for (const file of ['skills/create-mobile-app/references/phase-09-build.md', 'skills/edit-app/SKILL.md']) {
     const text = read(file);
     assert.match(text, /validate-screen-quality\.js"? --report --strict/);
@@ -18,6 +18,7 @@ test('create and edit own strict source checks and full-screen presentation hand
     assert.match(text, /unverified/);
     assert.match(text, /component/);
     assert.match(text, /source-pattern heuristics/);
+    assert.doesNotMatch(text, /validate-preview-review\.js|rendered-preview-review\.md|\breview_path\b|\breview_status\b/);
   }
   const hooks = JSON.parse(read('hooks/hooks.json')).hooks;
   assert.equal(hooks.PostToolUse, undefined);
@@ -29,7 +30,7 @@ test('preview freshness is tied to exact reviewed inputs without creating a seco
   assert.match(preview, /preview-provenance\.js.*--check/);
   assert.match(preview, /--scope "<full-screens\|components>"/);
   assert.match(preview, /never merely restamp/);
-  assert.match(preview, /Reload the page from disk/);
+  assert.match(preview, /open or reload the preview for the user/);
   const review = read('shared/references/native-visual-review.md');
   assert.match(review, /not a new design brief, another approval authority/);
   assert.match(review, /not dependency|cannot\s+discover omitted dependencies/);
@@ -52,14 +53,15 @@ test('image guidance distinguishes storage, resolution, cache and artwork withou
   assert.match(reads, /Never construct an authenticated URL or call raw HTTP/);
 });
 
-test('review explicitly checks applied typography, native chrome, long content and usable actions', () => {
+test('source review preserves native presentation checks without requiring browser evidence', () => {
   const review = read('shared/references/native-visual-review.md');
   for (const phrase of ['Actual component weight', 'intended row count', 'bottom insets',
-    'wrapping/long content', 'resolution appropriate', 'scroll to it', 'ordinary clicks/keyboard']) {
+    'wrapping/long content', 'resolution appropriate']) {
     assert.ok(review.includes(phrase), phrase);
   }
   assert.match(review, /idle Metro terminal is not proof/);
-  assert.match(review, /DONE_WITH_CONCERNS/);
+  assert.doesNotMatch(review, /validate-preview-review\.js|rendered-preview-review\.md/);
+  assert.match(review, /explicit.*request|explicitly requested/);
   assert.match(review, /Do not impose equal heights/);
   assert.match(read('shared/references/tamagui-html-mapping.md'), /Do not infer\s+bold weight/);
 });

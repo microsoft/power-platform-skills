@@ -2,6 +2,8 @@
 
 Maintainer evaluation of the experience-first workflow. This is not an app authoring
 reference, an automatic create phase, a new test framework or a visual template.
+The manual/interactive evaluation below runs only when a maintainer explicitly requests it.
+Ordinary HTML preview delivery does not trigger browser tests, screenshots or evidence gates.
 Do not give expected plan fixtures, prior generated apps or this evaluation's observations
 to the generator as design inputs. A passing contract test is not a model-quality result.
 
@@ -61,13 +63,13 @@ and classify inferred business scope rather than rewarding extra features.
 For each applicable preview, exercise two different record identities, a read-only variant,
 compound filters with a no-match result, an invalid edit, and reset after state changes.
 Check every offered scope's data support rather than rewarding convincing mock-only fields.
-Calibrate the browser capture and inspect final-version images; a full matrix of clipped or
-stale screenshots is not a completed review. Keep the initial render, the reviewed/repaired
+If screenshots are part of the requested evaluation, inspect final-version images; clipped or
+stale captures do not establish quality. Keep the initial render, the reviewed/repaired
 prompt-only result, and any later reference-assisted revision distinguishable.
 
-Use the existing source checks, `read-screen-data-audit.js`, provenance assertions and
-[rendered preview review](rendered-preview-review.md), including `validate-preview-review.js`.
-Record browser fallback attempts and incomplete evidence; those results establish only their documented scope. No additional framework
+Use the existing source checks, `read-screen-data-audit.js` and provenance assertions.
+For explicitly requested browser evaluation, report what was actually exercised and any unavailable
+checks. Do not impose a review-record validator on ordinary generation. No additional framework
 or score based on card count, color ratio, fixed density or pixel similarity is required.
 
 ## Report the result honestly

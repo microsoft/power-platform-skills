@@ -41,23 +41,18 @@ Choosing no brand input means context-led defaults with those artifacts, not a s
 Field/Ops-only renderer or a missing preview. `integration: caller-required` is expected:
 Step 9b applies the tokens; generation alone is not provider/font integration.
 The preview uses locked `### Primary journeys` and `### Preview selection`, with illustrative local
-interactions. It is not proof of native/data execution. Honor browser opt-out and show the actual link.
+interactions. It is not proof of native/data execution. Honor `visual_companion` for opening,
+including browser opt-out, and show the actual link.
 
 **Foreground design approval:** after the proposal/intent preview is ready, show consequential
 choices and ask for accept / targeted revision through the permitted question tool.
-Require the preview's compact per-screen rendered experience evidence first. Surface any
-unverified screenshot/interaction checks with `DONE_WITH_CONCERNS`; a known unresolved review
-failure blocks progression. Do not substitute artifact existence or TypeScript for visual review.
-Require `review_path` and `review_status` from
-[rendered preview review](../../../shared/references/rendered-preview-review.md). Re-run its
-read-only `validate-preview-review.js` gate against the actual selected screens, target/reflow
-viewports, offered themes and required sources. A `complete` result validates declared evidence
-coverage only; inspect the observations/screenshots, not just that status.
-Keep evidence coverage, observed usability and user acceptance distinct in the approval summary.
-Do not turn a matrix count into a percentage of design quality or use acceptance to erase a
-known wrong-record, unsupported-data or unreachable-action failure.
-If every supported browser path failed or review was declined, surface the exact unverified
-scope at this existing approval gate. Explicitly accepting it does not turn it into a visual pass.
+Before asking, complete `/preview-screens` static authoring and provenance checks.
+Do not automatically exercise the browser or capture screenshots after generating HTML;
+browser testing runs only when the user explicitly requests it as a separate task.
+No screenshot or browser-review evidence is required for approval or `DONE`. Source checks
+are not visual verification; keep the authored preview, any requested test results and user
+acceptance distinct in the approval summary. Do not use acceptance to erase a known
+wrong-record, unsupported-data or unreachable-action failure.
 The design child does not hold another creation approval gate. `DONE` alone is not acceptance.
 On acceptance, record actual artifact paths, direction, confirmed status and `visual_companion`
 in memory bank. Set `Approved preview` to the accepted intent path and exact plan/design revision,
@@ -83,8 +78,8 @@ Before that acceptance, reconcile the preview against approved data and operatio
 Do not call a two-image gallery, extra tab or inline write a presentation-only delta when the
 plan supports one image, different navigation or read-only rows. Style acceptance is not
 acceptance of undisclosed scope changes or evidence that native controls have executed.
-Carry the actual preview path, selected screen/state and observed review row forward with
-each relevant builder's spec. Preserve failed/unverified checks in the memory handoff.
+Carry the actual accepted preview path, selected screen/state and approved spec forward with
+each relevant builder's context. Preserve known source/design gaps in the memory handoff.
 Include realized grouping, icon/media treatment and normal action hierarchy in that handoff;
 do not copy preview-only simulator controls or expect native rendering to beautify the design.
 Before accepting the preview, check its current provenance with `--expect-mode intent`,

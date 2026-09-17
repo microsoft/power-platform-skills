@@ -342,8 +342,8 @@ Do not stop after design refresh. Continue to Step 7 verification and Step 8 pre
 
 Before rebuilding, reconcile accepted presentation with approved data/operations, then materialize
 changed shared component recipes using create Step 10.8. Forward `design_reference` (accepted
-screen/state and observed review row) and actual `component_interfaces` with affected specs as
-in create Step 11. Preserve unverified checks; a prettier preview alone is not an implemented edit.
+preview path, relevant screen/state and approved spec) and actual `component_interfaces` with
+affected specs as in create Step 11. Preserve known source/design gaps; a prettier preview alone is not an implemented edit.
 
 ### Step 2 — Re-plan affected sections
 
@@ -611,12 +611,16 @@ screen_spec: <this screen's approved compact delta, when available inline>
 service_signatures: <actual generated methods/types used by this screen>
 token_context: <relevant brand/token roles and negatives>
 journey_context: <relevant Primary journeys action/outcome/recovery>
+design_reference: <accepted preview path + relevant screen/state + approved spec, or explicit no-design/no-preview status>
+component_interfaces: <actual shared paths/exports + typed props/state contracts consumed by this screen>
 
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
 ```
 
 Compact fields are optional prompt context, never new sidecars. Resolve signatures from the
 current generated sources and load only missing relevant context; do not duplicate the whole plan.
+When a preview was accepted, supply `design_reference` for its consuming screens, along with
+actual `component_interfaces` for shared treatments. No browser-review evidence is required.
 
 ### Step 7 — Verify
 
@@ -679,17 +683,20 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
-If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens --mode implementation` after verification. This reads actual TSX/config/local components, regenerates `preview.html`, and opens it according to the project's `visual_companion` setting. Do not substitute a plan-derived intent preview for the edited implementation.
-Execute the shared [rendered preview review](${PLUGIN_ROOT}/shared/references/rendered-preview-review.md),
-including independent browser fallback and the preview-bound evidence gate. Return its
-`review_path` and `review_status`; missing screenshots/interactions remain unverified.
+Honor an explicit preview opt-out. Otherwise, if any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens --mode implementation` after verification. This reads actual TSX/config/local components, regenerates `preview.html`, and opens it according to the project's `visual_companion` setting. Do not substitute a plan-derived intent preview for the edited implementation.
+Deliver the actual preview link for manual review. Do not automatically run browser interactions,
+capture screenshots or start visual repair loops after generating HTML. Browser testing runs
+only when the user explicitly requests it as a separate task; no browser-review evidence is
+required for completion or a clean status.
 Follow [native presentation handoff](${PLUGIN_ROOT}/shared/references/native-visual-review.md):
-review complete affected screens and required journey destinations, not merely isolated icons.
+review the source of complete affected screens and required journey destinations, not merely isolated icons.
 Preserve the accepted preview's hierarchy/layout as the minimum baseline while respecting
-native text scaling and targets. Record/check the preview's source provenance, reload it from
-disk, and compare typography, media resolution, header/Back, repeated-item alignment, tabs/footer
-and primary action clearance. An explicit preview opt-out or component-only request remains
-unverified for full-screen quality. Keep source checks, rendered approximation and device
+native text scaling and targets. Record/check the preview's source provenance and compare
+source typography, media resolution, header/Back, repeated-item alignment, tabs/footer and
+primary action placement with the accepted design and approved specs. Source checks cannot
+verify rendered geometry. An explicit preview opt-out or component-only request does not
+verify full-screen quality; unobserved rendering remains unverified without blocking completion
+or requiring `DONE_WITH_CONCERNS`. Keep source checks, rendered approximation and device
 evidence separate; no evidence means no visual/native success claim.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
@@ -705,7 +712,7 @@ Append an edit entry to `memory-bank.md`:
 - Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
-- Preview: <path, mode, full-screen/component scope, provenance check, rendered evidence or unverified reason>
+- Preview: <path, mode, full-screen/component scope, provenance check, opened or linked per visual_companion, or explicit opt-out>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```

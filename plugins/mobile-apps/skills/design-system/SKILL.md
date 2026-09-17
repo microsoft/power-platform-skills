@@ -14,7 +14,7 @@ Follow the applicable safety, telemetry, and changed-file rules in [shared instr
 
 Design for the primary job, journey, content, and context. Infer presentation when the user chooses it, not merely because no brand input arrived; never force a preset or comparison.
 
-Ordinary output: compact `brand/design-system.md`, importable `brand/tokens.ts`, and one interactive `_design_preview.html`. Rendered review adds evidence, not another product contract. Galleries/history remain optional. Preserve runtime-required files/imports, including consumed legacy sidecars.
+Ordinary output: compact `brand/design-system.md`, importable `brand/tokens.ts`, and one interactive `_design_preview.html`. No post-preview browser testing or screenshot/evidence gate runs automatically. Galleries/history remain optional. Preserve runtime-required files/imports, including consumed legacy sidecars.
 
 This skill owns presentation, not schema/operation redesign, connectors, native scope, or generated services. The caller applies [Tamagui integration](./references/tamagui-integration.md) at Step 9b or `/edit-app`'s design step. Standalone existing-app runs apply it directly, preserving unrelated config/provider props; artifact-only runs report it pending. Tokens alone do not apply fonts/provider themes.
 
@@ -77,15 +77,15 @@ HTTPS images with fallbacks, not remote code.
 
 Follow [preview-screens](../preview-screens/SKILL.md) in `--mode intent`: direct HTML, three main screens by default, compact domain/data/connector/native context, approved tokens, and one coherent illustrative scenario. Actions demonstrate completion/recovery; native-only behavior stays labeled.
 
-Author HTML/CSS and local interactions without a renderer framework. Validate safety, destinations,
-actions, accessibility and tokens. The preview's rendered experience review is required:
-inspect actual treatments, critique weak hierarchy/media/density, and repair within scope.
-Decorative preferences remain advisory.
-Compare rendered facts/counts, artifacts and actions to [coverage](../../shared/references/screen-data-coverage.md).
+Author HTML/CSS and local interactions without a renderer framework. Statically check safety,
+destinations, handlers, accessibility properties and tokens. Review authored hierarchy/media/density;
+repair source inconsistencies within scope. Decorative preferences remain advisory.
+Compare authored facts/counts, artifacts and actions to [coverage](../../shared/references/screen-data-coverage.md).
 Return unsupported needs to foreground. Artifact-only designs without a data plan remain feasibility-unverified.
 
-Respect `visual_companion: no` or legacy `skip`. Execute [rendered review](../../shared/references/rendered-preview-review.md):
-independent browser fallback, actual screenshots/interactions, bounded repair and evidence validation.
+Respect `visual_companion: no` or legacy `skip`; otherwise open the preview for user review.
+Do not automatically exercise browser controls or capture screenshots. Browser testing requires
+a separate explicit user request, not ordinary design generation or preview approval.
 
 ### Review the design
 
@@ -93,8 +93,8 @@ independent browser fallback, actual screenshots/interactions, bounded repair an
 
 Show choices and preview. Only foreground approves through an actual available host question tool;
 a child returns `NEEDS_CONTEXT`. Reuse the creation gate and intent file; revise only affected choices.
-Include the preview's per-screen observed evidence, repairs and unverified checks in that handoff.
-Passing markup/interaction tests alone is not visual approval; do not add another user gate.
+Include static findings and known source gaps in the handoff. No screenshot matrix or evidence
+record is required. Passing source checks alone is not visual approval; do not add another user gate.
 
 ## 5 — Persist and hand off
 
@@ -109,15 +109,13 @@ brand_path: brand/design-system.md
 tokens_path: brand/tokens.ts
 preview_path: _design_preview.html
 preview_mode: intent
-review_path: .tmp/intent-preview-review.json
-review_status: <complete|incomplete|failed|stale>
 direction: <context-led description or explicit named input>
 visual_companion: <yes|no>
 integration: <applied|caller-required|artifact-only>
 ```
 
-`DONE` requires both brand files, the intent preview and complete declared rendered-review coverage.
-History/diff-only work needs no preview. Missing visual evidence returns `DONE_WITH_CONCERNS`, not a visual pass.
+`DONE` requires both brand files, the intent preview and required static/changed-file checks.
+History/diff-only work needs no preview. No browser testing is required; do not claim rendered or native verification.
 
 ## Optional operations — read only on request
 

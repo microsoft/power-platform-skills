@@ -23,7 +23,7 @@ demonstrate APIs, not mandatory layouts or permission to ship an unwired action.
 
 Required invocation fields: `working_dir`, `screen_name`, `route`, `target_file`, `plan_path`.
 Optional `screen_spec`, `service_signatures`, `token_context`, and `journey_context` carry compact resolved excerpts.
-`design_reference` supplies the accepted preview screen/state and observed review row, or explicit no-design/unverified status;
+`design_reference` supplies the accepted preview path, relevant screen/state and approved spec, or explicit no-design/no-preview status;
 `component_interfaces` names actual shared exports/props. Preserve navigation/shared conventions and typed skeleton imports/hooks.
 These are excerpts of existing artifacts, not a new work-order or sidecar format.
 
@@ -60,7 +60,7 @@ sections from `native-app-plan.md`, not the entire plan or other screens. Resolv
    follow its reconciled spec and tokens. Resolve material drift in foreground, not a silent redesign.
    Match actual shared components to the accepted recipes; missing exports return to foreground, not a generic substitute. A style acceptance does not verify an unobserved screen or native control.
    Preserve typography, navigation cues and alignment under [native presentation handoff](../shared/references/native-visual-review.md).
-   Report missing full-screen rendered evidence; static checks are not visual approval.
+   Report source/design drift; static checks are not visual approval. No browser evidence is required.
 
 Compact specs intentionally omit inherited chrome, loading copy and imports; check these sources before `NEEDS_CONTEXT`.
 Missing app-specific service, route, role decision, binding, or destructive behavior is not permission to invent it.
@@ -177,4 +177,4 @@ of file, implemented outcome, checks, and any limitation:
 - `BLOCKED: <reason>` — prerequisite/tool/write boundary prevents correct completion.
 
 Never downgrade a block to continue the workflow. The foreground owns user questions,
-root layout/gesture-provider repairs, app-wide route/type/build checks, and preview QA.
+root layout/gesture-provider repairs, app-wide route/type/build checks, and preview delivery.
