@@ -72,6 +72,7 @@ const {
   formEventsRegionIntent,
   viewColumnsIntent,
   firstColumnSectionsPointer,
+  cellFitsInRow,
 } = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
@@ -2037,6 +2038,31 @@ async function runSdkBuild(spec, opts = {}) {
   // A field whose declared section could not be resolved falls back to the form's first section —
   // exactly the pre-existing behavior. A layout the topology pass could not materialize must still
   // never lose a field.
+  // Append a cell to a section, PACKING it the way the create path does.
+  //
+  // `rowsFromCells` fills a row until the section's grid width is used, so a 2-column section holds
+  // two single-width fields per row. The reconcile path used to ignore that entirely — every ADDED
+  // field became its own single-cell row and every MOVED field was appended to the last row whatever
+  // its width — so the same spec deployed a different shape depending only on whether the form
+  // already existed. `cellFitsInRow` is the create path's own rule, shared rather than restated.
+  //
+  // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
+  // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
+  // row is rewritten instead — `updateElement` replaces the `cells` array, and re-sending the
+  // existing cell objects carries their `id` and `control.id` through verbatim (measured), so this
+  // neither mints new ids nor drops adapter-derived control state.
+  const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
+    const section = sectionAt(form, sectionPointer) || {};
+    const rows = section.rows || [];
+    const lastIndex = rows.length - 1;
+    if (lastIndex >= 0 && cellFitsInRow(rows[lastIndex], wantCell, section.columns)) {
+      await provision.updateElement('form', formId, sectionPointer + '/rows/' + lastIndex,
+        { cells: [...(rows[lastIndex].cells || []), wantCell] });
+      return;
+    }
+    await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
+  };
+
   const placeFieldInSection = async (formId, logical, wantCell, target) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
@@ -2045,7 +2071,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (!existing) {
       const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
       if (!rowsPtr) return;
-      await provision.addElement('form', formId, rowsPtr, { cells: [wantCell] });
+      await appendCellPacked(formId, form, rowsPtr.slice(0, -'/rows'.length), wantCell);
       return;
     }
     // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
@@ -2063,12 +2089,24 @@ async function runSdkBuild(spec, opts = {}) {
 
     // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
     // adapter-derived or maker-edited control state survive the move.
-    let rowIndex = ((sectionAt(form, targetPointer) || {}).rows || []).length - 1;
-    if (rowIndex < 0) {
-      // A section this run just created has no row to move into. The SDK accepts a row with an
-      // empty cells array and serializes it correctly, so seed one and target that.
+    //
+    // The destination ROW is chosen by the same packing rule the create path uses, not simply the
+    // last one: appending every relocated field to `rows.length - 1` piled four fields into a single
+    // row of a 2-column section, a shape `rowsFromCells` would never emit.
+    const targetSection = sectionAt(form, targetPointer) || {};
+    const targetRows = targetSection.rows || [];
+    // Captured BEFORE the add below. `getArtifact` can hand back a live reference to the artifact
+    // tree rather than a copy, so `targetRows` may be the very array `addElement` pushes into —
+    // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
+    // which silently skips the move (the `if (!row) return` guard below).
+    const priorRowCount = targetRows.length;
+    let rowIndex = priorRowCount - 1;
+    if (rowIndex < 0 || !cellFitsInRow(targetRows[rowIndex], wantCell, targetSection.columns)) {
+      // Either the section this run just created has no row yet, or the last row is full. The SDK
+      // accepts a row with an empty cells array and serializes it correctly, so seed one and target
+      // it. `addElement` appends, so the new row's index is the PRE-add length.
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      rowIndex = 0;
+      rowIndex = priorRowCount;
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);

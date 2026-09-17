@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -2493,4 +2493,52 @@ test('#574 follow-up: IsBaseCurrency is read through the Money CAST and drops th
   const e = entityFromMetadata(meta, 'cfo_rtproject');
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
     `the base-currency twin must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+// --- #584 item 1: an N:N whose deployed SchemaName diverges from the generated default -----------
+//
+// The N:N read already retrieved `SchemaName` and then threw it away, emitting only
+// { type, entity1, entity2 }. A relationship deployed as `new_CustomTicketTagLink` therefore came
+// back as the generated `new_tag_new_ticket`, so a rebuild into the SAME environment creates a
+// SECOND intersect relationship beside the existing one instead of matching it — while the download
+// presents itself as rebuildable. The 1:N branch had carried the deployed name for exactly this
+// reason; this applies the identical rule.
+test('readRelationships carries a divergent N:N SchemaName, and omits it when it matches the default', async () => {
+  const mk = (schemaName) => ({
+    dataverse: {
+      get: async (url) => {
+        if (/ManyToManyRelationships/.test(url)) {
+          return { status: 200, body: { value: [{ SchemaName: schemaName, Entity1LogicalName: 'new_ticket', Entity2LogicalName: 'new_tag', IsCustomRelationship: true }] } };
+        }
+        // No 1:N and no lookup metadata for this probe.
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  });
+
+  // 1. DIVERGENT and correctly prefixed -> carried verbatim.
+  const divergent = await readRelationships(mk('new_CustomTicketTagLink'), ['new_ticket', 'new_tag'], 'new');
+  const nn = (divergent.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn.length, 1, `expected one N:N; got ${JSON.stringify(divergent.relationships)}`);
+  assert.strictEqual(nn[0].schemaName, 'new_CustomTicketTagLink', 'a deployed name a rebuild could not guess must be carried');
+
+  // 2. The GENERATED default -> omitted, so the spec stays minimal and the build composes it.
+  const { manyToManySchemaName } = require('../lib/app-spec.js');
+  const auto = manyToManySchemaName({ entity1: 'new_ticket', entity2: 'new_tag' }, 'new');
+  const matching = await readRelationships(mk(auto), ['new_ticket', 'new_tag'], 'new');
+  const nn2 = (matching.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn2.length, 1);
+  assert.ok(!('schemaName' in nn2[0]), `a name equal to the generated default adds nothing; got ${JSON.stringify(nn2[0])}`);
+
+  // 3. FOREIGN publisher prefix -> reported as a rename, NOT carried (it would fail the spec's own
+  //    lint) and NOT counted as skipped (the relationship is still in the spec).
+  const warnings = [];
+  const foreign = await readRelationships(mk('zzz_ForeignPrefixLink'), ['new_ticket', 'new_tag'], 'new', (m) => warnings.push(m));
+  const nn3 = (foreign.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn3.length, 1, 'the relationship is still carried');
+  assert.ok(!('schemaName' in nn3[0]), 'but not under a name that fails the publisher-prefix lint');
+  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /publisher prefix/.test(w)),
+    `the rename must be reported; got ${JSON.stringify(warnings)}`);
+  assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
+    'and never counted as skipped — it IS in the rebuildable spec');
 });

@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -274,7 +274,27 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
           note(r.SchemaName, lc(logical), `it links '${e1}' to '${e2}' and this app does not include both tables`);
           continue;
         }
-        relationships.push({ type: 'ManyToMany', entity1: e1, entity2: e2 });
+        // The deployed schema name is emitted ONLY when it differs from the one the build would
+        // generate anyway AND it satisfies the publisher-prefix rule the lint enforces — the same
+        // rule the 1:N branch above applies, for the same two reasons: a foreign-prefix name would
+        // hand back a spec that fails its own lint, while omitting a DIVERGENT name makes a rebuild
+        // into this same environment create a SECOND intersect relationship beside the existing one
+        // instead of matching it.
+        //
+        // `manyToManySchemaName` SORTS the two entity names before composing, so `auto` is computed
+        // from the same pair that is emitted rather than from the order Dataverse happened to report.
+        const rel = { type: 'ManyToMany', entity1: e1, entity2: e2 };
+        const auto = manyToManySchemaName({ entity1: e1, entity2: e2 }, publisherPrefix);
+        const deployed = r.SchemaName;
+        if (deployed && lc(deployed) !== lc(auto)) {
+          if (!publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) rel.schemaName = deployed;
+          else if (typeof warn === 'function') {
+            // RENAMED, not skipped — this relationship IS carried into the spec, so recording it as
+            // skipped would claim it was absent from the rebuildable spec, the opposite of the truth.
+            warn(`relationship '${deployed}' between '${e1}' and '${e2}' does not start with this solution's publisher prefix '${publisherPrefix}_', so the spec rebuilds it under the generated name '${auto}' instead`);
+          }
+        }
+        relationships.push(rel);
       }
     } catch (e) {
       note('(many-to-many)', lc(logical), `their metadata could not be read (${e && e.message})`);

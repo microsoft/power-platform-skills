@@ -1899,7 +1899,13 @@ test('form topology: a field sitting in the wrong section is MOVED, never duplic
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   const moves = find(calls, 'moveElement');
   assert.strictEqual(moves.length, 1, `exactly one move; saw ${moves.map((c) => `${c.args[2]} -> ${c.args[3]}`).join(', ')}`);
-  assert.strictEqual(moves[0].args[3], '/tabs/0/columns/0/sections/1/rows/0/cells', 'moved INTO section_more');
+  // Row 1, not row 0. `section_more` is a ONE-column section whose row 0 already holds
+  // `new_obsolete`, so packing the relocated cell onto it would produce a two-cell row in a
+  // one-column section — a shape `rowsFromCells` never emits on the create path. The reconcile now
+  // uses that same packing rule, so it opens a new row instead.
+  assert.strictEqual(moves[0].args[3], '/tabs/0/columns/0/sections/1/rows/1/cells', 'moved INTO section_more, in a row that has space');
+  const seededRow = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/0/columns/0/sections/1/rows' && Array.isArray(c.args[3].cells) && c.args[3].cells.length === 0);
+  assert.ok(seededRow, 'and the row it moves into was seeded empty rather than overfilling row 0');
   const dupAdds = find(calls, 'addElement').filter((c) => /\/rows$/.test(String(c.args[2])) && ((c.args[3].cells || [])[0] || {}).control && c.args[3].cells[0].control.fieldName === 'new_tier');
   assert.strictEqual(dupAdds.length, 0, 'a relocated field must never be re-added as a second control');
 });
@@ -4145,4 +4151,82 @@ test('a failed default-form promotion WARNS instead of reporting a silent succes
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(m) });
   assert.ok(warnings.some((w) => /could not make form the default/.test(w) && /privilege check failed/.test(w)),
     `expected a promotion-failure warning naming the reason; got ${JSON.stringify(warnings)}`);
+});
+
+// --- #581: field placement must pack to the section's grid width ---------------------------------
+//
+// The reconcile path ignored `section.columns` entirely: an ADDED field became its own single-cell
+// row, and a MOVED field was appended to whatever row happened to be last. So the same spec produced
+// a structurally different form depending only on whether the form already existed — a 2-column
+// section that `rowsFromCells` would lay out as [[a,b],[c,d]] came out as one four-cell row on a
+// rebuild, a shape the create path can never emit.
+
+test('form topology: fields ADDED to a 2-column section pack two per row, like the create path', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', 'new_tier', 'new_note', 'new_extra'] },
+  ] }]);
+  // Deployed with ONLY new_name, so the other three are adds onto an existing form.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  // new_tier fits beside new_name in row 0, so the ROW is rewritten rather than a new row appended.
+  const rowPatch = find(calls, 'updateElement').find((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells));
+  assert.ok(rowPatch, `the first add must pack onto row 0; row writes: ${find(calls, 'updateElement').map((c) => c.args[2]).join(', ')}`);
+  assert.deepStrictEqual(rowPatch.args[3].cells.map((c) => c.control.fieldName), ['new_name', 'new_tier'],
+    'row 0 carries both cells, and the existing cell object is re-sent so its id survives');
+  // The third field does NOT fit in row 0, so it opens row 1.
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, `exactly one new row; saw ${rowAdds.length}`);
+  assert.deepStrictEqual(rowAdds[0].args[3].cells.map((c) => c.control.fieldName), ['new_note']);
+});
+
+test('form topology: a 1-column section never packs two cells into one row', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  const rowPatches = find(calls, 'updateElement').filter((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells));
+  assert.deepStrictEqual(rowPatches, [], 'a full one-column row must not be rewritten to hold two cells');
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, 'the field opens its own row instead');
+  assert.deepStrictEqual(rowAdds[0].args[3].cells.map((c) => c.control.fieldName), ['new_tier']);
+});
+
+// A colspan is load-bearing for packing: a full-width title in a 2-column section consumes the whole
+// row, so the next field must NOT be packed beside it even though the row holds only one cell.
+test('form topology: packing counts colspan, not cell count', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  assert.deepStrictEqual(
+    find(calls, 'updateElement').filter((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells)), [],
+    'a row already filled by a colspan:2 cell has no space left, despite holding one cell');
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, 'so the next field opens a new row');
 });

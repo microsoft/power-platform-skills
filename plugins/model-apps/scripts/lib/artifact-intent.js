@@ -17,6 +17,28 @@ const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 // Arrange field cells into `columns` cells-per-row.
 // Mirrors rowsFromCells in sdk-build.js but lives here so this module is
 // self-contained — the build engine should call compileFormIntent, not rowsFromCells.
+
+// The width a cell occupies in a section of `columns` columns, clamped exactly as rowsFromCells
+// clamps it. Shared so the RECONCILE path (which appends a cell to an already-deployed section) packs
+// by the same rule the CREATE path uses. They used to disagree: `placeFieldInSection` appended every
+// added field as its own single-cell row and moved every relocated field onto the last row
+// regardless of width, so the same spec produced a different shape depending only on whether the
+// form already existed.
+function clampedCellSpan(cell, columns) {
+  const cols = Math.max(1, Math.min(4, columns || 1));
+  return Math.min(cols, Math.max(1, Number(cell && cell.colspan) || 1));
+}
+
+// True when `cell` still fits on the END of `row`. This is the exact complement of the
+// "start a new row" test in rowsFromCells (`used + span > cols && current.length`): an EMPTY row
+// always accepts the cell, because a span wider than the section is clamped to it rather than
+// overflowing into a row of its own.
+function cellFitsInRow(row, cell, columns) {
+  const cols = Math.max(1, Math.min(4, columns || 1));
+  const used = ((row && row.cells) || []).reduce((n, c) => n + clampedCellSpan(c, cols), 0);
+  return used === 0 || used + clampedCellSpan(cell, cols) <= cols;
+}
+
 function rowsFromCells(cells, columns) {
   const cols = Math.max(1, Math.min(4, columns || 1));
   const rows = [];
@@ -801,6 +823,8 @@ function findFieldCellPointer(formJson, logical) {
 
 module.exports = {
   compileFormIntent,
+  clampedCellSpan,
+  cellFitsInRow,
   fieldCellIntent,
   notesCellIntent,
   notesSectionIntent,

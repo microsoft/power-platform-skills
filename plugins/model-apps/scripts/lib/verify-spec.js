@@ -5,7 +5,7 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
@@ -223,6 +223,88 @@ async function verifySpec(spec, read, opts = {}) {
         relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
       }
       add('relationship', schema, relCache.get(child).has(schema));
+    }
+  }
+
+  // Form TOPOLOGY. Existence is not proof of shape: every wrong-layout defect this plugin has hit —
+  // fields flattened into the first section, a duplicate tab appended on each rebuild, a relocated
+  // field piled into an already-full row — deployed a form that EXISTS with the right name and type,
+  // so verify reported an unqualified PASS while the layout was wrong.
+  //
+  // Scope is deliberately the AUTHORED subset, not an exact match: the engine appends sub-grid and
+  // notes sections the spec never declares, and a maker may add their own. So this asserts that every
+  // tab and section the author declared is present, and that every field lands in the section the
+  // author put it in — and says nothing about containers it did not declare.
+  //
+  // Only EXPLICIT layouts are checked. An `auto` layout declares no shape to honour, so there is
+  // nothing to verify beyond the field list the existing checks already cover.
+  //
+  // Fail-closed: when the formxml cannot be read the check is reported NOT present with the read
+  // error, never skipped — "we could not look" must not read as "the layout is correct".
+  if (typeof read.formTopology === 'function') {
+    for (const f of spec.forms || []) {
+      if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
+      const entity = String(f.entity || '').toLowerCase();
+      const name = f.name || `${f.entity} form`;
+      let id = null;
+      try {
+        id = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
+      } catch { id = null; }
+      if (!id) continue; // the existence check above already reported this form as missing.
+
+      let xml = null;
+      let readError = null;
+      try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
+      if (!xml) {
+        add('form-topology', `${entity}.${name}`, false,
+          `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
+        continue;
+      }
+
+      const deployed = parseFormTopology(xml);
+      const byTab = new Map(deployed.map((t) => [String(t.name || '').toLowerCase(), t]));
+      // Where the DEPLOYED form actually placed each bound field, keyed by section name.
+      const placedIn = new Map();
+      for (const t of deployed) for (const c of t.columns || []) for (const sec of c.sections || []) {
+        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, String(sec.name || '').toLowerCase());
+      }
+
+      const problems = [];
+      f.tabs.forEach((t, ti) => {
+        if (!t || typeof t !== 'object') return;
+        const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
+        const got = byTab.get(tabName);
+        if (!got) { problems.push(`tab '${tabName}' is absent`); return; }
+        const authoredColumns = formColumnsOf(t);
+        if ((got.columns || []).length < authoredColumns.length) {
+          problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
+        }
+        authoredColumns.forEach((col, ci) => {
+          const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
+          const deployedSections = new Set(((got.columns || [])[ci] || {}).sections
+            ? ((got.columns || [])[ci].sections || []).map((x) => String(x.name || '').toLowerCase())
+            : []);
+          sections.forEach((sec, si) => {
+            if (!sec || typeof sec !== 'object') return;
+            const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
+            if (!deployedSections.has(secName)) {
+              problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
+              return;
+            }
+            for (const entry of (sec.fields || [])) {
+              const fieldName = typeof entry === 'string' ? entry : (entry && entry.name);
+              if (!fieldName) continue;
+              const fl = String(fieldName).toLowerCase();
+              const where = placedIn.get(fl);
+              if (where === undefined) problems.push(`field '${fl}' is not placed on the deployed form`);
+              else if (where !== secName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
+            }
+          });
+        });
+      });
+
+      add('form-topology', `${entity}.${name}`, problems.length === 0,
+        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
     }
   }
 
@@ -1064,6 +1146,60 @@ function parseFetchXml(xml) {
     });
   }
   return { conditions, orders };
+}
+
+// Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
+//
+// Why this exists: form verification used to prove only that a form row EXISTS with the right
+// (entity, name, type), plus whether it is the table default. Every wrong-layout failure this plugin
+// has hit — fields flattened into the first section, a tab appended on every rebuild, a relocated
+// field piled into a full row — therefore finished with an unqualified PASS. Existence is not proof
+// of shape.
+//
+// Shape being parsed (attribute order varies; quotes may be single or double):
+//   <form><tabs>
+//     <tab name="tab_overview" ...><columns>
+//       <column width="60%"><sections>
+//         <section name="sec_summary" ...><rows>
+//           <row><cell ...><control datafieldname="new_name" .../></cell></row>
+//   … and a cell may carry no control at all (a spacer), or a control with no datafieldname
+//   (a sub-grid, the notes timeline, a web resource) — those are NOT bound fields and are skipped.
+//
+// Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
+// sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
+// first close tag, which for nested containers attributes children to the wrong parent.
+function parseFormTopology(xml) {
+  const s = String(xml || '');
+  const tabs = [];
+  let tab = null, column = null, section = null;
+  const re = /<(\/?)(tab|column|section|cell|control)\b([^>]*?)(\/?)>/gi;
+  const attr = (raw, name) => {
+    const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
+    return m ? (m[1] != null ? m[1] : m[2]) : undefined;
+  };
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    const raw = m[3];
+    const selfClosing = m[4] === '/';
+    if (closing) {
+      if (tag === 'tab') { tab = null; column = null; section = null; }
+      else if (tag === 'column') { column = null; section = null; }
+      else if (tag === 'section') section = null;
+      continue;
+    }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
+    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
+    else if (tag === 'control' && section) {
+      // Only BOUND fields. A control with no `datafieldname` is a sub-grid, the notes timeline or a
+      // web resource — engine-owned, never something the spec's field list claims to place.
+      const f = attr(raw, 'datafieldname');
+      if (f) section.fields.push(String(f).toLowerCase());
+    }
+  }
+  return tabs;
 }
 
 function conditionMatches(want, got) {

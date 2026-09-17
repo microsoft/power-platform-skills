@@ -1212,3 +1212,103 @@ test('parseFetchXml keeps the value attribute authoritative, and no-operand oper
   const noOperand = `<fetch><entity name="a"><condition attribute="ownerid" operator="eq-userid"/></entity></fetch>`;
   assert.deepStrictEqual(parseFetchXml(noOperand).conditions, [{ attribute: 'ownerid', operator: 'eq-userid', value: undefined }]);
 });
+
+// --- #584 item 6: --verify proves the deployed form TOPOLOGY, not just that a form exists ---------
+//
+// Form verification used to check (entity, name, type) identity and the default flag only, so every
+// wrong-layout failure this plugin has hit — fields flattened into the first section, a tab appended
+// on every rebuild, a relocated field piled into a full row — finished with an unqualified PASS.
+const TOPO_SPEC = () => ({
+  solution: { uniqueName: 's', publisherPrefix: 'new' },
+  app: { name: 'A' },
+  entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+  forms: [{ entity: 'new_ticket', name: 'Ticket Main', layout: 'explicit', tabs: [
+    { name: 'tab_overview', label: 'Overview', columns: [
+      { width: '60%', sections: [{ name: 'sec_left', label: 'L', fields: ['new_name'] }] },
+      { width: '40%', sections: [{ name: 'sec_right', label: 'R', fields: ['new_notes'] }] },
+    ] },
+  ] }],
+});
+const topoXml = (placement) => `<form><tabs><tab name="tab_overview"><columns>`
+  + `<column width="60%"><sections><section name="sec_left"><rows><row>`
+  + (placement.left || []).map((f) => `<cell><control datafieldname="${f}" /></cell>`).join('')
+  + `</row></rows></section></sections></column>`
+  + `<column width="40%"><sections><section name="sec_right"><rows><row>`
+  + (placement.right || []).map((f) => `<cell><control datafieldname="${f}" /></cell>`).join('')
+  + `</row></rows></section></sections></column>`
+  + `</columns></tab></tabs></form>`;
+
+const topoRead = (xml, over) => Object.assign({
+  // Enough of the reader surface for verifySpec to run end to end; only the form checks matter here.
+  findTable: async () => ({ logicalName: 'new_ticket' }),
+  findColumns: async () => [],
+  sitemapXml: async () => '',
+  queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'f1', name: 'Ticket Main', objecttypecode: 'new_ticket', type: 2, isdefault: true }] : []),
+  formTopology: async () => xml,
+}, over || {});
+
+const topoCheck = async (xml, specMutator) => {
+  const spec = TOPO_SPEC();
+  if (specMutator) specMutator(spec);
+  const res = await verifySpec(spec, topoRead(xml));
+  return (res.checks || []).find((c) => c.kind === 'form-topology');
+};
+
+test('verify PASSES when the deployed layout matches the authored one', async () => {
+  const chk = await topoCheck(topoXml({ left: ['new_name'], right: ['new_notes'] }));
+  assert.ok(chk, 'a form-topology check must be produced for an explicit layout');
+  assert.strictEqual(chk.present, true, `expected a pass; got ${chk && chk.detail}`);
+});
+
+// THE regression this exists for: the exact shape #575 deployed — everything flattened into the
+// first section. The field list is complete, so every pre-existing check still passes.
+test('verify FAILS when fields are flattened into the first section', async () => {
+  const chk = await topoCheck(topoXml({ left: ['new_name', 'new_notes'], right: [] }));
+  assert.strictEqual(chk.present, false, 'a flattened layout must not verify');
+  assert.match(chk.detail, /new_notes/, `the offending field should be named; got ${chk.detail}`);
+  assert.match(chk.detail, /sec_left/, 'and where it actually landed');
+});
+
+test('verify FAILS when an authored section is absent from the deployed form', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /sec_right/, `the missing section should be named; got ${chk.detail}`);
+});
+
+// Fail-closed: an unreadable layout is UNVERIFIED, which must never read as correct.
+test('verify reports a form whose layout cannot be read as NOT proven, rather than skipping it', async () => {
+  const spec = TOPO_SPEC();
+  const res = await verifySpec(spec, topoRead(null, { formTopology: async () => { throw new Error('boom'); } }));
+  const chk = (res.checks || []).find((c) => c.kind === 'form-topology');
+  assert.ok(chk, 'the check must still be produced');
+  assert.strictEqual(chk.present, false, 'an unreadable layout is not a passing layout');
+  assert.match(chk.detail, /unverified|could not read/i);
+});
+
+// An `auto` layout declares no shape, so there is nothing to prove and no check is emitted — this
+// keeps the oracle from inventing a topology expectation the author never stated.
+test('verify emits no topology check for an auto layout', async () => {
+  const spec = TOPO_SPEC();
+  spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main' }];
+  const res = await verifySpec(spec, topoRead(topoXml({ left: ['new_name'], right: [] })));
+  assert.strictEqual((res.checks || []).filter((c) => c.kind === 'form-topology').length, 0);
+});
+
+// The engine appends sub-grid and notes sections the spec never declares, and a maker may add their
+// own fields. The oracle grades the AUTHORED subset, so extras must not fail it.
+test('verify tolerates deployed sections and fields the spec never declared', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections>`
+    + `<section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section>`
+    + `<section name="section_grid_new_note"><rows><row><cell><control id="g" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `<column width="40%"><sections><section name="sec_right"><rows><row>`
+    + `<cell><control datafieldname="new_notes" /></cell><cell><control datafieldname="new_makeradded" /></cell>`
+    + `</row></rows></section></sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml);
+  assert.strictEqual(chk.present, true, `extras must not fail the authored subset; got ${chk && chk.detail}`);
+});
