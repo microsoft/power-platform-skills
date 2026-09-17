@@ -15,6 +15,19 @@ const skillPath = path.resolve(
 );
 const skill = fs.readFileSync(skillPath, 'utf8');
 
+function planningAttemptBlock(source) {
+  const match = source.replace(/\r\n/g, '\n')
+    .match(/```bash\n(SNAPSHOT_PATH=[\s\S]*?\nrun_dataverse_planning_attempt)\n```/);
+  assert.ok(match, 'foreground snapshot commands must expose one recoverable attempt');
+  return match[1];
+}
+
+test('foreground command extraction accepts LF and Windows CRLF checkouts', () => {
+  const normalized = skill.replace(/\r\n/g, '\n');
+  assert.equal(planningAttemptBlock(normalized.replace(/\n/g, '\r\n')),
+    planningAttemptBlock(normalized));
+});
+
 test('foreground Dataverse planning bypasses cached environment resolution', () => {
   const planningStart = skill.indexOf('### Step 3.0 — Foreground Dataverse planning');
   const planningEnd = skill.indexOf(
@@ -30,8 +43,7 @@ test('foreground Dataverse planning bypasses cached environment resolution', () 
 });
 
 test('foreground planning returns failed attempts to recovery and resumes with fresh validated evidence', async (testContext) => {
-  const match = skill.match(/```bash\n(SNAPSHOT_PATH=[\s\S]*?\nrun_dataverse_planning_attempt)\n```/);
-  assert.ok(match, 'foreground snapshot commands must expose one recoverable attempt');
+  const commands = planningAttemptBlock(skill);
   const pluginRoot = path.resolve(__dirname, '../..');
   const bashPaths = process.platform === 'win32'
     ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
@@ -72,7 +84,7 @@ node() {
     const timingsFile = path.join(temporary, 'mobile-planning-timings.json');
     fs.writeFileSync(snapshotFile, '{"stale":true}');
     fs.writeFileSync(evidenceFile, '{"stale":true}');
-    const block = match[1].replaceAll('<working_dir>', directory.replaceAll('\\', '/'));
+    const block = commands.replaceAll('<working_dir>', directory.replaceAll('\\', '/'));
     const env = {
       ...process.env, PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'), REAL_NODE: process.execPath.replaceAll('\\', '/'),
       FIXTURE_SNAPSHOT: JSON.stringify(snapshot), FAILURE_STAGE: failureStage,
