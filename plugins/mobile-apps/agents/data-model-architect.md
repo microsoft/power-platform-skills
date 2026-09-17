@@ -29,8 +29,13 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   this large artifact into model context.
 - **Compact architect evidence path (preferred)** — an absolute path to the
   hash-bound JSON sidecar rendered from that foreground planning snapshot.
-- **Dataverse planning mode** — `required` or `connector-only`.
-  `connector-only` intentionally has no snapshot/evidence paths.
+- **Dataverse planning mode** — `required`. Connector-only planning is owned by
+  `native-app-planner` and must not dispatch this agent.
+- **Approved native capabilities** (create flow, when supplied) — the exact
+  Gate 1-approved capability matrix, including capture/output and retention
+  targets.
+- **Approved connectors** (create flow, when supplied) — the exact Gate
+  1-approved connector list and each external system's ownership boundary.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
 - **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
 
@@ -44,12 +49,18 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   compact architect sidecar. Don't propose a `cr123_customer` table if a verified
   target `contact` table fits.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
-- **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
-  Dataverse discovery. A Dataverse-required run with no trustworthy foreground
-  snapshot is stopped by the orchestrator for the user action needed to restore
-  environment, authentication, inventory, or artifact access. Individual
-  table-detail failures inside a valid snapshot are not blockers; classify the
-  affected table as `Defer`.
+- **Mode fidelity.** This agent runs only for Dataverse-required planning. A
+  run without a trustworthy foreground snapshot returns to the orchestrator's
+  bounded environment, authentication, inventory, or artifact recovery before
+  dispatch. Individual table-detail failures inside a valid snapshot are not
+  blockers; classify the affected table as `Defer`.
+- **Connectivity intent ownership.** Follow
+  [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
+  when deriving schema.
+- **Approved architecture is authoritative when supplied.** Account for
+  approved native capture and retention targets when selecting Image, File,
+  location, or child evidence storage. Do not create a Dataverse duplicate of a connector-owned entity;
+  model only app-owned data or explicit Dataverse projections approved at Gate 1.
 - **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or, on the legacy live-discovery path only, `Unverified` (discovery could not run at all). A `detailLoadFailures` entry in a valid foreground snapshot is always `Defer`, never `Unverified`. Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
@@ -82,18 +93,18 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 6a. Cross-entity Read Audit (when `_screens_section.md` exists OR `mode: cross-entity-audit`)
 7. Produce the `## Data Model` section
 
-**`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 1 (or rolls it into the Gate 1 view if Gate 1 has not yet been presented).
+**`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 2 (the Dataverse data-model gate), not the architecture gate.
 
 ---
 
 ## Planning-mode short circuits
 
-When `Dataverse planning mode: connector-only` is supplied, do not resolve an
-environment, read metadata, or request snapshot artifacts. Write
-`_dm_section.md` with an explicit zero-table `## Data Model` section (all
-summary counts zero, no ER entities or dependency tiers, and a note that the
-confirmed systems of record are the approved connectors), update the normal
-artifact milestone, and return `DONE`.
+When `Dataverse planning mode: connector-only` is supplied, return:
+
+`BLOCKED: This step only applies when Dataverse is selected. Continue the connector-based app plan without data-model planning.`
+
+Do not read metadata or write planning artifacts. The native app planner owns
+the explicit zero-table connector-only section.
 
 ## Snapshot-only fast path
 
@@ -183,7 +194,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
 
-If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 1 review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
+If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's data-model review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
 
 ## Step 2 — Verify Dataverse Access
 
@@ -306,7 +317,7 @@ Classify every planned column before finalizing its table decision:
 >
 > **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. Request incremental detailed expansion only when the candidate is inventory-only or core-only and has not already been fully attempted. If a valid snapshot records the detail read as unavailable, classify Defer. Use Unverified only on the legacy path where discovery never ran. If already-detailed metadata remains incompatible or ambiguous, classify Defer and record what evidence or prerequisite is missing; never loop a no-op expansion or extend merely to keep the workflow moving.
 >
-> Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
+> Surfacing the collision at PLAN time (not at create time) prevents the user from approving the data model with a name that will explode at Step 5a of `/add-dataverse`.
 
 Build a table:
 
@@ -357,7 +368,7 @@ dependency-tier counts.
 **Print before starting:**
 > "→ Auditing planned screens for supported cross-entity read paths…"
 
-**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gate 4a/4b lands.
+**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gates 3 and 4 land.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
@@ -368,7 +379,15 @@ code, so this audit never proposes generated formula metadata.
 
 **Algorithm:**
 
-1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first (graph-only mode after Gate 4a). If absent, parse `<working_dir>/native-app-plan.md` and extract the `## Screens` section. Walk every per-screen spec and collect every `related_entity_fields` block.
+1. **Read the screen plan.** In `mode: cross-entity-audit`, read `plan_path`
+  (default `<working_dir>/native-app-plan.md`) and extract `## Screens`.
+  `_screens_section.md` is graph-only scratch after Gate 3 and is not a substitute
+  for the final per-screen specs. If the canonical plan or completed specs are
+  missing, return `NEEDS_CONTEXT: canonical-screen-specs` so the foreground
+  restores that handoff; do not report zero related fields from a graph alone.
+  Only legacy default-mode callers may use `_screens_section.md` when it
+  actually contains per-screen specs. Walk every spec and collect every
+  `related_entity_fields` block.
 
 2. **Per entry, branch on `recommends`:**
 
@@ -640,7 +659,7 @@ or written business/status column needed by the app, and each shown lookup
 names for Create/Extend schema. Mechanically verify that no relationship
 endpoint has an empty block and that every relationship's FK path is visible.
 
-If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
+If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at data-model approval (Gate 2 in `/create-mobile-app`) and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
 After `_dm_section.md` and the normalized schema contract are written,
 atomically update milestone

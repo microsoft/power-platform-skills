@@ -1110,6 +1110,286 @@ function validateFormSecurityRoles(f, spec, errors) {
   }
 }
 
+// Allow-listed keys for an explicit form layout, with the reason each rejection exists.
+//
+// `tabs[]`/`sections[]` had no allow-list at all, so an invented or misspelled key validated clean
+// and then vanished — the same class of silent loss that let `entities[].localizedLabels` ship as a
+// no-op. Worse here, several plausible keys are accepted by the SDK's normalizers and then DROPPED
+// by its serializer: measured against the vendored bundle, a tab emits only name/expanded/visible
+// + label, and a section only name/showlabel/visible/columns + label. Anything else never reaches
+// the FormXml, so accepting it would promise a layout Dataverse will not render.
+const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections', 'columns']);
+const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
+const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
+const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+// Identity of a sample-data `matchOn` value, shared by the author-time gate in `validateAppSpec` and
+// the loader's own refusal in `chooseMatchOn`/`firstDuplicateNonEmpty` (entity-provision.js).
+//
+// It lives here because entity-provision.js already requires this module, so one definition can feed
+// both without a cycle — and the two MUST agree: the gate exists only to move the loader's refusal
+// earlier, so a gate that decides "duplicate" differently either rejects a spec that would build or
+// passes one that would not.
+//
+// Type-sensitive because the loader is: `1` and `'1'` are distinct keys. Dataverse would coerce both
+// to "1" in a text column, so a spec mixing the two still has a latent collision the loader does not
+// catch either — that is a shared limitation, deliberately not papered over on one side only.
+function sampleKeyIdentity(v) {
+  return JSON.stringify([typeof v, v]);
+}
+
+// The names the form compiler generates for an UNNAMED tab/section, shared with artifact-intent.js
+// so the spec gate and the compiler cannot disagree about what a container will actually be called.
+//
+// This matters because the generated name is a real identity, not a placeholder: the topology
+// reconcile matches a deployed container by name, so an authored `name: "section_0_0"` and an
+// unnamed first section are the SAME container to every rebuild path even though the create path
+// emits two. Uniqueness therefore has to be checked on the EFFECTIVE name, which means the gate has
+// to know these formulas exactly.
+//
+// The `ci` segment is appended only for ci > 0, and that asymmetry is load-bearing: adding it
+// unconditionally would rename every section on every already-deployed single-column form, and each
+// rebuild would then create a duplicate section beside the original instead of converging onto it.
+function generatedTabName(ti) {
+  return 'tab_' + ti;
+}
+
+function generatedSectionName(ti, ci, si) {
+  return 'section_' + ti + (ci > 0 ? '_' + ci : '') + '_' + si;
+}
+
+// The form-columns a tab declares, in the shape the compiler reads them: `columns[]` is the explicit
+// multi-column form, and `sections[]` is the single-full-width-column shorthand. Shared for the same
+// reason as the name helpers — the section index that feeds `generatedSectionName` is the index
+// WITHIN a form-column, so anything computing an effective name has to walk the same structure.
+function formColumnsOf(tab) {
+  if (!tab || typeof tab !== 'object') return [];
+  if (Array.isArray(tab.columns)) return tab.columns;
+  return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
+}
+
+// Keys an author reasonably reaches for that the serializer silently discards. Naming the real
+// mechanism is the difference between an actionable error and a scavenger hunt.
+const FORM_LAYOUT_KEY_HINTS = {
+  showLabel: " — a TAB has no label toggle in FormXml; use the tab's `label`, or move the toggle to a section's `showLabel`",
+  labelPosition: ' — label position is not expressible per tab/section through this SDK',
+  locked: ' — section locking is not expressible through this SDK',
+  column: " — did you mean 'columns'?",
+  field: " — did you mean 'fields'?",
+  title: " — did you mean 'label'?",
+  visibility: " — did you mean 'visible'?",
+  colSpan: " — did you mean 'colspan'?",
+  rowSpan: " — did you mean 'rowspan'?",
+  readonly: " — did you mean 'readOnly'?",
+};
+
+// Sections a tab declares, from EITHER shape: directly on `sections` (the single-full-width-column
+// shorthand) or nested inside `columns[]` (the multi-column form). Every raw-spec reader must go
+// through this — reading `tab.sections` alone silently skips every check for a multi-column tab,
+// which is how a lint rule came to report such a tab as having no sections at all.
+function formSectionsOf(tab) {
+  if (!tab || typeof tab !== 'object') return [];
+  if (Array.isArray(tab.columns)) return tab.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []));
+  return Array.isArray(tab.sections) ? tab.sections : [];
+}
+
+function validateFormLayoutKeys(f, errors) {
+  if (!f || !Array.isArray(f.tabs)) return;
+  const label = `form '${f.name || f.entity}'`;
+  // An explicit layout has to supply real structure, and this is the gate that decides: the BUILD
+  // runs `validateAppSpec` only — it never calls the standalone lint — so a rule that lives only in
+  // `spec-lint.js` does not stop a deploy.
+  //
+  // MEASURED before this check, all with `validate.ok === true`:
+  //   tabs: []                        -> compiled 0 tabs, 0 sections, 0 bound cells
+  //   tab with sections: []           -> compiled 1 tab,  0 sections, 0 bound cells
+  //   tab with columns: []            -> same
+  //   tab with columns:[{sections:[]}]-> same
+  // Every declared field was silently dropped, because there is nowhere to place one
+  // (`firstSectionRowsPointer` returns ''). `tabs: []` is worse still: with notes enabled the
+  // compiler throws a raw `Cannot read properties of undefined (reading 'columns')` rather than
+  // reporting anything an author can act on.
+  //
+  // `layout: 'explicit'` with no `tabs` key at all is already rejected elsewhere, so only the
+  // present-but-empty shapes are handled here.
+  if (f.tabs.length === 0) {
+    errors.push(`${label}: uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
+  }
+  const unknown = (where, obj, allowed) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const k of Object.keys(obj)) {
+      if (allowed.has(k)) continue;
+      errors.push(`${label}: unknown key '${k}' on ${where}${FORM_LAYOUT_KEY_HINTS[k] || ''} (allowed: ${[...allowed].join(', ')})`);
+    }
+  };
+  const checkSpan = (where, entry) => {
+    for (const key of ['colspan', 'rowspan']) {
+      const v = entry[key];
+      if (v === undefined) continue;
+      if (!Number.isInteger(v) || v < 1) errors.push(`${label}: ${where} has ${key} '${v}' — it must be a whole number of ${key === 'colspan' ? 'columns' : 'rows'}, 1 or greater`);
+    }
+  };
+  // A tab/section/form-column entry the compiler will DEREFERENCE. `unknown` deliberately ignores a
+  // non-object, so `tabs: [null]` used to reach compileFormIntent — which reads `t.columns` — as a raw
+  // TypeError instead of a structural validation error.
+  const mustBeObject = (where, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) return true;
+    errors.push(`${label}: ${where} must be an object, got ${Array.isArray(v) ? 'an array' : JSON.stringify(v)}`);
+    return false;
+  };
+  // `expanded`/`visible`/`showLabel` are only ever truth-tested by the compiler (`!== false`), so a
+  // STRING "false" compiles as true and silently deploys the opposite of what was authored — the same
+  // silent-no-op class the allow-list exists to end.
+  const checkBooleans = (where, o, keys) => {
+    for (const k of keys) {
+      if (o[k] === undefined) continue;
+      if (typeof o[k] !== 'boolean') errors.push(`${label}: ${where} has ${k} '${o[k]}' — it must be true or false, not a ${typeof o[k]}`);
+    }
+  };
+  // Names are IDENTITY for the build's topology reconcile (it matches a deployed container by name,
+  // and keys its placement targets by name), so two containers sharing one name make both
+  // declarations resolve to the same live container.
+  //
+  // Checked on the EFFECTIVE name — the authored one, or the compiler's generated fallback — because
+  // a generated name is just as real an identity. An unnamed first section and an explicit
+  // `name: "section_0_0"` both compile to `section_0_0`, so create emits two sections while
+  // `declaredSectionByField`/`sectionTargets` route both their fields to one. MEASURED before this
+  // gate: the compiled intent carried two sections named `section_0_0`.
+  //
+  // Reserving the generated namespace instead would be wrong: a spec DOWNLOADED from a deployed app
+  // carries the real deployed section names, which for an app this compiler built are exactly these
+  // generated ones — rejecting them would break every download → rebuild round-trip.
+  const seenTabNames = new Map();
+  const seenSectionNames = new Map();
+  const checkUniqueName = (where, authored, effective, seen, kind) => {
+    if (effective === undefined || effective === null || effective === '') return;
+    const key = String(effective).toLowerCase();
+    if (seen.has(key)) {
+      const prev = seen.get(key);
+      // Name the generated side explicitly — an author who wrote only one of the two names would
+      // otherwise get an error about a name they cannot find anywhere in their spec.
+      const origin = (!authored || !prev.authored)
+        ? ` — an unnamed ${kind} is given the generated name '${effective}', so this collides with it`
+        : '';
+      errors.push(`${label}: ${where} reuses the ${kind} name '${effective}', already used by ${prev.where}${origin} — a ${kind} name is its identity on a rebuild, so duplicates make both declarations target the same deployed ${kind}. Give one of them a different \`name\`.`);
+      return;
+    }
+    seen.set(key, { where, authored: !!authored });
+  };
+  // A FIELD is identity too, and form-wide. The create path emits one cell per entry, but every
+  // reconcile path keys placement by logical name and takes the FIRST: `declaredSectionByField`
+  // resolves a field to one section, `findFieldCellPointer` targets the first matching cell, and
+  // `formFieldLogicals` de-duplicates. So a field listed twice deploys TWO cells on a fresh create
+  // and ONE on a rebuild — the same spec producing two different forms, which is the silent
+  // disagreement this whole gate exists to end.
+  //
+  // MEASURED on a two-section form listing `contoso_name` in both: the compiled intent carries 2
+  // bound cells while declaredSectionByField resolves the field to the first section only.
+  //
+  // Rejecting rather than implementing multi-placement because one-cell-per-field is what the rest
+  // of the pipeline is built on; supporting a second placement would mean teaching the reconcile,
+  // the prune and the verifier oracle to carry a set of pointers per field.
+  const seenFieldNames = new Map();
+  const checkUniqueField = (where, name) => {
+    if (typeof name !== 'string' || !name) return;
+    const key = name.toLowerCase();
+    if (seenFieldNames.has(key)) {
+      errors.push(`${label}: ${where} places field '${name}' again — it is already placed by ${seenFieldNames.get(key)}. A form places each field once: a rebuild resolves the field to its first placement, so the second cell would deploy on a fresh create and then vanish on the next build. Remove the duplicate, or move the field to the section you want it in.`);
+      return;
+    }
+    seenFieldNames.set(key, where);
+  };
+  f.tabs.forEach((t, ti) => {
+    const where = `tab ${t && t.label ? `'${t.label}'` : `#${ti + 1}`}`;
+    if (!mustBeObject(where, t)) return;
+    unknown(where, t, FORM_TAB_KEYS);
+    checkBooleans(where, t, ['expanded', 'visible']);
+    checkUniqueName(where, t.name, t.name || generatedTabName(ti), seenTabNames, 'tab');
+    // Section names are checked COLUMN-AWARE, because the index that feeds the generated name is the
+    // section's position within its form-column — not its position in the flattened list the
+    // per-section checks below walk. Done in its own pass so those checks keep their existing
+    // flattened numbering, and their messages do not churn.
+    formColumnsOf(t).forEach((c, ci) => {
+      const colSections = (c && Array.isArray(c.sections)) ? c.sections : [];
+      colSections.forEach((s, si) => {
+        if (!s || typeof s !== 'object' || Array.isArray(s)) return;
+        const nwhere = `${where} section ${s.label ? `'${s.label}'` : `#${si + 1}`}${ci > 0 ? ` (column #${ci + 1})` : ''}`;
+        checkUniqueName(nwhere, s.name, s.name || generatedSectionName(ti, ci, si), seenSectionNames, 'section');
+      });
+    });
+    // A tab is EITHER the single-full-width-column shorthand or the explicit multi-column shape.
+    // Accepting both would leave the compiler to pick one and silently discard the other's sections.
+    if (t && Array.isArray(t.columns) && Array.isArray(t.sections)) {
+      errors.push(`${label}: ${where} declares both 'sections' and 'columns' — 'sections' is the shorthand for one full-width column, so use one or the other (move those sections into columns[0].sections).`);
+    }
+    // `columns` means an INTEGER grid width on a section but an ARRAY of form-columns on a tab — the
+    // single most confusable key in this schema. A non-array tab `columns` used to validate clean and
+    // then be discarded by the compiler (which reads `Array.isArray(t.columns)`), so `"columns": 2`
+    // on a tab silently produced a one-column form: exactly the silent no-op this allow-list exists
+    // to end.
+    if (t && t.columns !== undefined && !Array.isArray(t.columns)) {
+      errors.push(`${label}: ${where} has columns '${t.columns}' — on a TAB, 'columns' is the list of form-columns ([{ "width": "60%", "sections": [...] }]). To give a SECTION a multi-column grid, put 'columns': ${t.columns} on the section instead.`);
+    }
+    const columns = (t && Array.isArray(t.columns)) ? t.columns : [];
+    columns.forEach((c, ci) => {
+      const cwhere = `${where} column #${ci + 1}`;
+      if (!mustBeObject(cwhere, c)) return;
+      unknown(cwhere, c, FORM_TAB_COLUMN_KEYS);
+      // Dataverse omits an undefined width from columnToRaw and then rejects the push, and a width
+      // that is not a percentage does not lay out at all.
+      if (c && c.width !== undefined && !/^\d{1,3}%$/.test(String(c.width))) {
+        errors.push(`${label}: ${where} column #${ci + 1} has width '${c.width}' — a form-column width must be a percentage such as '60%'`);
+      }
+      // A non-array `sections` is treated as absent by formSectionsOf, so the column's whole layout
+      // would be silently dropped rather than rejected.
+      if (c && c.sections !== undefined && !Array.isArray(c.sections)) {
+        errors.push(`${label}: ${where} column #${ci + 1} has a non-array 'sections' — it must be a list of sections`);
+      }
+    });
+    const sections = formSectionsOf(t);
+    // A tab with no section has nowhere to place a field, a sub-grid or a quick-view, so everything
+    // the author declared for it is dropped in silence. Checked against the FLATTENED list, so the
+    // multi-column shape counts too — looking at `t.sections` alone would report every multi-column
+    // tab as empty, which is the same silent disagreement in the other direction.
+    if (sections.length === 0) {
+      errors.push(`${label}: ${where} has no sections — add at least one section with fields, or drop the tab.`);
+    }
+    sections.forEach((s, si) => {      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
+      if (!mustBeObject(swhere, s)) return;
+      unknown(swhere, s, FORM_SECTION_KEYS);
+      checkBooleans(swhere, s, ['showLabel', 'visible']);
+      if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
+        errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
+      }
+      const entries = (s && Array.isArray(s.fields) ? s.fields : []);
+      entries.forEach((entry, fi) => {
+        // Runs for BOTH entry shapes — a bare logical-name string and a `{ name, ... }` object —
+        // because either one places a cell, so either one can be the duplicate.
+        checkUniqueField(swhere, typeof entry === 'string'
+          ? entry
+          : (entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.name : undefined));
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+        const fwhere = `${swhere} field '${entry.name || '?'}'`;
+        unknown(fwhere, entry, FORM_FIELD_ENTRY_KEYS);
+        checkSpan(fwhere, entry);
+        // A cell that spans DOWN reserves its column in the rows beneath it, and the following row's
+        // cells fill the section left to right — so a field declared after a spanning one lands in
+        // the reserved slot. Every stock Dataverse form that uses `rowspan` puts it on the LAST cell
+        // of its section (measured on the account and contact Main forms), so that is the shape this
+        // compiler emits.
+        //
+        // This is a COMPILER limitation, not a platform one: an empty SPACER cell occupies the
+        // reserved slot and the SDK serializes it correctly (measured against the vendored bundle —
+        // `{}` pushes as `<cell … colspan="1" rowspan="1" />`). Emitting spacers would lift this
+        // restriction; until the compiler does, rejecting is better than silently mispositioning a
+        // control. Tracked in #581.
+        if (Number.isInteger(entry.rowspan) && entry.rowspan > 1 && fi !== entries.length - 1) {
+          errors.push(`${label}: ${fwhere} has rowspan ${entry.rowspan} but is not the last field in its section — a cell that spans rows reserves its column underneath, and this compiler does not yet emit the spacer cell needed to place a field beside it. Move this field to the end of the section, or drop the rowspan.`);
+        }
+      });
+    });
+  });
+}
+
 function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   const label = `form '${f.name || f.entity}'`;
   const entity = entityByLower.get(String(f.entity || '').toLowerCase());
@@ -1127,7 +1407,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   const listedByLayout = new Set();
 
   for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
-    for (const s of ((t && t.sections) || [])) {
+    for (const s of formSectionsOf(t)) {
       if (s && s.fields !== undefined && !Array.isArray(s.fields)) {
         // Guard the compiler, which does `(s.fields || []).map(...)`. A string is ITERABLE and every
         // character of it IS a string, so a `fields: "new_name"` typo would pass a naive per-entry
@@ -1246,7 +1526,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   // warning, not an error: the author asked for it by name and may be pairing it with a custom control.
   if (explicit) {
     for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
-      for (const s of ((t && t.sections) || [])) {
+      for (const s of formSectionsOf(t)) {
         // Re-guard: the array check in the first loop `continue`s that loop only. Without repeating
         // it here a non-iterable `fields` (e.g. `{}` or `3`) throws a raw TypeError out of
         // validateAppSpec — discarding the correct finding the first loop already pushed.
@@ -1652,6 +1932,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
     validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormLayoutKeys(f, errors);
     validateFormSecurityRoles(f, spec, errors);
     // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.
     // `compileFormIntent` takes the explicit path only when `tabs` is an ARRAY, so this combination
@@ -2015,10 +2296,16 @@ function validateAppSpec(spec, opts = {}) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
       // ID-passthrough tiles (from a round-tripped/downloaded app) carry the deployed view/chart ids
       // + entity directly instead of names — they bind to existing artifacts, so skip the name checks.
-      const byId = t.viewId || t.visualizationId;
+      // `visualizationId` identifies a CHART and means nothing on a list tile; sharing one id test
+      // across both let a list tile with a stray visualizationId skip its viewId requirement.
+      const byId = t.type === 'chart' ? (t.viewId || t.visualizationId) : t.viewId;
       if (t.type === 'chart') {
         if (byId) {
+          // BOTH ids are load-bearing: a chart renders a visualization OVER a view. This mirrors
+          // spec-lint exactly — the two gates disagreeing meant a spec could validate clean and then
+          // fail its own structural lint.
           if (!t.viewId) errors.push(`dashboard '${d.name}': chart tile with visualizationId also needs viewId`);
+          if (!t.visualizationId) errors.push(`dashboard '${d.name}': id-based chart tile with viewId also needs visualizationId`);
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based chart tile needs entity`);
           else badEntityRef(t.entity, `dashboard '${d.name}': chart tile`);
         } else {
@@ -2392,12 +2679,68 @@ function validateAppSpec(spec, opts = {}) {
         const ent = lower.has(k.toLowerCase())
           ? (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === k.toLowerCase())
           : null;
+        // Mirror chooseMatchOn (entity-provision.js): with no safe single-column alternate key the
+        // loader falls back to the primary NAME column as `matchOn`, and duplicate names would let
+        // Dataverse resolve or deduplicate the wrong row — so the seeder refuses. That refusal lands
+        // in the sample-data phase, i.e. AFTER tables, forms and views are already deployed, which
+        // turns ordinary sample data (two tickets both called 'Printer issue') into a spec that
+        // validates clean and then stops building halfway. Caught here instead, at author time.
+        //
+        // Values are read case-insensitively because a sample record is keyed by the column name as
+        // the author wrote it, while the runtime compares the resolved lowercase logical name.
+        if (ent && ent.primaryAttribute && ent.primaryAttribute.schemaName) {
+          const valueOf = (rec, col) => {
+            if (!rec || typeof rec !== 'object') return undefined;
+            const want = String(col).toLowerCase();
+            for (const key of Object.keys(rec)) if (key.toLowerCase() === want) return rec[key];
+            return undefined;
+          };
+          const filled = (col) => v.length > 0 && v.every((r) => {
+            const x = valueOf(r, col);
+            return x !== undefined && x !== null && x !== '';
+          });
+          // An alternate key is enforced-unique by Dataverse, so it is preferred and makes the
+          // primary-name fallback irrelevant.
+          const hasSafeKey = (ent.alternateKeys || []).some((key) => (key.columns || []).length === 1 && filled(key.columns[0]));
+          // Whichever column becomes `matchOn` is the one duplicates break, so check THAT column.
+          // Checking only the primary-name fallback left `{ code: 'A' }, { code: 'A' }` passing the
+          // gate and then failing during sample-data provisioning — after tables, forms and views
+          // were already deployed, which is the whole failure this gate exists to move earlier.
+          const altKeyCol = (ent.alternateKeys || [])
+            .map((key) => ((key.columns || []).length === 1 ? key.columns[0] : null))
+            .find((c) => c && filled(c));
+          const matchOnCol = altKeyCol || (!hasSafeKey && filled(ent.primaryAttribute.schemaName) ? ent.primaryAttribute.schemaName : null);
+          if (matchOnCol) {
+            const seen = new Set();
+            for (const r of v) {
+              const raw = valueOf(r, matchOnCol);
+              // Keyed through the SHARED `sampleKeyIdentity` the loader uses, so this gate cannot
+              // decide "duplicate" differently from the code that actually refuses the seed. A
+              // plain `String(...)` key made `1` and `'1'` collide here while the loader treats them
+              // as distinct — rejecting, at author time, a spec that builds.
+              const key = sampleKeyIdentity(raw);
+              if (seen.has(key)) {
+                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
+                break;
+              }
+              seen.add(key);
+            }
+          }
+        }
         for (const rec of v) {
           for (const { field, token } of invalidChoiceSampleTokens(spec, ent, rec)) {
             errors.push(`sampleData['${k}']: value '${token}' for choice column '${field}' is not a declared option label`);
           }
           if (!rec || typeof rec !== 'object') {
             continue;
+          }
+          // `_seedKey` is not a loader sentinel and never has been: only `$parent`, `$parents` and
+          // `statusReason` are stripped before a record body is sent, so a `_seedKey` reaches
+          // Dataverse as an attribute no table has. Rejected rather than silently stripped because
+          // an author writing one is asking for dedupe/identity behavior that does not exist — the
+          // real mechanism is a single-column alternate key, which `matchOn` resolves.
+          if (Object.prototype.hasOwnProperty.call(rec, '_seedKey')) {
+            errors.push(`sampleData['${k}']: '_seedKey' is not a supported sample-record key — it is sent to Dataverse as an unknown attribute. Declare a single-column alternate key on the table for identity/dedupe instead.`);
           }
           // #1: validate the parent bind(s) — one `$parent` (singular) and/or many `$parents` (a
           // junction row binding multiple sides). Each must name a known parent entity, carry a
@@ -2928,6 +3271,10 @@ function migrateAppSpec(spec) {
 
 module.exports = {
   rejectLocalizedGlobalChoice,
+  sampleKeyIdentity,
+  generatedTabName,
+  generatedSectionName,
+  formColumnsOf,
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,
@@ -2977,6 +3324,11 @@ module.exports = {
   relationshipFor,
   resolveParentRelationship,
   lookupColumnsFor,
+  // Exported so every raw-spec form reader — including the offline eval harness — goes through the
+  // one helper that understands BOTH tab shapes. A reader that opens `tab.sections` directly silently
+  // skips every multi-column tab, which is exactly how a lint rule came to report such a tab as
+  // having no sections at all.
+  formSectionsOf,
   childRelationshipsFor,
   relationshipSchemaName,
   prefixedRelationshipName,

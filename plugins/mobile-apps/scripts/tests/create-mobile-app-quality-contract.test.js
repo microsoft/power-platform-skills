@@ -29,7 +29,7 @@ test('foreground command extraction accepts LF and Windows CRLF checkouts', () =
 });
 
 test('foreground Dataverse planning bypasses cached environment resolution', () => {
-  const planningStart = skill.indexOf('### Step 3.0 — Foreground Dataverse planning');
+  const planningStart = skill.indexOf('### Foreground Dataverse planning');
   const planningEnd = skill.indexOf(
     'Build `<working_dir>/.tmp/dataverse-concepts.json`',
     planningStart,
@@ -40,6 +40,43 @@ test('foreground Dataverse planning bypasses cached environment resolution', () 
     skill.slice(planningStart, planningEnd),
     /resolve-environment\.js" "\$ACTIVE_ENV_ID" --no-cache/,
   );
+});
+
+test('approved architecture precedes typed discovery without retrying the normal planner phases', () => {
+  const architectureStart = skill.indexOf('### Architecture gate');
+  const publisher = skill.indexOf('Now execute the deferred Step 1.7');
+  const snapshotStart = skill.indexOf('### Foreground Dataverse planning');
+  const conceptsStart = skill.indexOf('Build `<working_dir>/.tmp/dataverse-concepts.json`');
+  const commandsStart = skill.indexOf('SNAPSHOT_PATH="');
+  assert.ok(architectureStart >= 0 && architectureStart < publisher);
+  assert.ok(publisher < snapshotStart && snapshotStart < conceptsStart);
+  assert.ok(conceptsStart < commandsStart);
+  const architecture = skill.slice(architectureStart, publisher);
+  assert.match(architecture, /Architecture phase: gate-only/);
+  assert.match(architecture, /Dataverse planning snapshot: NOT SUPPLIED/);
+  assert.match(architecture, /approved-architecture\.md/);
+  assert.doesNotMatch(architecture, /create-dataverse-snapshot\.js|detect-publisher-prefix\.js/);
+  const concepts = skill.slice(conceptsStart, commandsStart);
+  assert.match(concepts, /Gate 1-approved architecture/);
+  assert.match(concepts, /exclude connector-owned\s+records from Dataverse candidate selection/);
+  assert.match(skill, /initial `gate-only` and `complete` planner\s+passes are separate normal `nativePlanner` attempts/);
+  assert.match(skill, /architecture-completion signal below is a successful `finish`/);
+});
+
+test('inline Dataverse planning keeps compact evidence and validates before Gate 2', () => {
+  const fallbackStart = skill.indexOf('#### 3.0a — Inline-gate fallback');
+  const fallbackEnd = skill.indexOf('#### 3.0 — Sub-agent return-status switch');
+  assert.ok(fallbackStart >= 0 && fallbackStart < fallbackEnd);
+  const fallback = skill.slice(fallbackStart, fallbackEnd);
+  assert.match(fallback, /Approved native capabilities:[\s\S]*Approved connectors:/);
+  assert.match(fallback, /`SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim/);
+  assert.match(fallback, /full snapshot is\s+validator input only; read only the compact evidence/);
+  assert.doesNotMatch(fallback, /\bEVIDENCE_PATH\b/);
+  assert.match(fallback, /Before presenting Gate 2[\s\S]*validate-dataverse-planning-decisions\.js/);
+  assert.match(fallback, /permit approval only on exit `0`/);
+  assert.match(fallback, /every direct revision and the fully-inline fallback/);
+  assert.match(fallback, /approve native capabilities, connectors, and data platform first/);
+  assert.match(fallback, /then draft the data model from `ARCHITECT_EVIDENCE_PATH`/);
 });
 
 test('foreground planning returns failed attempts to recovery and resumes with fresh validated evidence', async (testContext) => {
@@ -134,7 +171,7 @@ test('planning recovery keeps the agent active without weakening approval or met
 test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {
   const dataModel = skill.indexOf('### Step 8 — Apply data model');
   const sampleData = skill.indexOf('### Step 8.5 — Seed sample data');
-  const offline = skill.indexOf('### Step 8.85 — Offline profile');
+  const offline = skill.indexOf('### Offline profile');
   const native = skill.indexOf('### Step 9 — Apply native capabilities');
 
   assert.ok(dataModel < sampleData);
@@ -144,9 +181,11 @@ test('offline setup follows materialized Dataverse data and never infers connect
   const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7'));
   assert.match(design, /`DONE`[^\n]+continue to Step 7/);
   assert.match(design, /Continuing to Step 7/);
-  assert.match(skill, /Do not classify a missing\s+manifest as connector-only/);
-  assert.match(skill, /Missing,\s+malformed, or empty manifests are `BLOCKED/);
-  assert.match(skill, /seeding step fails for a non-manifest reason[\s\S]*continue to Step 8\.85/);
+  const offlineSetup = skill.slice(offline, native);
+  assert.match(offlineSetup, /Do not infer connector-only from a missing manifest/);
+  assert.match(offlineSetup, /read-only manifest\s+recovery in Step 8\.5 before asking/);
+  assert.match(offlineSetup, /If verification still fails, report\s+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`/);
+  assert.match(skill, /seeding step fails[\s\S]*continue to the offline-profile phase/);
 });
 
 test('template preparation is delegated to the deterministic script', () => {

@@ -64,6 +64,8 @@ const {
   firstSectionRowsPointer,
   findFieldCellPointer,
   findFieldCellLocation,
+  findSectionLocation,
+  declaredSectionByField,
   subgridCellIntent,
   subgridSectionIntent,
   quickViewCellIntent,
@@ -1773,6 +1775,287 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
+  // After a whole tab or form-column is appended, record where each of its sections landed, so the
+  // field pass places into them through the same locator the converge path produces. A freshly
+  // added container's sections occupy indices 0..n-1 in declaration order.
+  const recordColumnSectionTargets = (out, wantColumn, tabIndex, columnIndex, liveColumns) => {
+    const live = ((liveColumns || [])[columnIndex] || {}).sections || [];
+    (wantColumn.sections || []).forEach((s, si) => {
+      out[s.name] = { pointer: '/tabs/' + tabIndex + '/columns/' + columnIndex + '/sections/' + si, name: (live[si] || {}).name };
+    });
+  };
+
+  const recordSectionTargets = (out, wantTab, tabIndex, liveTab) => {
+    (wantTab.columns || []).forEach((c, ci) => recordColumnSectionTargets(out, c, tabIndex, ci, (liveTab || {}).columns));
+  };
+
+  // Identity of a deployed tab/section across rebuilds, in descending order of confidence:
+  //   1. NAME  — what the compiler emits, so a form this plugin created matches itself exactly.
+  //   2. LABEL — what the author sees and types; survives a name this plugin did not choose
+  //      (a form built in Maker, or by a much older version).
+  //   3. POSITION — last resort, and the one that makes an AUTO -> EXPLICIT migration converge.
+  //      The auto layout emits `tab_general`/`section_general`, while an explicit layout with no
+  //      authored names emits `tab_0`/`section_0_0` — so name matching alone would append a second
+  //      tab to every form this plugin had already built, on every single rebuild.
+  // A container is CREATED only when all three miss, which is what stops a rebuild duplicating one.
+  //
+  // `claimed` carries the indices an EARLIER want already took. Without it every want is matched
+  // independently, and because the compiler substitutes a DEFAULT label for an unlabeled container
+  // ('General' for a tab, 'Details' for a section), an author who labels nothing produces several
+  // wants with an identical label — the label pass then returns index 0 for all of them and the
+  // whole layout collapses into one container. Position has the same failure with repeated indices.
+  //
+  // `skip` hides containers the weaker passes must not claim. Only NAME may match them, because a
+  // name is positive evidence and a label/position is not.
+  const matchContainer = (list, want, wantIndex, opts) => {
+    const items = list || [];
+    const claimed = (opts && opts.claimed) || null;
+    const skip = (opts && opts.skip) || (() => false);
+    const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
+    const free = (i) => !claimed || !claimed.has(i);
+    let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
+    if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
+    if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
+    return idx < 0 ? null : { index: idx, item: items[idx] };
+  };
+
+  // A section the ENGINE owns rather than one the author laid out: a sub-grid host, or the
+  // notes/timeline section. `addSubgrids` appends one such section per authored sub-grid on EVERY
+  // layout (auto included), and `compileFormIntent` appends the notes section — so they sit in the
+  // same `sections[]` array as the author's own, just after them.
+  //
+  // They must be invisible to the LABEL and POSITION passes. Otherwise, as soon as an explicit
+  // layout declares as many sections as the index of the first appended one, the positional fallback
+  // claims the sub-grid: it gets relabelled to the author's section title, bound field controls are
+  // injected into the row holding the grid control, and the author's section is never created. The
+  // build is green and a rebuild converges on the same wrong shape, so nothing downstream reports it.
+  //
+  // Detected structurally (every cell carries a control with no `fieldName`) rather than by name, so
+  // it holds for a sub-grid whose section the author renamed in Maker. An EMPTY section has no cells
+  // and is deliberately NOT engine-owned — it stays matchable so a vacated section can be reused.
+  const isEngineOwnedSection = (s) => {
+    const cells = ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+    return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
+  };
+
+  // Send only the keys that actually differ, so a rebuild that changes nothing issues no writes.
+  const diffPatch = (live, want, keys) => {
+    const patch = {};
+    for (const k of keys) if (want[k] !== undefined && live[k] !== want[k]) patch[k] = want[k];
+    return patch;
+  };
+
+  // Converge an EXISTING form's CONTAINER topology (tabs, form-columns, sections) onto the spec's
+  // explicit layout, before any field is placed.
+  //
+  // Why this exists: the reconcile used to flatten an explicit layout entirely — every field was
+  // appended to `firstSectionRowsPointer`, i.e. the first section of the first tab, and no tab or
+  // section was ever created or reshaped. Because declaring explicit `tabs` ALSO switches pruning
+  // on, an author who moved to an explicit two-column layout to reorganize a deployed form got the
+  // old topology, minus any field they had not re-declared, and a successful build (#575).
+  //
+  // Containers are created EMPTY (`rows: []`) and every field is placed by the single pass that
+  // follows. Adding a tab with its compiled cells intact would duplicate any field already on the
+  // form elsewhere, and would leave two code paths that can each place a control.
+  //
+  // Existing containers are UPDATED IN PLACE rather than replaced, so ids — and any control a maker
+  // added to a section by hand — survive. `updateElement` merges when both sides are objects, so
+  // patching only the differing keys preserves everything else in the container.
+  //
+  // Returns the desired-section-name -> deployed-section locator map the field pass places through.
+  // It cannot re-derive this by name: a position-matched section keeps its own deployed name (it is
+  // deliberately NOT renamed, because form scripts and business rules can reference a section name).
+  const reconcileFormTopology = async (formId, def) => {
+    // An engine-owned section carries its rows INTACT when created: the field pass places only bound
+    // fields, so a notes/timeline section created empty would deploy a visible section header
+    // promising a control that nothing ever adds.
+    const stripRows = (section) => (isEngineOwnedSection(section) ? Object.assign({}, section) : Object.assign({}, section, { rows: [] }));
+    const sectionTargets = {};
+    const wantTabs = def.tabs || [];
+    // Indices already taken by an earlier want, so two wants can never converge on one container.
+    const claimedTabs = new Set();
+    const claimedSections = new Map(); // column pointer -> Set(index)
+    const claimedIn = (key) => { if (!claimedSections.has(key)) claimedSections.set(key, new Set()); return claimedSections.get(key); };
+    for (let ti = 0; ti < wantTabs.length; ti++) {
+      const wantTab = wantTabs[ti];
+      // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
+      // computed against an earlier snapshot can address the wrong container.
+      let form = await provision.getArtifact('form', formId) || {};
+      const tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      if (!tabMatch) {
+        await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
+          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: (c.sections || []).map(stripRows) })),
+        }));
+        form = await provision.getArtifact('form', formId) || {};
+        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        if (added) { claimedTabs.add(added.index); recordSectionTargets(sectionTargets, wantTab, added.index, added.item); }
+        continue;
+      }
+      claimedTabs.add(tabMatch.index);
+      const tabPointer = '/tabs/' + tabMatch.index;
+      const tabPatch = diffPatch(tabMatch.item, wantTab, ['label', 'expanded', 'visible']);
+      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, tabPointer, tabPatch);
+
+      const wantColumns = wantTab.columns || [];
+      for (let ci = 0; ci < wantColumns.length; ci++) {
+        form = await provision.getArtifact('form', formId) || {};
+        const liveTab = (form.tabs || [])[tabMatch.index];
+        if (!liveTab) break; // defensive: the tab vanished mid-reconcile
+        const liveColumns = liveTab.columns || [];
+        if (ci >= liveColumns.length) {
+          // A tab that gained a form-column — e.g. a single-column form widened into two.
+          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], {
+            sections: (wantColumns[ci].sections || []).map(stripRows),
+          }));
+          form = await provision.getArtifact('form', formId) || {};
+          recordColumnSectionTargets(sectionTargets, wantColumns[ci], tabMatch.index, ci, ((form.tabs || [])[tabMatch.index] || {}).columns);
+          continue;
+        }
+        if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
+          await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
+        }
+        const wantSections = wantColumns[ci].sections || [];
+        for (let si = 0; si < wantSections.length; si++) {
+          const wantSection = wantSections[si];
+          form = await provision.getArtifact('form', formId) || {};
+          const columnPointer = tabPointer + '/columns/' + ci;
+          const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
+          // A section may have been dragged to a different tab in Maker; it is still THAT section,
+          // so a form-wide name hit outranks a positional one inside this column.
+          const global = wantSection.name ? findSectionLocation(form, wantSection.name) : null;
+          const claimedHere = claimedIn(columnPointer);
+          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si, { claimed: claimedHere, skip: isEngineOwnedSection });
+          if (!global && !local) {
+            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
+            form = await provision.getArtifact('form', formId) || {};
+            const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const addedIdx = addedList.length - 1;
+            claimedHere.add(addedIdx);
+            sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
+            continue;
+          }
+          if (local) claimedHere.add(local.index);
+          else if (global && global.pointer.startsWith(columnPointer + '/sections/')) {
+            // A form-wide NAME hit inside THIS column still consumes that index. Without this, a
+            // later want in the same column could match the very section the name hit already took
+            // (by label or position), routing two authored sections onto one deployed section.
+            const idx = Number(global.pointer.slice((columnPointer + '/sections/').length));
+            if (Number.isInteger(idx)) claimedHere.add(idx);
+          }
+          const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
+          const live = global ? global.section : local.item;
+          sectionTargets[wantSection.name] = { pointer, name: live.name };
+          // `columns` is the key that matters most: it is what makes a section render as two
+          // columns rather than one, and it was previously unreachable on an existing form.
+          const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
+          if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
+        }
+      }
+    }
+    return sectionTargets;
+  };
+
+  // Resolve a section target recorded during the topology pass back to a live pointer.
+  // Prefer the deployed NAME (stable across the row-level mutations the field pass makes) and fall
+  // back to the recorded pointer for a section that carries no name at all.
+  const resolveSectionPointer = (form, target) => {
+    if (!target) return null;
+    if (target.name) {
+      const loc = findSectionLocation(form, target.name);
+      if (loc) return loc.pointer;
+    }
+    return target.pointer || null;
+  };
+
+  const sectionAt = (form, pointer) => {
+    const t = String(pointer || '').split('/').filter(Boolean);
+    if (t.length !== 6) return null;
+    const tab = (form.tabs || [])[Number(t[1])];
+    const col = tab && (tab.columns || [])[Number(t[3])];
+    return (col && (col.sections || [])[Number(t[5])]) || null;
+  };
+
+  // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
+  // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
+  // changes nothing issues no writes.
+  const convergeCellSpans = async (formId, form, location, wantCell) => {
+    if (!location || !wantCell) return;
+    const live = cellAt(form, location);
+    if (!live) return;
+    const patch = {};
+    for (const key of ['colspan', 'rowspan']) {
+      const want = wantCell[key];
+      if (want === undefined) continue; // no opinion — never overwrite a maker's hand-set span
+      const current = live[key] === undefined ? 1 : live[key];
+      if (current !== want) patch[key] = want;
+    }
+    if (Object.keys(patch).length) await provision.updateElement('form', formId, location.cellPointer, patch);
+  };
+
+  // The live cell a findFieldCellLocation result points at.
+  const cellAt = (form, location) => {
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    return (row && (row.cells || [])[location.cellIndex]) || null;
+  };
+
+  // Place one field in the section the layout declares, whether it is absent or merely misplaced.
+  //
+  // A field whose declared section could not be resolved falls back to the form's first section —
+  // exactly the pre-existing behavior. A layout the topology pass could not materialize must still
+  // never lose a field.
+  const placeFieldInSection = async (formId, logical, wantCell, target) => {
+    let form = await provision.getArtifact('form', formId) || {};
+    const targetPointer = resolveSectionPointer(form, target);
+    const existing = findFieldCellLocation(form, logical);
+
+    if (!existing) {
+      const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
+      if (!rowsPtr) return;
+      await provision.addElement('form', formId, rowsPtr, { cells: [wantCell] });
+      return;
+    }
+    // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
+    // used to be create-only on an existing form: an author who widened a field to `colspan: 2` on a
+    // deployed form got a green build and an unchanged cell.
+    //
+    // Only spans the author EXPLICITLY set are written. `fieldCellIntent` omits a span of 1, so an
+    // absent span means "no opinion" and leaves a cell a maker widened by hand alone — the same rule
+    // that keeps `isReadOnly: false` from ever being written.
+    await convergeCellSpans(formId, form, existing, wantCell);
+
+    // Already on the form and already in the right section (or we have no opinion) — leave it be,
+    // so a rebuild converges instead of reshuffling the form on every run.
+    if (!targetPointer || existing.sectionPointer === targetPointer) return;
+
+    // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
+    // adapter-derived or maker-edited control state survive the move.
+    let rowIndex = ((sectionAt(form, targetPointer) || {}).rows || []).length - 1;
+    if (rowIndex < 0) {
+      // A section this run just created has no row to move into. The SDK accepts a row with an
+      // empty cells array and serializes it correctly, so seed one and target that.
+      await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
+      rowIndex = 0;
+    }
+    form = await provision.getArtifact('form', formId) || {};
+    const from = findFieldCellLocation(form, logical);
+    const liveTarget = resolveSectionPointer(form, target);
+    if (!from || !liveTarget) return;
+    const row = ((sectionAt(form, liveTarget) || {}).rows || [])[rowIndex];
+    if (!row) return;
+    await provision.moveElement('form', formId, from.cellPointer, liveTarget + '/rows/' + rowIndex + '/cells', { index: (row.cells || []).length });
+    // Moving the only cell out of a row leaves an empty `<row/>` that renders as a blank line and
+    // would accumulate one per relocated field. Row indices are unchanged by a cell move, so the
+    // source row is still where it was.
+    if (from.rowCellCount === 1) {
+      const after = await provision.getArtifact('form', formId) || {};
+      const stranded = jsonPointerRow(after, from.rowPointer);
+      if (stranded && (stranded.cells || []).length === 0) {
+        await provision.removeElement('form', formId, from.rowPointer);
+      }
+    }
+  };
+
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
     // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
@@ -1783,13 +2066,18 @@ async function runSdkBuild(spec, opts = {}) {
       if (fn) wantCellByLogical[String(fn).toLowerCase()] = c;
     }
     const want = formFieldLogicals(def);
-    const have = new Set(formFieldLogicals(await provision.getArtifact('form', formId) || {}));
+    // An EXPLICIT layout is author-controlled topology, so converge the containers first and then
+    // place every field into the section that layout names. An AUTO layout has exactly one section
+    // and no authored structure to honor, so it keeps the additive first-section behavior —
+    // reshaping a form a maker built by hand is not something an auto layout ever asked for.
+    let declaredSection = {};
+    let sectionTargets = {};
+    if (def.__explicitLayout) {
+      declaredSection = declaredSectionByField(def.tabs);
+      sectionTargets = await reconcileFormTopology(formId, def);
+    }
     for (const logical of want) {
-      if (have.has(logical)) continue; // idempotent: already on the form
-      const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', formId) || {});
-      if (!rowsPtr) break;
-      await provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
-      have.add(logical);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]]);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -1829,7 +2117,7 @@ async function runSdkBuild(spec, opts = {}) {
   // Reconcile an EXISTING author view: fetch it, UNION its current columns with the spec's (so a
   // manual column add in Maker is preserved AND the spec's new lookup columns land), set, push,
   // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
-  const reconcileView = async (viewId, def) => {
+  const reconcileView = async (viewId, def, authoredQuery) => {
     await provision.fetchArtifact('view', viewId);
     const current = await provision.getArtifact('view', viewId) || {};
     const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
@@ -1855,6 +2143,20 @@ async function runSdkBuild(spec, opts = {}) {
     const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
     if (wantDescription && wantDescription !== String(current.description || '')) {
       await provision.updateElement('view', viewId, '/description', wantDescription);
+    }
+    // An EXISTING view's FetchXML (filters + sort) is not reapplied here — only columns and the
+    // description converge. Silence made an authored filter edit look applied when it was not, so
+    // the no-op is reported instead. It is a warning rather than a failure because the common way to
+    // hit it is entirely benign: the build reconciles onto the platform's auto-generated
+    // "Active <Plural>" view, which every table already has.
+    //
+    // `authoredQuery` is passed in rather than derived from `def`, because `viewDef` folds the
+    // implicit `statecode eq 0` of `activeOnly` into the same `filters.conditions` array as the
+    // author's own — so a non-empty array does not mean the author declared anything, and warning
+    // off it would fire on every rebuild of every view. `--verify` proves the deployed fetchxml
+    // separately and FAILS on a divergence; this explains what verification will report.
+    if (authoredQuery && typeof opts.warn === 'function') {
+      opts.warn(`view '${def.name}' already exists — its columns and description were updated, but authored filters/sort are NOT reapplied to an existing view. Rename the view to author a separate one, or adjust its filters in Maker.`);
     }
     requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
     reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
@@ -1887,11 +2189,17 @@ async function runSdkBuild(spec, opts = {}) {
     try {
       await provision.updateRecord('systemform', formId, { isdefault: true });
       promoted = true;
-    } catch {
-      /* best-effort — leave promoted=false so we skip the destructive deactivation below */
+    } catch (err) {
+      // Best-effort for the BUILD (leave promoted=false so the destructive deactivation below is
+      // skipped), but no longer SILENT. Swallowing this outright let a build record a selected
+      // default form it had not actually promoted, and report success — the exact silent-partial
+      // class `--verify` exists to catch. Verification now proves `systemform.isdefault`
+      // independently, so this warning is the signal that explains the failure it will report.
+      const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
+      if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return;
-    if (typeof provision.queryRecords !== 'function') return;
+    if (!deactivateOthers || !promoted) return promoted;
+    if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
       // (formactivationstate 1 -> 0); ours is skipped by id. A form already inactive
@@ -1915,10 +2223,11 @@ async function runSdkBuild(spec, opts = {}) {
     } catch {
       /* best-effort */
     }
+    return promoted;
   };
 
   // helper: create an artifact — or UPDATE it in place if it already exists — then add to the solution.
-  const buildArtifact = (type, def) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
+  const buildArtifact = (type, def, meta) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
     // Update-in-place: editing a deployed spec must land, so a form is reconciled (fields +
     // sub-grids) and a view has its columns reconciled, instead of the artifact being reused
     // unchanged (the old behavior silently dropped every edit while still reporting success).
@@ -1932,7 +2241,7 @@ async function runSdkBuild(spec, opts = {}) {
       if (existingId) return reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
-      if (existingId) return reconcileView(existingId, def);
+      if (existingId) return reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
     // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
@@ -1952,7 +2261,7 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
-    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
     // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
@@ -2153,9 +2462,11 @@ async function runSdkBuild(spec, opts = {}) {
       const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
         String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
       if (!isOwnCustomTable) continue;
-      // Serialized deliberately: two promotions racing is the bug being fixed.
-      await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
-      promotedEntities.add(entityLogical);
+      // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
+      // bookkeeping below — a build that could not set the flag must not report a default form it
+      // did not set, which is what `result.created.defaultForms` claims.
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
       [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])

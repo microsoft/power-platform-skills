@@ -165,14 +165,20 @@ preceded each run. No expected table names, schema contracts, or reuse choices
 were supplied by the evaluation runner.
 
 The measured boundary is the user's **Proceed** response at the cost-preview
-gate through the final foreground **Gate 1: Data Model** presentation. It
+gate through the final foreground data-model presentation, then called
+**Gate 1: Data Model**. It
 includes concept extraction, live metadata discovery, agent modeling,
 revisions, and the validations actually performed. It excludes dependency
 installation, prerequisite/setup questions, approval waiting before Proceed,
 and every later implementation gate. These runs did not approve or execute
 tenant schema changes.
 
-| Run | Proceed to Gate 1 | Metadata snapshot time | Metadata requests | Proposed table decisions |
+The current architecture-first flow uses Gate 1 for architecture and Gate 2 for
+the Dataverse model. New planning runs stop at Gate 2 and report architecture
+work and user-approval waiting separately. The historical timings below are
+not measurements of that combined flow.
+
+| Run | Proceed to data-model gate | Metadata snapshot time | Metadata requests | Proposed table decisions |
 |---|---:|---:|---:|---|
 | Original gym | 23m 30.813s | 10.182s across 3 passes | 136 | 8 reuse; no create/extend |
 | ICRC goods reception | 6m 20.108s | 7.891s in 1 pass | 14 | 6 create; no reuse/extend |
@@ -319,10 +325,12 @@ because unrelated detail-request latency varied between the two runs.
 - Roles, attributes, actions, statuses, and constraints trigger zero table
   detail selection unless explicitly reclassified as persistent entities.
 - No weaker reuse, extend, or adapt decision; every such table has `full`
-  target evidence before Gate 1.
+  target evidence before Gate 2 data-model approval.
 - No missing cross-entity projection or risk notes.
-- First factual progress milestone appears within 30 seconds.
-- Gate 1/data-model readiness targets 10–15 minutes, quality first.
+- First factual metadata progress milestone appears within 30 seconds of
+  starting Dataverse planning after architecture approval.
+- Gate 2/data-model readiness targets 10–15 minutes of data-model planning,
+  quality first. Connector-only apps skip this gate and metadata work.
 - Any inventory-only or core candidate needed for reuse/extend/adapt triggers
   an exact incremental full-detail snapshot expansion. New names continue
   automatically; already-attempted names never cause a duplicate read.

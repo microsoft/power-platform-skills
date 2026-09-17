@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { withStableDispatchCwd } = require('../../hooks/run-telemetry');
+const { fireAndForget } = require('../lib/mobile-telemetry-dispatcher');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const PLUGIN_VERSION = JSON.parse(
@@ -114,6 +115,35 @@ test('hook dispatch runs outside the caller project and restores its cwd', () =>
 
   assert.equal(dispatchCwd, fs.realpathSync(os.tmpdir()));
   assert.equal(process.cwd(), originalCwd);
+});
+
+test('detached telemetry dispatch uses a stable cwd without changing the caller', (testContext) => {
+  const context = fixture(testContext);
+  const originalCwd = process.cwd();
+  const spawnStub = testContext.mock.fn(() => ({
+    on() {},
+    stdin: { on() {}, end() {} },
+    unref() {},
+  }));
+
+  try {
+    process.chdir(context.projectRoot);
+    fireAndForget({ data: { pluginName: 'mobile-app' } }, {
+      projectRoot: context.projectRoot,
+      env: { POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+      spawn: spawnStub,
+    });
+    assert.equal(fs.realpathSync(process.cwd()), fs.realpathSync(context.projectRoot));
+  } finally {
+    process.chdir(originalCwd);
+  }
+
+  assert.equal(spawnStub.mock.callCount(), 1);
+  const spawnOptions = spawnStub.mock.calls[0].arguments[2];
+  assert.equal(spawnOptions.cwd, os.tmpdir());
+  assert.equal(spawnOptions.detached, true);
+  assert.equal(spawnOptions.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT, context.projectRoot);
+  assert.equal(spawnOptions.env.POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT, '1');
 });
 
 test('interactive Copilot invocation creates identity and logs before environment resolution', (t) => {

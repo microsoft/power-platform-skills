@@ -17,6 +17,7 @@ const {
   labelText,
   isLocalizedLabelMap,
   localizedLabelLcids,
+  sampleKeyIdentity,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -1101,14 +1102,29 @@ function matchesRecord(rec, match) {
 // relationship's lookup nav property, and resolve a custom statusReason into statuscode/statecode
 // (halting if its option value wasn't captured during the data-model phase). The SDK's
 // seedRecordGraph owns the @odata.bind URL formation and resolve-by-name idempotency.
+function firstDuplicateNonEmpty(seedRecords, attr) {
+  const seen = new Set();
+  for (const r of seedRecords) {
+    const v = r.body[attr];
+    if (v === undefined || v === null || v === '') continue;
+    // SHARED with validateAppSpec's author-time gate (app-spec.js) so the two cannot drift: that
+    // gate exists only to move this refusal earlier, and a different notion of "duplicate" there
+    // would reject a spec this accepts, or accept one this refuses.
+    const key = sampleKeyIdentity(v);
+    if (seen.has(key)) return v;
+    seen.add(key);
+  }
+  return undefined;
+}
+
 // Choose the seedRecordGraph idempotency key (matchOn) for an entity's sample rows. The SDK dedups /
 // reuses an existing row ONLY when matchOn is supplied, and it NEVER falls back to the primary
 // display name — Dataverse permits duplicate names, so name-based resolve is a silent-wrong-id bug
 // (see types/recordGraph.ts `SeedEntityGroup.matchOn`). To keep the old resolve-by-name idempotency
 // WITHOUT regressing correctness:
 //   1. prefer a single-column ALTERNATE KEY (Dataverse enforces its uniqueness — a safe key);
-//   2. else fall back to the primary NAME column (the key the retired `primaryAttribute` used), which
-//      carries the documented duplicate-name risk but preserves prior behavior;
+//   2. else fall back to the primary NAME column (the key the retired `primaryAttribute` used), but
+//      only if the sample rows are unique on that column;
 // and in BOTH cases only when EVERY seeded record has a non-empty value for the chosen key — otherwise
 // omit matchOn (insert every record, no dedup) rather than resolve on a partially-empty key, which
 // would collapse or mis-bind rows. `body` values are the resolved Web-API values the SDK will filter on.
@@ -1118,10 +1134,26 @@ function chooseMatchOn(e, seedRecords) {
     seedRecords.every((r) => { const v = r.body[attr]; return v !== undefined && v !== null && v !== ''; });
   for (const k of e.alternateKeys || []) {
     const cols = (k.columns || []).map((c) => String(c).toLowerCase());
-    if (cols.length === 1 && hasNonEmpty(cols[0])) return cols[0];
+    // An alternate key is enforced-unique by Dataverse, but the SAMPLE ROWS are not checked by
+    // anything before they are sent. Two rows sharing the key value resolve to the same record — the
+    // same wrong-row resolve the primary-name fallback below rejects — and the failure would land
+    // mid-seed rather than here. So the duplicate rule applies to whichever column becomes matchOn.
+    if (cols.length === 1 && hasNonEmpty(cols[0])) {
+      const duplicate = firstDuplicateNonEmpty(seedRecords, cols[0]);
+      if (duplicate !== undefined) {
+        throw new Error(`sample data for '${e.schemaName}' has duplicate ${cols[0]} value '${String(duplicate)}'; ${cols[0]} is the single-column alternate key used as matchOn, so Dataverse could resolve or deduplicate the wrong row. Make ${cols[0]} unique across the sample rows.`);
+      }
+      return cols[0];
+    }
   }
   const primary = e.primaryAttribute.schemaName.toLowerCase();
-  if (hasNonEmpty(primary)) return primary;
+  if (hasNonEmpty(primary)) {
+    const duplicate = firstDuplicateNonEmpty(seedRecords, primary);
+    if (duplicate !== undefined) {
+      throw new Error(`sample data for '${e.schemaName}' has duplicate ${primary} value '${String(duplicate)}'; without a single-column alternate key, ${primary} would be used as matchOn and Dataverse could resolve or deduplicate the wrong row. Add a single-column alternate key with unique values, or make ${primary} unique across the sample rows.`);
+    }
+    return primary;
+  }
   return undefined;
 }
 
@@ -1139,6 +1171,13 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   const seedRecords = [];
   for (let i = 0; i < resolved.length; i++) {
     const raw = records[i];
+    // Sample rows are otherwise free-form Dataverse attribute bags, so an undocumented sentinel-like
+    // key is more likely an authoring mistake than a safe instruction. Rejecting it prevents a
+    // payload like `{ "new_name": "T1", "_seedKey": "ticket-1" }` from reaching Dataverse
+    // as a non-existent attribute while avoiding a silent drop of data the author may expect to use.
+    if (raw && Object.prototype.hasOwnProperty.call(raw, '_seedKey')) {
+      throw new Error(`sample data for '${e.schemaName}' record ${i} uses _seedKey, but _seedKey is not supported by this App Spec version. Remove it, or declare a real single-column alternate key and put the stable seed identifier in that column.`);
+    }
     const body = Object.assign({}, resolved[i]);
     delete body.$parent; delete body.$parents; delete body.statusReason;
     // Parent lookups — one (`$parent`) or many (`$parents`, e.g. a junction row binding both
@@ -1157,10 +1196,18 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
       if (!rel || !parentEntity) {
         throw new Error(`sample data for '${e.schemaName}' declares a parent on '${parent.entity}' with no OneToMany relationship to it — fix the spec's $parent/$parents`);
       }
-      const parentIndex = sampleRecordsFor(spec, parentEntity).findIndex((pr) => matchesRecord(pr, parent.match));
-      if (parentIndex < 0) {
+      const parentRecords = sampleRecordsFor(spec, parentEntity);
+      const matchingParentIndexes = [];
+      for (let j = 0; j < parentRecords.length; j++) {
+        if (matchesRecord(parentRecords[j], parent.match)) matchingParentIndexes.push(j);
+      }
+      if (matchingParentIndexes.length === 0) {
         throw new Error(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} found no '${String(parent.entity).toLowerCase()}' sample record — the '${rel.lookup.schemaName}' lookup would be left unset`);
       }
+      if (matchingParentIndexes.length > 1) {
+        throw new Error(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} matched ${matchingParentIndexes.length} '${String(parent.entity).toLowerCase()}' sample records, so '${rel.lookup.schemaName}' is ambiguous. Make the match unique (for example by matching an alternate-key column) or change the sample data.`);
+      }
+      const parentIndex = matchingParentIndexes[0];
       binds.push({ navProperty: rel.lookup.schemaName, parentEntity: parent.entity.toLowerCase(), parentIndex });
     }
     // Custom status reason -> statecode + the captured statuscode option value. The value is
