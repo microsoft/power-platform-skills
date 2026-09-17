@@ -118,6 +118,7 @@ Read [spec fields](../shared/references/screen-planning/spec-contract.md#per-scr
   before accepting specs, including screens without related-field blocks. Do not silently
   drop a required need or mark unsupported fields as merely pending service generation.
 - Native scope must match approved shipped modules: acknowledgement is not ink capture; local files are not server persistence; one-shot location is not tracking; device sharing is not connector delivery.
+- Explicit named events add `Custom events` per the contract; never infer telemetry. Configure separately via `/setup-app-insights`.
 - Preserve input on errors, suppress duplicate navigation/submission and show success only after commit. Offline claims require runtime support.
 - Include optional fields/overrides only when relevant. Recipes grant no unsupported capabilities.
 

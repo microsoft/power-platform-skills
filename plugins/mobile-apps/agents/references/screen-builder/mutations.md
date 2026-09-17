@@ -67,3 +67,14 @@ service. See native reference for File/Image persistence.
 Dates serialize to UTC ISO. For DateOnly, preserve picked calendar components with
 `new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString()`.
 Display with shared formatters or `Intl.DateTimeFormat(undefined, explicitOptions)`.
+
+## Custom events
+
+If and only if the assigned spec contains `Custom events`, import `getCustomEventsLogger`
+from `@microsoft/power-apps-native-host` and emit exactly the named events at the specified
+successful/failure trigger. Never use `getAppLogger()` for custom events. Pass only approved
+scalar properties, not operation results/response payloads, form values, free text, record
+titles, personal identifiers, tokens, precise coordinates, nested objects or complete URLs.
+For measured duration use the logger's `trackScenario()` tracker rather than a hand-supplied
+`duration_ms` property. The logger is a safe no-op when custom events are disabled.
+Telemetry does not replace checked operation results or authorize new business writes.

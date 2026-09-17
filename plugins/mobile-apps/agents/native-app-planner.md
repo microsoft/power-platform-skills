@@ -85,6 +85,10 @@ Use its inference/record format, **not its interactive confirmation step**: the 
 native/integration gate confirms, adds or removes connectors. Dataverse tables belong in
 `## Data Model`, not `## Connectors`. Do not create connections or invoke add-data-source here.
 Unclear source-of-truth/integration requirements return `NEEDS_CONTEXT`.
+Application Insights telemetry is outside the plan gates: `/setup-app-insights` owns optional
+host configuration after creation or via `/edit-app`. Do not model it as a connector, native
+capability, table or telemetry screen; an independently requested in-app analytics product
+is different. Preserve explicit named custom events in normal business-screen specs.
 
 ## Provisional design context
 

@@ -111,8 +111,10 @@ For judgment calls (structure, brand intent, redundant status cues), review rath
 Recheck touched files; cap at two retries per file/validator.
 These are explicit validators, never global plugin write hooks.
 
-Run `npx tsc --noEmit` after repairs. Record remaining nonblocking visual judgments as
-`DONE_WITH_CONCERNS`; never downgrade a required compile/route/mobile-validator failure.
+Final schema/TypeScript verification belongs to Step 12's `predev` lifecycle after all repairs,
+not a duplicate command here. If stopping before Metro, run `npm run predev` explicitly before
+claiming code completion. Record nonblocking visual judgments as `DONE_WITH_CONCERNS`;
+never downgrade a required compile/route/mobile-validator failure.
 Run mandatory `validate-mobile-files.js` on every exact changed file before success.
 For changed typography, retain the canonical final-config `assertNativeFontDefaults` and
 complete role props from Step 9b. Its presence is not an executed test: distinguish helper

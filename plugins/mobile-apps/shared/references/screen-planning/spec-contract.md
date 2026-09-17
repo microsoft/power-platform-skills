@@ -210,6 +210,13 @@ to its owner rather than disappearing from a sparse screen or appearing as fabri
 - **Related entity fields**: every visible field sourced beyond the primary table, using the block and decision table below.
 - **Lookup writes**: approved relationship/target before generation, then exact quoted `@odata.bind` key from the generated model plus entity set at Step 10.7. Never infer casing or write an annotation property. A verified unsupported write is `BLOCKED`; expected pre-generation absence follows the staging handoff above.
 - **Audit**: only when required; action/event code/label/payload fields plus approved audit service contract. Do not invent inspection-specific event numbers or services.
+- **Custom events**: only when the user explicitly requested named events; record exact names,
+  success/failure triggers and approved scalar properties. Use `getCustomEventsLogger()` from
+  the host, never `getAppLogger()`. Do not include operation results/response payloads, form
+  values, free text, record titles, personal identifiers, tokens, precise coordinates, nested
+  objects or complete URLs. Use `trackScenario()` for measured durations; never spec a
+  model-supplied `duration_ms` or other timing scalar. Host telemetry is disabled by default
+  and configured separately through `/setup-app-insights`; it is not a connector or audit table.
 - **Native capabilities / Artifact persistence**: approved modules/wrappers, platform/permission fallback, target, and failure states below.
 - **Calendar library / JavaScript Dependencies**: compatible exact version and evidence per [javascript-dependency-planning.md](../javascript-dependency-planning.md); only when selected. No planning-time install.
 - **Input ergonomics override / A11y notes / Animations / Density mode / Surface style / Refresh trigger**: exceptions to shared rules only. Respect reduced motion; standard list refresh uses `useFocusEffect`.

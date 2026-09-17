@@ -98,5 +98,5 @@ Neither a browser simulation nor design acceptance verifies native/device behavi
 - Structural compile/route/configuration failures remain blockers. Report known nonblocking
   limitations without treating unrequested browser testing as a missing gate.
   An idle Metro terminal is not proof of runtime health.
-- Runtime diagnosis remains user-requested, terminal-driven `/debug-app`; no React Native Web,
+- Runtime diagnosis remains user-requested `/debug-app` using sanitized `.powernative/metro-logs/`; no React Native Web,
   Metro HTTP probes, forced clicks or automated native screen crawling.

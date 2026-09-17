@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { readSkillWorkflow } = require('./helpers/workflow-documents');
 
 function caretVersionAtLeast(value, minimum) {
   const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(value);
@@ -75,7 +76,9 @@ test('template uses the host Metro factory that installs project-local logging',
 
 test('skill contracts read logs and persist host-neutral state under .powernative', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
-  const createSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
+  const createSkill = readSkillWorkflow('create-mobile-app');
+  const createEntry = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
+  const buildPhase = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'phase-09-build.md'), 'utf8');
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
   const deploySkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'deploy', 'SKILL.md'), 'utf8');
   const reportIssueSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'report-issue', 'SKILL.md'), 'utf8');
@@ -85,7 +88,12 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
-  assert.match(createSkill, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
+  assert.match(createEntry, /Final gate:[\s\S]*`predev` lifecycle/);
+  assert.doesNotMatch(createEntry, /persistent Metro terminal verified/);
+  assert.match(buildPhase, /Final schema\/TypeScript verification belongs to Step 12's `predev` lifecycle/);
+  assert.match(buildPhase, /If stopping before Metro, run `npm run predev` explicitly/);
+  assert.doesNotMatch(buildPhase, /Run `npx tsc --noEmit` after repairs/);
+  assert.match(createSkill, /### Step 12 — Start dev server \(Metro writes project-local logs\)/);
   assert.match(createSkill, /createPowerAppsMetroConfig/);
   assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);

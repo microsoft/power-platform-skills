@@ -67,6 +67,13 @@ environment ID with the foreground question interface. Preserve supplied aesthet
 constraints, but defer brand/style choices to `/design-system`.
 Derive a kebab-case ASCII slug; show it at Step 2c for correction rather than asking separately.
 
+Normalize requests for Application Insights or monitoring of this generated app as optional
+host/runtime configuration, owned by a post-creation `/setup-app-insights` run, not a connector
+or planning constraint. Tell downstream planners not to create telemetry tables/screens or
+use the deprecated Application Insights connector unless an in-app analytics dashboard was
+separately requested. Preserve explicitly requested custom-event names, triggers and approved
+scalar properties in the relevant screen specs; do not enable telemetry during creation.
+
 ### Step 2b — Requirements discovery
 
 Use the existing four richness signals only to reduce redundant discovery questions:

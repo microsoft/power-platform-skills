@@ -49,14 +49,11 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
 });
 
 test('scaffold changed-file validation separates preparation and generator ownership', () => {
-  const preparation = skill.slice(
-    skill.indexOf('### Step 5 — Prepare existing template'),
-    skill.indexOf('### Step 6 — Initialize'),
+  const preparation = scaffold.slice(
+    scaffold.indexOf('### Step 5 — Prepare existing template'),
+    scaffold.indexOf('### Step 6 — Initialize'),
   );
-  const memory = skill.slice(
-    skill.indexOf('### Step 6.7 — Seed the memory bank'),
-    skill.indexOf('### Step 6.75 — Design system'),
-  );
+  const memory = scaffold.slice(scaffold.indexOf('### Step 6.7 — Seed the memory bank'));
   const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
 
   assert.match(preparation, /result\.writtenFiles/);

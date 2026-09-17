@@ -44,6 +44,11 @@ process.stdout.write(`${JSON.stringify(result)}\n`);
 NODE
 ```
 
+Capture `result.writtenFiles` as the exact project-relative preparation validation targets.
+Keep `removedPowerConfig` and `removedLegacyFiles` as removal outcomes, not `--file` targets:
+Step 6 can recreate the same config path with a different owner. Union targets across any
+preparation reruns. Do not rebuild this list from `git status` or a directory scan after init.
+
 The script is the **only owner of Step 5 mutations**: identity, recognized legacy cleanup,
 missing shared helpers, host TypeScript inheritance and structural provider/theme/safe-area
 postconditions. Do not repeat its inline recipes. It preserves custom navigation/helper bytes,
@@ -56,6 +61,23 @@ write anything under `src/generated/`. Only Power Apps generation owns those fil
 Never hand-write an empty `connectorSchemas.ts` or barrel. Preserve host TypeScript aliases
 instead of making a second app-local alias map. Keep bundle/scheme defaults; wrap owns them.
 No dependency installation, registry changes, token provisioning or direct source-provider edits.
+
+Verify the normal dev entrypoint and host-owned logging configuration read-only. Do not add a
+process-owning wrapper: `npm run dev` must remain `expo start`, and `predev` must run schema
+generation followed by type-checking. The template's `createPowerAppsMetroConfig` delegates
+sanitized logging to the native host under `.powernative/metro-logs/`.
+
+```bash
+node - "<working_dir>" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[2], 'package.json'), 'utf8'));
+if (pkg.scripts?.dev !== 'expo start') throw new Error('Expected scripts.dev to be "expo start"; do not add a wrapper.');
+if (pkg.scripts?.predev !== 'npm run generate-schemas && npm run type-check') {
+  throw new Error('Expected predev to run schema generation followed by type-checking.');
+}
+NODE
+```
 
 ### Step 6 — Initialize
 
@@ -72,6 +94,8 @@ and report its environment rather than overwriting or initializing again; a conf
 may skip already-verified initialization, not rerun it.
 Verify config exists and `environmentId`/`appDisplayName` equal the approved values.
 On failure use the shared command policy, report exact error and stop if unresolved.
+Record successful `npx power-apps init` as the config writer. Keep these checks read-only;
+do not add that CLI-generated file to manual validation targets or hand-edit it.
 
 ### Step 6.5 — Verify dependencies
 
@@ -84,6 +108,9 @@ Step 5 already owns structural changes. Verify `SafeAreaProvider`, `tamaguiConfi
 `offlineProfile`, color-scheme-driven `defaultTheme`; after brand wiring also verify matching
 `theme`/`darkTheme` props. Rerun preparation only for a missing contract element; stop if unsupported.
 Never add an outer TamaguiProvider or wrap Slot in a global SafeAreaView. Routes own visible edges.
+Verify imported `app.json` reaches `PowerAppsProvider` through `appConfig`. The host uses it
+for optional `expo.extra.appInsightsConfig` inside fixed Dev Player, not `Constants.expoConfig`.
+This verification does not enable telemetry or authorize printing/storing connection strings.
 
 ### Step 6.6 — Scaffold TypeScript gate
 
@@ -104,4 +131,8 @@ Immediately flush queued `DEFERRED_CONCERNS[]` into `## Concerns` and discovery 
 `## Discovery Notes` (no secrets); this flush is unconditional when the queue is nonempty.
 Persist `visual_companion: yes|no` and later update it from `/design-system`.
 From here every successful step appends to the bank immediately, not at the end.
+Before leaving, validate Step 5's `writtenFiles`, `memory-bank.md` and other pending skill/helper
+changes using exact existing `--file` targets. Exclude verified CLI output not manually modified:
+`power.config.json` is covered by read-only identity checks in Step 6. TypeScript does not
+replace either check; never send generator-owned output to the manual write-safety gate.
 Next load the design phase.

@@ -17,14 +17,26 @@ const {
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const templateRoot = path.join(pluginRoot, 'template');
+const temporaryDirectories = new Set();
+
+test.after(() => {
+  for (const directory of temporaryDirectories) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function tempDirectory(name) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  temporaryDirectories.add(directory);
+  return directory;
 }
 
 function copyTemplate() {
   const projectRoot = tempDirectory('mobile-template');
-  fs.cpSync(templateRoot, projectRoot, { recursive: true });
+  fs.cpSync(templateRoot, projectRoot, {
+    recursive: true,
+    filter: (source) => source !== path.join(templateRoot, 'node_modules'),
+  });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
 }
@@ -149,9 +161,8 @@ test('preparation is idempotent and preserves generated and existing helper file
   assertSnapshotsEqual(beforeSecondRun, afterSecondRun);
 });
 
-test('scaffold validation uses preparation writes, not later generator output', (t) => {
+test('scaffold validation uses preparation writes, not later generator output', () => {
   const projectRoot = copyTemplate();
-  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const configPath = path.join(projectRoot, 'power.config.json');
   fs.writeFileSync(configPath, '{"environmentId":""}\n');
   const options = { workingDir: projectRoot, displayName: 'Validation App', slug: 'validation-app' };

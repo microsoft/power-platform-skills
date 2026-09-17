@@ -24,6 +24,10 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Metro logs | `.powernative/metro-logs/` — sanitized source used by `/debug-app`; do not copy ephemeral values from log filenames into this file |
 | Metro launch command | `npm run dev` |
 
+Metro state in this notebook is limited to the log directory and launch command. Do not store
+terminal IDs, PIDs, ports, start times, or Metro URLs, including values extracted from log
+filenames. Resolve the current session from sanitized project-local logs when needed.
+
 ## Power Platform context
 
 | Key | Value |

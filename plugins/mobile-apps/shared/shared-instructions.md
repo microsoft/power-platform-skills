@@ -1,7 +1,6 @@
 # Shared Instructions — Power Apps Native Code Apps
 
-Read this small core at skill entry. **Do not read every linked topic.**
-Load the matching reference only when the active operation needs it.
+Read this core at entry. **Do not read every linked topic.** Load references only for the active operation.
 
 ## Safety Guardrails
 
@@ -13,36 +12,39 @@ Load the matching reference only when the active operation needs it.
   (`fetch`, `axios`, raw Graph/Dataverse calls) or app-owned OAuth workarounds.
   Rendering public HTTPS images with an image component is allowed under [media sources](references/media-sources.md);
   it does not authorize direct business-data HTTP or credential forwarding.
+- Application Insights is optional host observability; `/setup-app-insights` owns
+  `app.json` → `expo.extra.appInsightsConfig`, off by default, not business-data ingestion.
+  Never propose the deprecated Application Insights connector or telemetry tables/screens
+  unless an in-app analytics product was separately requested. Keep connection strings private.
 - Only Power Apps generators own `src/generated/`; do not hand-edit, erase, or stub their output.
-- Native-code/config packages must exist in the live `template/package.json`; `expo-haptics`
-  remains runtime-banned. Package names alone do not establish native code. Approved JS-only app
+- Native-code/config packages must exist in the live `template/package.json`; `expo-haptics` is runtime-banned. Names alone do not establish native code. Approved JS-only
   dependencies follow [JavaScript dependency planning](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md).
   Use `npx expo install` for approved Expo packages, never an unplanned install to silence TypeScript.
 - Keep Reanimated's Babel plugin last. Preserve the root provider order; rerun `npx tsc --noEmit`
   after provider changes and before native runs. Do not add an outer TamaguiProvider around the host.
 - No browser runtime verification, React Native Web setup, route crawling, or Metro/localhost
-  HTTP probes. Requested runtime diagnosis uses `/debug-app` with captured Metro terminal output.
+  HTTP probes. Requested runtime diagnosis uses `/debug-app` with sanitized `.powernative/metro-logs/` files.
   Static intent/source-preview checks are allowed, but are not native runtime verification.
 - HTML preview delivery stops after generation, static checks and opening/linking for the user.
-  Do not automatically run post-preview browser tests, capture screenshots or collect review
-  evidence. Browser testing requires a separate explicit user request; absence is not a gate.
+  Do not automatically run post-preview browser tests, capture screenshots or collect review evidence.
+  Browser testing requires a separate explicit user request; absence is not a gate.
 - Keep scratch files inside the project, never in system temporary directories. No tokens,
   secrets, or current-user identity in plan, memory bank, telemetry or committed configuration.
 
 ## Foreground questions and approval
 
-Only the foreground skill captures user answers/approvals through the question tool actually
-exposed by its host. Use plan-mode tools when available, never invent a required call.
+Only the foreground captures approvals through the host's question tool; use plan-mode tools when available, never invent a call.
 Children return proposals and missing context; they cannot approve themselves or invoke nested agents.
-If host policy requires a structured question, do not fall back to plain text.
-When no permitted approval interface exists, stop with the pending question.
+If host policy requires a structured question, do not use plain text; absent a permitted interface, stop with the pending question.
 Silence, cancel, a recommendation, agent `DONE`, or an inferred default is **not approval**.
 Reuse supplied answers; ask only unresolved trade-offs. Deterministic read-only checks need no prompt.
+Inspect overlapping existing changes before editing; preserve them and confirm conflicts before overwriting.
 
 ## Mandatory changed-file validation
 
-Each mutating skill tracks files written by itself and its children; exclude untouched trusted
-generator output. Before success, pass **exact changed files**, never a directory or whole project:
+Track writer ownership (skill/subagents/helpers versus trusted generators) using returned `writtenFiles`; removals are not validation targets.
+CLI output is excluded only when produced by that command and not modified afterward by the skill or its subagents.
+Before success, pass **exact existing changed files**, never a directory or whole project:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
@@ -51,6 +53,9 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
 
 Exit `2` requires repair and rerun; exit `0` is required before `DONE`, even after a clean typecheck.
 Use the text-extension policy in `scripts/lib/mobile-validator-manifest.js`, not a copied list.
+`--file` is a write-safety gate. Check CLI-owned `power.config.json`/`src/generated/` via phase identity/schema/service/type checks.
+Do not suppress a protected-path finding for manual edits; recover through the owning command and approval/resume rules.
+Never infer ownership from a path or whole-worktree diff. Record empty manual target lists; do not invoke an empty validator or add generated files.
 
 ## Workflow Checkpoints
 
@@ -69,10 +74,8 @@ Telemetry is fail-open: ignore emitter output, never retry/inspect it, never alt
 
 ## Memory and context
 
-Read `<working_dir>/memory-bank.md` if present; reuse completed work only with confirmed resume.
-Update after each successful step with ISO-dated append-only entries; mark old facts superseded.
-Keep `Current phase`, `Pending decision`, and `Approved preview` current; a preview record binds
-the accepted plan/design revision and is never runtime proof or a substitute for approval.
+Read `<working_dir>/memory-bank.md` if present; reuse only with confirmed resume. Append ISO-dated entries after success; mark old facts superseded.
+Keep `Current phase`, `Pending decision`, and `Approved preview` current; bind the accepted plan/design revision, never as runtime proof or approval.
 Inherit caller `working_dir`, plan and answers; honor `--skip-planning` without waiving approval.
 Create's planning phase queues concerns until Step 6.7 seeds the bank; no early bank writes.
 For detailed lifecycle rules, load [memory/context](${PLUGIN_ROOT}/shared/shared-instructions-memory.md).
@@ -89,11 +92,9 @@ For detailed lifecycle rules, load [memory/context](${PLUGIN_ROOT}/shared/shared
 
 ## Microsoft Learn MCP (authoritative Microsoft docs)
 
-For uncertain Microsoft platform/API/CLI behavior, query advertised Microsoft Learn MCP tools.
-If unavailable, use the explicit `learn.microsoft.com` links in the active reference; never guess.
+For uncertain Microsoft APIs/CLI, query advertised Learn MCP tools or use the active reference's `learn.microsoft.com` links; never guess.
 Do not use Learn for Expo/React Native/Tamagui/npm questions.
 
 ## Shell Requirement (Windows users)
 
-Skills require a POSIX shell (Git Bash/WSL on Windows), not native PowerShell/cmd.
-If unavailable, stop and explain. OS invocation details are in the conditional CLI contract.
+Require a POSIX shell (Git Bash/WSL on Windows), not native PowerShell/cmd; otherwise stop. OS details are in the conditional CLI contract.

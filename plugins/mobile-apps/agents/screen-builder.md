@@ -111,6 +111,7 @@ Print `→ [<screen_name>] Checking action, data, route, and token contracts…`
 - Missing prerequisites disable the action with a visible reason or return `BLOCKED`;
   no enabled button with a silent `if (!record) return`. Loading, empty, permission
   denial, failure, and successful completion are distinct states.
+- Only explicit `Custom events` specs use the host `getCustomEventsLogger()`; follow [event rules](references/screen-builder/mutations.md), never infer telemetry.
 - React Query owns server state where provided; reuse the host provider. Invalidate
   affected entity/list keys after checked success. No new `QueryClient` in a screen.
 - All Dataverse route IDs use shared `normalizeDataverseGuid` before service calls.
@@ -149,7 +150,6 @@ Functional safety and accessibility are never waived by a visual treatment.
   where there is no supported next action. Never expose raw service errors as UI copy.
 
 ## 4 — Verify and return
-
 Print `→ [<screen_name>] Checking assigned screen…`
 
 Review the actual action path: entry → authorized transition → checked operation → outcome.

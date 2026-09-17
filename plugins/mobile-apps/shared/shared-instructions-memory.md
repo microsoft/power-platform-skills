@@ -16,8 +16,17 @@ Maintain the existing Project facts fields, not another state sidecar:
 - `Pending decision`: exact unanswered foreground question, or none after an explicit answer.
 - `Approved preview`: accepted intent-preview path and represented plan/design revision;
   never evidence that native/data runtime behavior passed.
+- `Metro logs`: `.powernative/metro-logs/`, the sanitized project-local discovery path used by
+  `/debug-app`, regardless of who launched Metro.
+- `Metro launch command`: `npm run dev`; its `predev` lifecycle runs the combined final
+  schema-generation/TypeScript gate before Expo starts.
 If the plan/design changes, mark the old preview record superseded until reviewed again.
 Before bank creation keep these facts in foreground context; flush them when Step 6.7 seeds it.
+
+Persist only the stable Metro log directory and launch command, not terminal IDs, PIDs, ports,
+start times, or Metro URLs (including values in log filenames). Do not copy logs or raw terminal
+output into the bank. Discover the current Metro session from project-local logs when needed;
+optional host terminal handles are not a resume or `/debug-app` dependency.
 
 `/create-mobile-app` seeds from [memory-bank.md](${PLUGIN_ROOT}/shared/memory-bank.md) at Step 6.7,
 after init and the scaffold gate. Preserve an existing bank during confirmed resume.

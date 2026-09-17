@@ -30,7 +30,7 @@ Do not preload the agent files for phases that have not started.
 | 7 | Integrations (9–10) | [phase-07-integrations.md](references/phase-07-integrations.md) | Native wrappers, approved JS dependencies, host brand wiring, sequential connector generation |
 | 8 | Screen shell (10b–10.8) | [phase-08-screens.md](references/phase-08-screens.md) | Route layouts + service snapshot + typed skeletons pass navigation/skeleton gate |
 | 9 | Implementation (11–11.4) | [phase-09-build.md](references/phase-09-build.md) | Every screen wave clean, routes checked, minimum product UX review and changed-file validation complete |
-| 10 | Launch (12–13) | [phase-10-run.md](references/phase-10-run.md) | Final TypeScript clean, persistent Metro terminal verified, summary + optional debug |
+| 10 | Launch (12–13) | [phase-10-run.md](references/phase-10-run.md) | Combined `predev` gate clean, current Metro/log readiness verified, summary + optional debug |
 
 Follow **phase order 1 → 10**. Filenames use zero-padded `phase-01` through `phase-10`
 so they sort in execution order; do not sort by the older decimal step numbers.
@@ -83,13 +83,14 @@ pre-mutation manifest is not evidence that an approved Dataverse app is connecto
 
 ## TypeScript Gate Policy — no quality compromise
 
-Run `npx tsc --noEmit` at these boundaries, not after every microscopic edit:
+Run `npx tsc --noEmit` for gates 1–4, not after every microscopic edit:
 
 1. **Scaffold gate:** Step 6.6 after preparation, init and dependency verification.
 2. **Dataverse/generated-services gate:** after Step 8 schema/service generation.
 3. **Navigation/skeleton gate:** after Step 10b/10.8, before builders.
 4. **Screen-wave gate:** after each Step 11 wave, before the next wave.
-5. **Final gate:** after all code/quality repairs and schema refresh, before Step 12.
+5. **Final gate:** Step 12's `npm run dev` runs the `predev` lifecycle after all repairs:
+   `npm run generate-schemas && npm run type-check`. Do not duplicate it immediately before launch.
 
 Capture full failure output once, group by root cause, batch repairs, then rerun the same gate.
 Respect bounded retries and user stop policy; STOP if still failing. Never launch data work from
