@@ -38,7 +38,7 @@ for (const options of [{ prefix: 'adx_' }, { prefix: '', nested: true, major: 5 
     Object.assign(f.request.styles[0], { scope: 'site', fileName: 'service-cards.css' });
     const plan = preparePlan(f.root, f.request);
     const metadata = plan.writes.find((write) => write.kind === 'webfile');
-    assert.match(metadata.after, new RegExp(`^${options.prefix}displayorder: 3$`, 'm'));
+    assert.doesNotMatch(metadata.after, /displayorder:/);
     assert.match(metadata.after, /mimetype: text\/css/);
     assert.match(metadata.path, options.nested ? /service-cards\.css\/service-cards\.css\.webfile\.yml$/ : /^web-files\/service-cards\.css\.webfile\.yml$/);
     assert.equal(plan.writes.find((write) => write.kind === 'css').path, metadata.path.replace(/\.webfile\.yml$/, ''));
@@ -101,6 +101,16 @@ test('tampered managed CSS cannot pass by recalculating only the plan hash', (t)
   assert.throws(() => validatePlan(plan), /outside its declared/);
 });
 
+test('plan warnings must remain a string array for review and apply output', (t) => {
+  const f = fixture(t);
+  const plan = preparePlan(f.root, f.request);
+  for (const warnings of [undefined, null, 'not an array', [null], [{}]]) {
+    const invalid = { ...plan, warnings };
+    invalid.planHash = planHash(invalid);
+    assert.throws(() => validatePlan(invalid), /Invalid plan context/);
+  }
+});
+
 test('prepare CLI saves only external new proposal files', (t) => {
   const f = fixture(t);
   const requestPath = path.join(f.work, 'request.json');
@@ -124,7 +134,7 @@ test('Studio-only changes cannot smuggle class edits into local source', (t) => 
   assert.throws(() => preparePlan(f.root, f.request), /Studio-only/);
 });
 
-test('section CSS stays in the custom priority band and discloses only its subtree', (t) => {
+test('section CSS discloses its subtree and priority without allocating display order', (t) => {
   const f = fixture(t);
   f.request.pageId = ids.sectionLocale;
   const copyPath = 'web-pages/contact/content-pages/Contact.en-US.webpage.copy.html';
@@ -134,18 +144,20 @@ test('section CSS stays in the custom priority band and discloses only its subtr
   const plan = preparePlan(f.root, f.request);
   assert.deepEqual(plan.placements[0].affectedPageIds.sort(), [ids.section, ids.sectionLocale].sort());
   assert.equal(plan.placements[0].path, 'web-files/contact-cards.css');
-  assert.match(plan.writes.find((write) => write.kind === 'webfile').after, /adx_displayorder: 3/);
+  assert.doesNotMatch(plan.writes.find((write) => write.kind === 'webfile').after, /displayorder:/);
+  assert.match(plan.warnings.join('\n'), /Advisory CSS Web File priority/);
   assert.ok(plan.writes.every((write) => !write.path.includes('portalbasictheme')));
 });
 
-test('new custom files receive distinct available display-order slots', (t) => {
+test('multiple new custom files do not allocate display-order slots', (t) => {
   const f = fixture(t);
   Object.assign(f.request.styles[0], { scope: 'site', fileName: 'cards.css' });
   f.request.styles.push({ ...f.request.styles[0], id: 'card-color', fileName: 'colors.css', declarations: { color: '#123456' } });
   const plan = preparePlan(f.root, f.request);
   const metadata = plan.writes.filter((write) => write.kind === 'webfile');
-  assert.match(metadata[0].after, /adx_displayorder: 3/);
-  assert.match(metadata[1].after, /adx_displayorder: 4/);
+  assert.equal(metadata.length, 2);
+  for (const write of metadata) assert.doesNotMatch(write.after, /displayorder:/);
+  assert.equal(plan.warnings.filter((warning) => warning.includes('Advisory CSS Web File priority')).length, 2);
 });
 
 test('refuses direct edits to generated CSS instead of introducing a new compiler', (t) => {
@@ -166,12 +178,37 @@ test('different scopes cannot overwrite the same pending CSS/metadata path', (t)
   assert.throws(() => preparePlan(f.root, f.request), /collide/);
 });
 
-test('reused custom CSS must remain in the supported priority band', (t) => {
+test('Web File eligibility does not depend on missing, adjacent, equal or other display-order values', (t) => {
+  for (const [theme, basic, custom] of [
+    [9, 10, 200], [9, 10, 0], [9, 10, 9], [9, 10, 10], [9, 9, 9],
+    [10, 9, 5], [undefined, undefined, undefined], [null, 'unknown', undefined], [9.5, 10.5, 1.5],
+  ]) {
+    for (const create of [false, true]) {
+      const f = fixture(t);
+      f.setDisplayOrder('theme.css', theme);
+      f.setDisplayOrder('portalbasictheme.css', basic);
+      f.setDisplayOrder('custom.css', custom);
+      Object.assign(f.request.styles[0], { scope: 'site',
+        ...(create ? { fileName: 'sunrise-theme.css' } : { targetId: f.assets['custom.css'].id }) });
+      const plan = preparePlan(f.root, f.request);
+      assert.equal(validatePlan(plan), plan);
+      assert.match(plan.warnings.join('\n'), /Advisory CSS Web File priority/);
+      assert.ok(plan.writes.every((write) => write.kind !== 'webfile' || write.before === null));
+      for (const write of plan.writes.filter((entry) => entry.kind === 'webfile')) {
+        assert.doesNotMatch(write.after, /displayorder:/);
+      }
+    }
+  }
+});
+
+test('creating custom CSS does not require theme/default records to infer a priority band', (t) => {
   const f = fixture(t);
-  Object.assign(f.request.styles[0], { scope: 'site', targetId: f.assets['custom.css'].id });
-  const metadata = path.join(f.root, `${f.assets['custom.css'].path}.webfile.yml`);
-  fs.writeFileSync(metadata, fs.readFileSync(metadata, 'utf8').replace('adx_displayorder: 5', 'adx_displayorder: 20'));
-  assert.throws(() => preparePlan(f.root, f.request), /outside the supported display-order band/);
+  fs.unlinkSync(path.join(f.root, `${f.assets['theme.css'].path}.webfile.yml`));
+  fs.unlinkSync(path.join(f.root, `${f.assets['portalbasictheme.css'].path}.webfile.yml`));
+  Object.assign(f.request.styles[0], { scope: 'site', fileName: 'sunrise-theme.css' });
+  const plan = preparePlan(f.root, f.request);
+  assert.equal(validatePlan(plan), plan);
+  assert.doesNotMatch(plan.writes.find((write) => write.kind === 'webfile').after, /displayorder:/);
 });
 
 test('class editing respects HTML attribute boundaries, including quoted > characters', () => {
@@ -233,16 +270,18 @@ test('legacy preview plans and hash-rebuilt preview payloads require a new propo
   assert.throws(() => validatePlan(plan), /Invalid or modified proposal/);
 });
 
-test('diff-only preparation retains missing-baseline and unknown-order blockers', (t) => {
+test('diff-only preparation retains missing-asset protection without an unknown-order blocker', (t) => {
   const f = fixture(t);
   const asset = path.join(f.root, f.assets['theme.css'].path);
   const original = fs.readFileSync(asset);
   fs.unlinkSync(asset);
   assert.throws(() => preparePlan(f.root, f.request), /Missing baseline CSS/);
   fs.writeFileSync(asset, original);
-  const metadata = path.join(f.root, `${f.assets['custom.css'].path}.webfile.yml`);
-  fs.writeFileSync(metadata, fs.readFileSync(metadata, 'utf8').replace('adx_displayorder: 5', 'adx_displayorder: unknown'));
-  assert.throws(() => preparePlan(f.root, f.request), /CSS display order is unknown/);
+  for (const name of Object.keys(f.assets)) f.setDisplayOrder(name, undefined);
+  const plan = preparePlan(f.root, f.request);
+  assert.equal(validatePlan(plan), plan);
+  assert.ok(!plan.warnings.some((warning) => warning.includes('Advisory CSS Web File priority')),
+    'Page-sidecar changes do not get unrelated Web File priority guidance.');
 });
 
 test('custom CSS still requires real hooks and scoped text parts after removing rendering', (t) => {

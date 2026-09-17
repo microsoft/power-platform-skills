@@ -172,6 +172,7 @@ function captureSite(input) {
       if (typeof filename !== 'string' || /[\\/]/.test(filename)) throw new Error(`Unsupported attachment filename: ${file.path}`);
       const assetPath = path.posix.join(path.posix.dirname(file.path), filename);
       safePath(siteRoot, assetPath);
+      // Retain displayorder for metadata inspection only, not cascade inference.
       webFiles.push({
         ...common, filename, assetPath, order: field(record, 'displayorder'),
         mimeType: record.mimetype, isDefault: DEFAULT_CSS.test(common.partialUrl || filename),
@@ -201,7 +202,7 @@ function captureSite(input) {
   const versions = new Set(assetEvidence.map((entry) => entry.version));
   const major = majors.length === 1 && [3, 5].includes(majors[0]) && versions.size === 1 ? majors[0] : null;
   const warnings = [
-    'Stylesheet order is inferred from exported metadata. Custom templates, runtime assets and Studio rendering require separate confirmation.',
+    'Web File displayorder does not establish CSS priority. Runtime rendering and Studio save/reopen behavior remain unverified; local styling does not require live checks.',
   ];
   if (!major) warnings.push('Bootstrap is missing, conflicting or unsupported. Resolve the asset/configuration evidence before preparing styling.');
   for (const file of webFiles.filter((entry) => entry.isCss && !entry.assetPresent)) warnings.push(`Missing CSS attachment: ${file.assetPath}`);

@@ -225,7 +225,7 @@ test('general inline CSS retains exact source edits, composition and conservativ
   assert.match(reference, /Authored priority changes require `importantReason` and expanded review/);
   assert.match(quick, /inline-only\/stylesheet-only\/inline\+CSS.*at most one \*\*existing\*\* stylesheet/);
   assert.match(policy, /do not emit ineffective CSS, blindly escalate priority\/specificity, rewrite the DOM or replace native components/);
-  assert.match(policy, /theme\.css < custom < portalbasictheme\.css/);
+  assert.match(policy, /custom CSS has higher priority than `theme\.css` and lower priority than `portalbasictheme\.css`/);
   assert.match(reference, /directly addressable component roots and root states.*blocks stylesheet values/);
   assert.match(reference, /Exact already-equal inline values are permitted/);
   assert.match(reference, /Descendant\/generated targets still require explicit source\/cascade review/);
@@ -416,6 +416,11 @@ test('installed guidance removes native-property prohibitions without removing s
     'Supported tag names are `div`, `section`',
     'single-line static',
     'on one line',
+    'theme.css < custom < portalbasictheme.css',
+    'Unknown orders block preparation',
+    'protected custom band',
+    'global numeric display order',
+    'no safe slot **hard-stop**',
   ];
   for (const file of documents) {
     const content = fs.readFileSync(file, 'utf8');
@@ -424,11 +429,22 @@ test('installed guidance removes native-property prohibitions without removing s
     }
   }
   assert.match(policy, /Never replace, deactivate, delete, or reorder/);
-  assert.match(policy, /Unknown orders block preparation/);
+  assert.match(policy, /Missing, equal, adjacent or otherwise different display-order values do not block styling/);
   assert.match(policy, /Do not remove ownership markers, overwrite generated output, or install a new toolchain/);
   assert.match(reference, /leading HTML comment banner containing `generated file` or `do not edit` also blocks markup updates/);
   assert.match(reference, /local-source-pipeline change instead; do not remove the banner/);
   assert.match(policy, /Preserve Bootstrap containers, accessibility semantics, Studio editing attributes, Liquid expressions/);
+});
+
+test('Web File priority is advisory rather than display-order or runtime-proof gating', () => {
+  assert.match(policy, /advisory priority guidance/);
+  assert.match(policy, /Do not derive CSS priority from `displayorder`/);
+  assert.match(policy, /or require runtime load-order evidence to proceed/);
+  assert.match(policy, /new CSS Web Files omit `displayorder`/);
+  assert.match(reference, /not a `displayorder` comparison or a requirement to prove runtime load order/);
+  assert.match(reference, /retain the advisory note in review, approval and the final report/);
+  assert.match(reference, /omits `displayorder`; do not allocate slots/);
+  assert.match(quick, /Web File priority is advisory, not a `displayorder` or runtime load-order prerequisite/);
 });
 
 test('visual changes require paired resolved colors without importing the SPA redesign workflow', () => {

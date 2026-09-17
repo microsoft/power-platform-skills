@@ -94,6 +94,88 @@ test('apply requires the exact revision and runs fresh independent verification'
   assert.equal(JSON.parse(fs.readFileSync(receipt)).status, 'applied');
 });
 
+for (const options of [{ major: 3, prefix: 'adx_' }, { major: 5, prefix: '', nested: true, wrapped: true }]) {
+  for (const scope of ['site', 'section']) {
+    for (const create of [false, true]) {
+      test(`${create ? 'new' : 'existing'} ${scope} Web File applies with theme 9/basic 10 (Bootstrap ${options.major})`, (t) => {
+        const f = fixture(t, options);
+        f.setDisplayOrder('theme.css', 9);
+        f.setDisplayOrder('portalbasictheme.css', 10);
+        f.setDisplayOrder('bootstrap.min.css', undefined);
+        const parentId = scope === 'site' ? ids.home : ids.section;
+        if (scope === 'section') {
+          f.request.pageId = ids.sectionLocale;
+          f.request.components[0].sourcePath = 'web-pages/contact/content-pages/Contact.en-US.webpage.copy.html';
+          f.put(f.request.components[0].sourcePath, '<section class="pp-card">Contact team</section>');
+        }
+        const sunriseId = '88888888-8888-4888-8888-888888888888';
+        const sunrisePath = options.nested ? 'web-files/SunriseTheme.css/SunriseTheme.css' : 'web-files/SunriseTheme.css';
+        if (!create) {
+          f.put(sunrisePath, '/* Keep SunriseTheme content. */\n');
+          f.put(`${sunrisePath}.webfile.yml`, f.yml('webfile', {
+            id: sunriseId, name: 'SunriseTheme.css', partialurl: 'SunriseTheme.css',
+            parentpageid: parentId, publishingstateid: ids.state, displayorder: 200,
+          }) + 'filename: SunriseTheme.css\nmimetype: text/css\nisdocument: true\n');
+        }
+        Object.assign(f.request.styles[0], { scope,
+          ...(scope === 'section' ? { parentPageId: parentId } : {}),
+          ...(create ? { fileName: 'sunrise-theme.css' } : { targetId: sunriseId }) });
+        f.request.styles.push({ ...f.request.styles[0], id: 'card-spacing', declarations: { padding: '16px' } });
+        const baseline = inspectSite(f.root);
+        const prepared = draft(f);
+        const plan = JSON.parse(fs.readFileSync(prepared.artifacts.plan));
+        const review = JSON.parse(fs.readFileSync(prepared.artifacts.review));
+        assert.deepEqual(inspectSite(f.root).files, baseline.files, 'Preparation never writes the site.');
+        assert.equal(plan.bootstrap.major, options.major);
+        const notes = plan.warnings.filter((warning) => warning.includes('Advisory CSS Web File priority'));
+        assert.equal(notes.length, 1, 'Multiple style groups in one Web File share one advisory note.');
+        assert.match(notes[0], /higher priority than theme\.css and lower priority than portalbasictheme\.css/);
+        assert.match(notes[0], /not a displayorder check or write prerequisite/);
+        assert.ok(review.warnings.includes(notes[0]));
+        assert.ok(prepared.warnings.includes(notes[0]));
+        const css = plan.writes.find((write) => write.kind === 'css');
+        assert.ok(notes[0].startsWith(`${css.path}:`));
+        if (!create) assert.equal(css.path, sunrisePath);
+        for (const metadata of plan.writes.filter((write) => write.kind === 'webfile')) {
+          assert.equal(metadata.before, null);
+          assert.doesNotMatch(metadata.after, /displayorder:/);
+        }
+        const applied = main(['--operation', 'apply', '--plan', prepared.artifacts.plan,
+          '--approvedHash', prepared.planHash, '--receipt', path.join(f.work, 'receipt.json')]);
+        assert.equal(applied.status, 'applied');
+        assert.equal(applied.verification.status, 'verified-local-files');
+        assert.ok(applied.warnings.includes(notes[0]));
+        const after = inspectSite(f.root);
+        assert.equal(fs.readFileSync(path.join(f.root, css.path), 'utf8'), css.after);
+        for (const file of baseline.files.filter((entry) => entry.path !== css.path)) {
+          assert.deepEqual(after.files.find((entry) => entry.path === file.path), file,
+            `Unrelated source, existing metadata and defaults must remain unchanged: ${file.path}`);
+        }
+        const repeated = main(['--operation', 'apply', '--plan', prepared.artifacts.plan,
+          '--approvedHash', prepared.planHash, '--receipt', path.join(f.work, 'repeat-receipt.json')]);
+        assert.equal(repeated.status, 'already-applied');
+        assert.equal(repeated.verification.status, 'verified-local-files');
+        assert.ok(repeated.warnings.includes(notes[0]));
+      });
+    }
+  }
+}
+
+test('page CSS and inline edits with no display-order metadata get no Web File advisory', (t) => {
+  for (const location of ['stylesheet', 'inline']) {
+    const f = fixture(t);
+    for (const name of Object.keys(f.assets)) f.setDisplayOrder(name, undefined);
+    Object.assign(f.request.styles[0], { location, ...(location === 'inline' ? { inlineTarget: '<section class="pp-card">' } : {}) });
+    const prepared = draft(f);
+    const applied = main(['--operation', 'apply', '--plan', prepared.artifacts.plan,
+      '--approvedHash', prepared.planHash, '--receipt', path.join(f.work, 'receipt.json')]);
+    assert.equal(applied.verification.status, 'verified-local-files');
+    for (const result of [prepared, applied]) {
+      assert.ok(!result.warnings.some((warning) => warning.includes('Advisory CSS Web File priority')));
+    }
+  }
+});
+
 test('drift after writing is reported independently with the recovery receipt', (t) => {
   const f = fixture(t);
   const result = draft(f);
@@ -167,6 +249,37 @@ test('compact evidence resolves only explicit pages and static ID/class candidat
   assert.throws(() => inspect(['--siteRoot', f.root, '--summary', '--target', '.pp-card']), /page/);
   assert.throws(() => inspect(['--siteRoot', f.root, '--pageId', ids.locale, '--target', 'section .pp-card']), /literal/);
   assert.throws(() => inspect(['--siteRoot', f.root, '--pageId', 'unknown']), /No matching/);
+});
+
+test('inspection lists applicable CSS by path without treating displayorder or ancestry as priority', (t) => {
+  const f = fixture(t);
+  const sectionPath = 'web-files/a-section.css';
+  f.put(sectionPath, '/* Section-only CSS. */');
+  f.put(`${sectionPath}.webfile.yml`, f.yml('webfile', {
+    id: '88888888-8888-4888-8888-888888888888', name: 'a-section.css',
+    partialurl: 'a-section.css', parentpageid: ids.section, displayorder: 999,
+  }) + 'filename: a-section.css\nmimetype: text/css\nisdocument: true\n');
+  const args = ['--siteRoot', f.root, '--summary', '--pageId', ids.sectionLocale];
+  const before = inspect(args);
+  const paths = before.css.map((file) => file.path);
+  assert.deepEqual(paths, [...paths].sort((a, b) => a.localeCompare(b)));
+  assert.equal(paths[0], sectionPath, 'Ancestry and the value 999 must not move this file within the inventory.');
+  assert.match(before.cssInventoryNote, /not runtime load order/);
+  assert.match(before.cssInventoryNote, /displayorder metadata only, not CSS priority/);
+  const context = inspectSite(f.root);
+  assert.match(context.warnings.join('\n'), /displayorder does not establish CSS priority/);
+  assert.match(context.warnings.join('\n'), /local styling does not require live checks/);
+  assert.doesNotMatch(context.warnings.join('\n'), /order is inferred from exported metadata/);
+  f.setDisplayOrder('theme.css', 9);
+  f.setDisplayOrder('portalbasictheme.css', 10);
+  f.setDisplayOrder('custom.css', -1);
+  f.setDisplayOrder('bootstrap.min.css', undefined);
+  const after = inspect(args);
+  assert.deepEqual(after.css.map((file) => file.path), paths);
+  assert.equal(after.css.find((file) => file.path === f.assets['custom.css'].path).order, -1);
+  assert.equal(after.css.find((file) => file.path === f.assets['bootstrap.min.css'].path).order, null);
+  const root = inspect(['--siteRoot', f.root, '--summary', '--pageId', ids.locale]);
+  assert.ok(!root.css.some((file) => file.path === sectionPath), 'Ancestor pages do not inherit descendant Web Files.');
 });
 
 test('summary stays below 4 KB for a large inventory and discloses omitted evidence', (t) => {

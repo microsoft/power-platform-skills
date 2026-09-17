@@ -20,7 +20,7 @@ Read [quick-start.md](references/quick-start.md). Show **Inspect/propose → App
 
 ## Inspect and select the route
 
-Resolve classic export, locale, external work directory, source/cascade and Bootstrap; reject SPAs. Default to local authoring for listed/unlisted properties and general CSS, not property/gradient allowlists.
+Resolve classic export, locale, external work directory, local sources and Bootstrap; reject SPAs. Default to local authoring for listed/unlisted properties and general CSS, not property/gradient allowlists.
 
 <!-- not-a-gate: missing inputs; no navigation/write authority -->
 Use `AskUserQuestion` only for missing/ambiguous inputs.
@@ -71,7 +71,7 @@ Require independent validator success; re-read files/diffs against targets/recei
 
 ## Report
 
-Report evidence/pending checks and parser/Studio/resource warnings. Blocked local work needs a local next step, not Studio-only success. Record `StyleSite` only after verified local or requested handoff completion; preserve no-op/separate tracking diffs.
+Report local evidence, pending checks and all warnings, including Web File priority. Blocked local work needs a local next step, not Studio-only success. Record `StyleSite` only after verified local or requested handoff completion; preserve no-op/separate tracking diffs.
 
 > Reference: ${PLUGIN_ROOT}/references/skill-tracking-reference.md
 

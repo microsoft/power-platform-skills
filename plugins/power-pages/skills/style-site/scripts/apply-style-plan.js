@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const generateUuid = require('../../../scripts/generate-uuid');
 const { preparePlanFromSnapshot, validatePlan, saveJson } = require('../../../scripts/lib/style-site-plan');
-const { requestWarnings } = require('../../../scripts/lib/studio-style-capabilities');
 const {
   safePath, readText, hash, resolveSiteRoot, captureSite, assertOutsideSite, parseArgs,
 } = require('../../../scripts/lib/classic-site-style-context');
@@ -50,7 +49,9 @@ function preflight(plan) {
 
 function applyPlan(plan, options = {}) {
   const { applied, changed } = preflight(plan);
-  const warnings = requestWarnings(plan.request);
+  // Preserve all hash-bound review guidance, including Web File priority notes;
+  // recomputing only Studio warnings loses placement and CSS diagnostics.
+  const warnings = [...plan.warnings];
   if (!options.apply) return { status: applied ? 'already-applied' : 'dry-run', planHash: plan.planHash, files: changed.map((write) => write.path), warnings };
   if (options.approvedHash !== plan.planHash) throw new Error('Explicit approval of this exact planHash is required before local writes.');
   if (!options.receipt) throw new Error('--receipt is required for local apply.');
