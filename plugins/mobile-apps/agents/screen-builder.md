@@ -121,8 +121,8 @@ Print `→ [<screen_name>] Checking action, data, route, and token contracts…`
   `expo-notifications` in the current host. Approved pure-JavaScript dependencies
   require the exact planned version, installed manifest entry, and successful resolve;
   otherwise return context/block status, never install from a builder.
-- A connectivity banner or offline profile is not proof of an offline write queue.
-  Say “saved on this device” / “pending sync” only for implemented, verified persistence.
+- Follow [connectivity ownership](../shared/references/connectivity-intent-ownership.md): use host-owned runtime/status UI, not duplicates.
+  App-specific saved/pending-sync claims require actual persistence evidence, not a profile-creation call.
 
 ## 3 — Implement approved UX, not universal presentation
 

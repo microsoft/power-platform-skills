@@ -18,7 +18,7 @@ Optional patterns, selected by the actor's task and approved UX contract — **n
 ## Trust and input
 
 - [Biometric reveal](universal-patterns/recipes.md#6-biometric-auth--reveal-gate), [session timeout](universal-patterns/recipes.md#7-session-timeout-warning): only for an actual security requirement and supported auth lifecycle.
-- [Offline queue](universal-patterns/recipes.md#8-offline-sync-queue-ui): only if verified runtime support exists; a profile is not a queue.
+- [App-owned sync queue](universal-patterns/recipes.md#8-app-owned-sync-queue-ui): only for an approved product requirement backed by a real app-owned queue API, never implicit Mobile Offline Profile UI. Follow [connectivity intent ownership](connectivity-intent-ownership.md).
 - [Priority alert](universal-patterns/recipes.md#9-safety--priority-alert-banner), [voice input](universal-patterns/recipes.md#10-voice-input-button): evidence-backed urgency or supported input, not a field-industry default.
 - [Progressive disclosure](universal-patterns/recipes.md#18-progressive-disclosure), [inline validation](universal-patterns/recipes.md#19-inline-field-validation): reduce effort without hiding errors or required work.
 - [True-black mode](universal-patterns/recipes.md#20-oled-true-black-mode): optional explicit device/theme choice, never an industry-implied preference.

@@ -45,7 +45,8 @@ it can persist an auth cache. Resolve only after Step 2c proceeds.
 
 ### Step 1.7 — Detect publisher prefix (deferred)
 
-Execute only after Step 2c proceeds and mode is `required`:
+Execute only after Step 3 Gate 1 approves the architecture and confirms mode `required`,
+before the planning snapshot. Step 2c proceed alone does not authorize prefix discovery:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID"
@@ -62,8 +63,9 @@ For `connector-only`, set the detected prefix to empty and make no Dataverse pre
 **Telemetry checkpoint: `gather_app_requirements`**
 
 Reuse answered arguments. If no description exists, ask what users need to accomplish and who
-uses the app. Collect display name, target platforms (default iOS + Android), and intended
-environment ID with the foreground question interface. Preserve supplied aesthetic/brand
+uses the app. Collect display name and intended environment ID with the foreground question
+interface. Set `<target_platforms> = "ios, android"`; do not ask an iOS/Android platform
+question. Preserve explicit target constraints and supplied aesthetic/brand
 constraints, but defer brand/style choices to `/design-system`.
 Derive a kebab-case ASCII slug; show it at Step 2c for correction rather than asking separately.
 
@@ -105,12 +107,18 @@ On adjustment, revise with the user's answers; on start over, return to the desc
 Do not force a generic feature picker or reconfirm an already approved brief. Step 2c captures
 the final proceed/edit/abort decision, including the summarized brief.
 
-Classify `<dataverse_planning_mode>`:
+Infer a **provisional** `<dataverse_planning_mode>` for the plan preview, not a storage decision:
 
 - `connector-only` only if **every record source/write target** is an explicit non-Dataverse
-  system and there are no app-owned rows, Dataverse offline data, retained File/Image artifacts,
-  existing Dataverse tables, or Dataverse-backed native capabilities.
+  system and there are no app-owned Dataverse rows, retained Dataverse File/Image artifacts,
+  existing Dataverse tables, or Dataverse-backed native capabilities. Retained artifacts can use
+  approved connector-owned storage with a supported write/upload operation.
 - `required` otherwise, including ambiguity. A named connector alone proves nothing.
+
+Apply [connectivity intent ownership](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md):
+offline wording is operating context, not a reason to select Dataverse or invent schema/sync UI.
+Gate 1 confirms data ownership, native capabilities and connectors before prefix/snapshot discovery.
+The confirmed mode may differ from this provisional recommendation; no discovery follows it yet.
 
 Keep exact-target needs (reuse/extend, existing/managed targets, collision, computed-column,
 relationship or customizability facts) explicit. Required planning never degrades to unverified
@@ -125,7 +133,7 @@ Show a compact factual preview from the brief already in memory:
 - Display name, derived slug, platforms and intended environment ID.
 - Primary users/journeys and known data systems/integrations, distinguishing facts from assumptions.
 - Dataverse mode and unresolved decisions; actual table/screen counts are **not yet known**.
-- Approval sequence: data model → native capabilities + connectors → screen graph → screen specs;
+- Approval sequence: data platform + native capabilities + connectors → data model → screen graph → screen specs;
   brand/visual review follows scaffold. Rejected sections are revised, not the whole plan.
 - Work remaining: evidence + proposals, prepare/init, data/native/connector work, screen build,
   TypeScript/route/quality gates. No promised duration or minimum spending budget.
@@ -150,7 +158,7 @@ Require resolved environment ID/URL/tenant; stash them as `ACTIVE_ENV_ID`, `ACTI
 `ACTIVE_TENANT_ID`, `ACTIVE_ENV_NAME`, and write `.resolved-environment.json` now, not earlier.
 Failure: use the shared auth policy; never infer an empty inventory or initialize here.
 If needed, run `az login --tenant <env-tenant>` in foreground; do not conflate CLI accounts.
-Execute deferred prefix detection only for required mode.
+Keep prefix detection deferred to Step 3, after Gate 1 confirms required mode.
 
 Check app-name collision with `npx power-apps list-codeapps --environment-id <id> --json` if
 that command is supported. Parse a successful response; command failure is not "no collision".

@@ -1,6 +1,6 @@
 # Foreground-owned approval receipt
 
-Load at Gate 1 acceptance and later approved-plan revisions. This documents the existing live
+Load at Gate 2 acceptance and later approved-plan revisions. This documents the existing live
 contract; it does not introduce another schema or approval authority.
 The authoritative normalization, hash and validation functions are exported by
 `${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js`:
@@ -14,16 +14,20 @@ restamp it. A valid integrity hash detects accidental replacement, not a malicio
 
 ## Lifecycle
 
-1. Before Gate 1, require the normalized schema sidecar and explicit executable decisions;
+1. Gate 1 records accepted platform/native/connector decisions and their actual timestamps in
+   the human plan before modeling; no Dataverse receipt exists yet. Before Gate 2, require the
+   normalized schema sidecar and explicit executable decisions;
    every `unverified` row is non-executable. Adapt rows must fully name adapted schema/logical/
    intersect identities; the execution worker cannot choose them.
-2. **Approved:** only at explicit Gate 1 user acceptance, foreground initializes
+2. **Approved:** only at explicit Gate 2 user acceptance, foreground initializes
    `<working_dir>/.tmp/mobile-plan-status.json` from `contractApprovalContent(contract)`,
    preserving the exact normalized content. The `dataModel` approval record contains the
-   acceptance time and approved contract hash. Later gates remain pending until accepted.
-3. On Gate 2 acceptance update only `nativeCapabilities` and `connectors` approval records.
-   Gate 4a acceptance is recorded in the human plan; `screenPlan` remains pending until Gate 4b.
-4. On Gate 4b acceptance finalize structured `serviceRequiredTables` from approved screen,
+   acceptance time and approved contract hash. Copy `nativeCapabilities` and `connectors`
+   approvals with their original Gate 1 timestamps only after verifying that those accepted
+   decisions are unchanged. Missing or stale architecture approval returns to Gate 1; never
+   synthesize it from model acceptance. Later gates remain pending until accepted.
+3. Gate 3 acceptance is recorded in the human plan; `screenPlan` remains pending until Gate 4.
+4. On Gate 4 acceptance finalize structured `serviceRequiredTables` from approved screen,
    hook, identity and lookup consumers. Each row needs a deterministic consumer identifier.
    Its exact logical-name set must equal the normalized contract's non-deferred serviceRequired
    table and M:N intersect declarations. New services require earlier contract reapproval.
@@ -61,8 +65,9 @@ and invalidate the completed receipt integrity. Preserve unaffected approval tim
 Show the actual delta and re-run the owning foreground gate; refresh hashes only after acceptance.
 This applies to prefix corrections, environment changes, cross-entity read addenda and **Step 6.75
 design changes to native-app-plan.md before Step 8**. Never silently refresh a whole-plan hash
-because the change "only adds design". Gate 4b must accept affected specs/design delta; schema
-changes additionally require Gate 1 and fresh evidence for the intended environment.
+because the change "only adds design". Gate 4 must accept affected specs/design delta; schema
+changes additionally require Gate 2 and fresh evidence for the intended environment.
+Platform/native/connector changes return to Gate 1 and invalidate dependent model/screen approvals.
 
 Pre-approval visual proposals may refine inferred layout/media/emphasis without reopening
 unchanged data or behavior approvals. Leave the authoritative plan and receipt unchanged while

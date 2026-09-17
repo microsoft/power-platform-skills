@@ -43,12 +43,63 @@ derived inputs/units, related read, write/transition, retained artifact or nativ
 Record required versus explicitly deferred scope. Do not invent exact existing columns before
 evidence. Preserve useful needs while assessing feasibility; do not minimize the schema first.
 
-### Verified data evidence and proposal
+## 3.1 — Architecture proposal and Gate 1
 
-For `required`, read and execute [planning-snapshot.md](planning-snapshot.md). The foreground
-owns environment resolution, evidence, progress rendering and bounded exact-name expansions.
-For `connector-only`, do not read that reference or create a snapshot/contract/receipt; propose
-an explicit zero-table/no-Dataverse `## Data Model` section for foreground review.
+Dispatch `mobile-app:native-app-planner` for **only** native capabilities, connector needs and
+provisional design context with the confirmed brief, wizard facts, provisional data-platform choices,
+the Experience outline/Information needs, plugin root, working directory and output `.tmp/native-integration-proposal.md`.
+It cannot ask questions, run gates, assemble approval records or invoke architects.
+Resolve its `NEEDS_CONTEXT` in foreground. Surface excluded capabilities before approving scope.
+No publisher discovery, Dataverse snapshot or data-model-architect dispatch occurs before Gate 1.
+Use [connectivity intent ownership](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
+throughout proposals; connectivity wording alone adds no storage, services, routes or sync UI.
+
+Foreground assembles the human plan skeleton. Keep these independent top-level sections:
+`## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`,
+`## Design Direction`, `## Design` (existing design execution fields), `## Connectors`,
+`## Screens`, `## Approvals`. Provenance may be a short separate section.
+The confirmed brief stays verbatim, compact and separate from architecture; do not nest schema
+under a `## Brief`. **Do not duplicate raw evidence**: embed proposal decisions, not raw
+rankings/columns/timings; retain the separately referenced evidence appendix.
+Keep data-model implementation notes under one concise `### Notes`; queue discovery diagnostics
+for the bank. Do not write links to nonexistent operational documents.
+
+Use the host's actual question interface and available plan-mode tools per the shared core.
+Present each section, capture an explicit user answer, then record what was approved and when.
+`DONE`, empty answers, entering plan mode and recommendations never approve a section.
+On rejection revise only that section, invalidate dependent approvals, then present it again.
+If no permitted question interface exists, stop with the pending approval; do not dispatch more work.
+
+### Gate 1 — Data platform + native capabilities + connectors
+
+Foreground presents each source of truth, proposed Dataverse mode and both capability/connector
+matrices including `None`, exclusions, capture/output and retained-artifact destinations.
+Approve these together before modeling. Empty matrices are not self-approval.
+Before acceptance and whenever a platform, connector or storage choice changes, revalidate
+every native capability against its supported input/output and storage path:
+
+- Connector-owned storage needs a supported upload/write operation, not just a connector name.
+- Dataverse File/Image host controls require Dataverse. Continuous `geolocation` requires
+  its supported Dataverse target; one-shot `location` is not an automatic replacement.
+- Do not silently remove capabilities to fit connector-only mode. Foreground resolves the
+  incompatible combination or asks for an explicit scope change before acceptance.
+
+Record the accepted data platform, confirmed `required`/`connector-only` mode, native capabilities,
+connectors and actual approval timestamps in `native-app-plan.md` under `## App Requirements`,
+the owning sections and `## Approvals`. Keep recommendations separate from these approvals.
+Do not create an architecture sidecar or a Dataverse receipt before a schema exists.
+Validate these recorded decisions before discovery and architect dispatch, including on resume.
+Missing, malformed, stale or contradictory approval returns to Gate 1, not a generic worker
+retry or a silent fallback to required mode. Changed architecture invalidates dependent model,
+graph/spec and receipt approvals. The foreground owns this check even without agent tooling.
+
+## 3.2 — Verified data evidence and remaining approval gates
+
+For Gate 1-approved `required`, execute deferred Step 1.7 prefix detection, then read and execute
+[planning-snapshot.md](planning-snapshot.md). The foreground owns evidence, progress rendering
+and bounded exact-name expansions. For approved `connector-only`, skip prefix discovery,
+snapshot and data-model-architect entirely; create an explicit zero-table/no-Dataverse
+`## Data Model` proposal. No Dataverse schema contract or receipt is created in that mode.
 
 Dispatch `mobile-app:data-model-architect` directly in required mode:
 
@@ -56,6 +107,8 @@ Dispatch `mobile-app:data-model-architect` directly in required mode:
 Requirements brief: <confirmed brief verbatim, including workflow/domain context>
 Experience outline and Information needs: <foreground-derived journey, decisions, fact/action needs and classified assumptions>
 Original prompt and wizard facts: <verbatim facts>
+Approved native capabilities: <exact Gate 1-approved matrix, including None and storage/output>
+Approved connectors: <exact Gate 1-approved list, including None and source-of-truth boundaries>
 Working directory: <absolute working_dir>
 Plugin root: ${PLUGIN_ROOT}
 Dataverse planning mode: required
@@ -73,44 +126,18 @@ No user questions, approvals, receipt writes or nested agents; return the standa
 
 Require both `_dm_section.md` and normalized `.tmp/dataverse-schema-contract.json`.
 Missing/malformed sidecar is `BLOCKED`, never Markdown parsing. Revision prompts preserve the
-same snapshot/evidence paths. Bounded missing-metadata signals route to planning-snapshot.md.
+same snapshot/evidence paths and still-approved architecture. Bounded missing-metadata signals
+route to planning-snapshot.md. New platform/native/connector needs return to Gate 1 before
+revising the model, not to a mutation worker.
 
-## 3.1 — Native/integration proposal and assembly
-
-Dispatch `mobile-app:native-app-planner` for **only** native capabilities, connector needs and
-provisional design context with the confirmed brief, wizard facts, approved/drafted data needs,
-the Experience outline/Information needs, plugin root, working directory and output `.tmp/native-integration-proposal.md`.
-It cannot ask questions, run gates, assemble approval records or invoke architects.
-Resolve its `NEEDS_CONTEXT` in foreground. Surface excluded capabilities before approving scope.
-Send storage changes back to the data architect before Gate 1, not to a mutation worker.
-
-Foreground assembles the human plan. Keep these independent top-level sections:
-`## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`,
-`## Design Direction`, `## Design` (existing design execution fields), `## Connectors`,
-`## Screens`, `## Approvals`. Provenance may be a short separate section.
-The confirmed brief stays verbatim, compact and separate from architecture; do not nest schema
-under a `## Brief`. **Do not duplicate raw evidence**: embed proposal decisions, not raw
-rankings/columns/timings; retain the separately referenced evidence appendix.
-Keep data-model implementation notes under one concise `### Notes`; queue discovery diagnostics
-for the bank. Do not write links to nonexistent operational documents.
-
-## 3.2 — Foreground approval gates
-
-Use the host's actual question interface and available plan-mode tools per the shared core.
-Present each section, capture an explicit user answer, then record what was approved and when.
-`DONE`, empty answers, entering plan mode and recommendations never approve a section.
-On rejection revise only that section, invalidate dependent approvals, then present it again.
-If no permitted question interface exists, stop with the pending approval; do not dispatch more work.
-
-1. **Gate 1 — Data model:** show reuse/extend/create decisions, Mermaid ER with columns,
+2. **Gate 2 — Data model:** show reuse/extend/create decisions, Mermaid ER with columns,
    relationships, alternate keys, tiers, risks and retained-artifact targets.
    In required mode, normalize and verify proposed publisher names **before** acceptance.
    On acceptance initialize the foreground-owned receipt using [approval-receipt.md](approval-receipt.md).
    Connector-only still requires explicit approval of the no-Dataverse decision, recorded in the plan.
-2. **Gate 2 — Native capabilities + connectors:** review both matrices including `None`,
-   exclusions and storage/output. Both empty is not self-approval: record the user's acceptance
-   of the empty scope. Update `nativeCapabilities` and `connectors` records only after acceptance.
-3. **Gate 4a — Screen graph:** dispatch the graph worker below, embed its section, review the
+   Transfer only still-valid Gate 1 native/connector approvals and their original timestamps
+   into the receipt; model acceptance never approves architecture retrospectively.
+3. **Gate 3 — Screen graph:** dispatch the graph worker below, embed its section, review the
    journey coverage, screen list, useful first-entry surfaces, scan/deep-link returns, navigation
    contracts and shared conventions **before specs**.
    Show the derived scope breakdown from Navigation Pattern: main destinations, unique business
@@ -119,16 +146,16 @@ If no permitted question interface exists, stop with the pending approval; do no
    A large graph needs task-based justification, not automatic approval or arbitrary truncation.
    Approve the navigation pattern and explicit visible tab/drawer destination IDs with their
    hierarchy/access rationale; detail, status and action routes do not count as peer destinations.
-4. **Gate 4b — Screen specs:** dispatch specs only against the approved graph, review compact
+4. **Gate 4 — Screen specs:** dispatch specs only against the approved graph, review compact
    per-screen behavior, independent domain states and authorized transitions, initial filters,
    data/permissions, JS dependencies and open questions.
    Run the full information/interaction audit in Step 3.4 before acceptance in every data mode,
    not only when related-field annotations exist. Resolve gaps and reapprove affected earlier gates.
-   Gate 4b rejection reruns specs only. Structural changes return to Gate 4a.
+   Gate 4 rejection reruns specs only. Structural changes return to Gate 3.
 
 Brand selection is deferred to Step 6.75. Both screen phases use `skip_preview: true`; there is
-no plan-time browser open, style-picker early return, or requirement to render before Gate 4b.
-Gate 4b approves behavior, data/permissions and navigation, not model-inferred visual arrangement.
+no plan-time browser open, style-picker early return, or requirement to render before Gate 4.
+Gate 4 approves behavior, data/permissions and navigation, not model-inferred visual arrangement.
 Label suggested layout/media/emphasis as provisional until visual approval; explicit user brand
 and presentation constraints remain binding. Apply the
 [presentation authority boundary](${PLUGIN_ROOT}/shared/references/design-planning.md#entry-composition-and-reference-transfer).
@@ -177,11 +204,13 @@ Resolve blocking open questions in foreground before acceptance.
 Foreground alone embeds graph output; specs worker writes only its assigned plan section,
 never approval records. If a screen requires new
 schema, native or connector scope, revise/reapprove that earlier gate and regenerate dependent
-graph/specs before returning to Gate 4b. Never silently revise locked input.
+graph/specs before returning to Gate 4. Never silently revise locked input.
+Handle `NEEDS_CONTEXT: graph missing` and `NEEDS_CONTEXT: graph revision required` before a
+generic specs retry: return to graph planning and explicit Gate 3 approval, then regenerate specs.
 
 ## 3.4 — Information/interaction audit and final integrity
 
-After detailed specs are drafted and **before Gate 4b acceptance**, run
+After detailed specs are drafted and **before Gate 4 acceptance**, run
 [information and interaction coverage](${PLUGIN_ROOT}/shared/references/screen-data-coverage.md).
 Pass explicit `plan_path: <working_dir>/native-app-plan.md` to the read-only extraction helper
 and audit every intended spec against App Requirements/Information needs, not graph scratch.

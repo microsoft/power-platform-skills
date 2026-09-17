@@ -1659,8 +1659,13 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   ), 'utf8');
   assert.match(
     approval,
-    /only at explicit Gate 1 user acceptance[\s\S]*`dataModel` approval record contains the\s+acceptance time and approved contract hash/,
+    /only at explicit Gate 2 user acceptance[\s\S]*`dataModel` approval record contains the\s+acceptance time and approved contract hash/,
   );
+  assert.match(
+    approval,
+    /Copy `nativeCapabilities` and `connectors`[\s\S]*original Gate 1 timestamps[\s\S]*decisions are unchanged/,
+  );
+  assert.match(approval, /never\s+synthesize it from model acceptance/);
   assert.match(
     approval,
     /Do not use the manifest builder to create or restamp this receipt/,

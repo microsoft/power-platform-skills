@@ -62,7 +62,7 @@ _<table name — collision type (foreign / tombstone / reserved) — resolution 
 _Populated by `/setup-offline-profile`. Step 1b reads this section on every run to detect resume state (in-progress profile from a prior interrupted session)._
 
 ```yaml
-status: none           # none | in-progress | done
+status: none           # none | in-progress | done | not-applicable
 profileId:             # mobileofflineprofile GUID, captured at Step 5
 profileName:           # human-readable name
 mode:                  # create-new | extend

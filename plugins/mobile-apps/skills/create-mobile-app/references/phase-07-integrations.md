@@ -20,7 +20,7 @@ If None, skip only these invocations, **not** Step 9a/9b.
 Read the Installation Contract in
 [javascript-dependency-planning.md](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md)
 for approved `## Screens → ### JavaScript Dependencies` rows.
-Gate 4b consent covers exactly those packages/versions. Install/validate before skeleton/builders,
+Gate 4 consent covers exactly those packages/versions. Install/validate before skeleton/builders,
 including package/lockfile and module resolution checks. No package substitution, compiler-error
 guessing, or routing JS-only dependencies through `/add-native`.
 If native content/incompatible dependencies emerge, remove only the just-added package and STOP.

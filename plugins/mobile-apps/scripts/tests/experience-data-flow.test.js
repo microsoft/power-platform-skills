@@ -14,7 +14,7 @@ const coverage = read('shared/references/screen-data-coverage.md');
 
 test('experience and information needs precede data discovery without a new approval gate', () => {
   const experience = planning.indexOf('## 3.0 — Experience and information needs before data');
-  const data = planning.indexOf('### Verified data evidence and proposal');
+  const data = planning.indexOf('## 3.2 — Verified data evidence');
   const dispatch = planning.indexOf('Dispatch `mobile-app:data-model-architect`');
   assert.ok(experience >= 0 && data > experience && dispatch > data);
   const section = planning.slice(experience, data);
@@ -78,7 +78,7 @@ test('create, edit, design and standalone data planning share the full reconcili
     'agents/screen-planner.md',
     'shared/references/screen-planning/spec-contract.md',
   ]) assert.ok(read(file).includes('screen-data-coverage.md'), `${file} must use the shared audit`);
-  assert.match(planning, /before Gate 4b acceptance/);
+  assert.match(planning, /before Gate 4 acceptance/);
   assert.match(planning, /Connector-only, local and auth-only screens are included/);
   const edit = read('skills/edit-app/SKILL.md');
   assert.match(edit, /Before Step 3 approval/);

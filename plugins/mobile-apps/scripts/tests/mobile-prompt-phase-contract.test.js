@@ -116,7 +116,7 @@ test('graph and specs have one foreground owner with distinct immutable handoffs
   assert.match(planning, /plan_path: <working_dir>\/native-app-plan\.md/);
   assert.match(planning, /locked `## Screens` in `plan_path`, not graph scratch/);
   assert.match(planning, /never `_screens_section\.md`/);
-  assert.match(planning, /Gate 4b rejection reruns specs only/);
+  assert.match(planning, /Gate 4 rejection reruns specs only/);
   assert.match(planning, /never require or invent generated services/);
 });
 

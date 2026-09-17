@@ -63,7 +63,7 @@ The graph/spec gates in Step 3 were structural. Brand/design review belongs here
 implementation. Inferred layout, media sizing and emphasis remain provisional until this review.
 The designer may improve them within approved behavior and explicit brand constraints without
 reopening business approvals; foreground presents the affected presentation delta here.
-A graph change returns to Gate 4a; data/native/integration changes return to their gates.
+A graph change returns to Gate 3; data/native/integration changes return to their gates.
 If accepted design changes shared conventions/specs, send only affected specs back to
 `mobile-app:screen-planner` with the locked graph and accepted visual reference to reconcile
 presentation, not independently redesign it. Preserve approved operations and first-entry scope.

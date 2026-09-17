@@ -55,6 +55,7 @@ Handle `NATIVE_MODULE_MISSING`, `VIEWER_FAILED`, `CAPTURE_FAILED`, `uploadFailed
 and `invalidUrl`; `USER_CANCELLED` keeps state unchanged. Background GPS calls only
 approved wrapper lifecycle APIs and never implies tracking started before success.
 
-A created offline profile or “No connection” banner is not offline runtime support.
-No “saved offline”, durable draft, or pending-sync guarantee without implemented,
-verified storage/queue behavior.
+Follow [connectivity intent ownership](../../../shared/references/connectivity-intent-ownership.md):
+the native host consumes the profile for its offline runtime and status UI. Do not scaffold
+duplicate queues or sync controls. App-specific “saved offline”, durable draft or pending-sync
+claims still require evidence from the actual supported storage path, not a simulated banner.

@@ -178,6 +178,9 @@ phase and pending work so the next invocation can verify and resume it.
   outline and Information needs: the working journey, decision evidence, repeated
   interactions and classified assumptions. This enriches short briefs without silently
   inventing business capabilities or requiring a reference screenshot.
+  The maker approves data platform, native capabilities and connectors before Dataverse
+  prefix/snapshot discovery or modeling, then approves the data model, screen graph and specs.
+  Workers remain non-interactive; the foreground retains each approval and its scope.
 - [Information and interaction coverage](shared/references/screen-data-coverage.md)
   reconciles every required fact, metric, filter, action and retained artifact against
   supported data/capabilities before spec approval. Reuse requires complete support,
@@ -335,7 +338,7 @@ Example edit flows:
 | `/preview-screens` | ✅ v0 | Browser-viewable intent storyboards before implementation or source-derived HTML approximations after generation/edits. Uses actual theme inputs and clearly distinguishes illustrative interactions from native runtime verification. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
-| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Auto-proposed by `/create-mobile-app` Step 6.85 for offline-relevant apps; also runs standalone on existing apps. |
+| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables through a consolidated configuration review. Writes `offline-profile.json`; never mutates `power.config.json`. The bundled native host consumes the profile for SQLite reads/writes, queued synchronization, reconnect behavior and status UI; no duplicate app-owned runtime is generated. Offered after verified Dataverse materialization, including reused tables, by `/create-mobile-app` Step 6.85; also runs standalone. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |
 | `/assign-offline-profile` | 🟡 v0.1 | Bind users / teams to a Mobile Offline Profile via `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` rows. Without this, the profile exists but no one's app uses it. Accepts `--user <upn>`, `--team <name>`, `--me`, `--all-app-users`, `--unassign-*` flags. |
 | `/edit-offline-profile` | 🟡 v0.1 | Change ONE aspect of an existing profile (table scope, sync frequency, column list, name/description) without re-running the full wizard. Mirrors the `/edit-app` gated edit pattern. Accepts `--rename`, `--table X --scope`, `--table X --sync`, `--table X --columns add:/remove:/reset` flags. |

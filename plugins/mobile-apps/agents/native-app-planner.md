@@ -28,6 +28,8 @@ Preserve the supplied Experience outline and Information needs when checking cap
 artifact feasibility. Return unsupported required needs to foreground; do not redesign the
 journey around an absent wrapper or expand scope merely to imitate a reference.
 For edits also require the current relevant section; preserve unaffected decisions.
+Follow [connectivity intent ownership](../shared/references/connectivity-intent-ownership.md):
+offline wording alone does not select a data platform or add schema, sync queues or screens.
 Write only that proposal file. Do not edit `native-app-plan.md`, `_dm_section.md`,
 `_screens_section.md`, `memory-bank.md` or `.tmp/mobile-plan-status.json`.
 Return the output path, unresolved assumptions, exclusions and handoff notes.
@@ -59,11 +61,14 @@ Preserve these distinctions:
   picker. Dataverse File/Image form fields use host `<FilePicker>`/`<ImagePicker>` instead.
   Never require broad media-library access when a scoped picker suffices.
 - Generated PDFs use `pdf-report` only when `expo-print` ships; sharing additionally needs
-  `expo-sharing`. Retained PDFs need Dataverse File storage, never long text/base64.
+  `expo-sharing`. Retained PDFs need Dataverse File storage or approved connector-owned storage
+  with a supported upload/write operation, never long text/base64. A connector name alone is
+  not a storage implementation.
 - `native-pdf-viewer` requires the exact Power Apps PDF viewer package at 0.2.9+ and HTTPS or
   local `file://` PDF input; it does not accept `content://`, `blob:` or `http://`.
 - `pen-input` requires the exact Power Apps pen package; PNG data URI persistence needs
-  an Image/File column or child Evidence/Signature row. Cancellation is not an error.
+  an Image/File column, child Evidence/Signature row or compatible connector upload path.
+  Dataverse File/Image host controls still require Dataverse. Cancellation is not an error.
 - One-shot foreground coordinates use `location`/`expo-location`. Continuous/background
   tracking uses `geolocation` only if `@microsoft/power-apps-native-bglocation` ships.
   Its MSAL-authenticated Dataverse target must already exist and `/add-native geolocation`
@@ -74,6 +79,9 @@ Preserve these distinctions:
 
 If none qualify, write `## Native Capabilities` with `None` and concise exclusion reasons.
 Do not silently drop user-requested functionality; foreground resolves the scope decision.
+Revalidate capability/storage compatibility whenever the platform or connector choice changes.
+Continuous `geolocation` requires Dataverse; one-shot `location` is not an automatic replacement.
+Return conflicts to foreground before Gate 1 acceptance, without choosing a weaker capability.
 Keep JS-only libraries out of the native matrix. Forward explicit package requests and use cases
 to the foreground screen-planner dispatch, using
 [JavaScript dependency planning](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md).

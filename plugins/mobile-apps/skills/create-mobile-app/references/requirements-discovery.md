@@ -36,18 +36,22 @@ The following are interpretations to check against the actual brief, not automat
 | Audit, inspect, compliance check | Clarify whether users perform a checklist/evidence workflow, review historical changes, or both | A custom Audit Event table, change-log screen, or inspection workflow from the word alone |
 
 A generic list/document can use Dataverse, another service, or local content. A generic chat can be app-owned. Do not present unrequested connectors as preselected "recommended" features.
+Follow [connectivity intent ownership](../../../shared/references/connectivity-intent-ownership.md):
+offline wording is operating context only, not an implicit platform, schema or sync-UI requirement.
 
 ## Native and artifact feasibility
 
 Resolve native requirements through [native capability proposals](../../../agents/native-app-planner.md#native-capability-proposals), which checks the live `template/package.json` and [add-native allowlist boundary](../../add-native/SKILL.md). An absent or runtime-banned module is a feasibility constraint, not a capability to promise. Pure JavaScript follows [dependency planning](../../../shared/references/javascript-dependency-planning.md), not the native allowlist.
 
 - PDF viewing requires `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ for HTTPS or local `file://`; no `content://`, `blob:`, or `http://` viewer input.
-- Local PDF generation requires `expo-print`; sharing requires `expo-sharing` when shipped and requested. Retention requires a Dataverse File column or Attachment/Evidence table with a verified write path.
+- Local PDF generation requires `expo-print`; sharing requires `expo-sharing` when shipped and requested. Retention requires a Dataverse File column, Attachment/Evidence table or approved connector-owned storage with a supported upload/write operation.
 - Signature/ink capture needs an explicit target in `native-app-plan.md`; a successful local capture is not proof of upload/retention.
 - Continuous/background tracking uses `geolocation` (`@microsoft/power-apps-native-bglocation`, MSAL-only) with an existing Dataverse table: default entity set `msdyn_locationrecords`, or verified custom `tableName`/`fieldMap`.
 - `/add-native geolocation` must verify that control table; a missing table is provisioned through the geolocation-control setup, not `/add-dataverse`. Do not use the control until verification succeeds.
 - One-shot foreground location uses `location` (`expo-location`), not the background control.
-- An offline profile does not provide a generated runtime queue. Record supported retry/draft behavior; seek foreground clarification only if required offline operation cannot be met.
+- The native host consumes the offline profile for its SQLite/sync runtime and status overlay;
+  do not add duplicate generated queues or controls. Separately requested custom diagnostics
+  need explicit product scope and a real supported API.
 
 ## Consequential questions through the foreground
 

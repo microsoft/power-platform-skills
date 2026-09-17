@@ -2,6 +2,16 @@
 
 Read graph fields for `phase: graph`; read spec fields only for `phase: specs` or legacy full mode. These extend the existing `## Screens` section of `native-app-plan.md`; there is no separate journey/preview sidecar.
 
+## Spec writes
+
+Retries replace specs, not unrelated content; no duplicates or receipts.
+Replace all prior copies of the phase-owned `### Per-Screen Specs`, `### JavaScript Dependencies`,
+and `### Open Questions` / legacy `### Open Questions for the User` subsections in one edit.
+Remove an optional owned subsection if the replacement omits it; leave at most one current copy.
+Remove obsolete specs-owned `### Screen Graph` subsections, not the approved graph fields.
+Keep graph fields and everything outside the assigned section unchanged. Check missing graph
+context before any specs write and return to foreground for Gate 3 rather than repairing routes here.
+
 ## Graph fields
 
 Retain the existing headings `### Navigation Pattern`, `### Screen Map`, `### Navigation Contracts`, and `### Shared Conventions`. Add `### Primary journeys` and `### Preview selection` within that section.
@@ -24,7 +34,7 @@ Keep the original columns in order and append ID + Rationale:
 
 #### Screen scope and consolidation
 
-Before Gate 4a, choose the **smallest coherent screen set that preserves every approved job**.
+Before Gate 3, choose the **smallest coherent screen set that preserves every approved job**.
 Screen count is an output of this review, never a target derived from tables, roles, or features.
 Do not default to a large graph, but do not remove necessary work to meet an arbitrary cap.
 
@@ -45,7 +55,7 @@ Do not default to a large graph, but do not remove necessary work to meet an arb
    Do not replace route proliferation with an overloaded mega-screen or an unmanageable sheet.
 5. **Recheck coverage after merging.** Every journey still has its entry, action, outcome,
    recovery, and return context. Specs expand only the approved graph; a necessary new route
-   returns to Gate 4a with the missing job and proposed change, never grows silently during building.
+   returns to Gate 3 with the missing job and proposed change, never grows silently during building.
 
 In `### Navigation Pattern`, report a short derived scope summary: main destinations (a subset
 of routes), unique business routes (including routed modals/sheets), local overlays/states hosted
@@ -250,12 +260,14 @@ When identity links through `systemuser`, require `SystemusersService` and the p
 Resolve native requests against the live template/package allowlist and approved Native Capabilities. Pure-JavaScript selection follows its separate reference. `expo-haptics` is runtime-banned.
 
 - `document-picker` = `expo-document-picker` for user-picked files; camera capture and gallery selection are different requirements. Generic attachment does not imply a camera.
-- `pdf-report` = `expo-print`; add `expo-sharing` only when device sharing is required and shipped. Retention needs a verified File column or Attachment/Evidence table.
+- `pdf-report` = `expo-print`; add `expo-sharing` only when device sharing is required and shipped. Retention needs a verified File column, Attachment/Evidence table or approved connector-owned storage with a supported upload/write operation.
 - `native-pdf-viewer` = `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ for HTTPS or local `file://` input, never `content://`, `blob:`, or `http://`. Name URL/local source and invalid/viewer failure handling.
-- `pen-input` = `@microsoft/power-apps-native-pen-input` only for explicit ink/signature capture, not ordinary approval. Name the Dataverse Image/File or child table target; cancellation is not an error.
+- `pen-input` = `@microsoft/power-apps-native-pen-input` only for explicit ink/signature capture, not ordinary approval. Name the Dataverse Image/File, child table or compatible connector upload target; cancellation is not an error.
 - One-shot `location` = `expo-location`. Continuous/background `geolocation` = `@microsoft/power-apps-native-bglocation` (MSAL-only); verified existing Dataverse location table/field map, start/stop/status controls, permission-denied path. Never promise tracking solely from "field work".
 - Relevant artifact states: `invalidUrl`, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled`, `signatureCaptureFailed`, `nativeModuleMissing`. State whether local success differs from server persistence; a failed required upload cannot be represented as submitted.
-- Offline profile configuration alone does not supply an offline runtime queue. Describe actual network failure/retry/resume behavior; do not fabricate sync counts.
+- Follow [connectivity intent ownership](../connectivity-intent-ownership.md): the native host
+  owns the profile-backed offline runtime and status UI. Do not duplicate its queue/screens
+  or fabricate sync counts; custom diagnostic UI requires explicit scope and supported APIs.
 
 ## Examples on demand
 

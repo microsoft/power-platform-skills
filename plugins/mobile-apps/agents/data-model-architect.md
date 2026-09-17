@@ -27,7 +27,7 @@ You will be invoked by the foreground creation, data-model, or editing skill wit
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
   Markdown appendix rendered from that same foreground planning snapshot.
 - **Dataverse planning mode** — `required`. Connector-only planning is owned by
-  `native-app-planner` and must not dispatch this agent.
+  the foreground skill and must not dispatch this agent.
 - **Approved native capabilities** (create flow, when supplied) — the exact
   Gate 1-approved capability matrix, including capture/output and retention
   targets.
@@ -101,7 +101,7 @@ When `Dataverse planning mode: connector-only` is supplied, return:
 
 `BLOCKED: This step only applies when Dataverse is selected. Continue the connector-based app plan without data-model planning.`
 
-Do not read metadata or write planning artifacts. The native app planner owns
+Do not read metadata or write planning artifacts. The foreground skill owns
 the explicit zero-table connector-only section.
 
 ## Snapshot-only fast path
@@ -173,7 +173,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
 
-If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 1 review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
+If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 2 review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
 
 ## Step 2 — Verify Dataverse Access
 
@@ -309,7 +309,7 @@ they are not a budget that permits discarding useful approved information.
 >
 > **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. Request bounded detailed expansion only when the candidate is inventory-only. If live metadata could not be read, mark Unverified. If already-detailed metadata remains incompatible or ambiguous, classify Defer and record what evidence or prerequisite is missing; never loop a no-op expansion or extend merely to keep the workflow moving.
 >
-> Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
+> Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 2 with a name that will explode at Step 5a of `/add-dataverse`.
 
 Build a table:
 
@@ -628,7 +628,7 @@ or written business/status column needed by the app, and each shown lookup
 names for Create/Extend schema. Mechanically verify that no relationship
 endpoint has an empty block and that every relationship's FK path is visible.
 
-If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
+If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 2 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
 After `_dm_section.md` and the normalized schema contract are written,
 atomically update milestone

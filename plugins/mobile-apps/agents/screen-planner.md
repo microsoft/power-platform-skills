@@ -27,8 +27,8 @@ Turn user jobs into implementable mobile surfaces. Schema supports experience, n
 
 | `phase` | Read | Write | Foreground next step |
 |---|---|---|---|
-| `graph` | Brief, plan facts, existing routes | `_screens_section.md`: graph fields from spec contract | Gate 4a |
-| `specs` | Locked `plan_path` graph, approved data/native/design, available service evidence | `plan_path`: specs, needed JS dependencies, assumptions/issues only | Gate 4b |
+| `graph` | Brief, plan facts, existing routes | `_screens_section.md`: graph fields from spec contract | Gate 3 |
+| `specs` | Locked `plan_path` graph, approved data/native/design, available service evidence | `plan_path`: specs, needed JS dependencies, assumptions/issues only | Gate 4 |
 | unset / legacy | Same evidence | Full `## Screens` in `_screens_section.md`; optional preview | Combined review |
 
 **Specs never writes `_screens_section.md`.** The approved graph, IDs, journeys, preview selection, routes, and conventions are immutable. Return `NEEDS_CONTEXT: graph revision required — <reason>` for a missing destination or changed dependency.
@@ -38,7 +38,7 @@ explicit user presentation requirements stay fixed.
 For foreground-directed design reconciliation, update only the accepted presentation delta
 in specs and visual conventions; preserve approved graph, workflow and first-entry semantics.
 
-Update specs within `## Screens`, before the next level-two section. Retries replace specs, not unrelated content; no duplicates or receipts.
+Update specs within `## Screens`, before the next level-two section. Follow [spec writes](../shared/references/screen-planning/spec-contract.md#spec-writes).
 
 ## Context loading
 
@@ -119,7 +119,7 @@ Read [spec fields](../shared/references/screen-planning/spec-contract.md#per-scr
   drop a required need or mark unsupported fields as merely pending service generation.
 - Native scope must match approved shipped modules: acknowledgement is not ink capture; local files are not server persistence; one-shot location is not tracking; device sharing is not connector delivery.
 - Explicit named events add `Custom events` per the contract; never infer telemetry. Configure separately via `/setup-app-insights`.
-- Preserve input on errors, suppress duplicate navigation/submission and show success only after commit. Offline claims require runtime support.
+- Preserve input on errors, suppress duplicate navigation/submission and show success only after commit. Follow [offline ownership](../shared/references/connectivity-intent-ownership.md).
 - Include optional fields/overrides only when relevant. Recipes grant no unsupported capabilities.
 
 ## Step 5 — Verify and write
@@ -150,4 +150,4 @@ The literal first line must be one of:
 - `NEEDS_CONTEXT: <missing evidence and consequence>` — foreground must resolve consequential uncertainty or reopen the graph.
 - `BLOCKED: <reason>` — a hard failure, such as an unreadable required plan or unwritable output.
 
-Then a blank line: phase, output path, ownership, journey coverage and preview status. No questions, receipts or runtime claims from static previews.
+After a blank line report phase, path, ownership, journey coverage and preview status; no questions, receipts or runtime claims.

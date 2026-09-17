@@ -175,10 +175,10 @@ test('screen scope is consolidated before approval without fixed caps or hidden 
   assert.match(planner, /scope\/consolidation review[\s\S]*before graph approval/);
   const planning = read('skills/create-mobile-app/references/phase-02-planning.md');
   const building = read('skills/create-mobile-app/references/phase-09-build.md');
-  assert.match(planning, /Gate 4a[\s\S]*Show the derived scope breakdown/);
+  assert.match(planning, /Gate 3[\s\S]*Show the derived scope breakdown/);
   assert.match(planning, /what was consolidated and why remaining similar surfaces cannot be combined/);
   assert.match(building, /Build only approved Screen Map routes/);
-  assert.match(building, /Necessary graph additions return to Gate 4a/);
+  assert.match(building, /Necessary graph additions return to Gate 3/);
 });
 
 test('navigation choice follows jobs and hierarchy instead of exposing every generated route', () => {
@@ -217,7 +217,7 @@ test('minimum UX requires independent domain states and useful first entry witho
   const builder = read('agents/screen-builder.md');
   const preview = read('skills/preview-screens/SKILL.md');
   assert.match(intake, /before data planning[\s\S]*Capture known domain rules/);
-  assert.match(planning, /Gate 4b[\s\S]*independent domain states and authorized transitions/);
+  assert.match(planning, /Gate 4[\s\S]*independent domain states and authorized transitions/);
   assert.match(build, /Minimum product UX review/);
   assert.match(build, /actual source\/handler\/route evidence/);
   assert.match(build, /Compilation and the presence of handlers alone do not establish task completion/);
@@ -255,7 +255,7 @@ test('entry composition strengthens existing fields without a universal layout o
   assert.match(planner, /not inferred visual styling\s+for the later design phase/);
   assert.match(planner, /foreground-directed design reconciliation, update only the accepted presentation delta/);
   const planning = read('skills/create-mobile-app/references/phase-02-planning.md');
-  assert.match(planning, /Gate 4b approves behavior, data\/permissions and navigation, not model-inferred visual arrangement/);
+  assert.match(planning, /Gate 4 approves behavior, data\/permissions and navigation, not model-inferred visual arrangement/);
   assert.match(planning, /does not promote provisional styling\s+into fixed requirements/);
   assert.match(contract, /Do not default every collection to All/);
   assert.match(read('agents/references/screen-builder/design-api.md'),

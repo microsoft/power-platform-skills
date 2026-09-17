@@ -280,11 +280,13 @@ Use only when the real auth/session policy supports expiry detection and renewal
 
 ---
 
-## 8. Offline Sync Queue UI
+## 8. App-Owned Sync Queue UI
 
-Use only with a verified runtime queue and real pending/error state. A Dataverse offline profile alone does not create an app runtime queue. Otherwise show truthful connection/error recovery, not simulated sync counts.
-
-Used for: field apps, any app that works without connectivity.
+Use only for an approved product requirement backed by a real app-owned sync queue API
+and real pending/error state. Mobile Offline Profile configuration uses the bundled native
+host's runtime and status overlay; it does not require this generated UI. Follow
+[connectivity intent ownership](../connectivity-intent-ownership.md). Connectivity wording
+alone is not permission to add a queue, banner or per-record sync status.
 
 ```tsx
 // Sync status bar — sticky at top of list screens

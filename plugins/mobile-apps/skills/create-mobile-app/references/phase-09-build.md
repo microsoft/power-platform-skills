@@ -14,7 +14,7 @@ screen with identical quality checks. Screen count/time pressure is never an ava
 or reason to replace the workflow with a weaker inline shortcut.
 
 Build only approved Screen Map routes; record/status/role variants and local overlays do not
-become extra builder targets. Necessary graph additions return to Gate 4a before building them.
+become extra builder targets. Necessary graph additions return to Gate 3 before building them.
 Foreground owns all fan-out; children never spawn more agents. Cap concurrent builders at 5,
 using a single parallel batch per wave. Build all planned app-specific screens, including assigned
 starter routes that need replacement; leave unrelated template Login/OAuth/runtime screens alone.

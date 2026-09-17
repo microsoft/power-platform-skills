@@ -327,7 +327,7 @@ illustrative media as real user evidence or use unexplained emojis as the primar
 | No people/team | `people-outline` | `@expo/vector-icons` |
 | Error state | `alert-circle` | `@expo/vector-icons` |
 | Success/complete | `checkmark-circle` | `@expo/vector-icons` |
-| Offline | `cloud-offline-outline` | `@expo/vector-icons` |
+| Connectivity diagnostic | `cloud-offline-outline` | `@expo/vector-icons` |
 | No permissions | `shield-outline` | `@expo/vector-icons` |
 | Onboarding welcome | `sparkles` | `@expo/vector-icons` |
 

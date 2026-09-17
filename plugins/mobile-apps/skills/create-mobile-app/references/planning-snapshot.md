@@ -1,7 +1,9 @@
 # Foreground Dataverse snapshot and bounded evidence
 
-Load only for required Dataverse planning, including revisions that request exact-name expansion.
+Load only after Gate 1 approves required Dataverse planning, including revisions that request exact-name expansion.
 The snapshot is evidence, not permission to write. Connector-only runs skip all commands here.
+Verify the accepted architecture and mode in the human plan first; missing or stale approval
+returns to Gate 1 before discovery, even on resume.
 
 Resolve the approved environment in foreground using `scripts/resolve-environment.js`;
 require a nonempty resolved Dataverse URL and tenant. Do not make a child rediscover them.
