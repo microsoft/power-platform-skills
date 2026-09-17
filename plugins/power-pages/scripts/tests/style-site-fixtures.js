@@ -60,7 +60,15 @@ function fixture(t, { major = 3, prefix = 'adx_', nested = false, wrapped = fals
       rationale: 'Maintain this reusable component treatment in the selected local page stylesheet.',
     }],
   };
-  return { work, project, root, put, yml, request, pagePath, copyPath, cssPath, assets };
+  const setDisplayOrder = (name, value) => {
+    const relative = `${assets[name].path}.webfile.yml`;
+    const before = fs.readFileSync(path.join(root, relative), 'utf8');
+    const field = `${prefix}displayorder`;
+    const line = new RegExp(`^${field}:[^\\r\\n]*(?:\\r?\\n|$)`, 'm');
+    const replacement = value === undefined ? '' : `${field}: ${value}\n`;
+    put(relative, line.test(before) ? before.replace(line, replacement) : before + replacement);
+  };
+  return { work, project, root, put, yml, request, pagePath, copyPath, cssPath, assets, setDisplayOrder };
 }
 
 function heroFixture(t, { major = 3, readable = false, studioText = false } = {}) {

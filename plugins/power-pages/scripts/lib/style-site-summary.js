@@ -1,7 +1,7 @@
 'use strict';
 
 const { snapshotText } = require('./classic-site-style-context');
-const { sourceTags, reachableTemplates, orderedCss } = require('./style-site-plan');
+const { sourceTags, reachableTemplates, applicableCss } = require('./style-site-plan');
 const { requestSupport } = require('./studio-style-capabilities');
 
 const SUMMARY_BYTES = 4096;
@@ -80,7 +80,8 @@ function inspectionSummary(context, selection, artifact) {
     pages: selection.pages.map(({ id, name, rootId, languageId, copyPath, cssPath }) =>
       ({ id, name: short(name), rootId, languageId, copyPath, cssPath })),
     targets: selection.candidates,
-    css: selected ? orderedCss(context, selected.id).map(({ assetPath, parentId, order, isDefault }) => ({ path: assetPath, parentId, order, isDefault })) : [],
+    css: selected ? applicableCss(context, selected.id).map(({ assetPath, parentId, order, isDefault }) => ({ path: assetPath, parentId, order, isDefault })) : [],
+    cssInventoryNote: 'Applicable files, not runtime load order. The order field is displayorder metadata only, not CSS priority.',
     warnings: context.warnings,
     next: !selected ? 'Select the intended page/locale with --pageId; use --page to narrow omitted pages.' :
       'Candidates are advisory. Confirm source hooks/ownership; use --target to narrow omitted targets.',

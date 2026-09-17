@@ -2,11 +2,11 @@
 
 ## Eligibility and safety
 
-**Small-change:** ordinary declarations on one locale, at most 3 components/10 style groups in one section, inline-only/stylesheet-only/inline+CSS, at most one **existing** stylesheet and guarded class additions. Require known Bootstrap/source/cascade. Any raw `css`, global scope, nonempty `externalResources`/`importantReason`, new/shared files, templates or Studio-only work needs **expanded** review; unresolved/generated-source work blocks.
+**Small-change:** ordinary declarations on one locale, at most 3 components/10 style groups in one section, inline-only/stylesheet-only/inline+CSS, at most one **existing** stylesheet and guarded class additions. Require known Bootstrap and local targets. Any raw `css`, global scope, nonempty `externalResources`/`importantReason`, new/shared files, templates or Studio-only work needs **expanded** review; unresolved/generated-source work blocks.
 
 - **Local-only:** no PAC/authentication, remote writes, deployment/ALM, Sync or cache clearing. VS Code Web saves remotely; Desktop Preview uses uploaded content/clears cache. Neither is allowed.
 - **Local-first:** use required `owner: "custom"` for **both listed and unlisted** properties. The [map](studio-component-capabilities.md) describes availability, not ownership. Unlisted properties allow safe local styling with warnings. Unknown components/Flex availability stay unverified; no promise values populate native controls.
-- **Placement:** edit the actual static inline declaration or use effective CSS in the locale sidecar/custom Web File at `theme.css < custom < portalbasictheme.css` (parent/descendants). Page Copy uses the selected locale; shared-template inline edits require site scope, potentially every page. Do not blanket-inline reusable styles.
+- **Placement:** use owning inline declarations, locale CSS or reusable Web Files. Web File priority is advisory, not a `displayorder` or runtime load-order prerequisite; see [policy](styling-policy.md). Page Copy uses the selected locale; shared-template inline edits need site scope. Do not blanket-inline reusable styles.
 - **Safety:** preserve defaults/order, Bootstrap, unrelated edits, Liquid, IDs, accessibility/Studio markers. Edit winning inline declarations, not ineffective overrides or blind priority escalation. Preserve exact-property inline importance; authored priority needs `importantReason` and expanded review.
 - **Boundaries:** no DOM/component replacement, PCF/iframe/third-party internals, installs, generated-output overwrites or hand-edited plans. Keep artifacts private, **outside the uploadable site tree**, out of telemetry.
 

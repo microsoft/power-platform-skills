@@ -15,6 +15,10 @@ const {
 const ID = /^[a-z][a-z0-9-]{0,63}$/;
 const CLASS = /^pp-[a-z][a-z0-9-]{0,60}$/;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Power Pages priority guidance is not a numeric Web File metadata constraint.
+// https://learn.microsoft.com/power-pages/configure/manage-css
+const WEB_FILE_PRIORITY_GUIDANCE = 'Advisory CSS Web File priority: custom CSS has higher priority than theme.css and lower priority than portalbasictheme.css. ' +
+  'This is guidance only, not a displayorder check or write prerequisite; ordering metadata is not changed.';
 
 function requireString(value, label, max = 240) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`${label} must be non-empty text (maximum ${max} characters).`);
@@ -366,24 +370,15 @@ function ancestry(context, pageId) {
   return result;
 }
 
-function orderedCss(context, pageId) {
+function applicableCss(context, pageId) {
   const ancestors = ancestry(context, pageId);
+  // Stable inventory order only; neither displayorder nor ancestor distance
+  // establishes stylesheet inclusion order or effective CSS priority.
   return context.webFiles.filter((file) => file.isCss && ancestors.includes(file.parentId))
-    .sort((a, b) => Number(a.order) - Number(b.order) ||
-      ancestors.indexOf(b.parentId) - ancestors.indexOf(a.parentId) || a.path.localeCompare(b.path));
+    .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function customCssBand(context, pageId) {
-  const relevant = orderedCss(context, pageId);
-  const theme = relevant.find((file) => /^theme(?:\.min)?\.css$/i.test(file.partialUrl || ''));
-  const basic = relevant.find((file) => /^portalbasictheme\.css$/i.test(file.partialUrl || ''));
-  if (!theme || !basic || !Number.isInteger(theme.order) || !Number.isInteger(basic.order)) {
-    throw new Error('Default CSS order is unavailable; configure the custom Web File in Studio first.');
-  }
-  return { relevant, theme, basic };
-}
-
-function newWebFile(context, style, allocatedIds, reservedOrders) {
+function newWebFile(context, style, allocatedIds) {
   if (!style.fileName) throw new Error('Shared styles need targetId of an existing custom Web File or fileName for a new one.');
   const parentId = style.scope === 'site' ? context.homePageId : style.parentPageId;
   const parent = context.pages.find((entry) => entry.id === parentId && !entry.rootId);
@@ -391,16 +386,11 @@ function newWebFile(context, style, allocatedIds, reservedOrders) {
   if (context.webFiles.some((file) => file.partialUrl === style.fileName && file.parentId === parentId)) {
     throw new Error('CSS Web File already exists at that URL; use its targetId to reuse it.');
   }
-  // Learn specifies the custom band between theme.css and portalbasictheme.css.
-  // Preserve both default records; when no integer slot exists, require the maker
-  // to configure a custom file instead of silently moving platform-owned files.
-  // https://learn.microsoft.com/power-pages/configure/manage-css
-  const { relevant, theme, basic } = customCssBand(context, parentId);
-  const occupied = new Set([...relevant.map((file) => file.order), ...reservedOrders]);
-  let order = theme.order + 1;
-  while (occupied.has(order) && order < basic.order) order += 1;
-  if (order >= basic.order) throw new Error('No supported custom display-order slot; configure custom ordering in Studio without moving defaults.');
-  const exemplar = relevant.find((file) => !file.isDefault) || theme;
+  const relevant = applicableCss(context, parentId);
+  const exemplar = relevant.find((file) => !file.isDefault) ||
+    relevant.find((file) => /^theme(?:\.min)?\.css$/i.test(file.partialUrl || '')) ||
+    relevant[0] || context.webFiles.find((file) => file.parentId === parentId) || context.webFiles[0];
+  if (!exemplar) throw new Error('New CSS requires an existing local Web File metadata example to establish the export structure.');
   const nested = path.posix.basename(path.posix.dirname(exemplar.path)) === exemplar.filename;
   const base = nested ? path.posix.dirname(path.posix.dirname(exemplar.path)) : path.posix.dirname(exemplar.path);
   const folder = nested ? path.posix.join(base, style.fileName) : base;
@@ -410,8 +400,10 @@ function newWebFile(context, style, allocatedIds, reservedOrders) {
   }
   allocatedIds[style.id] = ids;
   const prefix = exemplar.prefix;
+  // Do not allocate displayorder slots or copy one from the exemplar. Styling
+  // creates only the required resource metadata and leaves ordering untouched.
   const metadata = {
-    [`${prefix}displayorder`]: order, [`${prefix}enabletracking`]: false,
+    [`${prefix}enabletracking`]: false,
     [`${prefix}excludefromsearch`]: true, [`${prefix}hiddenfromsitemap`]: true,
     [`${prefix}name`]: style.fileName, [`${prefix}parentpageid`]: parent.id,
     [`${prefix}partialurl`]: style.fileName, [`${prefix}publishingstateid`]: exemplar.publishingStateId,
@@ -422,7 +414,7 @@ function newWebFile(context, style, allocatedIds, reservedOrders) {
   const text = Object.keys(metadata).sort().map((key) => `${key}: ${metadata[key]}`).join('\n') + '\n';
   return {
     path: path.posix.join(folder, `${style.fileName}.webfile.yml`),
-    assetPath: path.posix.join(folder, style.fileName), text, parentId, order,
+    assetPath: path.posix.join(folder, style.fileName), text, parentId,
   };
 }
 
@@ -455,6 +447,7 @@ function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
   }
   const css = compileStyles(request);
   const placements = [];
+  const webFilePaths = new Set();
   for (const style of request.styles) {
     if (style.owner === 'studio') {
       placements.push({ styleId: style.id, owner: 'studio', action: style.studioAction, scope: style.scope, handoffReason: style.handoffReason });
@@ -487,17 +480,13 @@ function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
       let parentId;
       if (style.targetId) {
         if (!file || !file.isCss || file.isDefault || !file.assetPresent) throw new Error('Choose an existing custom CSS Web File with a local attachment.');
-        const { theme, basic } = customCssBand(context, file.parentId);
-        if (!Number.isInteger(file.order) || file.order <= theme.order || file.order >= basic.order) {
-          throw new Error('Existing custom CSS is outside the supported display-order band. Choose/configure a custom file between theme.css and portalbasictheme.css without moving defaults.');
-        }
         target = file.assetPath;
         parentId = file.parentId;
       } else {
         const key = `${style.scope}:${style.parentPageId || context.homePageId}:${style.fileName}`;
         let created = newFiles.get(key);
         if (!created) {
-          created = newWebFile(context, style, allocatedIds, [...newFiles.values()].map((entry) => entry.order));
+          created = newWebFile(context, style, allocatedIds);
           if (writes.has(created.path) || writes.has(created.assetPath)) {
             throw new Error('New scoped stylesheets collide on one local path. Choose distinct CSS filenames for different scopes.');
           }
@@ -513,6 +502,7 @@ function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
       if (style.scope === 'section' && (parentId === context.homePageId || (style.parentPageId && parentId !== style.parentPageId))) throw new Error('Section scope must match the selected non-root parent.');
       affectedPageIds = context.pages.filter((entry) => ancestry(context, entry.id).includes(parentId)).map((entry) => entry.id);
       if (!affectedPageIds.includes(request.pageId)) throw new Error('The selected page is outside the CSS Web File scope.');
+      webFilePaths.add(target);
     }
     const write = getWrite(target, 'css');
     // Validate before adding marker comments: their closing delimiters must not
@@ -558,11 +548,9 @@ function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
     }
     write.after = applyMarkup(write.before, request, relative);
   }
-  // A diff-only proposal still needs a complete, ordered CSS baseline. Removing
-  // rendering must not weaken the version/cascade checks used to choose a target.
-  for (const file of orderedCss(context, request.pageId)) {
+  // Preserve asset-completeness checks without inferring priority from metadata.
+  for (const file of applicableCss(context, request.pageId)) {
     if (!file.assetPresent) throw new Error(`Missing baseline CSS: ${file.assetPath}`);
-    if (!Number.isInteger(file.order)) throw new Error(`CSS display order is unknown: ${file.path}. Resolve ordering before preparing the proposal.`);
   }
   const reachable = reachableTemplates(context, page, (relative) => snapshotText(snapshot, relative));
   for (const component of request.components) {
@@ -608,7 +596,8 @@ function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
   const plan = {
     schemaVersion: 2, siteRoot: context.siteRoot, siteId: context.siteId, title: request.title,
     request, allocatedIds, bootstrap: structuredClone(context.bootstrap), inputs: structuredClone(context.files), placements,
-    warnings: [...context.warnings, ...requestWarnings(request), ...request.styles.flatMap((style) =>
+    warnings: [...context.warnings, ...[...webFilePaths].map((file) => `${file}: ${WEB_FILE_PRIORITY_GUIDANCE}`),
+      ...requestWarnings(request), ...request.styles.flatMap((style) =>
       analyzeStyle(style, request.components.find((entry) => entry.id === style.componentId)).warnings.map((warning) => `${style.id}: ${warning}`))],
     writes: [...writes.values()].map((write) => ({ ...write, afterHash: hash(write.after) })),
   };
@@ -622,7 +611,8 @@ function validatePlan(plan) {
     throw new Error('Invalid or modified proposal; regenerate and approve the new revision.');
   }
   validateRequest(plan.request);
-  if (![3, 5].includes(plan.bootstrap?.major) || !Array.isArray(plan.writes) || !Array.isArray(plan.inputs)) throw new Error('Invalid plan context.');
+  if (![3, 5].includes(plan.bootstrap?.major) || !Array.isArray(plan.writes) || !Array.isArray(plan.inputs) ||
+      !Array.isArray(plan.warnings) || plan.warnings.some((warning) => typeof warning !== 'string')) throw new Error('Invalid plan context.');
   const paths = new Set();
   const compiled = compileStyles(plan.request);
   for (const write of plan.writes) {
@@ -668,5 +658,5 @@ function saveJson(output, data, siteRoot) {
 module.exports = {
   validateRequest, compileStyles, replaceBlock, addClass, applyMarkup, openingTag, sourceTags, classHooks,
   reachableTemplates, assertKeys,
-  ancestry, orderedCss, preparePlan, preparePlanFromSnapshot, validatePlan, planHash, saveJson,
+  ancestry, applicableCss, preparePlan, preparePlanFromSnapshot, validatePlan, planHash, saveJson,
 };
