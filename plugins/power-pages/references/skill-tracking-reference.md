@@ -58,6 +58,12 @@ If the tracking script creates or updates site setting YAML files, include those
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 | migrate-bootstrap | MigrateBootstrap | Site/AI/Skills/MigrateBootstrap |
 | migrate-webapi-selectall | MigrateWebapiSelectall | Site/AI/Skills/MigrateWebapiSelectall |
+| author-webpage | AuthorWebpage | Site/AI/Skills/AuthorWebpage |
+| author-webpage-content | AuthorWebpageContent | Site/AI/Skills/AuthorWebpageContent |
+| author-content-snippet | AuthorContentSnippet | Site/AI/Skills/AuthorContentSnippet |
+| author-web-file | AuthorWebFile | Site/AI/Skills/AuthorWebFile |
+| author-page-template | AuthorPageTemplate | Site/AI/Skills/AuthorPageTemplate |
+| author-web-template | AuthorWebTemplate | Site/AI/Skills/AuthorWebTemplate |
 
 ## YAML Format
 

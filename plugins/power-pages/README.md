@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 42 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, classic-site authoring, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -83,6 +83,48 @@ Runtime-tests a deployed, activated site using a real browser (via the bundled P
 - Network request verification for Web API / Server Logic / Cloud Flow endpoints
 - Console and network error capture
 - Screenshots on failure
+
+#### `/practice-site-check`
+
+> "Show me how a simple Power Pages skill works"
+
+Provides a small, read-only example for learning skill development. It recognizes both code sites and PAC-downloaded declarative sites, reports their local identity, and checks framework and compiled output details when they apply.
+
+### Classic site authoring
+
+These skills edit local PAC CLI-downloaded declarative Power Pages sites. They do not
+apply to React, Angular, Vue, or Astro code sites.
+
+#### `/author-webpage`
+
+Creates or modifies root and localized webpage records, routes, parent relationships,
+page-template assignments, localized content shells, and requested navigation links.
+
+#### `/author-webpage-content`
+
+Composes or modifies one localized `.webpage.copy.html` file from a resolved page design,
+using Design Studio-compatible sections, columns, text, images, buttons, videos, and
+spacers.
+
+#### `/author-content-snippet`
+
+Creates or modifies localized and language-neutral content snippets, translations,
+Text/HTML values, Liquid usage, and required caller migrations.
+
+#### `/author-web-file`
+
+Creates or modifies images, CSS, JavaScript, fonts, documents, and other site-served
+assets together with their PAC metadata.
+
+#### `/author-web-template`
+
+Creates or modifies reusable Liquid/HTML templates, inherited layouts, fragments, and
+explicitly requested callers or bindings.
+
+#### `/author-page-template`
+
+Creates or modifies page-template metadata, web-template-backed page layouts, rewrite
+templates, and explicitly requested webpage assignments.
 
 ### Data modeling
 
@@ -377,6 +419,16 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Offers auto-fixes with explicit per-fix user confirmation
 
 ### Polish
+
+#### `/add-button`
+
+> "Add a Register button to the applications page"
+
+Adds a Design Studio-compatible link button to one localized page in a PAC CLI-downloaded declarative site. Discovers the available pages, languages, sections, and columns; previews the exact placement and markup; and changes only the approved local `.webpage.copy.html` file.
+
+- Supports internal pages, external URLs, email, telephone, and explicit placeholders
+- Uses any user-provided button label
+- Does not upload or deploy the site
 
 #### `/add-seo`
 
