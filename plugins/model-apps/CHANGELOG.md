@@ -12,265 +12,118 @@ downloads that round-trip Choice columns.
 
 ### Added
 
-- **A persona can record what the app deliberately leaves out** ([#583]). `personas[].excludes[]`
-  captures scope decisions — "approving budgets is handled in the Finance app" — and renders them as
-  **Deliberately out of scope** beside the jobs→surfaces traceability table. Two apps built over the
-  same tables are told apart by what each declines to do, and an omission the reviewer was never
-  shown cannot be approved. Documentary only, like `jobs[].surfaces[]`; nothing reaches Dataverse.
-
-- **The vendored SDK moves to injected storage, and the plugin takes it up.** The SDK removed
-  `workspacePath`; every call site now builds a store with `createNodeWorkspaceStorage(...)`. Nothing
-  changes for authors — this is an internal uptake — but it is a breaking change for anything calling
-  these scripts as a library.
-
-- **Richer form layouts: multi-column tabs, cell spans, and per-container visibility.** A tab can
-  now hold several form-columns (`tabs[].columns[]` with a `width`), a field entry can set
-  `colspan`/`rowspan`, and `expanded`/`visible`/`showLabel` are author-controlled. Layout keys are
-  allow-listed, so a typo — or a key the SDK's serializer would discard — fails instead of silently
-  vanishing. The form wireframe renders the new structure, since that preview is the approval gate.
-
-- **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
-  the plan was a static echo of the spec, identical whether every artifact already existed or none
-  did — the one question a dry run exists to answer. Each item is now `+ create` or `= reuse`, with
-  a summary (`2 to create, 6 already present`); an unreadable item is `? unknown`, never guessed.
-  The probe reuses the build's own discovery, so the plan cannot drift from the apply.
-  `--no-live-plan` restores the offline listing.
-- **Sample data can express a hierarchy on one table** ([#544]). A `$parent` may target the row's
-  own entity (an org tree, a "reports to" chain). Rows are seeded in dependency waves, so
-  declaration order does not matter, and a cycle is rejected by the lint rather than failing the
-  build partway through. Add `$parent.lookup` to say which relationship a bind uses — required only
-  when two or more relationships connect the same pair, and now **rejected** rather than silently
-  taking the first declared one.
+- **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
+  **Deliberately out of scope** beside the traceability table. Documentary only.
+- **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell
+  `colspan`/`rowspan`, and author-controlled `expanded`/`visible`/`showLabel`. Layout keys are
+  allow-listed, so a typo fails instead of silently vanishing.
+- **The dry run resolves create-vs-reuse against the live environment** ([#559]) — each item is
+  `+ create`, `= reuse` or `? unknown`, never guessed. `--no-live-plan` restores the offline listing.
+- **Sample data can express a hierarchy on one table** ([#544]). `$parent` may target the row's own
+  entity; rows seed in dependency waves and a cycle fails the lint. `$parent.lookup` picks the
+  relationship when two connect the same pair — now required there instead of guessed.
+- **`minimumPluginVersion`** lets a spec declare the oldest plugin that can build it, so a newer spec
+  is refused rather than mis-compiled.
+- **The vendored SDK moves to injected storage.** `createNodeWorkspaceStorage(...)` replaces
+  `workspacePath` — no change for authors, breaking for anything calling these scripts as a library.
 
 ### Fixed
 
-- **A downloaded page no longer loses its table bindings to a byte-order mark.** `pac` writes
-  `config.json` with a BOM, which `JSON.parse` rejects — the failure was caught and treated as "this
-  page has no data sources", so the rebuilt page queried a table it was no longer bound to. The BOM
-  is now stripped, and a config that is present but unreadable is no longer reported as "no
-  bindings": the download stops unless you pass `--allow-lossy-download`.
-- **`/genpage` refuses to "update" a page that does not exist.** `pac` treats an unknown
-  `--page-id` as a create and returns the new page's id, so a stale or mistyped id silently produced
-  a second, unplaced page and reported it as an update. The target is now verified first, and an
-  environment listing that cannot be read stops the upload rather than allowing it.
-- **An explicitly empty prompt or agent message is refused, not replaced.** A blank file used to be
-  swapped for generated text, so a page carried provenance nobody wrote. Omitting the value still
-  gets the default — only a supplied-but-blank value is rejected — and both `/genpage` and
-  `/app-builder` now behave the same way, with `/app-builder` failing before any page is deployed.
+- **An explicit form layout reshapes a form instead of flattening it** ([#575]). Every field was
+  appended to the first section, containers were never created or resized, and declaring `tabs`
+  silently switched pruning on. Containers now match by `name`, then `label`, then position, and a
+  misplaced field is moved rather than duplicated.
+- **A section emptied by a layout move is reclaimed** instead of surviving as a blank twin.
+- **A field added or moved on an existing form packs to the section's grid**, so the same spec no
+  longer produces a different form depending on whether the form already existed.
+- **Cell spans converge on an existing form, and are clamped where they are written.** A declared
+  span reaches the deployed cell; an undeclared one is still never sent, so a cell widened by hand
+  survives. `rowspan` is rejected unless it is the last field in its section ([#581]).
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
-  indistinguishable from not setting one at all, so changing a field from `2` back to `1` never
-  reached the form. A span you *don't* declare is still left alone, so a column widened by hand in
-  the designer survives a rebuild.
-- **A plain `--apply` halts when the changed-only snapshot cannot be invalidated** ([#587]). The
-  result was discarded and a throw swallowed, so a full apply could mutate the environment while an
-  *eligible* snapshot survived — and a later `--changed-only` run would then trust it and skip work
-  this apply had just made necessary. A missing snapshot is still fine; only a real failure (lease
-  contention from a concurrent run, an unwritable workspace) now stops the build.
-- **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). The app
-  module is the dependency root — tables, forms, views and charts are its components — so continuing
-  past a failed app delete removed everything a still-live app renders and left it broken. This
-  **reverses earlier best-effort behaviour** that deliberately continued; continue-on-error still
-  applies to every later step, and to the case where the app row *was* deleted and only a cascade
-  cleanup step failed, where stopping would strand more orphans rather than fewer.
-- **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). The
-  cleanup ran `rm -rf` on the caller-supplied path with no check that it was a workspace at all, and
-  it runs immediately after a *successful* teardown — the moment an operator is least expecting data
-  loss. A mistyped path, or a shell variable that expanded to a repo root, was destroyed. Cleanup
-  now requires a real `.maker-workspace` directory, rejects filesystem roots and
-  symlink/junction escapes, and reports a refusal instead of failing the teardown.
-- **A security role whose sharing check cannot be read is retained, not deleted** ([#587]). Teardown
-  skips a role another app still references, but a failed read of that association counted as "not
-  shared" and left the role deletable — silently stripping permissions from the other app. It now
-  fails closed, matching the business-unit check in the same function.
-- **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). The
-  standalone skill still told the orchestrator to compose a raw `pac model genpage upload
-  --prompt "<text>"` command line, so a prompt containing quotes, newlines, `%VAR%` or non-ASCII
-  could fail to deploy — and the tempting workaround, editing the approved prompt until it parses,
-  builds the page from text the user never approved. Both create and edit now call
-  `scripts/genpage-upload.js`, which hands the prompt and agent-message to pac **by file**.
-  `--add-to-sitemap` is additionally refused alongside `--page-id`, so an update cannot add a
-  second sitemap entry.
-- **The form wireframe now shows authored `hidden` and `readOnly` field state** ([#591]). The
-  preview is the layout approval gate, but it drew every bound field as visible and editable — so a
-  maker could approve an apparently editable field that deploys read-only, or one they believe is
-  visible that deploys hidden. A hidden field is annotated rather than dropped, so the approval
-  still shows it exists, and the state is never truncated: in a narrow column the widget hint and
-  then the label give way first.
-- **The vendored SDK is refreshed to pick up upstream wire-correctness fixes.** The bundle now
-  carries fixes for two joins on one table collapsing into one, a join type the typed layer does not
-  model being silently rewritten as an inner join, `addElement` re-keying a node handed a property
-  bag, dashboard layout/control-id parsing, and — from a later upstream round — a synchronous
-  storage throw escaping the concurrent workspace batch, duplicate sort attributes collapsing and
-  changing sort precedence, ordinary `uiname`/`uitype` lookup annotations freezing an editable
-  filter, and BPF updates issuing no `If-Match`. Measured against the previous bundle, none of this
-  changes this plugin's output today — it authors no view joins, and all its `addElement` calls
-  target array pointers — so this removes latent hazards rather than altering behaviour.
-- **A section emptied by a layout move is reclaimed instead of left as a blank twin.** Moving a
-  section between tabs or form-columns under a generated name changed its identity, so the old one
-  survived as an empty duplicate-labelled section. Gated on the same `prune` opt-out the field prune
-  uses, and never touches a section that still holds anything.
-- **`minimumPluginVersion` lets a spec declare the oldest plugin that can build it**, so a newer spec
-  is refused by an older plugin rather than mis-compiled. It protects forward only — already-shipped
-  consumers validate no such marker.
-- **A field added or moved on an existing form now packs to the section's grid.** Placement ignored
-  `section.columns`, so a two-column section that a fresh build lays out two-per-row came back as one
-  long row on a rebuild — the same spec producing a different form depending only on whether it
-  already existed.
-- **`--verify` now proves the deployed form LAYOUT, not just that a form exists.** Every wrong-layout
-  failure previously finished with an unqualified PASS. It checks the authored tabs, sections and
-  field placement, tolerates containers the spec never declared, and reports a layout it could not
-  read as unverified rather than correct.
-- **A download carries an N:N relationship's deployed name when it differs from the generated one.**
-  Otherwise a rebuild into the same environment created a second intersect relationship beside the
-  existing one.
-
-- **A business rule's `dataType` now reaches Dataverse as a real type.** The new SDK forwards the
-  type hint verbatim instead of ignoring it, and the plugin was sending the App Spec's word
-  (`Money`, `Picklist`, and `String` by default) where Dataverse expects a numeric
-  `WorkflowAttributeType`. Live-measured: the platform **accepts** the bad value rather than
-  rejecting it, so affected rules deployed and activated with a wrongly-typed condition. Rebuild any
-  app with `businessRules[]` that was built against the previous release.
-
-- **Editing a form with an explicit layout reshapes it, instead of flattening it** ([#575]). Every
-  field was appended to the first section of the first tab, nothing was ever created or resized, and
-  declaring explicit `tabs` simultaneously switched **pruning** on — so an author moving a deployed
-  form to a two-column layout got the old layout, minus any field they had not re-declared, and a
-  green build. Tabs, form-columns and sections are now created when missing, patched in place when
-  they differ, and a field in the wrong section is **moved** rather than duplicated. Containers match
-  by `name`, then `label`, then position, so a form built by an earlier `auto` layout converges
-  instead of gaining a duplicate tab on every rebuild; sections the engine owns (a sub-grid host, the
-  notes/timeline section) are matched by name only.
-- **`--verify` no longer demands a default form the build never promotes.** The build refuses to
-  re-point the default form of a reused or stock table, but the verifier asserted it anyway — so any
-  spec with a Main form on `account`, `contact`, or an `existing: true` table failed verify
-  permanently. Verify now applies the build's own guard.
-- **A tab's `columns` must be a list of form-columns.** `columns` is an integer grid width on a
-  *section* and an array of form-columns on a *tab* — the schema's most confusable key. `"columns": 2`
-  on a tab validated clean and was then discarded by the compiler, silently shipping a one-column
-  form. It is now an error that names the fix.
-- **Duplicate sample-data names fail at author time, not halfway through the build.** The loader
-  refuses to use a duplicated value as its `matchOn` key — a refusal that landed after tables, forms
-  and views were already deployed. Two tickets both called "Printer issue" is ordinary sample data;
-  it is now caught by `validateAppSpec`, with the same escape hatches the loader honours, and the
-  rule now also covers a single-column alternate key when that is what `matchOn` selects.
-- **Cell spans converge on an existing form, and are clamped where they are written.** `colspan`/
-  `rowspan` were create-only, so widening a field on a deployed form produced a green build and an
-  unchanged cell. A declared span is now written to the deployed cell, while an undeclared one is
-  still never sent, so a cell a maker widened by hand survives. A `colspan` wider than its section is
-  now clamped in the emitted cell, not only in the row arithmetic. A `rowspan` is rejected unless it
-  is the last field in its section — a compiler limitation, tracked in [#581].
-- **A build no longer reports a default form it failed to set.** `result.created.defaultForms`
-  recorded the entity even when the `isdefault` write threw.
-- **`--verify` proves sort PRECEDENCE, not just membership.** Each authored order was checked for
-  existence anywhere in the deployed query, so a deployed `[name asc, createdon desc]` satisfied an
-  authored `[createdon desc, name asc]` — two views that return rows in different orders. Authored
-  orders must now appear in their declared relative order; extra platform orders are still tolerated.
-- **Dashboard id-passthrough tiles are validated per tile type.** One shared test covered both
-  shapes, so a list tile carrying a stray `visualizationId` skipped the `viewId` requirement and a
-  chart tile with only a `viewId` passed with no visualization to render. The download was made
-  consistent in the same change.
-- **A downloaded relationship that is renamed is no longer reported as lost.** A relationship carried
-  into the spec under a generated name was also recorded as skipped, so the summary claimed it was
-  absent. It is now reported as a rename, and a parent table whose metadata could not be read is
-  reported as undetermined rather than diagnosed wrongly.
-- **Two silent no-ops now report themselves.** A failed default-form promotion was swallowed
-  entirely; it now warns with the reason, and `--verify` proves the deployed `systemform.isdefault`
-  independently. An **existing** view's authored filters/sort are still not reapplied — only columns
-  and description converge — and that is now said out loud instead of reported as success.
-- **`_seedKey` in `sampleData` is rejected instead of being sent to Dataverse.** It was never a
-  loader sentinel, so it reached the API as an attribute no table has. The error names the real
-  mechanism: a single-column alternate key. Ambiguous parent binds are rejected for the same reason
-  rather than binding to an arbitrary row.
-- **`--verify` gained three oracles**: the deployed default Main form, a view's authored
-  filters/sort parsed from `fetchxml`, and app-role associations. Each fails closed when its proof
-  cannot be read.
-- **A download no longer invents text columns from a polymorphic lookup** ([#574]). A polymorphic
-  lookup's shadow attributes are stored physically, so unlike a single-target lookup's they slipped
-  past the filter that catches the rest: `<lookup>name` and `<lookup>yominame` were emitted as real
-  `Text` columns, and a rebuild into a fresh environment gained two invented text fields where a
-  lookup used to be. The filter now keys on `AttributeOf`, which names the attribute a shadow belongs
-  to; an unreadable value keeps the column rather than deleting it.
-- **A download no longer invents a Money column's base-currency twin either.** Found by live
-  round-trip after the fix above. Dataverse generates a `<money>_base` column beside every `Money`
-  column, and it carries no `AttributeOf`, so the rule above is blind to it — the downloaded spec
-  declared it as an authored column, and a rebuild would try to create a column the platform owns.
-  Recognised by `IsBaseCurrency`, which is the only unambiguous signal; an unreadable value keeps the
-  column.
-- **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely and nothing
-  said so, so a downloaded spec looked complete while a rebuild produced tables with no lookups and
-  no hierarchy, reporting success. 1:N and N:N relationships are now read from live metadata, and any
-  the App Spec cannot express — a polymorphic lookup, a parent outside the app — are named with a
-  reason instead of vanishing.
-- **A downloaded spec no longer fails its own lint** ([#572]). A downloaded dashboard carries
-  id-passthrough tiles, which `validateAppSpec` and the build accept but the lint did not — so
-  `lint-app-spec.js` rejected a freshly downloaded spec with six errors reporting a chart literally
-  named `'undefined'`. The lint now understands them and reports a missing reference as missing.
-- **A download round-trips Choice and MultiChoice columns** ([#564]). They were emitted with no
-  `type`, so rebuilding into a **fresh** environment created single-line Text while Memo, Money and
-  DateTime survived — an asymmetry harder to notice than an outright failure. Option sets are now
-  read per table: a local set becomes inline `options[]` (localizations preserved), a shared one a
-  `globalChoice` reference plus a `globalChoices[]` declaration. Four related defects went with it:
-  a **MultiChoice column was dropped from the spec entirely** (Dataverse types it `Virtual`); a
-  lookup's synthetic `<lookup>name` column was emitted as a real Text column, which a fresh rebuild
-  then created; a legal multi-language option set could abort the **whole** download; and
-  `globalChoices[]` could declare sets nothing referenced. A column whose option set cannot be read
-  is still left untyped — but now named, with the reason. Note the App Spec cannot express option
-  *values*: labels and order round-trip, and a fresh rebuild re-bases them to `100000000 + index`.
-- **`--verify` checks that a sitemap-visible table really belongs to the app.** The sitemap and the
-  app module's table list are separate facts and can disagree, so an app could show a table in
-  navigation while omitting it from its Tables list — and verify still said PASS, because the table
-  existed and the sitemap named it. It now fails by table name, fails **closed** when the component
-  list cannot be read, and reports leftover `entity` placeholder components.
-- **A multi-line page prompt is no longer flattened on upload** ([#565]). Prompts went to `pac`
-  inline, where a newline guard collapsed every line break — so a downloaded conversation transcript
-  degraded a little more on each edit-rebuild. They now go through `--prompt-file` /
-  `--agent-message-file`. `upload()` also accepts an optional `compiledCodeFile`.
-- **`/genpage` Phase 1 is reachable again** ([#541]). Its interactive flow was specified to run
-  inside a headless `Task` subagent, so create flows could not complete. Interaction now runs in the
-  main loop; the agents are headless workers that return a `needs_input` request when they need a
-  decision (`references/agent-interaction-contract.md`).
-- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). The
-  table delete already removes it, so deleting it first returned `referenced by 2 other components`
-  and a completely clean run still exited non-zero.
-- **A mistyped flag now fails instead of quietly changing what the command does.** An unrecognised
-  flag was dropped *and* swallowed the token after it: `--stagee ui` planned all 9 phases instead of
-  3 and exited 0 — with `--apply`, a scoped apply became a full one. Every CLI now declares the
-  flags it accepts, rejects anything else with a "did you mean", and rejects a value-bearing flag
-  passed bare. This also covers `--allow-destructiv` and friends on the destructive tools.
-- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** Discovery was a
-  flat `readdir`, so a nested suite would be committed, reviewed, reported green and never run.
+  indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
+- **The form wireframe shows authored `hidden` and `readOnly` state** ([#591]), so the approval gate
+  no longer draws every field as visible and editable.
+- **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). A
+  prompt containing quotes, newlines, `%VAR%` or non-ASCII could fail to deploy — and editing the
+  approved prompt until it parses builds the page from text nobody approved. `--add-to-sitemap` is
+  now refused alongside `--page-id`.
+- **A multi-line page prompt is no longer flattened on upload** ([#565]).
+- **`/genpage` refuses to "update" a page that does not exist.** `pac` treats an unknown `--page-id`
+  as a create and returns the new id, so a stale one silently produced a second, unplaced page and
+  reported it as an update.
+- **An explicitly empty prompt or agent message is refused, not replaced** with generated text.
+  Omitting the value still gets the default, on both `/genpage` and `/app-builder`.
+- **`/genpage` Phase 1 is reachable again** ([#541]) — its interactive flow no longer runs inside a
+  headless subagent.
+- **A downloaded page keeps its table bindings.** `pac` writes `config.json` with a BOM, which
+  `JSON.parse` rejects, and the failure was read as "no data sources". A config that is present but
+  unreadable now stops the download unless you pass `--allow-lossy-download`.
+- **Choice and MultiChoice columns round-trip on download** ([#564]). They were emitted untyped, so
+  a fresh rebuild created Text, and a MultiChoice column was dropped entirely. Option *values* still
+  do not round-trip: labels and order do, and a fresh rebuild re-bases them to `100000000 + index`.
+- **`relationships[]` is reconstructed on download** ([#567]). The block was absent and nothing said
+  so, so a rebuild produced tables with no lookups and reported success.
+- **A download no longer invents columns** — a polymorphic lookup's shadow attributes ([#574]) and a
+  Money column's `_base` twin were emitted as real columns a fresh rebuild would then create.
+- **A downloaded spec no longer fails its own lint** ([#572]).
+- **A renamed N:N relationship carries its deployed name**, so a rebuild does not create a second
+  intersect beside it, and it is reported as renamed rather than lost.
+- **Every dropped dashboard tile is reported**, naming the parameter it lacks, and id-passthrough
+  tiles are validated per tile type.
+- **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). It ran
+  `rm -rf` on the caller's path with no check that it was a workspace, immediately after a
+  *successful* teardown. It now requires a real `.maker-workspace` and rejects roots and symlink
+  escapes.
+- **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). This
+  **reverses earlier best-effort behaviour**; continue-on-error still applies to every later step.
+- **A security role whose sharing check cannot be read is retained, not deleted** ([#587]).
+- **A plain `--apply` halts when the changed-only snapshot cannot be invalidated** ([#587]) —
+  otherwise a later `--changed-only` run trusts a stale snapshot and skips work.
+- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]).
+- **A mistyped flag fails instead of quietly changing what the command does.** An unrecognised flag
+  was dropped *and* swallowed the token after it, so `--stagee ui` planned all 9 phases and exited 0.
+- **`--verify` proves the deployed form LAYOUT**, not just that a form exists — every wrong-layout
+  failure previously finished with an unqualified PASS.
+- **`--verify` proves sort PRECEDENCE, not just membership**, so two views that return rows in
+  different orders are no longer both accepted.
+- **`--verify` checks that a sitemap-visible table really belongs to the app**, and fails closed when
+  the component list cannot be read.
+- **`--verify` gained three oracles**: the deployed default Main form, a view's filters/sort parsed
+  from `fetchxml`, and app-role associations. Each fails closed.
+- **`--verify` no longer demands a default form the build never promotes** on a reused or stock table.
+- **A tab's `columns` must be a list of form-columns.** `"columns": 2` on a tab validated clean and
+  was then discarded, silently shipping a one-column form.
+- **Duplicate sample-data names fail at author time**, not after tables and forms are deployed.
+- **`_seedKey` in `sampleData` is rejected** instead of reaching Dataverse as an attribute no table
+  has; the error names the real mechanism, a single-column alternate key.
+- **An explicit layout with no tabs, or a tab with no sections, is rejected** — it previously passed
+  the build gate and silently dropped every field the form declared.
+- **A form layout may not place the same field twice, or reuse a tab/section `name`.** A duplicated
+  field deployed two cells on a fresh build and one on the next.
+- **A business rule's `dataType` reaches Dataverse as a real type.** The platform *accepts* the wrong
+  value rather than rejecting it, so affected rules deployed and activated with a wrongly-typed
+  condition — rebuild any app with `businessRules[]` built against the previous release.
+- **A build no longer reports a default form it failed to set**, and a failed promotion warns with
+  the reason instead of being swallowed. An **existing** view's authored filters/sort are still not
+  reapplied, and that is now said out loud.
+- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.**
+- **The vendored SDK is refreshed** for upstream wire-correctness fixes (view joins, `addElement`
+  re-keying, dashboard parsing, duplicate sort attributes, BPF `If-Match`). Measured against the
+  previous bundle, none of it changes this plugin's output today — it removes latent hazards.
 
 ### Changed
 
-- **`/app-builder` is GA.** The preview notice is gone: the App Spec shape, the CLI flags and the
-  build phases are now treated as a stable contract rather than one that may change between
-  versions. The guidance that outlived the notice stays — review the dry-run plan before approving,
-  and use `teardown-model-app.js --apply` to clean up probes. `--changed-only` (partial apply) is
-  the one piece still experimental, and remains off by default.
-- **Connector authoring is GA and on by default.** SharePoint / weather / Office 365 / SQL /
-  custom-REST binding and ALM packaging of connection references work without opting in. The
-  `connectors` flag is **flipped to `true` and kept for one release as a rollback switch** —
-  `GENPAGE_ENABLE_CONNECTORS=0` restores the old behaviour — and is scheduled for removal next
-  release. `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
-- **The Phase 4.5 dispatch value is the binding count, not the flag state.** The page-builder gets
-  `Connectors: none` or `<n> binding(s)`; a disabled gate and an empty binding table both yield
-  `none`, so the dispatch stays stable when the flag is removed.
-- **The App Spec schema is split so the always-read half is smaller.** `globalChoices`,
-  `webResources`, `commands`, `businessRules`, `businessProcessFlows`, `dashboards` and `roleGrants`
-  moved to `app-spec-schema-advanced.md`, leaving a pointer table: 105 KB → 82 KB eagerly read.
-- **The CLI flag contract is shared rather than per-script**, so the flag rules and the "did you
-  mean" suggestion cannot drift between commands.
-- **Deeper tests on the paths connectors GA just made live**, including a connector *edit* eval and
-  a contract test pinning the dispatch fields the skills hand to the page-builder.
-- **A form layout may no longer place the same field twice, or reuse a tab/section `name`.** Both
-  are now rejected at author time: a duplicated field deployed two cells on a fresh build and one on
-  the next, so the spec did not survive its own rebuild. Remove the duplicate placement. Identity is
-  per form — a second form on the same table may still place the same column.
-- **A download now reports every dashboard tile it drops** instead of discarding it in silence,
-  naming the parameter the tile lacks.
-- **An explicit form layout with no tabs, or a tab with no sections, is rejected at author time.** It
-  previously passed the build gate — only the standalone lint caught it — and silently dropped every
-  field the form declared.
+- **`/app-builder` is GA.** The App Spec shape, the CLI flags and the build phases are now a stable
+  contract. `--changed-only` remains experimental and off by default.
+- **Connector authoring is GA and on by default.** The `connectors` flag is flipped to `true` and
+  kept for one release as a rollback switch (`GENPAGE_ENABLE_CONNECTORS=0`), then removed.
+  `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
+- **The Phase 4.5 dispatch value is the binding count, not the flag state**, so the dispatch stays
+  stable when the flag is removed.
+- **The App Spec schema is split** so the always-read half is smaller: 105 KB → 82 KB.
+- **The CLI flag contract is shared** rather than per-script, so the rules and the "did you mean"
+  suggestion cannot drift between commands.
+- **Deeper tests on the paths connectors GA made live**, including a connector *edit* eval.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
