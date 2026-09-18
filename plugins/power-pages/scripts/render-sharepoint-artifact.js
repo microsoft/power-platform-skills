@@ -7,7 +7,9 @@ const crypto = require('node:crypto');
 const { renderTemplate, parseArgs } = require('./lib/render-template');
 const { renderReportHtml } = require('./lib/sharepoint-report-html');
 
-const ARTIFACTS = ['requirements', 'discovery', 'plan', 'progress'];
+// Reading order of the records. `sharing` sits after `plan` because it reports
+// what the approved plan actually provisioned and who can reach it.
+const ARTIFACTS = ['requirements', 'discovery', 'plan', 'sharing', 'progress'];
 const TONES = ['neutral', 'info', 'success', 'warning', 'danger'];
 const TEMPLATE = path.join(__dirname, '..', 'skills', 'sharepoint-to-power-pages', 'assets', 'report.html');
 const ICON = path.join(__dirname, '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
@@ -133,10 +135,10 @@ function blocks(value, location, depth = 0) {
   }
 }
 
-function validateArtifact(data, { allowLegacySummary = false } = {}) {
+function validateArtifact(data, { allowLegacySummary = false, allowLegacyLinks = false } = {}) {
   object(data, 'Report', ['version', 'artifact', 'title', 'updatedAt', 'phase', 'summary', 'metadata', 'footer', 'links', 'sections']);
   if (data.version !== 1) fail('Report.version must be 1.');
-  if (!ARTIFACTS.includes(data.artifact)) fail('Report.artifact must be requirements, discovery, plan, or progress.');
+  if (!ARTIFACTS.includes(data.artifact)) fail(`Report.artifact must be one of ${ARTIFACTS.join(', ')}.`);
   for (const key of ['title', 'updatedAt', 'phase']) text(data[key], `Report.${key}`, false);
   for (const key of ['summary', 'metadata', 'footer']) {
     if (data[key] !== undefined) richText(data[key], `Report.${key}`);
@@ -144,7 +146,6 @@ function validateArtifact(data, { allowLegacySummary = false } = {}) {
   const summaryText = typeof data.summary === 'string' ? data.summary : data.summary?.map((run) => run.text).join('');
   if (!allowLegacySummary && !summaryText?.trim()) fail('Report.summary must contain a reader-facing summary before rendering.');
   array(data.links, 'Report.links');
-  if (data.links.length !== ARTIFACTS.length) fail('Report.links must contain all four artifacts.');
   const linked = new Set();
   for (const [index, entry] of data.links.entries()) {
     const at = `Report.links[${index}]`;
@@ -154,6 +155,14 @@ function validateArtifact(data, { allowLegacySummary = false } = {}) {
     text(entry.label, `${at}.label`, false);
     link(entry.href, `${at}.href`, true);
   }
+  // Records written before the sharing map existed carry four links. They stay
+  // readable so an in-flight migration can be loaded and reconciled; a write must
+  // still name every record, because the template renders the link set as the
+  // reader's only navigation between them.
+  if (!allowLegacyLinks && linked.size !== ARTIFACTS.length) {
+    fail(`Report.links must contain all ${ARTIFACTS.length} artifacts.`);
+  }
+  if (!linked.has(data.artifact)) fail('Report.links must include an entry for this report.');
   array(data.sections, 'Report.sections');
   const ids = new Set(['overview']);
   for (const [index, section] of data.sections.entries()) {
@@ -202,7 +211,7 @@ function readArtifact(outputPath) {
   }
   // Version-1 records created before reader summaries were required remain
   // readable for migration. A subsequent write requires the missing summary.
-  return { data: validateArtifact(data, { allowLegacySummary: true }), sha256: file.sha256, integrity: file.integrity };
+  return { data: validateArtifact(data, { allowLegacySummary: true, allowLegacyLinks: true }), sha256: file.sha256, integrity: file.integrity };
 }
 
 function assertReplacement(file, expectedSha256, allowUnmanaged) {

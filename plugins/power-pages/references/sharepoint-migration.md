@@ -1,9 +1,9 @@
 # SharePoint discovery and backend reference
 
 For source inspection or branding, read **Source discovery and branding**.
-For virtual-list or document integration, read the matching branch under **Backend paths**.
+For virtual-table or document integration, read the matching branch under **Backend paths**.
 Recheck the linked Microsoft documentation before relying on feature availability, permissions, or runtime contracts.
-Record results using the **requirements**, **discovery**, **plan**, and **progress** aliases defined in `${PLUGIN_ROOT}/references/sharepoint-artifacts.md`.
+Record results using the **requirements**, **discovery**, **plan**, **sharing**, and **progress** aliases defined in `${PLUGIN_ROOT}/references/sharepoint-artifacts.md`.
 
 ## Source discovery and branding
 
@@ -55,13 +55,13 @@ Use existing views and details panes; keep edit/save/delete/share actions and pe
 | Site and pages | Approved navigation, page sections, headings, links, and rendered web parts | Selected page structure and content summaries; distinguish visible behavior from functionality that still needs implementation. |
 | Lists | Selected view, displayed columns, item details, existing filters/sorts, and accessible column/settings information | Observed labels, types/options only where shown, candidate mappings, and the visible row/sample coverage. |
 | Libraries and folders | Approved library/folder view and file details | Names, metadata, hierarchy, and selected file references; no bulk downloads. |
-| Documents | The approved document's browser preview and details pane | Only the sections/metadata needed for the agreed scenario; use supplied excerpts when the viewer cannot expose them safely. |
+| Documents | The approved document's browser preview and details pane | Only the sections/metadata needed for the agreed scenario; use supplied excerpts when the viewer cannot share them safely. |
 
 Wait for loading to finish and use UI pagination or scrolling for the approved scope.
 Virtualized lists show only part of their contents in the DOM.
 Record the active view, filters, inspected pages/rows, and whether the UI provides an authoritative total.
 Visible rows are a sample unless complete coverage is established; a view count is not automatically the whole-list count.
-Record internal names, data types, relationships, and hidden columns as unverified when the authorized UI does not expose them.
+Record internal names, data types, relationships, and hidden columns as unverified when the authorized UI does not share them.
 Never infer an internal schema name from a display label.
 
 Follow only the selected resource's required sign-in/preview transitions.
@@ -72,13 +72,13 @@ When the UI cannot provide required information, document the gap and request us
 
 ### List inventory and selection
 
-For each approved SharePoint site, open **Site contents** through the browser UI and inventory all accessible lists before asking which to expose.
+For each approved SharePoint site, open **Site contents** through the browser UI and inventory all accessible lists before asking which to share.
 Scope means those sites, not every site in the tenant; expanding to another site or subsite requires approval.
 Inventory reads names and available metadata, not every list's item contents.
 
 Follow Site contents pagination, loading, and scrolling until all entries in the authorized view are accounted for.
 Use the visible item type to distinguish lists from document libraries and other site resources.
-For each list, record its site, name, description when shown, browser URL, and list ID only when it is exposed in a normal visible link/settings URL.
+For each list, record its site, name, description when shown, browser URL, and list ID only when it is shared in a normal visible link/settings URL.
 Use site plus URL/ID as identity so duplicate display names cannot be merged accidentally.
 Preserve provider-incompatible lists in the inventory with the known restriction; do not silently omit them.
 
@@ -88,6 +88,8 @@ Selection determines which lists get a virtual table and portal integration; rem
 When the UI cannot establish complete inventory, mark coverage partial and let the user choose whether to proceed with the known subset or resolve access.
 
 After selection, inspect only those lists for the mapping and access plan.
+For each selected list, record a candidate **text** column for the virtual table's primary field; provisioning needs one and only string columns qualify.
+Record any column whose type the provider cannot carry across, so the sharing plan never depends on content that will be absent.
 A visible SharePoint view/filter is not a virtual-table security boundary and does not restrict every portal query to that subset.
 Any field or row exclusions must be enforceable through the destination design before enabling Web API access.
 
@@ -111,7 +113,7 @@ For an inaccessible theme source, record the limitation and ask for supplied ass
 ### Content and asset handling
 
 Recreate approved layouts as React components and serve source text through an approved authenticated path, such as a permission-protected Dataverse content table.
-If that needs a separate page-content copy operation, approve it explicitly; the SharePoint-list importer does not perform it.
+If that needs a separate page-content copy operation, approve it explicitly; virtual tables over lists do not perform it.
 If rich text must be retained, sanitize it with a maintained allowlist sanitizer and restrict links/media to approved protocols and destinations.
 Remove scripts, event handlers, embedded frames, unsafe URLs, source tracking code, and internal navigation.
 Do not use unsanitized `dangerouslySetInnerHTML`.
@@ -125,73 +127,137 @@ These paths configure the destination after source discovery.
 Browser-only discovery does not remove their own connector, administrator-consent, identity, or table-permission prerequisites.
 Power Pages session-authenticated runtime APIs are not a fallback for inspecting SharePoint with maker credentials.
 
-### A. SharePoint lists copied into Dataverse
+### A. SharePoint lists stay in SharePoint behind virtual tables
 
-The requested [Easier than ever experience to import data from SharePoint List](https://www.microsoft.com/en-us/power-platform/blog/power-apps/easier-than-ever-experience-to-import-data-from-sharepoint-list/) describes a maker experience, not a callable migration utility.
-The current table-authoring documentation provides a table-only route:
+A virtual table is a live view of one SharePoint list, not a copy of it.
+Dataverse holds the table definition; every read goes to SharePoint at request time through the [virtual connector provider](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-virtual-tables-using-connectors).
+There is no ingestion to wait for, no second copy to keep fresh, and no refresh schedule to own.
+The trade is that source availability, provider limits, and the connection identity become runtime concerns for every page that reads the list.
 
-**Power Apps maker portal > select the approved environment > Tables > New table > Create with external data > SharePoint list.**
+Provision **one virtual table per selected list**, then share each table through Power Pages table permissions and Web API site settings exactly as the plugin does for any other Dataverse table.
 
-Use the SharePoint connection to select the approved site and list, review the inferred table/column names and types, then save the table.
-Do not create an unrelated canvas app as part of this Power Pages workflow.
-If the UI differs, consult the current documentation rather than calling a guessed endpoint.
+#### One wizard pass establishes the site, then scripts repeat it
 
-The SharePoint import route is currently documented as **preview**, and its documentation warns that preview features are not intended for production.
-Use it for the approved hackathon or development pilot only.
-Before a production migration, recheck availability and use a currently supported import mechanism with a revised, approved mapping if the preview restriction remains.
-Do not confuse the availability of Copilot features elsewhere on the page with the status of this importer.
+A SharePoint connection is an interactive OAuth grant, and the connection, connection reference, and data source it produces have no public creation API.
+So the maker creates the **first** table for a SharePoint site in the browser, and the scripts reuse the provider and data source ids the platform wrote for it.
 
-**Prerequisites:** A Dataverse environment, the documented table-authoring permissions (System Customizer and an appropriate role with Create/Read/Write on the Entity table), data-write permission, and an authorized SharePoint connection.
-Copilot is not required in every supported scenario; the FAQ permits import without it where Copilot is unavailable.
-Do not invent a dedicated OAuth scope or undocumented API for the maker experience.
+Read the environment first:
 
-Before saving each import, fire the parent skill's per-action Approval Gate.
-The source selection must match the approved copy scope, not merely the columns the SPA will display.
-If this importer cannot filter rows or columns before ingestion, stop and propose a curated, approved input or a separately documented import mechanism.
-Do not import the full list and delete or hide unapproved data afterward.
-Do not modify the original SharePoint list to make the import work.
+```bash
+node "${PLUGIN_ROOT}/scripts/list-sharepoint-virtual-sources.js" --envUrl "<envUrl>"
+```
 
-The first **20 rows are a preview**, not the complete import or a dataset limit.
-After saving, wait for background ingestion to finish and inspect completion/errors before comparing counts.
-This copies data once; it does not establish ongoing refresh, source deletions, or write-back to SharePoint.
+It returns the connector data providers, the SharePoint data sources, the virtual tables already bound to them, a `seedTable` to copy ids from, and a `wizard` target.
+This reads Dataverse only. It never contacts SharePoint, so it does not weaken the browser-only discovery boundary above.
 
-#### Mapping and verification
+`ready: true` means the wizard pass already happened; skip to provisioning with the returned `seedTable`.
+`ready: false` means it has not, and `nextAction` names the missing piece: a provider, a data source, or a first table.
+
+**Do not hand the maker a URL to go and find. Open the page for them.**
+Fire the parent skill's `7.virtual-table-wizard` pause gate and drive the browser:
+
+1. Open `wizard.url` in its own tab, leaving the live preview and any SharePoint inspection tab where they are.
+   The script scopes the link to the approved environment when it can resolve the environment id, and falls back to the portal root when it cannot.
+2. Snapshot the page and tell the user what actually loaded.
+   Maker-portal routing below the host is product UI rather than a documented API, so a deep link can land somewhere else after a portal change; quote `wizard.breadcrumbs` and let the user navigate rather than insisting the link was correct.
+3. Ask the user to create one virtual table for any single selected list, inside the approved unmanaged solution so it travels with the rest of the site's components.
+   They sign in, choose or add the SharePoint connection, and save. The agent supplies no credentials and answers no consent prompt.
+4. If the wizard reports a missing provider, have them install the **Virtual Connector Provider** solution from the commercial marketplace, then retry.
+5. After the user continues, run the script again. **`ready: true` is the evidence, not the fact that the page opened.**
+   While it is still false, report what the script found and offer the choice again; never start provisioning on the assumption that the wizard succeeded.
+
+Wizard navigation, whichever surface the user prefers:
+
+| Surface | Navigation |
+|---|---|
+| Power Apps maker portal | **Solutions > open the approved unmanaged solution > New > Table > Virtual table** |
+| Power Pages design studio | **Data workspace > + Table > New table from external data > SharePoint** |
+
+Sources: [create virtual tables using virtual connectors](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-virtual-tables-using-connectors) and [Data workspace virtual tables](https://learn.microsoft.com/en-us/power-pages/configure/data-workspace-virtual-tables).
+
+#### Provision the remaining lists
+
+For each remaining selected list, fire the parent skill's per-action Approval Gate, then run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/create-virtual-table.js" \
+  --envUrl "<envUrl>" --projectRoot "<PROJECT_ROOT>" \
+  --seedTable "<logical name from list-sharepoint-virtual-sources>" \
+  --externalName "<SharePoint list title>" \
+  --schemaName "<prefix>_<Name>" --displayName "<Name>" --pluralName "<Names>" \
+  --primaryColumnSchemaName "<prefix>_<Column>" --primaryColumnExternalName "<SharePoint column>" \
+  --primaryColumnDisplayName "<Column>" \
+  --site "<site URL>" --listUrl "<list URL>" \
+  --solutionUniqueName "<solution>"
+```
+
+Add `--dry-run` to show the exact table definition before anything is written.
+Choose the primary column from a **text** column the list actually has; only string columns qualify, and the list must have one.
+The script creates the table, waits for the provider's column-generation job, reads the generated columns back, publishes the table, and records the result in `<PROJECT_ROOT>/.sharepoint-sharing.json`.
+
+Read its `status` rather than its exit code:
+
+| `status` | Meaning | Next step |
+|---|---|---|
+| `created` | The table exists and the provider generated its columns. | Continue to permissions and site settings. |
+| `adopted` | The table already existed on the same data source and was re-verified. | Continue; a repeated run is not a second table. |
+| `created-unverified` | The table exists but no generated column appeared in time. | Inspect the column-generation job in System Jobs, then re-create that list through the wizard. Do not configure access for it. |
+
+A `created-unverified` table is not a working integration.
+Record it as blocked and keep it out of the Web API settings until its columns exist.
+
+#### What the provider cannot carry across
 
 | Concern | Required treatment |
 |---|---|
-| Explicit exclusions | This importer omits image, task outcome, external data, managed metadata, single/multiple attachments or images, SharePoint system columns, column-level numeric symbols (currency/prefix/postfix), and unique-value settings. Flag these before approval. |
-| Complex fields | Verify person/group, lookup, calculated, choice, and other nontrivial mappings from the actual result; do not assume preservation or a complete conversion matrix. |
-| Attachments | List attachments are not copied by this workflow. Do not pretend they become document-library locations; require a separately approved path or leave them excluded. |
-| Stable identity | Do not assume the SharePoint system ID survives. If resumable import or refresh is required, explicitly map a permitted source identifier into an ordinary destination column using a supported path. Without a reliable key, stop before repeating an import that could duplicate rows. |
-| Values | Check nulls, dates/time zones, Unicode, rich text, choices, relationships, and number precision against approved samples. |
-| Completion | Compare approved source and destination counts after ingestion; surface rejected rows and schema loss. Save copy time, counts, and status in **progress**. |
-| Solution ownership | Add created schema/components to the selected unmanaged solution using the existing solution workflow. Solution packaging does not transport the copied business records. |
-| Ongoing operation | Record source of truth, refresh owner, stale-data behavior, and any separately approved refresh/deletion/conflict policy. A periodic Power Automate flow is additional work, not an import setting. |
+| Unsupported column types | Person or Group, Image, Managed metadata, Location coordinates, and Attachment columns are not projected into the table. Content held only in one of these is absent, not hidden. Confirm the sharing plan does not depend on them. |
+| Required source shape | The list needs at least one text column for the primary field. SharePoint's hidden numeric `ID` supplies the key. |
+| Provider columns | The generated table carries `ID` (the external key) and `ComplianceAssetId` (SharePoint bookkeeping). Keep both out of the field allowlist unless the maker asks for them. |
+| Text length | A virtual text column carries at most 4,000 characters; a longer source value fails validation on write. |
+| Result size | A virtual-table query is limited to 1,000 records, and a query that crosses a relationship past that limit fails with an error. Filter server-side and page. |
+| Negative filters | `Does Not Equal` and `Does Not Contain` can page incorrectly past the first page. Build queries from positive filters. |
+| Views | A SharePoint view is not a security boundary and the provider cannot select an **All** view. Enforce every row and column exclusion through the destination design. |
+| Solution ownership | Create the table into the approved unmanaged solution with `--solutionUniqueName`, or adopt it afterwards through the existing solution workflow. |
 
-Do not quote an undocumented row/column limit, the SharePoint list-view threshold, or an Excel-import limit as this importer's capacity.
-Assess actual volume, supported limits, ingestion progress, and destination capacity.
+Source: [limitations and troubleshooting virtual tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/limits-tshoot-virtual-tables).
 
-Once mapping is verified, delegate frontend integration to `/power-pages:integrate-webapi` with the exact tables and operations.
-Use `/_api/<EntitySetName>`, not the logical table name as an assumed plural.
-Configure `Webapi/<logical-table-name>/enabled` and an explicit allowed-fields list plus table permissions on the destination tables.
+#### Share each verified table through Power Pages
+
+Delegate frontend integration to `/power-pages:integrate-webapi` with the exact tables and operations, exactly as for a native Dataverse table.
+Use `/_api/<EntitySetName>` from the create script's output, not the logical name with an assumed plural.
+Configure `Webapi/<logical-table-name>/enabled` and an explicit `Webapi/<logical-table-name>/fields` list built from the verified generated columns.
 The wildcard fields value `*` is deprecated; do not use it.
 Use the shared Power Pages API client for session and anti-forgery handling, explicit projections, paging, and surfaced errors.
-Do not put maker/Graph/SharePoint credentials in React.
+Do not put maker, Graph, or SharePoint credentials in React.
 
 Table permissions, relationships, and web roles enforce row access on the server.
-A React filter or OData filter is not an authorization boundary.
-If a table mixes audiences, use a verified Contact/Account/Parent relationship or another supported server-enforced design; never grant Global read and rely on the UI to hide other rows.
-Assign permissions only to the approved authenticated web roles; never grant source-data access to an anonymous role.
-Verify direct access under the skill's authenticated-only isolation checks.
+A React filter or an OData filter is not an authorization boundary.
+Assign permissions only to the approved authenticated web roles; never grant source data to an anonymous role.
 
-**Import complete when:** Ingestion has finished, every mapping check has evidence, counts reconcile, and rejected or unsupported data is explicitly accounted for.
-**Integration complete when:** The verified destination tables are accessed through the configured Power Pages API and the approved audience passes both allowed and denied access tests.
+Two properties of virtual tables decide the access design, so settle them before granting anything:
 
-Sources: [create tables with external data](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-edit-entities-portal#create-with-external-data), [excluded SharePoint columns](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-edit-entities-portal#sharepoint-columns-not-used-in-dataverse-table-generation), [import FAQ](https://learn.microsoft.com/en-us/power-apps/maker/common/faqs-sharepoint-list-to-table-app), and [Power Pages Web API](https://learn.microsoft.com/en-us/power-pages/configure/web-api-overview).
+- **The connection identity reads the whole list.** SharePoint item-level permissions do not travel with the data. Whatever the connection owner can see, the table can return.
+- **Row scoping needs a relationship the source has to provide.** Contact, Account, and Parent scope all resolve through a lookup column on the table, and a SharePoint list rarely carries Dataverse record ids. When no verified relationship exists, Global scope is the honest description of what the permission grants, and the sharing decision is which **audience** gets the whole list, not which rows they get.
 
-The blog's older canvas-app link can lead to a **direct SharePoint-connected canvas app**, where edits update SharePoint.
-That is not the copied-to-Dataverse architecture above.
-[Programmable Dataverse import](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/import-data) is another mechanism; it is not a public API wrapper around this maker experience and requires its own approved design.
+If one list mixes audiences and no server-enforced relationship can be established, split the source, restrict the shared columns, or leave that list excluded.
+Never grant Global read and rely on the UI to hide the rest.
+
+#### Publish the sharing map
+
+After each table's permissions and site settings exist, regenerate the **sharing** record:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-sharing-map.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+It joins `.sharepoint-sharing.json` with the site's committed `.powerpages-site` web roles, table permissions, and site settings, then writes `docs/sharepoint-sharing-map.html`.
+Because it is derived from the shipped configuration, it reports the access that is actually enforced rather than the access that was planned.
+Treat a `danger` finding as a release blocker and a `warning` as a decision the maker has to confirm.
+Add `--data-only` to inspect the model without writing the page.
+Run it again after any permission, role, field, or table change, and read the result before claiming the integration is complete.
+
+**Provisioning complete when:** Every selected list has a verified virtual table whose generated columns were read back from Dataverse, and any unverified list is recorded as blocked rather than integrated.
+**Integration complete when:** Each verified table is reached through the configured Power Pages Web API, the approved audience passes both allowed and denied access tests, and the sharing map reports no outstanding `danger` finding.
 
 ### B. Documents remain in SharePoint
 
@@ -257,7 +323,7 @@ Server permissions must deny access outside the authorized parent/location even 
 Do not return inaccessible document titles in search results or log file contents.
 
 For a verified native integration, the documented upload default is **10 MB**, configurable up to **50 MB**; Microsoft recommends individual downloads **250 MB or smaller** to reduce timeouts.
-These are document-management constraints, not SharePoint-list import limits.
+These are document-management constraints, not virtual-table limits.
 
 Sources: [Power Pages SharePoint document management](https://learn.microsoft.com/en-us/power-pages/configure/manage-sharepoint-documents), [server-based SharePoint integration](https://learn.microsoft.com/en-us/power-platform/admin/set-up-dynamics-365-online-to-use-sharepoint-online), [enable document management for tables](https://learn.microsoft.com/en-us/power-platform/admin/enable-sharepoint-document-management-specific-entities), [document-location table](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/sharepointdocumentlocation), and [Power Pages table permissions](https://learn.microsoft.com/en-us/power-pages/security/table-permissions).
 

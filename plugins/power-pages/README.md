@@ -69,16 +69,18 @@ Currently supports authenticated external audiences only; anonymous and mixed pu
 - Inspects SharePoint only through the signed-in browser UI, without requiring application API scopes for discovery.
 - Opens SharePoint's sign-in page when needed and pauses for you to complete login and MFA in that same browser session.
 - Shows each page and component as it is built through hot reload, with source sign-in and report review kept in separate tabs.
-- Approve the exact lists, fields, records, document folders, and audiences before data is copied or exposed.
-- Import selected list data into Dataverse and use the Power Pages Web API with table permissions.
+- Inventories every list on the approved sites and asks which ones to share, rather than assuming the one you named.
+- Approve the exact lists, fields, records, document folders, and audiences before anything is shared.
+- Creates one Dataverse virtual table per selected list, so records stay in SharePoint with nothing to copy or refresh, then shares each table through table permissions and Web API settings exactly as it does for any other Dataverse table.
+- Publishes an sharing map in the site's `docs/` folder: which SharePoint list is reachable, through which table, by whom, for which operations, and which columns leave SharePoint. It is generated from the permissions the site actually ships, so it cannot drift from them.
 - Keep documents in SharePoint, using document-location and parent-record permissions; custom SPA document transport requires runtime verification.
-- Keep local previews, private pilots, and external publication separate; a list import is not ongoing synchronization.
+- Keep local previews, private pilots, and external publication separate.
 - After you review the built site, offers deployment through `/deploy-site`; that skill offers `/activate-site` only when needed and reuses an already active site.
 
 The workflow reuses `/create-site` and the existing authentication, integration, and deployment skills.
-Some source access, list imports, and document-management setup require maker or administrator interaction.
-The referenced list importer is documented as preview, and the document-management guide does not define a public SPA transport API.
-The skill keeps those paths pilot-only unless current production support is established.
+Some source access, the first virtual table for a site, and document-management setup require maker or administrator interaction.
+Creating a SharePoint connection is an interactive sign-in with no public API, so the skill opens the maker portal at the right environment, waits while you create the first table for the site, then provisions the remaining lists by script from the ids the platform wrote.
+The document-management guide does not define a public SPA transport API, so the skill keeps that path pilot-only unless current production support is established.
 Working artifacts remain local and outside the site build, with credentials and raw private content excluded.
 
 #### `/deploy-site`
@@ -460,7 +462,7 @@ Enables, disables, or checks the status of usage telemetry. Per-user and per-plu
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
+- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC shares it
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -570,7 +572,7 @@ This Dataverse relationship check is intended for local validation only and shou
 
 This plugin sends usage telemetry by default to help Microsoft improve it.
 Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
-When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+When PAC shares the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
 When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
 Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 

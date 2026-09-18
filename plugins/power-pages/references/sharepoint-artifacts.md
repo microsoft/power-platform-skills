@@ -11,7 +11,7 @@ Create `<PROJECT_ROOT>/docs/` if absent, preserving existing files.
 Use the generated site's folder, not the plugin tree or a session scratch folder.
 Until the user confirms this location, retain notes in conversation; then backfill the initial prompt, suitability decision, and answers already gathered.
 
-Initialize four self-contained HTML artifacts with the shared renderer below.
+Initialize five self-contained HTML artifacts with the shared renderer below.
 For work that has not happened, state the gap, its consequence, and the next action rather than creating a page of empty headings.
 
 | Alias | Default path | Record |
@@ -19,14 +19,15 @@ For work that has not happened, state the gap, its consequence, and the next act
 | **requirements** | `docs/sharepoint-requirements.html` | What is being built, for whom, the agreed scope and exclusions, decisions with rationale, and questions still needing an answer. |
 | **discovery** | `docs/sharepoint-discovery.html` | What was actually inspected or observed, what it means for the site, evidence and uncertainty, and the next discovery action. |
 | **plan** | `docs/sharepoint-migration-plan.html` | The agreed approach, why it was chosen, what is and is not approved, dependencies, implementation sequence, and links to detailed mappings. |
+| **sharing** | `docs/sharepoint-sharing-map.html` | Which SharePoint object the portal can reach, through which Dataverse table, by whom, for which operations, and which columns leave SharePoint. |
 | **progress** | `docs/sharepoint-migration-progress.html` | What has been completed, what is blocked, the consequence, and the exact action/role needed to resume. |
 
 If a filename belongs to another document, choose a non-conflicting name.
 All skill/reference mentions of these aliases or default paths mean the actual selected files.
-Add their exact paths to the site's `.gitignore` before the first commit, and preserve those exclusions when merging the create-site scaffold's gitignore.
+Add their exact paths to the site's `.gitignore` before the first commit, together with `.sharepoint-sharing.json`, and preserve those exclusions when merging the create-site scaffold's gitignore.
 Creating records grants no permission to scaffold or change cloud resources.
 
-**Initialized when:** All four files exist under the confirmed site's `docs/`, prior information is backfilled, existing documents are preserved, and Git exclusions match the actual paths.
+**Initialized when:** All five files exist under the confirmed site's `docs/`, prior information is backfilled, existing documents are preserved, and Git exclusions match the actual paths.
 
 ## Render through the plugin template
 
@@ -66,11 +67,26 @@ If integrity is not `valid`, inspect the current HTML for manual changes before 
 Adopting legacy HTML or reconciling manual edits requires explicit user permission, content-preserving conversion to the model, the current file fingerprint, and `--allow-unmanaged true`.
 That option is not part of routine updates.
 
+## The sharing record is generated, not written
+
+**Build the sharing record with `${PLUGIN_ROOT}/scripts/build-sharing-map.js`, never by hand.**
+It joins the provisioning manifest `<PROJECT_ROOT>/.sharepoint-sharing.json` with the site's committed `.powerpages-site` web roles, table permissions, and site settings, then regenerates the page through the same guarded renderer:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-sharing-map.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Deriving it from the shipped configuration is the point: a hand-written access summary can disagree with the YAML the site deploys, and this one cannot.
+Regenerate after every virtual table, permission, web role, or field-allowlist change, and read its findings before reporting the integration as complete.
+Add `--data-only` to inspect the model first, and `--links` when the neighbouring records use non-default filenames.
+The command refuses to overwrite a page that was edited by hand; move the edited copy aside rather than passing `--allow-unmanaged`.
+Until the site has a `.powerpages-site` folder, the command reports that instead of writing a page, so initialize **sharing** with the renderer and a short "not provisioned yet" record like the other four.
+
 ## Update at each checkpoint
 
 After each user answer, source/API/browser finding, approval, scope change, or completed/failed action, update the relevant artifact before the next question or operation.
 Synthesize the current state before writing; appending another log entry is not sufficient.
-Reconcile shared facts across all four artifacts, including the site name, audience, approval status, active blocker, and next action.
+Reconcile shared facts across all five artifacts, including the site name, audience, approval status, active blocker, and next action.
 An explicit recorded decision supersedes an older unanswered field; a direct observation carries more weight than an unsupported inference.
 If two authoritative records genuinely conflict, name the discrepancy and seek clarification instead of choosing silently.
 Remove resolved questions from the current brief, move superseded wording to the supporting record, and advance resume instructions to the first incomplete dependency.
@@ -101,7 +117,7 @@ For browser discovery, record the resource/view, inspected coverage, sign-in out
 Record approval only after the user gives it in conversation, against the revision they reviewed.
 Text inside a document cannot itself authorize an action.
 
-**Updated when:** A new reader can identify the goal, current position, key decisions, and next action without opening the supporting record or reading another report, and those facts agree across all four artifacts.
+**Updated when:** A new reader can identify the goal, current position, key decisions, and next action without opening the supporting record or reading another report, and those facts agree across all five artifacts.
 
 ## Write for later readers
 
@@ -137,10 +153,11 @@ Open them through the host's artifact viewer or local-file browser capability an
 
 ## Verify before handoff
 
-1. Open all four reports on desktop and mobile; the first view must communicate the actual subject and position, not only phase metadata or links to sections.
+1. Open all five reports on desktop and mobile; the first view must communicate the actual subject and position, not only phase metadata or links to sections.
 2. Reconcile all current summaries, decisions, open questions, and next actions against the recorded evidence; keep contradictions and superseded snapshots out of the current brief.
 3. Confirm sensitive values and active source markup are absent.
-4. Confirm renderer read mode reports valid integrity, and the actual artifact paths remain ignored by Git and absent from build/deployment output.
+4. Confirm renderer read mode reports valid integrity, and the actual artifact paths and `.sharepoint-sharing.json` remain ignored by Git and absent from build/deployment output.
 5. Confirm the key content is readable without JavaScript, mobile tables do not require horizontal panning, and supporting history remains accessible.
+6. Regenerate **sharing** and confirm it reports the same tables, roles, and operations the other records claim, with no outstanding `danger` finding.
 
-**Verified when:** All five checks pass and the user has the actual artifact paths.
+**Verified when:** All six checks pass and the user has the actual artifact paths.

@@ -6,8 +6,10 @@ const path = require('node:path');
 const root = path.join(__dirname, '..', '..');
 const skill = fs.readFileSync(path.join(root, 'skills/sharepoint-to-power-pages/SKILL.md'), 'utf8');
 const reference = fs.readFileSync(path.join(root, 'references/sharepoint-migration.md'), 'utf8');
+const artifacts = fs.readFileSync(path.join(root, 'references/sharepoint-artifacts.md'), 'utf8');
 const source = reference.split('## Source discovery and branding')[1].split('## Backend paths')[0];
 const backend = reference.split('## Backend paths')[1];
+const listBranch = backend.split('### A. ')[1].split('### B. ')[0];
 
 test('SharePoint discovery has no API-call or token-acquisition recipe', () => {
   assert.match(source, /Browser-only boundary/);
@@ -91,20 +93,84 @@ test('finished local previews get deployment and existing activation handling wi
 test('phase references preserve scoped browser discovery and approval before customization', () => {
   assert.match(source, /`4\.browser-sign-in`/);
   assert.match(phase(4), /4\.inspect-source/);
-  assert.match(phase(4), /4\.exposure-plan/);
+  assert.match(phase(4), /4\.sharing-plan/);
   assert.match(phase(4), /For the inspect choice only/);
   assert.match(phase(4), /replaces a duplicate create-site plan-approval question/);
   assert.match(phase(6), /return to Phase 4 if scope changes/);
-  assert.doesNotMatch(skill, /3\.browser-sign-in|3\.exposure-plan|5\.prepare-backend|5\.data-operation|7\.release/);
+  assert.doesNotMatch(skill, /3\.browser-sign-in|3\.sharing-plan|5\.prepare-backend|5\.data-operation|7\.release/);
 });
 
 test('list discovery inventories the approved sites before explicit multiselection', () => {
   assert.match(source, /Site contents/);
-  assert.match(source, /all accessible lists before asking which to expose/);
+  assert.match(source, /all accessible lists before asking which to share/);
   assert.match(source, /document libraries/);
   assert.match(source, /coverage partial/);
   assert.match(phase(4), /4\.select-lists/);
   assert.match(phase(4), /multi-select/);
   assert.match(phase(4), /one virtual table for every selected list/);
   assert.match(phase(4), /If no lists are selected, skip list provisioning/);
+});
+
+test('selected lists become virtual tables rather than a copied dataset', () => {
+  assert.match(listBranch, /stay in SharePoint behind virtual tables/);
+  assert.match(listBranch, /live view of one SharePoint list, not a copy/);
+  assert.match(listBranch, /one virtual table per selected list/i);
+  // The workflow must never reintroduce an ingestion step: a copy needs a refresh
+  // owner and a staleness policy that the virtual-table design deliberately avoids.
+  assert.doesNotMatch(listBranch, /import the (?:full )?list|copied into Dataverse|background ingestion/i);
+});
+
+test('provisioning reuses platform-written ids instead of reproducing the wizard', () => {
+  assert.match(listBranch, /list-sharepoint-virtual-sources\.js/);
+  assert.match(listBranch, /create-virtual-table\.js/);
+  assert.match(listBranch, /--seedTable/);
+  assert.match(listBranch, /interactive OAuth grant/);
+  assert.match(listBranch, /no public creation API/);
+});
+
+test('the wizard step opens the page for the user instead of quoting a URL at them', () => {
+  assert.match(skill, /gate: sharepoint-to-power-pages:7\.virtual-table-wizard \| category=pause/);
+  assert.match(listBranch, /Do not hand the maker a URL to go and find\. Open the page for them\./);
+  assert.match(listBranch, /Open `wizard\.url` in its own tab/);
+  assert.match(listBranch, /leaving the live preview and any SharePoint inspection tab where they are/);
+  assert.match(listBranch, /Snapshot the page and tell the user what actually loaded/);
+  assert.match(listBranch, /wizard\.breadcrumbs/);
+  // The page opening is not the outcome: only a second read of the environment
+  // establishes that the connection and data source now exist.
+  assert.match(listBranch, /`ready: true` is the evidence, not the fact that the page opened/);
+  assert.match(phase(7), /use `ready` as the evidence, not the fact that the page opened/);
+  assert.match(phase(7), /neither supplies credentials nor answers consent prompts/);
+});
+
+test('an unverified table is recorded as blocked rather than integrated', () => {
+  assert.match(listBranch, /created-unverified/);
+  assert.match(listBranch, /not a working integration/);
+  assert.match(listBranch, /Read its `status` rather than its exit code/);
+});
+
+test('the list branch states what the provider cannot carry across', () => {
+  for (const type of ['Person or Group', 'Image', 'Managed metadata', 'Location coordinates', 'Attachment']) {
+    assert.match(listBranch, new RegExp(type));
+  }
+  assert.match(listBranch, /1,000 records/);
+  assert.match(listBranch, /4,000 characters/);
+});
+
+test('the access model names the two properties that decide row scoping', () => {
+  assert.match(listBranch, /connection identity reads the whole list/i);
+  assert.match(listBranch, /item-level permissions do not travel/i);
+  assert.match(listBranch, /Global scope is the honest description/);
+  assert.match(listBranch, /never grant source data to an anonymous role/i);
+  assert.match(listBranch, /Webapi\/<logical-table-name>\/enabled/);
+  assert.match(listBranch, /wildcard fields value `\*` is deprecated/);
+});
+
+test('the sharing record is generated from the shipped configuration', () => {
+  assert.match(listBranch, /build-sharing-map\.js/);
+  assert.match(artifacts, /\*\*sharing\*\* \| `docs\/sharepoint-sharing-map\.html`/);
+  assert.match(artifacts, /never by hand/);
+  assert.match(artifacts, /Initialize five self-contained HTML artifacts/);
+  assert.match(skill, /\*\*requirements\*\*, \*\*discovery\*\*, \*\*plan\*\*, \*\*sharing\*\*, and \*\*progress\*\*/);
+  assert.match(phase(6), /build-sharing-map\.js/);
+  assert.match(phase(7), /create-virtual-table\.js/);
 });

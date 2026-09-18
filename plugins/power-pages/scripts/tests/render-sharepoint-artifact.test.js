@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const { validateArtifact, renderArtifact, readArtifact } = require('../render-sharepoint-artifact');
 
 const script = path.join(__dirname, '..', 'render-sharepoint-artifact.js');
-const kinds = ['requirements', 'discovery', 'plan', 'progress'];
+const kinds = ['requirements', 'discovery', 'plan', 'sharing', 'progress'];
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
 function fixture(artifact = 'requirements') {
@@ -36,7 +36,7 @@ function directory(t) {
   return dir;
 }
 
-test('all four artifacts use the same branded, offline report template and round-trip data', (t) => {
+test('every artifact uses the same branded, offline report template and round-trips its data', (t) => {
   const dir = directory(t);
   for (const kind of kinds) {
     const data = fixture(kind);

@@ -86,7 +86,9 @@ td{font-size:14px}
   .topbar{position:static;padding:12px 20px;flex-wrap:wrap}
   .layout{display:block}
   .sidebar{position:static;width:100%;height:auto;overflow:visible;border-inline-end:0;border-bottom:1px solid var(--border);padding:12px 16px}
-  .record-nav{display:flex;gap:4px}
+  /* Five record links do not fit one narrow row; wrapping keeps every report
+     reachable instead of pushing the last ones off-screen. */
+  .record-nav{display:flex;flex-wrap:wrap;gap:4px}
   .record-nav .nav-btn{padding:8px 10px;border-inline-start:0;border-bottom:2px solid transparent}
   .record-nav .nav-btn.active{border-bottom-color:var(--accent)}
   .nav-group-label{padding:4px 8px}

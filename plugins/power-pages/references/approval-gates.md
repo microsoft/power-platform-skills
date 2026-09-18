@@ -714,7 +714,7 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ---
 
-### 6.33 `sharepoint-to-power-pages` (10 gate IDs)
+### 6.33 `sharepoint-to-power-pages` (11 gate IDs)
 
 Assesses authenticated-portal suitability, confirms the local brief, and launches the scaffold before source discovery and detailed design.
 The user watches the site being built at the live-preview URL, then chooses deployment after review.
@@ -726,15 +726,16 @@ Invoked skills retain their own Approval Gates.
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `sharepoint-to-power-pages:1.fit` | gate | plan | 1 | Confirm Power Pages suitability, revise the requirement, or stop with a simpler alternative; runs before source access or scaffolding. | nothing |
-| Phase 1 and Phase 2 intake | not-a-gate | - | 1-2 | Collect missing requirement, authenticated audience, source, theme, exposure, identity, freshness, environment, and folder decisions one at a time; record them in HTML after folder confirmation. | local-html-artifacts |
+| Phase 1 and Phase 2 intake | not-a-gate | - | 1-2 | Collect missing requirement, authenticated audience, source, theme, sharing, identity, freshness, environment, and folder decisions one at a time; record them in HTML after folder confirmation. | local-html-artifacts |
 | `sharepoint-to-power-pages:2.scaffold` | gate | plan | 2 | Confirm the brief and exact project folder before local scaffolding and dependency installation. Unresolved source/cloud details are recorded dependencies, not startup prerequisites. | local-html-artifacts |
 | `sharepoint-to-power-pages:4.inspect-source` | gate | plan | 4 | With the preview running, approve exact source URLs and branding/content inspection scope, use supplied information for a synthetic preview, or stop. Reuse an existing matching approval. | live-scaffold-and-records |
 | `sharepoint-to-power-pages:4.browser-sign-in` | gate | pause | 4 | Open SharePoint's sign-in flow in the inspection browser and wait for the user, keeping the live preview in its own tab. Verify resource visibility after each new access challenge. | live-preview-browser-and-records |
 | `sharepoint-to-power-pages:4.select-lists` | gate | plan | 4 | Show the full accessible list inventory for the approved sites and confirm the maker's multiselection; incomplete coverage and provider restrictions are explicit. No provisioning follows without the later action approval. | live-scaffold-and-records |
-| `sharepoint-to-power-pages:4.exposure-plan` | gate | plan | 4 | Approve the content-to-audience mapping and rendered create-site implementation plan together before customization; repeat for scope changes. | approved-migration-state |
+| `sharepoint-to-power-pages:4.sharing-plan` | gate | plan | 4 | Approve the content-to-audience mapping and rendered create-site implementation plan together before customization; repeat for scope changes. | approved-migration-state |
 | `sharepoint-to-power-pages:6.review` | gate | plan | 6 | Accept the actual preview/pilot with verification status, request changes, or stop. | reviewed-preview-or-pilot |
 | `sharepoint-to-power-pages:7.deploy` | gate | plan | 7.1 | After local review, offer deploy/keep local even for a first build. Child `deploy-site` owns environment confirmation, activation checks, and any conditional activation offer. Repeat per reviewed upload. | reviewed-preview-or-pilot |
 | `sharepoint-to-power-pages:7.prepare-backend` | gate | plan | 7.3 | After successful deployment or explicit resumption on an existing site, choose whether to configure the selected private-pilot backend or leave it pending. | deployed-site-and-preview |
+| `sharepoint-to-power-pages:7.virtual-table-wizard` | gate | pause | 7.3 | Open the maker portal for the user and wait while they create the site's first virtual table, because its connection and data source come from an interactive OAuth grant with no public API. Re-reads the environment afterwards and treats `ready: true` as the only evidence. | deployed-site-and-preview |
 | `sharepoint-to-power-pages:7.data-operation` | gate | consent | 7.3 | Approve one selected list's virtual-table provisioning, separate content copy, or document-integration configuration; fires per action and every retry that writes, never once for the whole loop. | partial-private-pilot |
 
 ---
@@ -794,7 +795,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 These are honest unresolved questions — not necessary to answer before v2 lands, but flagged for future tightening:
 
 - **Does `intent` need a sub-category for plan-alm itself?** plan-alm is the front-door planner; it doesn't have a Phase 0 ALM-plan gate (because it *is* the plan). The closest analogue is `plan-alm:1.deferral` (handle `.alm-deferred` marker) and `plan-alm:1.completeness` (completeness check). Both are tagged `progress` in §6.1 — defensible but worth a second look.
-- **Should `pause` gates be allowed to auto-resume?** Currently the lint rule would flag any tooling that auto-responds. But if PP Pipelines exposes a polling endpoint that detects approval state, a deterministic auto-resume becomes possible. Worth a future rule extension.
+- **Should `pause` gates be allowed to auto-resume?** Currently the lint rule would flag any tooling that auto-responds. But if PP Pipelines shares a polling endpoint that detects approval state, a deterministic auto-resume becomes possible. Worth a future rule extension.
 - **Telemetry on gate cancellation.** A gate that's cancelled 80% of the time is asking the wrong question. Out of scope for v2; worth instrumenting once §5 lint lands.
 - **Multi-prompt gates.** Some entries in §6 cover multiple `AskUserQuestion` calls under one marker (e.g., `setup-solution:5.5*` is one logical gate but renders three multiSelect prompts). The lint rule says one marker can cover multiple calls if the catalog row documents it. Worth a more precise rule once we see drift.
 - **Phase-number drift is silent.** Catalog rows reference SKILL.md phase numbers as plain strings (`7.6.4`, `3 (Q3 PP)`, `2.1.2`). If a skill is refactored to renumber phases (e.g. `7.6.4` → `7.7.1`), the catalog row's "Phase" column desyncs with no signal. **Convention:** any SKILL.md phase renumber MUST grep this catalog for the old phase number and update the row(s). Worth a future lint rule that asserts each catalog phase-reference is findable as a heading in the owning SKILL.md.

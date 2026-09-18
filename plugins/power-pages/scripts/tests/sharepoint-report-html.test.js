@@ -8,7 +8,7 @@ function fixture() {
     version: 1, artifact: 'requirements', title: 'Portal brief',
     updatedAt: '2026-09-16T14:00:00Z', phase: 'Discovery blocked',
     summary: 'Build a read-only customer portal. Source access needs confirmation before discovery can continue.',
-    links: ['requirements', 'discovery', 'plan', 'progress'].map(artifact => ({
+    links: ['requirements', 'discovery', 'plan', 'sharing', 'progress'].map(artifact => ({
       artifact, label: artifact, href: `${artifact}.html`,
     })),
     sections: [{
