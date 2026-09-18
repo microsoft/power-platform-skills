@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
@@ -1259,22 +1259,54 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
 // eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
 // apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
 //
-// ⚠ This is a SOURCE-LEVEL guard, and it is honest about that. The call lives inside the CLI's
-// `main()`, which is not exported and has no test harness (unlike teardown's), so there is no seam
-// to drive it through without building one. It pins the two things that actually went wrong —
-// discarding the result and swallowing the throw — rather than asserting behaviour it cannot reach.
-// `apply-snapshot-store.test.js` covers what invalidateSnapshot itself returns.
-test('#587 a plain --apply refuses to mutate when the changed-only snapshot cannot be invalidated', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  const call = src.slice(src.indexOf('if (opts.apply) {', src.indexOf('applySnapshotStore.invalidateSnapshot') - 2000));
-  const block = call.slice(0, call.indexOf('r = await buildModelApp'));
+// The first version of this test was SOURCE-LEVEL, and an adversarial review proved it worthless:
+// both `if (false && …)` and a catch manufacturing `{ ok: true }` left all 74 tests green. The
+// guard is now an exported function, so it is tested by BEHAVIOUR instead.
+test('#587 the snapshot guard refuses every outcome that is not a definite success', () => {
+  const calls = [];
+  const storeReturning = (value) => ({
+    invalidateSnapshot: (dir) => { calls.push(dir); if (typeof value === 'function') return value(); return value; },
+  });
 
-  assert.ok(/invalidateSnapshot\(workspaceDir\)/.test(block), 'the invalidate call must still happen before the apply');
-  assert.ok(!/try \{ applySnapshotStore\.invalidateSnapshot\([^)]*\); \} catch/.test(block),
-    'the result must not be discarded by a one-line try/catch again');
-  assert.ok(/inv\.ok !== true|!inv\.ok/.test(block),
-    'the { ok } result must be checked, not ignored');
-  assert.ok(/throw new Error\(/.test(block),
-    'an un-invalidatable snapshot must halt the apply rather than warn');
-  assert.ok(/refusing to apply/.test(block), 'and say so in the operator-facing message');
+  // The only accepted outcome, including the "nothing to invalidate" case an ordinary first build
+  // produces — so this is not a blanket refusal.
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, generation: 'g1' }), 'WS'),
+    { ok: true, generation: 'g1' });
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, reason: 'no snapshot to invalidate', generation: null }), 'WS').ok,
+    true);
+  assert.deepStrictEqual(calls, ['WS', 'WS'], 'the workspace dir must be passed through');
+
+  // Everything else must halt BEFORE the mutation engine runs.
+  for (const [label, value] of [
+    ['lease contention', { ok: false, reason: 'workspace lease held by pid 123' }],
+    ['a thrown error', () => { throw new Error('EACCES: permission denied'); }],
+    ['undefined', undefined],
+    ['null', null],
+    ['a malformed return', { status: 'fine' }],
+    ['ok as a truthy non-true', { ok: 'yes' }],
+  ]) {
+    assert.throws(
+      () => assertSnapshotInvalidated(storeReturning(value), 'WS'),
+      /refusing to apply/,
+      `${label} must halt the apply`);
+  }
+
+  // The reason reaches the operator — "it failed" without saying why is not actionable when the
+  // realistic cause is another run holding the lease.
+  assert.throws(
+    () => assertSnapshotInvalidated(storeReturning({ ok: false, reason: 'workspace lease held by pid 123' }), 'WS'),
+    /workspace lease held by pid 123/);
+});
+
+// …and the WIRING, which a behavioural test of the function alone cannot cover: main() must
+// actually call it, and only when applying.
+test('#587 a plain --apply calls the snapshot guard before building', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const i = src.indexOf('r = await buildModelApp(spec, opts, deps);');
+  assert.ok(i > -1, 'the build call must still be findable for this check to mean anything');
+  const before = src.slice(Math.max(0, i - 1500), i);
+  assert.match(before, /if \(opts\.apply\) assertSnapshotInvalidated\(applySnapshotStore, workspaceDir\);/,
+    'the guard must run, gated on apply, immediately before the mutation engine');
 });

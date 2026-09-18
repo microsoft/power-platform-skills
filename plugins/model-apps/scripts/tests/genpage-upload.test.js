@@ -292,7 +292,63 @@ test('the standalone flags are emitted, and --add-to-sitemap only on a create', 
   assert.strictEqual(update[update.indexOf('--data-sources') + 1], 'account,contact');
 });
 
-// /app-builder must be unaffected: it never asks for these, so none may appear by default.
+// astra MEDIUM 8 — the option tests above call the LIBRARY directly and mostly check flag presence.
+// Astra mutated `main()` to drop forwarding of model/connectors/actions/addToSitemap, and replaced
+// the library's model and file arguments with "WRONG", and every committed test stayed green. So the
+// wiring from CLI flag → wrapper → actual pac invocation was unprotected.
+//
+// This drives the REAL wrapper through `main()` and asserts exact flag/value pairs on the captured
+// pac argv, with values distinct enough that a swap cannot pass.
+test('main forwards every option through the real wrapper to the pac invocation, by value', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  fs.writeFileSync(pf, 'the approved prompt', 'utf8');
+
+  const seen = [];
+  // The wrapper deletes its temp dir in a `finally`, so the prompt file cannot be read after
+  // upload() returns. Capture the contents DURING the invocation instead.
+  let promptOnDisk = null;
+  const factory = (env) => makeGenpageCli(env, {
+    run: async (args) => {
+      seen.push(args);
+      const i = args.indexOf('--prompt-file');
+      if (i !== -1) promptOnDisk = fs.readFileSync(args[i + 1], 'utf8');
+      if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+
+  const r = await new Promise((resolve) => {
+    main([
+      '--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'APPID-1', '--code-file', 'CODE.tsx',
+      '--name', 'NamedPage', '--data-sources', 'account,contact',
+      '--model', 'MODEL-9', '--connectors', 'CONN.json', '--actions', 'ACT.json',
+      '--prompt-file', pf, '--agent-message', 'msg', '--add-to-sitemap',
+    ], { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `expected success, got ${JSON.stringify(r.payload)}`);
+
+  const args = seen.find((a) => a.includes('upload'));
+  assert.ok(args, `pac upload should have been invoked; saw ${JSON.stringify(seen)}`);
+  const valueOf = (flag) => args[args.indexOf(flag) + 1];
+
+  // EXACT pairs. A dropped flag or a swapped value fails here, which is what the old tests missed.
+  assert.strictEqual(valueOf('--environment'), 'https://contoso.crm.dynamics.com/');
+  assert.strictEqual(valueOf('--app-id'), 'APPID-1');
+  assert.strictEqual(valueOf('--code-file'), 'CODE.tsx');
+  assert.strictEqual(valueOf('--name'), 'NamedPage');
+  assert.strictEqual(valueOf('--data-sources'), 'account,contact');
+  assert.strictEqual(valueOf('--model'), 'MODEL-9');
+  assert.strictEqual(valueOf('--connectors'), 'CONN.json');
+  assert.strictEqual(valueOf('--actions'), 'ACT.json');
+  assert.ok(args.includes('--add-to-sitemap'), 'a create that asked for placement must carry the flag');
+
+  // And the prompt still travels by FILE, with the file holding the approved text.
+  assert.ok(args.includes('--prompt-file'), 'the prompt must be delivered by file');
+  assert.strictEqual(promptOnDisk, 'the approved prompt',
+    'the temp file must hold exactly what the caller supplied');
+});
 test('an /app-builder-shaped upload sends none of the standalone flags', async () => {
   const seen = [];
   const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
