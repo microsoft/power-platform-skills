@@ -54,7 +54,9 @@ downloads that round-trip Choice columns.
   prompt containing quotes, newlines, `%VAR%` or non-ASCII could fail to deploy — and editing the
   approved prompt until it parses builds the page from text nobody approved. `--add-to-sitemap` is
   now refused alongside `--page-id`.
-- **A multi-line page prompt is no longer flattened on upload** ([#565]).
+- **A multi-line page prompt is no longer flattened on upload** ([#565]). Prompt files are now
+  delivered byte-for-byte, including a trailing newline; only a leading byte-order mark is stripped,
+  because that is an encoding marker rather than content.
 - **`/genpage` refuses to "update" a page that does not exist.** `pac` treats an unknown `--page-id`
   as a create and returns the new id, so a stale one silently produced a second, unplaced page and
   reported it as an update.
@@ -83,8 +85,8 @@ downloads that round-trip Choice columns.
   tiles are validated per tile type.
 - **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). It ran
   `rm -rf` on the caller's path with no check that it was a workspace, immediately after a
-  *successful* teardown. It now requires a real `.maker-workspace` and rejects roots and symlink
-  escapes.
+  *successful* teardown. It now requires the directory to carry the SDK's own workspace manifest —
+  the conventional name alone is not proof — and rejects roots and symlink escapes.
 - **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). This
   **reverses earlier best-effort behaviour**; continue-on-error still applies to every later step.
 - **A security role whose sharing check cannot be read is retained, not deleted** ([#587]).
@@ -94,7 +96,10 @@ downloads that round-trip Choice columns.
 - **A mistyped flag fails instead of quietly changing what the command does.** An unrecognised flag
   was dropped *and* swallowed the token after it, so `--stagee ui` planned all 9 phases and exited 0.
 - **`--verify` proves the deployed form LAYOUT**, not just that a form exists — every wrong-layout
-  failure previously finished with an unqualified PASS.
+  failure previously finished with an unqualified PASS. It checks the authored tabs, sections and
+  field placement, that no row carries more content than its section's grid allows, and that a span
+  you declared is the span that deployed. A span you did *not* declare is left alone, so a cell
+  widened by hand in the designer still verifies.
 - **`--verify` proves sort PRECEDENCE, not just membership**, so two views that return rows in
   different orders are no longer both accepted.
 - **`--verify` checks that a sitemap-visible table really belongs to the app**, and fails closed when
