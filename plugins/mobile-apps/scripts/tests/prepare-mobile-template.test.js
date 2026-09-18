@@ -4,7 +4,6 @@ const assert = require('assert');
 const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const Module = require('module');
-const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
@@ -17,9 +16,19 @@ const {
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const templateRoot = path.join(pluginRoot, 'template');
+const guidanceFiles = ['AGENTS.md', 'CLAUDE.md', '.github/copilot-instructions.md'];
+const fixtureDirectories = [];
+
+test.after(() => {
+  for (const directory of fixtureDirectories) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function tempDirectory(name) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  const directory = fs.mkdtempSync(path.join(__dirname, `.${name}-`));
+  fixtureDirectories.push(directory);
+  return directory;
 }
 
 function copyTemplate() {
@@ -73,6 +82,218 @@ function assertSnapshotsEqual(left, right) {
     assert.deepStrictEqual(right.get(relativePath), content, relativePath);
   }
 }
+
+function removeGuidance(projectRoot) {
+  for (const relativePath of guidanceFiles) {
+    fs.unlinkSync(path.join(projectRoot, relativePath));
+  }
+}
+
+const guidanceOptions = { displayName: 'Guidance App', slug: 'guidance-app' };
+
+test('preparation adds only missing guidance and reports exact writer ownership', () => {
+  const projectRoot = copyTemplate();
+  removeGuidance(projectRoot);
+  fs.rmdirSync(path.join(projectRoot, '.github'));
+  const before = fileSnapshot(projectRoot);
+  const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
+  const after = fileSnapshot(projectRoot);
+
+  assert.deepStrictEqual(result.copiedGuidanceFiles, guidanceFiles);
+  assert.deepStrictEqual(result.preservedGuidanceFiles, []);
+  assert.deepStrictEqual(result.writtenFiles, [...after]
+    .filter(([name, content]) => !before.has(name) || !content.equals(before.get(name)))
+    .map(([name]) => name.split(path.sep).join('/'))
+    .sort());
+  for (const relativePath of guidanceFiles) {
+    assert.deepStrictEqual(
+      fs.readFileSync(path.join(projectRoot, relativePath)),
+      fs.readFileSync(path.join(templateRoot, relativePath)),
+    );
+    assert.ok(result.writtenFiles.includes(relativePath));
+  }
+
+  const repeated = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
+  assert.deepStrictEqual(repeated.writtenFiles, []);
+  assert.deepStrictEqual(repeated.copiedGuidanceFiles, []);
+  assert.deepStrictEqual(repeated.preservedGuidanceFiles, guidanceFiles);
+  assertSnapshotsEqual(after, fileSnapshot(projectRoot));
+});
+
+test('preparation preserves customer guidance bytes and fills a partial set', () => {
+  const projectRoot = copyTemplate();
+  const customAgents = Buffer.from('\ufeff# Customer rules\r\nPreserve exactly.\r\n');
+  fs.writeFileSync(path.join(projectRoot, 'AGENTS.md'), customAgents);
+  fs.writeFileSync(path.join(projectRoot, 'CLAUDE.md'), '');
+  fs.unlinkSync(path.join(projectRoot, '.github', 'copilot-instructions.md'));
+  const unrelated = path.join(projectRoot, '.github', 'customer.txt');
+  fs.writeFileSync(unrelated, 'customer-owned\n');
+
+  const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
+  assert.deepStrictEqual(result.copiedGuidanceFiles, ['.github/copilot-instructions.md']);
+  assert.deepStrictEqual(result.preservedGuidanceFiles, ['AGENTS.md', 'CLAUDE.md']);
+  assert.deepStrictEqual(fs.readFileSync(path.join(projectRoot, 'AGENTS.md')), customAgents);
+  assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'CLAUDE.md'), 'utf8'), '');
+  assert.strictEqual(fs.readFileSync(unrelated, 'utf8'), 'customer-owned\n');
+  assert.ok(!result.writtenFiles.includes('AGENTS.md'));
+  assert.ok(!result.writtenFiles.includes('CLAUDE.md'));
+  assert.deepStrictEqual(
+    fs.readFileSync(path.join(projectRoot, '.github', 'copilot-instructions.md')),
+    fs.readFileSync(path.join(templateRoot, '.github', 'copilot-instructions.md')),
+  );
+});
+
+test('preparation preserves all existing customer guidance byte-for-byte', () => {
+  const projectRoot = copyTemplate();
+  for (const relativePath of guidanceFiles) {
+    fs.writeFileSync(path.join(projectRoot, relativePath), `Customer: ${relativePath}\r\n`);
+  }
+  const before = fileSnapshot(projectRoot);
+  const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
+  assert.deepStrictEqual(result.copiedGuidanceFiles, []);
+  assert.deepStrictEqual(result.preservedGuidanceFiles, guidanceFiles);
+  for (const relativePath of guidanceFiles) {
+    assert.deepStrictEqual(
+      fs.readFileSync(path.join(projectRoot, relativePath)),
+      before.get(relativePath.split('/').join(path.sep)),
+    );
+    assert.ok(!result.writtenFiles.includes(relativePath));
+  }
+});
+
+for (const keepParent of [false, true]) {
+  test(`guidance rollback restores missing files and ${keepParent ? 'preserves' : 'removes new'} parent`, () => {
+    const projectRoot = copyTemplate();
+    removeGuidance(projectRoot);
+    if (!keepParent) fs.rmdirSync(path.join(projectRoot, '.github'));
+    // The error occurs after guidance copying, so rollback must undo real writes.
+    const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+    fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8')
+      .replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+    const before = fileSnapshot(projectRoot);
+    assert.throws(() => prepareMobileTemplate({
+      workingDir: projectRoot, ...guidanceOptions,
+    }), /must not wrap Slot with SafeAreaView/);
+    assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, '.github')), keepParent);
+  });
+}
+
+test('guidance rollback preserves custom files and unrelated parent contents', () => {
+  const projectRoot = copyTemplate();
+  fs.writeFileSync(path.join(projectRoot, 'AGENTS.md'), 'Customer-owned\r\n');
+  fs.unlinkSync(path.join(projectRoot, 'CLAUDE.md'));
+  fs.unlinkSync(path.join(projectRoot, '.github', 'copilot-instructions.md'));
+  fs.writeFileSync(path.join(projectRoot, '.github', 'customer.txt'), 'Keep me\n');
+  const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+  fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8')
+    .replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+  const before = fileSnapshot(projectRoot);
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), /must not wrap Slot with SafeAreaView/);
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+test('exclusive guidance creation and rollback do not claim a concurrent customer write', (t) => {
+  const projectRoot = copyTemplate();
+  removeGuidance(projectRoot);
+  const before = fileSnapshot(projectRoot);
+  const customerPath = path.join(projectRoot, 'CLAUDE.md');
+  const originalCopy = fs.copyFileSync;
+  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
+    if (destination === customerPath) fs.writeFileSync(customerPath, 'Concurrent customer rules\n');
+    return originalCopy(source, destination, flags);
+  });
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), { code: 'EEXIST' });
+  before.set('CLAUDE.md', Buffer.from('Concurrent customer rules\n'));
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+  assert.ok(fs.statSync(path.join(projectRoot, '.github')).isDirectory());
+});
+
+test('guidance rollback retains new parent directories containing unrelated customer files', (t) => {
+  const projectRoot = copyTemplate();
+  removeGuidance(projectRoot);
+  fs.rmdirSync(path.join(projectRoot, '.github'));
+  const before = fileSnapshot(projectRoot);
+  const copilotPath = path.join(projectRoot, '.github', 'copilot-instructions.md');
+  const originalCopy = fs.copyFileSync;
+  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
+    if (destination === copilotPath) {
+      fs.writeFileSync(path.join(projectRoot, '.github', 'customer.txt'), 'Concurrent customer file\n');
+      throw new Error('Simulated guidance copy failure');
+    }
+    return originalCopy(source, destination, flags);
+  });
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), /Simulated guidance copy failure/);
+  before.set(path.join('.github', 'customer.txt'), Buffer.from('Concurrent customer file\n'));
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+test('preparation rejects a symlinked project root without mutations', (t) => {
+  const projectRoot = copyTemplate();
+  const before = fileSnapshot(projectRoot);
+  const link = path.join(tempDirectory('guidance-project-link'), 'app');
+  try {
+    fs.symlinkSync(projectRoot, link, 'junction');
+  } catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error;
+    t.skip('Symlink creation is unavailable on this host');
+    return;
+  }
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: link, ...guidanceOptions,
+  }), /must not traverse a symlink: project root/);
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+for (const relativePath of [...guidanceFiles, '.github']) {
+  for (const dangling of [false, true]) {
+    test(`preparation rejects ${dangling ? 'dangling ' : ''}guidance symlink ${relativePath}`, (t) => {
+      const projectRoot = copyTemplate();
+      const externalRoot = tempDirectory('guidance-link-target');
+      const targetIsDirectory = relativePath === '.github';
+      const target = path.join(externalRoot, targetIsDirectory ? 'instructions' : 'rules.md');
+      if (!dangling) {
+        if (targetIsDirectory) fs.mkdirSync(target);
+        else fs.writeFileSync(target, 'External rules\n');
+      }
+      const link = path.join(projectRoot, relativePath);
+      fs.rmSync(link, { recursive: true });
+      const before = fileSnapshot(projectRoot);
+      const externalBefore = fileSnapshot(externalRoot);
+      try {
+        fs.symlinkSync(target, link, targetIsDirectory ? 'junction' : 'file');
+      } catch (error) {
+        if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error;
+        t.skip('Symlink creation is unavailable on this host');
+        return;
+      }
+      assert.throws(() => prepareMobileTemplate({
+        workingDir: projectRoot, ...guidanceOptions,
+      }), /must not traverse a symlink/);
+      assert.ok(fs.lstatSync(link).isSymbolicLink());
+      fs.unlinkSync(link);
+      assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+      assertSnapshotsEqual(externalBefore, fileSnapshot(externalRoot));
+    });
+  }
+}
+
+test('preparation rejects a non-directory guidance parent without mutations', () => {
+  const projectRoot = copyTemplate();
+  fs.rmSync(path.join(projectRoot, '.github'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, '.github'), 'Customer file\n');
+  const before = fileSnapshot(projectRoot);
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), /target must be a directory: \.github/);
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
 
 test('preparation is idempotent and preserves generated and existing helper files', () => {
   const projectRoot = copyTemplate();
