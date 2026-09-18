@@ -7,6 +7,7 @@ const path = require('node:path');
 const RUNTIME_FILE = '.devplayer-builder/runtime.json';
 const OMITTED_DIRECTORIES = new Set(['node_modules', '.git', '.expo', '.powernative']);
 const OPERATIONAL_FILES = new Set([
+  'memory-bank.md',
   '.tmp/prototype-conversion-journal.json',
   '.tmp/prototype-dataverse-remote-journal.json',
 ]);

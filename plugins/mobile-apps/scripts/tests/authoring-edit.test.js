@@ -29,6 +29,26 @@ function write(root, relative, value) {
   fs.writeFileSync(file, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value));
 }
 
+test('memory bank updates remain operational evidence without changing app source identity', { skip: HAS_SOURCE ? false : SOURCE_REASON }, (t) => {
+  const source = require('../lib/authoring-source');
+  const root = path.join(__dirname, `.authoring-source-work-${crypto.randomUUID()}`);
+  const snapshot = path.join(__dirname, `.authoring-source-snapshot-${crypto.randomUUID()}`);
+  fs.mkdirSync(root, { recursive: true });
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(snapshot, { recursive: true, force: true });
+  });
+  write(root, 'app/index.tsx', 'export default function App() { return null; }\n');
+  write(root, 'memory-bank.md', '# Initial context\n');
+  const before = source.captureSource(root);
+  const snapshotBefore = source.captureSnapshot(root);
+  write(root, 'memory-bank.md', '# Updated context\n');
+  assert.deepEqual(source.captureSource(root), before);
+  assert.notEqual(source.captureSnapshot(root).revision, snapshotBefore.revision);
+  assert.deepEqual(source.copySource(root, snapshot, before.revision), before);
+  assert.equal(fs.readFileSync(path.join(snapshot, 'memory-bank.md'), 'utf8'), '# Updated context\n');
+});
+
 function fixture(t) {
   const root = path.join(__dirname, `.authoring-edit-work-${crypto.randomUUID()}`);
   fs.mkdirSync(root, { recursive: true });
