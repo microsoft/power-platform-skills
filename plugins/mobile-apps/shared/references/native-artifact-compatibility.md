@@ -53,6 +53,10 @@ methods must handle failure/cancellation/platform states without throwing
 (including permission calls). Compare with the installed package APIs/version;
 an import that type-checks is not proof the native build supports the operation.
 Keep each helper's missing-package, runtime-ban, and native-version gates.
+Camera permission rejection must become an `error` result, not an unhandled
+promise or a false permission-denied result. Missing APIs return `unsupported`;
+public boolean permission helpers report the failure and return false. Scanner
+permission rejection renders a failure state instead of escaping its effect.
 
 **Storage is part of compatibility when requested.** Resolve the approved local-only
 or retained-artifact behavior before judging reuse. Do not infer uploads from

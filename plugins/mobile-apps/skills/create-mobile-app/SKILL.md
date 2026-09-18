@@ -1473,6 +1473,7 @@ Invoke skill: /design-system
 Context:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: create-mobile-app
+  working_dir: <working_dir>
   phase: design
   approved_scope: <confirmed app intent; design-system owns its design approval>
 
@@ -1754,6 +1755,7 @@ Invoke skill: /add-dataverse
 Context:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: create-mobile-app
+  working_dir: <working_dir>
   phase: implementation
   approved_scope: <approved Data Model and bound operation-manifest artifacts>
 
@@ -1904,6 +1906,7 @@ Invoke skill: /add-native
 Context:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: create-mobile-app
+  working_dir: <working_dir>
   phase: implementation
   approved_scope: <approved capability row, storage target, and screen requirements>
 

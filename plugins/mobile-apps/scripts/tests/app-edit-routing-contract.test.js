@@ -204,6 +204,63 @@ test('connector aliases and operations preserve dedicated routing and dependency
   assert.match(connector, /implementation-only removal must stop if it would leave broken consumers/);
 });
 
+test('Dataverse discovery executes before connector setup and ends the leaf', () => {
+  const connector = skill('add-connector');
+  const identify = section(connector, '### Step 2', '### Step 3');
+  const setup = section(connector, '### Step 3', '### Step 4');
+  assert.match(identify, /find-dataverse-api --search/);
+  assert.match(identify, /STOP this leaf/);
+  assert.match(identify, /Do not enter Step 3/);
+  assert.ok(identify.indexOf('find-dataverse-api') < identify.indexOf('| Connector API name'));
+  assert.doesNotMatch(setup, /find-dataverse-api/);
+});
+
+test('generic connector preserves supplied IDs and references before resolving a missing binding', () => {
+  const setup = section(skill('add-connector'), '### Step 3', '**Classify the connector');
+  assert.match(setup, /Supplied `--connection-id`[\s\S]*reuse that exact/);
+  assert.match(setup, /Supplied `--connection-ref`[\s\S]*preserve that/);
+  assert.match(setup, /skip `\/list-connections` and creation/);
+  assert.match(setup, /Missing binding only:.*invoke `\/list-connections`/);
+  assert.match(setup, /ambiguous supplied values return to the owner instead of creating a fallback/);
+  assert.match(setup, /`--connection-ref '<connectionRef>'` on `add-data-source` only/);
+  assert.match(setup, /backing ID for the approved reference/);
+  assert.doesNotMatch(setup, /Run the `\/list-connections` skill/);
+});
+
+test('SharePoint reuses supplied bindings and emits the matching registration form', () => {
+  const sharepoint = skill('add-sharepoint');
+  const binding = section(sharepoint, '### Step 6:', '### Step 7:');
+  assert.match(binding, /Supplied `--connection-id`[\s\S]*reuse the exact ID/);
+  assert.match(binding, /Supplied `--connection-ref`[\s\S]*retain the exact/);
+  assert.match(binding, /Missing binding only/);
+  assert.match(binding, /skip `create-connection` and `\/list-connections`/);
+  assert.match(binding, /Do not create another connection for discovery/);
+  const add = section(sharepoint, '### Step 9:', '### Step 10:');
+  assert.match(add, /Run only the applicable command/);
+  assert.match(add, /--connection-id '<connectionId>'/);
+  assert.match(add, /--connection-ref '<connectionRef>'/);
+  assert.match(section(sharepoint, '### Step 7:', '### Step 8:'), /Skip this picker/);
+  assert.match(section(sharepoint, '### Step 8:', '### Step 9:'), /Skip this picker/);
+});
+
+test('every explicit create/edit child context includes its working directory', () => {
+  for (const [name, content] of [['create-mobile-app', create], ['edit-app', edit]]) {
+    const contexts = [...content.matchAll(/(?:Context|Environment):\n([\s\S]*?)\nArguments:\n([\s\S]*?)\n```/g)];
+    assert.ok(contexts.length > 0, `${name} handoff coverage`);
+    for (const [, context, args] of contexts) {
+      assert.match(context, /working_dir: <working_dir>/, name);
+      assert.match(args, /--working-dir "?<working_dir>"?/, name);
+    }
+  }
+});
+
+test('connector-only summary does not claim a nonexistent Dataverse manifest', () => {
+  const summary = section(skill('setup-datamodel'), '### Phase 7', '## Reference');
+  assert.match(summary, /Manifest as `not applicable`/);
+  assert.match(summary, /<verified manifest path and updated\/unchanged status, or "not applicable">/);
+  assert.doesNotMatch(summary, /Manifest\s+:\s+\.datamodel-manifest\.json/);
+});
+
 test('existing native wrappers and Dataverse plans are checked against the requested delta', () => {
   assert.match(skill('add-native'), /inspect its exports against the approved capability\ncontract/);
   assert.doesNotMatch(skill('add-native'), /regeneration skipped — wrapper already exists/);
