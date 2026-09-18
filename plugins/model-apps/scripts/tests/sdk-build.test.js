@@ -267,11 +267,22 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'addElement', args: [t, id, ptr, el, opts] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       const arr = jpGet(art, ptr);
-      // The real SDK splices at `opts.position` for an ARRAY parent and appends when it is absent
-      // (`s.splice(K7(s, a?.position), 0, l)`), so the mock must too — an append-only mock would
-      // hide a wrong insertion index.
+      // Model the REAL SDK's position contract exactly, INCLUDING its failure mode. It resolves
+      // `undefined | 'end' | 'start' | { index } | { before } | { after }` and tests
+      // `'index' in position`, so a BARE NUMBER throws. A permissive mock that accepted a number
+      // hid exactly that bug: the suite passed green while every real insertion failed with
+      // "Cannot use 'in' operator to search for 'index' in 1".
       if (Array.isArray(arr)) {
-        const at = opts && Number.isInteger(opts.position) ? Math.max(0, Math.min(arr.length, opts.position)) : arr.length;
+        const pos = opts && opts.position;
+        let at;
+        if (pos === undefined || pos === 'end') at = arr.length;
+        else if (pos === 'start') at = 0;
+        else if (pos && typeof pos === 'object' && 'index' in pos) at = Math.max(0, Math.min(pos.index, arr.length));
+        else if (pos && typeof pos === 'object' && 'before' in pos) {
+          const n = arr.findIndex((x) => x && x.id === pos.before); at = n < 0 ? arr.length : n;
+        } else if (pos && typeof pos === 'object' && 'after' in pos) {
+          const n = arr.findIndex((x) => x && x.id === pos.after); at = n < 0 ? arr.length : n + 1;
+        } else throw new TypeError(`Cannot use 'in' operator to search for 'index' in ${pos}`);
         arr.splice(at, 0, clone(el));
       }
       return clone(art);
@@ -4496,23 +4507,46 @@ test('form topology: widening a field re-packs the row it overflows', async () =
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
 
-  // Reconstruct what the row writes left behind: the widened cell must not share its row.
   const sec = '/tabs/0/columns/0/sections/0';
-  const rowWrites = find(calls, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2]))
-    && c.args[3] && Array.isArray(c.args[3].cells));
-  assert.ok(rowWrites.length > 0,
-    `the overflowing row must be re-packed; saw ${JSON.stringify(find(calls, 'updateElement').map((c) => [c.args[2], c.args[3]]))}`);
+  // Assert the RESULTING form, not just that some calls were made: emptying either packed row left
+  // the call-shape assertions passing while the primary field was deleted, or the displaced field
+  // was recreated later and lost its cell id and control state.
+  // The mock keys the store by the id the BUILD resolved, not the fixture's — take it from a call.
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  assert.ok(formCall, 'the build must have written to the form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const rows = finalForm.tabs[0].columns[0].sections[0].rows || [];
+  assert.strictEqual(rows.length, 2, `the row must split in two; got ${JSON.stringify(rows)}`);
 
-  const row0 = rowWrites.filter((c) => String(c.args[2]) === sec + '/rows/0').pop();
-  assert.ok(row0, 'the original row must be rewritten');
-  const widths = (row0.args[3].cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
-  assert.ok(widths <= 2, `row 0 must not exceed the section's 2 columns; got ${JSON.stringify(row0.args[3].cells)}`);
+  const names = rows.map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(names, [['new_name'], ['new_tier']],
+    `the widened field keeps its row and the displaced one moves DOWN; got ${JSON.stringify(names)}`);
+  assert.strictEqual(rows[0].cells[0].colspan, 2, 'the widened cell keeps its span');
+  // Identity must survive: a cell recreated instead of moved loses its id and any maker-edited state.
+  assert.strictEqual(rows[0].cells[0].id, 'c1', 'the widened cell is the SAME cell, not a new one');
+  assert.strictEqual(rows[1].cells[0].id, 'c2', 'the displaced cell is MOVED, not recreated');
 
-  // The displaced field moves DOWN, not to the bottom of the section: a row is inserted right after.
+  for (const r of rows) {
+    const width = (r.cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(width <= 2, `no row may exceed the section's 2 columns; got ${JSON.stringify(r.cells)}`);
+  }
+
+  // The new row goes immediately BELOW the widened one, and carries the SDK's real position shape:
+  // it resolves `'index' in position`, so a bare number throws at the SDK boundary.
   const inserted = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
-  assert.ok(inserted.length >= 1, 'a row must be created for the displaced cell');
-  assert.strictEqual(inserted[0].args[4] && inserted[0].args[4].position, 1,
-    `the new row goes immediately below the widened one; got ${JSON.stringify(inserted[0].args[4])}`);
+  assert.strictEqual(inserted.length, 1, 'exactly one row is created');
+  assert.deepStrictEqual(inserted[0].args[4] && inserted[0].args[4].position, { index: 1 },
+    `position must be { index: n }; got ${JSON.stringify(inserted[0].args[4])}`);
+
+  // Converged state is a fixed point: re-applying the same spec must write nothing more.
+  const before = calls.length;
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const second = calls.slice(before);
+  assert.deepStrictEqual(find(second, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows'), [],
+    'a second apply must not create another row');
+  assert.deepStrictEqual(
+    find(second, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2])) && c.args[3] && Array.isArray(c.args[3].cells)),
+    [], 'a second apply must not rewrite the rows it already packed');
 });
 
 // A span change that does NOT overflow must not churn the form.
@@ -4535,4 +4569,77 @@ test('form topology: widening a field that still fits re-packs nothing', async (
   assert.deepStrictEqual(
     find(calls, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2])) && c.args[3] && Array.isArray(c.args[3].cells)),
     [], 'no row may be rewritten when nothing overflowed');
+});
+
+// A MIDDLE row is where the insertion index actually matters: appending would drop the displaced
+// field below every later row instead of immediately beneath the field it was sharing a row with.
+// With a single-row section, "insert at 1" and "append" are indistinguishable — so this is the case
+// that holds the packer honest.
+test('form topology: widening a field in a MIDDLE row inserts directly below it, not at the end', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push(
+    { schemaName: 'new_alpha', displayName: 'Alpha', type: 'Text' },
+    { schemaName: 'new_beta', displayName: 'Beta', type: 'Text' },
+    { schemaName: 'new_gamma', displayName: 'Gamma', type: 'Text' },
+  );
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2,
+      fields: ['new_name', 'new_tier', { name: 'new_alpha', colspan: 2 }, 'new_beta', 'new_gamma'] },
+  ] }]);
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [
+          { cells: [cell('c1', 'new_name'), cell('c2', 'new_tier')] },
+          { cells: [cell('c3', 'new_alpha'), cell('c4', 'new_beta')] }, // new_alpha widens here
+          { cells: [cell('c5', 'new_gamma')] },
+        ] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const names = (finalForm.tabs[0].columns[0].sections[0].rows || [])
+    .map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(names,
+    [['new_name', 'new_tier'], ['new_alpha'], ['new_beta'], ['new_gamma']],
+    `the displaced field goes DIRECTLY below, keeping author order; got ${JSON.stringify(names)}`);
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  const inserted = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(inserted.length, 1, 'exactly one row is created');
+  assert.deepStrictEqual(inserted[0].args[4] && inserted[0].args[4].position, { index: 2 },
+    `the row goes immediately below row 1; got ${JSON.stringify(inserted[0].args[4])}`);
+});
+
+// A span must be clamped against the section the field is MOVING TO, not the one it is leaving.
+// Converging before the relocation cut a `colspan: 4` down to the 2-column source's width and then
+// moved the narrowed cell, so the destination showed 2 and only reached 4 on a second apply.
+test('form topology: a relocated field is clamped against its DESTINATION, not its source', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'sec_narrow', label: 'Narrow', columns: 2, fields: ['new_tier'] },
+    { name: 'sec_wide', label: 'Wide', columns: 4, fields: [{ name: 'new_name', colspan: 4 }] },
+  ] }]);
+  // Deployed: new_name sits in the 2-column section beside new_tier and must move to the 4-column one.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'sec_narrow', label: 'Narrow', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+      { id: 's1', name: 'sec_wide', label: 'Wide', visible: true, showLabel: true, columns: 4, rows: [] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const wide = finalForm.tabs[0].columns[0].sections[1];
+  const moved = (wide.rows || []).flatMap((r) => r.cells || [])
+    .find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.ok(moved, `new_name must land in the wide section; got ${JSON.stringify(wide.rows)}`);
+  assert.strictEqual(moved.colspan, 4,
+    'the authored span is clamped against the 4-column DESTINATION, not the 2-column source');
+  assert.strictEqual(moved.id, 'c1', 'the cell is moved, not recreated');
 });

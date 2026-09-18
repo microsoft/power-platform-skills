@@ -118,6 +118,18 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
+  // Same normalization as the switch above, and for the same reason: `parseArgs` yields the STRING
+  // "false" for `--clear-data-sources=false`, which is truthy. Testing the raw flag would have read
+  // an explicit refusal to clear as permission to clear — unbinding the page the guard protects.
+  const clearDataSources = flags['clear-data-sources'] === true || flags['clear-data-sources'] === 'true';
+  // A contradiction, not a precedence question: one says "remove every binding", the other names the
+  // bindings to keep. Silently preferring either is a guess about intent on a destructive operation.
+  if (clearDataSources && flags['data-sources']) {
+    return emit(false, {
+      error: '--clear-data-sources cannot be combined with --data-sources: one unbinds the page and '
+        + 'the other sets its bindings. Drop whichever you did not mean.',
+    });
+  }
   // REFUSED, not silently dropped. pac rejects the combination, and an update that quietly discards
   // the flag leaves the caller believing a placement happened. The wrapper also omits it on an
   // update as a backstop, but a backstop is not an answer to an explicit contradictory request.
@@ -184,8 +196,13 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // bindings are read back and re-sent, so a fix-redeploy is non-destructive by default; pass
   // `--clear-data-sources` to actually unbind. A create has nothing to preserve.
   let preservedDataSources;
-  if (flags['page-id'] && !flags['data-sources'] && !flags['clear-data-sources']) {
+  if (flags['page-id'] && !flags['data-sources'] && !clearDataSources) {
     const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
+    // The failure is RECORDED and emitted after cleanup, never emitted from inside the try. The real
+    // `emitResult` calls `process.exit(1)`, so a `return emit(...)` in the catch never reaches the
+    // `finally` — leaving the probe directory, and the downloaded page source and prompt inside it,
+    // on disk. The injected emitters used in tests return normally and hid that entirely.
+    let probeError = null;
     try {
       await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
       // pac names the downloaded directory with ITS OWN casing of the page id, which need not match
@@ -202,22 +219,27 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
         throw new Error('config.json is not a JSON object');
       }
-      // A config that parses but carries no `dataSources` key means the page HAS no bindings — the
-      // same reading the download path uses (`config.dataSources || []`). That is a real answer, not
-      // an unreadable one, so an unbound page is not blocked from updating. Only a MISSING or
-      // UNPARSEABLE config is unknown, and that is what the catch below refuses.
+      // An ABSENT `dataSources` key means the page HAS no bindings — the same reading the download
+      // path uses (`config.dataSources || []`), and how an unbound page legitimately looks. A key
+      // that is PRESENT but not an array is neither absent nor readable: it is malformed, and
+      // treating it as "no bindings" would unbind the page on the strength of a value we could not
+      // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below.
+      if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
+        throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
+      }
       preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
     } catch (e) {
       // Fail CLOSED: guessing "probably none" is exactly the silent unbinding this exists to stop.
-      return emit(false, {
-        error: `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
-          + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
-          + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
-          + ' --clear-data-sources to unbind deliberately.',
-      });
+      probeError = `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
+        + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
+        + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
+        + ' --clear-data-sources to unbind deliberately.';
     } finally {
-      fs.rmSync(probe, { recursive: true, force: true });
+      // Best-effort: a cleanup failure must not replace the outcome of the operation, nor abort an
+      // update whose bindings were read successfully.
+      try { fs.rmSync(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
     }
+    if (probeError) return emit(false, { error: probeError });
   }
 
   try {

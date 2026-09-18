@@ -2026,7 +2026,10 @@ async function runSdkBuild(spec, opts = {}) {
     if (packed.length <= 1) return; // still fits — nothing to do
     for (let k = 1; k < packed.length; k += 1) {
       await provision.addElement('form', formId, location.sectionPointer + '/rows', { cells: [] },
-        { position: location.rowIndex + k });
+        // The SDK's position resolver accepts `undefined | 'end' | 'start' | {index} | {before} |
+        // {after}` and tests `'index' in position`, so a BARE NUMBER throws
+        // "Cannot use 'in' operator to search for 'index' in 1".
+        { position: { index: location.rowIndex + k } });
       await provision.updateElement('form', formId,
         `${location.sectionPointer}/rows/${location.rowIndex + k}`, { cells: packed[k].cells });
     }
@@ -2089,11 +2092,18 @@ async function runSdkBuild(spec, opts = {}) {
     // Only spans the author EXPLICITLY set are written. `fieldCellIntent` omits a span of 1, so an
     // absent span means "no opinion" and leaves a cell a maker widened by hand alone — the same rule
     // that keeps `isReadOnly: false` from ever being written.
-    await convergeCellSpans(formId, form, existing, wantCell);
-
-    // Already on the form and already in the right section (or we have no opinion) — leave it be,
-    // so a rebuild converges instead of reshuffling the form on every run.
-    if (!targetPointer || existing.sectionPointer === targetPointer) return;
+    //
+    // Converging BEFORE a relocation would clamp the span against the section the cell is LEAVING:
+    // a `colspan: 4` bound for a 4-column destination was cut to the 2-column source's width and
+    // then moved, arriving narrower than authored (and only widening on a second apply). So when the
+    // cell is staying, converge here; when it is moving, converge in the DESTINATION after the move.
+    const staying = !targetPointer || existing.sectionPointer === targetPointer;
+    if (staying) {
+      await convergeCellSpans(formId, form, existing, wantCell);
+      // Already on the form and already in the right section (or we have no opinion) — leave it be,
+      // so a rebuild converges instead of reshuffling the form on every run.
+      return;
+    }
 
     // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
     // adapter-derived or maker-edited control state survive the move.
@@ -2139,6 +2149,13 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.removeElement('form', formId, from.rowPointer);
       }
     }
+
+    // Converge the span NOW, in the destination, so it is clamped and packed against the section the
+    // cell actually landed in rather than the one it left. Re-resolve the location: the move (and a
+    // possible stranded-row removal) invalidated every pointer computed above.
+    const settledForm = await provision.getArtifact('form', formId) || {};
+    const settled = findFieldCellLocation(settledForm, logical);
+    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell);
   };
 
   const reconcileForm = async (formId, def) => {

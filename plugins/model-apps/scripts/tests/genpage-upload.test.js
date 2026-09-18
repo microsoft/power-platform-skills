@@ -743,3 +743,103 @@ test('the current bindings are found even when --page-id casing differs from pac
   assert.strictEqual(r.ok, true, `casing must not lose the config; got ${JSON.stringify(r.payload)}`);
   assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket'], 'the bindings must still be preserved');
 });
+
+// --- Review follow-ups on the unbind guard --------------------------------------------------------
+
+// `parseArgs` yields the STRING "false" for `--clear-data-sources=false`, which is truthy. Testing
+// the raw flag read an explicit refusal to clear as permission to clear — unbinding the page the
+// guard exists to protect.
+test('--clear-data-sources=false does NOT authorise clearing; bindings are still preserved', async () => {
+  const cli = capturingCli({ liveDataSources: ['contoso_ticket'] });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', '--clear-data-sources=false'],
+    { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `the update must proceed; got ${JSON.stringify(r.payload)}`);
+  assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket'],
+    'an explicit "false" must not be read as permission to unbind');
+});
+
+test('--clear-data-sources combined with --data-sources is refused, not silently resolved', async () => {
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p',
+      '--clear-data-sources', '--data-sources', 'contoso_other'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, 'one unbinds and the other binds — guessing is not an option');
+  assert.match(r.payload.error, /cannot be combined/);
+  assert.strictEqual(uploads, 0);
+});
+
+// A PRESENT but non-array `dataSources` is malformed, not absent. Reading it as "no bindings" would
+// unbind the page on the strength of a value we could not interpret.
+test('a dataSources value of the wrong type refuses the update, rather than unbinding', async () => {
+  for (const bad of ['"contoso_ticket"', '42', '{"a":1}']) {
+    let uploads = 0;
+    const factory = () => ({
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of (pageIds || [])) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'),
+            Buffer.from(`{"dataSources":${bad}}`, 'utf8'));
+        }
+        return true;
+      },
+      upload: async () => { uploads += 1; return { pageId: 'x' }; },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+    assert.strictEqual(r.ok, false, `dataSources ${bad} is malformed, not empty`);
+    assert.strictEqual(uploads, 0, `nothing may upload for dataSources ${bad}`);
+  }
+});
+
+// The real `emitResult` calls process.exit(1), so a `return emit(...)` inside the try/finally never
+// reaches the cleanup. The probe directory — holding the page's downloaded source and prompt — was
+// left on disk. The error is recorded and emitted AFTER cleanup instead.
+test('the probe directory is removed even when the read fails', async () => {
+  const probes = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    download: async ({ outputDir }) => { probes.push(outputDir); return true; }, // writes no config
+    upload: async () => ({ pageId: 'x' }),
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, 'the unreadable config still refuses');
+  assert.strictEqual(probes.length, 1, 'a probe directory was created');
+  assert.strictEqual(fs.existsSync(probes[0]), false,
+    `the probe directory must be cleaned up on the failure path; ${probes[0]} survived`);
+});
+
+// Cleanup is best-effort: its failure must not replace the outcome of an otherwise good update.
+test('a cleanup failure does not fail an update whose bindings were read', async () => {
+  const cli = capturingCli({ liveDataSources: ['contoso_ticket'] });
+  const realRm = fs.rmSync;
+  fs.rmSync = () => { throw new Error('EPERM'); };
+  let r;
+  try {
+    r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+  } finally { fs.rmSync = realRm; }
+  assert.strictEqual(r.ok, true, `a temp-dir cleanup failure must not abort the update; got ${JSON.stringify(r.payload)}`);
+  assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket']);
+});

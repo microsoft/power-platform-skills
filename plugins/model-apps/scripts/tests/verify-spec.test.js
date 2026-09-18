@@ -1334,22 +1334,101 @@ test('verify PASSES an auto-to-explicit migration where containers kept their de
 });
 
 // The position fallback must not become a rubber stamp: a genuinely WRONG placement still fails,
-// even though every container now matches positionally.
+// even though every container matches positionally. The fields are SWAPPED rather than removed, so
+// this cannot pass merely because a field is absent — both are present, in the wrong sections.
 test('verify still FAILS a wrong placement when containers matched by position', async () => {
-  const wrong = migratedXml().replace('datafieldname="new_notes"', 'datafieldname="new_name"')
-    .replace('<cell><labels><label description="Name" languagecode="1033"/></labels><control datafieldname="new_name" /></cell>', '');
-  const chk = await topoCheck(wrong);
-  assert.strictEqual(chk.present, false, 'a field in the wrong section must still fail');
+  const swapped = migratedXml()
+    .replace('datafieldname="new_name"', 'datafieldname="__TMP__"')
+    .replace('datafieldname="new_notes"', 'datafieldname="new_name"')
+    .replace('datafieldname="__TMP__"', 'datafieldname="new_notes"');
+  const chk = await topoCheck(swapped);
+  assert.strictEqual(chk.present, false, 'two fields swapped between sections must fail');
+  assert.match(chk.detail, /new_name|new_notes/, `the offending field should be named; got ${chk.detail}`);
 });
 
-// A cell carries its own <labels>; attributing one to the enclosing section would let a cell label
-// win the label pass and match the wrong container.
-test('a cell label is not mistaken for its section label', async () => {
-  const chk = await topoCheck(migratedXml(), (spec) => {
-    // Name the first section after the CELL's label. If the cell label leaked into the section, this
-    // would match section_0_0 by label and pass; it must be matched positionally instead, which it
-    // still is — so the real assertion is that the SECOND section is not stolen by the same label.
-    spec.forms[0].tabs[0].columns[0].sections[0].label = 'Name';
+
+
+
+// --- N3 label/exclusion tests, built so the LABEL pass is the only route to the right answer ------
+// A fixture whose authored name matches a deployed name is resolved by the NAME pass and proves
+// nothing about labels, exclusions or defaults. In each test below the authored name matches
+// NOTHING and the positional slot points at the WRONG container, so only the behaviour under test
+// can produce a pass.
+
+// One tab, two sections; `fields` is placed in the section named by `inSection`.
+const twoSectionXml = ({ s0, s1, tabLabel = 'Overview', tabName = 'zz_tab' }) =>
+  `<form><tabs><tab name="${tabName}"><labels><label description="${tabLabel}" languagecode="1033"/></labels><columns>`
+  + `<column width="100%"><sections>${s0}${s1}</sections></column>`
+  + `</columns></tab></tabs></form>`;
+const sectionXml = (name, label, field, opts = {}) =>
+  `<section name="${name}">`
+  + (label === null ? '' : `<labels><label description="${label}" languagecode="1033"/></labels>`)
+  + `<rows><row><cell>`
+  + (opts.cellLabel ? `<labels><label description="${opts.cellLabel}" languagecode="1033"/></labels>` : '')
+  + (field ? `<control datafieldname="${field}" />` : '<control id="notescontrol" classid="{06375649}" />')
+  + `</cell></row></rows></section>`;
+// Authored: ONE section with no name (so the generated name matches nothing deployed).
+const oneAuthoredSection = (label, fields) => (spec) => {
+  spec.forms[0].tabs = [{ columns: [{ width: '100%', sections: [{ label, fields }] }] }];
+};
+
+test('container labels are XML-decoded before matching', async () => {
+  // The target is at index 1; the positional slot is index 0. Only a DECODED label resolves it.
+  const xml = twoSectionXml({
+    s0: sectionXml('zz_other', 'Other', 'new_name'),
+    s1: sectionXml('zz_rnd', 'R &amp; D', 'new_notes'),
   });
-  assert.strictEqual(chk.present, true, `positional matching must still resolve; got ${chk && chk.detail}`);
+  const chk = await topoCheck(xml, oneAuthoredSection('R & D', ['new_notes']));
+  assert.strictEqual(chk.present, true, `an encoded label must still match; got ${chk && chk.detail}`);
+});
+
+test('an engine-owned section is not claimed by the label pass', async () => {
+  // Both sections carry label 'L'. The first is the NOTES host (a control with no datafieldname);
+  // only the engine-owned exclusion keeps the label pass off it.
+  const xml = twoSectionXml({
+    s0: sectionXml('zz_notes', 'L', null),
+    s1: sectionXml('zz_real', 'L', 'new_name'),
+  });
+  const chk = await topoCheck(xml, oneAuthoredSection('L', ['new_name']));
+  assert.strictEqual(chk.present, true,
+    `the engine-owned section must be skipped so the author's section matches; got ${chk && chk.detail}`);
+});
+
+test('a cell label is not mistaken for its section label', async () => {
+  // Section 0 has NO label of its own but contains a cell labelled 'Right'. If that leaked, the
+  // label pass would claim section 0 and the field check would fail.
+  const xml = twoSectionXml({
+    s0: sectionXml('zz_a', null, 'new_name', { cellLabel: 'Right' }),
+    s1: sectionXml('zz_b', 'Right', 'new_notes'),
+  });
+  const chk = await topoCheck(xml, oneAuthoredSection('Right', ['new_notes']));
+  assert.strictEqual(chk.present, true, `a cell label must not claim a section; got ${chk && chk.detail}`);
+});
+
+test('an omitted section label matches the compiler default the deployed form carries', async () => {
+  // `compileFormIntent` labels an unlabelled section 'Details', so the DEPLOYED section says
+  // 'Details'. Passing the raw (undefined) label would skip the label pass and take index 0.
+  const xml = twoSectionXml({
+    s0: sectionXml('zz_other', 'Other', 'new_name'),
+    s1: sectionXml('zz_details', 'Details', 'new_notes'),
+  });
+  const chk = await topoCheck(xml, oneAuthoredSection(undefined, ['new_notes']));
+  assert.strictEqual(chk.present, true,
+    `an unlabelled section must match the compiler's 'Details' default; got ${chk && chk.detail}`);
+});
+
+test('an omitted TAB label matches the compiler default the deployed form carries', async () => {
+  // Two deployed tabs; the authored (unnamed, unlabelled) tab belongs to the SECOND, which carries
+  // the compiler's 'General' default. Index 0 is the wrong tab.
+  const xml = `<form><tabs>`
+    + `<tab name="zz_other"><labels><label description="Other" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections>${sectionXml('zz_s0', 'Details', 'new_name')}</sections></column></columns></tab>`
+    + `<tab name="zz_general"><labels><label description="General" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections>${sectionXml('zz_s1', 'Details', 'new_notes')}</sections></column></columns></tab>`
+    + `</tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ columns: [{ width: '100%', sections: [{ fields: ['new_notes'] }] }] }];
+  });
+  assert.strictEqual(chk.present, true,
+    `an unlabelled tab must match the compiler's 'General' default; got ${chk && chk.detail}`);
 });

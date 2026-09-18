@@ -6,6 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
@@ -279,7 +280,11 @@ async function verifySpec(spec, read, opts = {}) {
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
-        const tabHit = matchContainer(deployed, { name: tabName, label: t.label }, ti, { claimed: claimedTabs });
+        // Match the label the COMPILER emits, not the raw authored one. `compileFormIntent` defaults
+        // a tab to 'General' and a section to 'Details', so the deployed container carries the
+        // default — comparing against `undefined` would skip the label pass and fall through to
+        // position, picking a different container than the build did.
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs });
         if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
         claimedTabs.add(tabHit.index);
         const got = tabHit.item;
@@ -294,7 +299,7 @@ async function verifySpec(spec, read, opts = {}) {
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
-            const secHit = matchContainer(deployedSections, { name: secName, label: sec.label }, si,
+            const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
               { claimed: claimedSections, skip: isEngineOwnedSection });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
@@ -1184,10 +1189,10 @@ function parseFetchXml(xml) {
 function parseFormTopology(xml) {
   const s = String(xml || '');
   const tabs = [];
-  let tab = null, column = null, section = null;
+  let tab = null, column = null, section = null, row = null, cell = null;
   // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
   let inCell = false;
-  const re = /<(\/?)(tab|column|section|cell|control|label)\b([^>]*?)(\/?)>/gi;
+  const re = /<(\/?)(tab|column|section|row|cell|control|label)\b([^>]*?)(\/?)>/gi;
   const attr = (raw, name) => {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
@@ -1201,29 +1206,41 @@ function parseFormTopology(xml) {
     if (closing) {
       if (tag === 'tab') { tab = null; column = null; section = null; }
       else if (tag === 'column') { column = null; section = null; }
-      else if (tag === 'section') section = null;
-      else if (tag === 'cell') inCell = false;
+      else if (tag === 'section') { section = null; row = null; cell = null; }
+      else if (tag === 'row') { row = null; cell = null; }
+      else if (tag === 'cell') { inCell = false; cell = null; }
       continue;
     }
     if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
-    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), label: undefined, fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
-    else if (tag === 'cell') { inCell = !selfClosing; }
+    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), label: undefined, rows: [], fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
+    else if (tag === 'row' && section) { row = { cells: [] }; section.rows.push(row); if (selfClosing) row = null; }
+    else if (tag === 'cell') {
+      inCell = !selfClosing;
+      // A cell with no <control> child stays control-less, which is what keeps a SPACER from
+      // reading as engine-owned.
+      cell = { };
+      if (row) row.cells.push(cell);
+      if (selfClosing) cell = null;
+    }
     // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
     // not an attribute. The BUILD matches containers name -> label -> position, so without this the
     // verifier can never make the label pass and would disagree with a label-matched reshape.
     else if (tag === 'label' && !inCell) {
-      const d = attr(raw, 'description');
+      const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
       if (d !== undefined) {
         if (section && section.label === undefined) section.label = d;
         else if (!section && tab && tab.label === undefined) tab.label = d;
       }
     }
     else if (tag === 'control' && section) {
-      // Only BOUND fields. A control with no `datafieldname` is a sub-grid, the notes timeline or a
-      // web resource — engine-owned, never something the spec's field list claims to place.
+      // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
+      // notes timeline or a web resource — engine-owned, never something the spec's field list
+      // claims to place. The CELL still records that a control was present, because that is what
+      // distinguishes an engine-owned section from a merely empty one.
       const f = attr(raw, 'datafieldname');
       if (f) section.fields.push(String(f).toLowerCase());
+      if (cell) cell.control = f ? { fieldName: String(f).toLowerCase() } : {};
     }
   }
   return tabs;
