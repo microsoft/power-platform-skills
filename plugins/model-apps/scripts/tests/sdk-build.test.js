@@ -4407,3 +4407,67 @@ test('form topology: a vacated section named __proto__ is still claimed, not rec
   assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
     'a section the layout claims must never be reclaimed, whatever its name');
 });
+// A RESET is what an author hits after widening a field and changing their mind: the declared span
+// goes from 2 back to 1. Folding an explicit 1 into "no opinion" made that unrepresentable, so the
+// deployed cell kept its old width across repeated applies — live-reproduced, twice, before the fix.
+// The omission control above ("a field with no authored span leaves the deployed cell alone") is what
+// still protects a maker's hand-widened cell; these two only cover a span the author DECLARED.
+test('form topology: an authored span RESET to 1 converges on a deployed cell that is wider', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 1, rowspan: 1 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, rowspan: 3, control: { fieldName: 'new_name' } }] },
+          { cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => /\/cells\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.strictEqual(patches.length, 1,
+    `the reset must reach the deployed cell; saw ${JSON.stringify(patches.map((c) => [c.args[2], c.args[3]]))}`);
+  assert.strictEqual(patches[0].args[3].colspan, 1, 'colspan must be reset to 1, not left at 2');
+  assert.strictEqual(patches[0].args[3].rowspan, 1, 'rowspan must be reset to 1, not left at 3');
+});
+
+// The same reset declared through the OTHER route. `fieldOptions` has its own span normalizer, so a
+// fix applied only to inline entries leaves this path still dropping the reset.
+test('form topology: a span RESET declared via fieldOptions converges too', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { colspan: 1 } } }];
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => /\/cells\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && c.args[3].colspan !== undefined);
+  assert.strictEqual(patches.length, 1,
+    `the fieldOptions reset must reach the deployed cell; saw ${JSON.stringify(patches.map((c) => [c.args[2], c.args[3]]))}`);
+  assert.strictEqual(patches[0].args[3].colspan, 1, 'colspan must be reset to 1 through the fieldOptions route as well');
+});
+
+// Converged state must be a fixed point: re-applying the same spec against the now-correct form must
+// issue NO span write at all, or every rebuild churns the form and its audit history.
+test('form topology: a span already at the authored value is not rewritten', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 1 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => c.args[3]
+    && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.deepStrictEqual(patches, [],
+    'an absent colspan already MEANS 1, so declaring 1 must not produce a write');
+});

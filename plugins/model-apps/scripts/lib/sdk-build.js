@@ -74,7 +74,7 @@ const {
   firstColumnSectionsPointer,
   cellFitsInRow,
 } = require('./artifact-intent.js');
-const { makeGenpageCli } = require('./genpage-cli.js');
+const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -3343,6 +3343,17 @@ async function runSdkBuild(spec, opts = {}) {
         else runner.skip('pages', `page "${p.name}" (no tsx source)`);
       }
 
+      // A page that SUPPLIES an empty prompt or agent message would otherwise have generated text
+      // deployed in its place. Checked here, before ANY upload, so a bad spec fails whole rather than
+      // leaving half the pages deployed. Absent keys are untouched — only a present-but-blank value is
+      // an authoring mistake. Same rule as the standalone CLI, via the same predicate.
+      for (const p of implemented) {
+        for (const [field, value] of [['prompt', p.prompt], ['agentMessage', p.agentMessage]]) {
+          if (suppliedButBlank(value)) {
+            throw new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false });
+          }
+        }
+      }
       // (1) STRUCTURAL SCAN of every implemented canonical source BEFORE any write (C1/C4), via the single
       //     nav oracle (extractNavTargets). Reject a malformed (non-canonical) nav PAGEREF and enforce EXACT
       //     parity between declared navigatesTo targetKeys and the keys the source references at REAL nav

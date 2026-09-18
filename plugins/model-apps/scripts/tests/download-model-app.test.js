@@ -2599,3 +2599,76 @@ test('a BOM-prefixed downloaded prompt.txt does not keep the BOM in the prompt',
   assert.strictEqual(pages[0].prompt, 'Conversation with 1 prompts:');
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+// The parse-level test above proves an unreadable config is RECORDED. It does not prove the
+// download REFUSES to emit a spec because of it — the policy is what protects the user, and making
+// the gate unconditionally false left the parse test passing while `runDownload` happily returned
+// ok:true with the bindings silently dropped. This asserts the GATE, not just the parse.
+test('runDownload REFUSES to emit a spec when a page config is unreadable, unless the loss is accepted', async () => {
+  const GP = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-00000000beef';
+  const APP_UNIQ_VALUE = 'c0ffee00-0000-4000-8000-00000000cafe';
+  const SM_ID = '5111e0f2-0000-4000-8000-0000000000ab';
+  const APP_UNIQUE = 'test_gate';
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP}" Title="Sitemap Page"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
+
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gate-'));
+  const mkSdk = () => ({
+    fetchArtifact: async () => ({
+      name: 'Gate App', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+        { type: 'GenPage', genPageId: GP, title: 'Sitemap Page' },
+        { type: 'Entity', entity: 'contoso_item' },
+      ] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE, uniquename: APP_UNIQUE }];
+      }
+      if (logical === 'appmodulecomponent') return [{ objectid: SM_ID, componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
+    }),
+  });
+  // pac downloads the page, but its config.json is unreadable — the live BOM case before the fix,
+  // and any future pac format change after it.
+  const genpageCli = {
+    enumerateEnv: async () => ({ ok: true, ids: [GP.toLowerCase()], pages: [{ pageId: GP, name: 'Env Page' }] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of (pageIds || [])) {
+        fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+        fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default () => null;');
+        fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('{ truncated', 'utf8'));
+      }
+      return true;
+    },
+  };
+
+  try {
+    const refused = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    assert.strictEqual(refused.ok, false, `an unreadable config must abort the download; got ${JSON.stringify(refused).slice(0, 300)}`);
+    assert.match(refused.error, /config\.json/, 'the failure names what could not be read');
+    assert.match(refused.error, /--allow-lossy-download/, 'and advertises the override');
+    assert.strictEqual(refused.spec, undefined, 'no spec may be produced — emitting one IS the silent loss');
+
+    // With the loss explicitly accepted it completes, warns, and the bindings are simply absent.
+    const warned = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return realWrite(chunk, ...rest); };
+    let lossy;
+    try {
+      lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+    } finally { process.stderr.write = realWrite; }
+    assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let it through: ${JSON.stringify(lossy).slice(0, 300)}`);
+    assert.ok(warned.some((w) => /unreadable/i.test(w) && /DROPPED/.test(w)),
+      `the accepted loss must still be announced; saw ${JSON.stringify(warned)}`);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});

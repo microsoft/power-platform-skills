@@ -432,3 +432,126 @@ test('an /app-builder-shaped upload sends none of the standalone flags', async (
     assert.ok(!args.includes(f), `${f} must not appear unless asked; got ${JSON.stringify(args)}`);
   }
 });
+
+// --- The update guard must survive the REAL wrapper, not just a capturing stub --------------------
+// Every negative test above supplies its OWN enumerator, so all of them keep passing even if the
+// wrapper stops exporting one and the guard silently turns itself off. These drive main() through
+// the real `makeGenpageCli` with only `run` faked, so the production handoff is what is asserted.
+
+// pac's env-wide listing, in the LIVE shape (auto-sized fixed-width columns) — an invented format is
+// correctly rejected as 'unrecognized', so a fixture that only LOOKS plausible tests the wrong path.
+const envListing = (ids) => {
+  const names = ids.map((_, i) => `Page${i}`);
+  const nameW = Math.max(4, ...names.map((n) => n.length));
+  const header = 'Page ID'.padEnd(37) + 'Name'.padEnd(nameW + 1) + 'Published';
+  const body = ids.map((id, i) => `${id} ${names[i].padEnd(nameW)} -`).join('\n');
+  return `Connected as tester@contoso.com\nRetrieving generated pages...\n`
+    + `Found ${ids.length} generated page(s):\n\n${header}\n${body}\n`;
+};
+
+test('REAL wrapper: updating an id absent from the environment is refused and never uploads', async () => {
+  const seen = [];
+  const factory = (env) => makeGenpageCli(env, {
+    run: async (args) => {
+      seen.push(args);
+      if (args.includes('list')) return { status: 0, stdout: envListing(['9e1d3a20-0000-4000-8000-000000000001']), stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', 'deadbeef-0000-4000-8000-00000000ffff', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, `an absent target must be refused; got ${JSON.stringify(r.payload)}`);
+  assert.match(r.payload.error, /does not exist in this environment/);
+  assert.deepStrictEqual(seen.filter((a) => a.includes('upload')), [],
+    'pac upload must never run — it would CREATE a new unplaced page and report it as an update');
+});
+
+test('REAL wrapper: a target that DOES exist still updates (the guard blocks nothing legitimate)', async () => {
+  const id = '9e1d3a20-0000-4000-8000-000000000001';
+  const seen = [];
+  const factory = (env) => makeGenpageCli(env, {
+    run: async (args) => {
+      seen.push(args);
+      if (args.includes('list')) return { status: 0, stdout: envListing([id]), stderr: '' };
+      return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', id.toUpperCase(), '--prompt', 'p'], // upper-case: pac's ids are case-insensitive
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `an existing target must update; got ${JSON.stringify(r.payload)}`);
+  assert.ok(seen.some((a) => a.includes('upload')), 'pac upload must run for a real target');
+});
+
+test('a wrapper exposing NO environment listing is refused, not waved through', async () => {
+  // Gating the guard on `typeof cli.enumerateEnvironment === 'function'` was fail-OPEN: an older or
+  // custom wrapper skipped verification entirely and restored the original defect.
+  let uploads = 0;
+  const factory = () => ({ upload: async () => { uploads += 1; return { ok: true, pageId: 'x' }; } });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', 'deadbeef-0000-4000-8000-00000000ffff', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, `a wrapper that cannot prove existence must refuse; got ${JSON.stringify(r.payload)}`);
+  assert.match(r.payload.error, /exposes no environment listing/);
+  assert.strictEqual(uploads, 0, 'nothing may be uploaded when the target cannot be verified');
+});
+
+test('a wrapper exposing only the older enumerateEnv name is still verified', async () => {
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnv: async () => ({ ok: true, ids: ['9e1d3a20-0000-4000-8000-000000000001'] }),
+    upload: async () => { uploads += 1; return { ok: true, pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', 'deadbeef-0000-4000-8000-00000000ffff', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, 'the alternate enumerator name must be used, not ignored');
+  assert.match(r.payload.error, /does not exist in this environment/);
+  assert.strictEqual(uploads, 0);
+});
+
+// --- The provenance rule lives in the WRAPPER; assert it there ------------------------------------
+// The standalone refusal is a second line of defence. /app-builder calls upload() directly, so the
+// fabrication this fixes is only actually prevented by the wrapper's own fallback rule.
+test('wrapper: an explicitly empty agent message is sent verbatim, never replaced with a default', async () => {
+  const read = {};
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      const i = args.indexOf('--agent-message-file');
+      if (i !== -1) read.text = fs.readFileSync(args[i + 1], 'utf8');
+      if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: '' });
+  assert.strictEqual(read.text, '', 'an empty agent message must reach pac as written, not as fabricated provenance');
+});
+
+test('wrapper: an OMITTED agent message still gets the default (that fallback is deliberate)', async () => {
+  const read = {};
+  const mk = () => makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      const i = args.indexOf('--agent-message-file');
+      if (i !== -1) read.text = fs.readFileSync(args[i + 1], 'utf8');
+      if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  await mk().upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p' });
+  assert.strictEqual(read.text, 'Authored by app-builder', 'omission is not a claim, so the default applies');
+  await mk().upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: null });
+  assert.strictEqual(read.text, 'Authored by app-builder', 'null is omission too');
+});

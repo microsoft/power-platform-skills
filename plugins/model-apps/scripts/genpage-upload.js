@@ -30,7 +30,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { makeGenpageCli, suppliedButBlank } = require('./lib/genpage-cli.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name',
   'data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
@@ -107,7 +107,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     ['agent message', 'agent-message', 'agent-message-file', agentMessage],
   ]) {
     const given = typeof flags[inlineFlag] === 'string' || typeof flags[fileFlag] === 'string';
-    if (given && !String(resolved.value || '').trim()) {
+    if (given && suppliedButBlank(resolved.value === undefined ? '' : resolved.value)) {
       return emit(false, {
         error: `the ${label} resolved to empty — refusing to deploy generated text in place of the `
           + `${label} you supplied. Check the file is not blank, newline-only, or BOM-only.`,
@@ -140,8 +140,23 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // Env-wide and including unpublished pages, because an app-scoped list is derived from the sitemap
   // and would miss exactly the unplaced page this defect creates. Fail CLOSED on an unreadable
   // listing: "cannot prove the target exists" must not license a write that might create a duplicate.
-  if (flags['page-id'] && typeof cli.enumerateEnvironment === 'function') {
-    const known = await cli.enumerateEnvironment();
+  if (flags['page-id']) {
+    // Resolve the enumerator by EITHER of the wrapper's two exported names. A wrapper exposing
+    // neither cannot prove the target exists, and skipping the check in that case would be
+    // fail-OPEN exactly when the wrapper is unknown — the opposite of the policy this guard
+    // implements. Gating on `typeof ... === 'function'` alone silently restored the original defect
+    // for any older or custom wrapper.
+    const enumerate = typeof cli.enumerateEnvironment === 'function' ? () => cli.enumerateEnvironment()
+      : typeof cli.enumerateEnv === 'function' ? () => cli.enumerateEnv()
+        : null;
+    if (!enumerate) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} exists before updating it — this pac `
+          + 'wrapper exposes no environment listing. Refusing to upload, because pac treats an '
+          + 'unknown --page-id as a create and would make a new page and report it as an update.',
+      });
+    }
+    const known = await enumerate();
     if (!known || known.ok !== true) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} exists before updating it `

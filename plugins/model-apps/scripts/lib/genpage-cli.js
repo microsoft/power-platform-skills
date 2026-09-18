@@ -377,4 +377,11 @@ function makeGenpageCli(env, deps = {}) {
   };
 }
 
-module.exports = { makeGenpageCli, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
+// A provenance value the caller SUPPLIED but left blank. `undefined`/`null` mean "not supplied", and
+// the wrapper's defaults then apply legitimately. A present-but-blank value is different: the caller
+// asked for THAT text, so substituting generated provenance deploys words nobody wrote. Whitespace-,
+// newline- and BOM-only files are the realistic ways an empty value arrives.
+function suppliedButBlank(value) {
+  return value !== undefined && value !== null && !String(value).trim();
+}
+module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
