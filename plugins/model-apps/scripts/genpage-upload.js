@@ -58,7 +58,7 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
   }
   if (hasFile) {
     // utf8, and NOT trimmed: a downloaded prompt is a multi-line conversation transcript whose
-    // blank lines are part of the text. Only a trailing newline added by a text editor is dropped.
+    // blank lines — and whose final newline — are part of the text.
     //
     // A LEADING UTF-8 BOM is stripped. MEASURED against a live deployment: `pac model genpage
     // download` writes the recovered `prompt.txt` starting `ef bb bf`, and the documented edit flow
@@ -66,10 +66,15 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     // U+FEFF, so the prompt handed back to pac would begin with an invisible character — silently
     // altering the first character of a prompt the user approved. Only the LEADING one is removed:
     // a U+FEFF anywhere else is content, not an encoding marker.
+    // The bytes are otherwise passed through UNCHANGED — no trailing-newline normalization. This
+    // transport exists precisely so an arbitrary prompt survives verbatim, and the direct
+    // /app-builder wrapper path preserves a final newline, so stripping one here made the same text
+    // deploy differently depending on which path carried it. A prompt that legitimately ends with a
+    // newline (a downloaded transcript, a heredoc) keeps it.
     try {
       return {
         ok: true,
-        value: String(readFile(path.resolve(file), 'utf8')).replace(/^\uFEFF/, '').replace(/\r?\n$/, ''),
+        value: String(readFile(path.resolve(file), 'utf8')).replace(/^\uFEFF/, ''),
       };
     } catch (e) {
       return { ok: false, error: `--${fileFlag} could not be read: ${e.message}` };

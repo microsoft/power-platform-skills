@@ -242,17 +242,37 @@ async function verifySpec(spec, read, opts = {}) {
   // nothing to verify beyond the field list the existing checks already cover.
   //
   // Fail-closed: when the formxml cannot be read the check is reported NOT present with the read
-  // error, never skipped — "we could not look" must not read as "the layout is correct".
-  if (typeof read.formTopology === 'function') {
+  // error, never skipped — "we could not look" must not read as "the layout is correct". That
+  // applies to a MISSING READER CAPABILITY too: gating the whole oracle on
+  // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
+  // explicit form passed verify on identity and default checks alone with no layout proof at all.
+  const canReadTopology = typeof read.formTopology === 'function';
+  {
     for (const f of spec.forms || []) {
       if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
+      if (!canReadTopology) {
+        add('form-topology', `${entity}.${name}`, false,
+          'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
+        continue;
+      }
       let id = null;
+      let idError = null;
       try {
         id = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
-      } catch { id = null; }
-      if (!id) continue; // the existence check above already reported this form as missing.
+      } catch (e) { idError = (e && e.message) || String(e); }
+      if (!id) {
+        // A form that genuinely does not exist was already reported by the existence check above, so
+        // saying it twice adds nothing. A FAILED resolution is different: the form may well be there
+        // and correct, and silently skipping the layout check let a transient read failure pass as a
+        // verified layout.
+        if (idError) {
+          add('form-topology', `${entity}.${name}`, false,
+            `could not resolve the deployed form id (${idError}) — the layout is unverified, not proven correct`);
+        }
+        continue;
+      }
 
       let xml = null;
       let readError = null;
@@ -306,6 +326,38 @@ async function verifySpec(spec, read, opts = {}) {
               return;
             }
             claimedSections.add(secHit.index);
+            // OCCUPANCY: no deployed row may carry more columns of content than its section has.
+            // This is the shape defect the reconcile fixes (a field packed into a full row, or a
+            // widened span overflowing one), and a field-to-section check alone cannot see it.
+            // Skipped when the deployed section declares no width — unknown is not "one".
+            const secCols = Number(secHit.item.columns);
+            if (Number.isFinite(secCols) && secCols >= 1) {
+              for (const [ri, drow] of (secHit.item.rows || []).entries()) {
+                const used = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                if (used > secCols) {
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content in a ${secCols}-column section`);
+                }
+              }
+            }
+            // A span the author DECLARED must be the deployed span. An UNDECLARED one is not
+            // checked — the build never writes it, so a maker's hand-widened cell must survive
+            // both the rebuild and the verification.
+            const deployedCellOf = (logical) => (secHit.item.rows || [])
+              .flatMap((r2) => r2.cells || [])
+              .find((c) => c.control && c.control.fieldName === logical);
+            for (const entry of (sec.fields || [])) {
+              if (!entry || typeof entry !== 'object') continue;
+              const fl = String(entry.name || '').toLowerCase();
+              if (!fl) continue;
+              const dc = deployedCellOf(fl);
+              if (!dc) continue; // placement is reported separately below
+              for (const key of ['colspan', 'rowspan']) {
+                const want = Number(entry[key]);
+                if (!Number.isFinite(want) || want < 1) continue; // not declared
+                const got = Number(dc[key]) || 1;
+                if (got !== want) problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${want}`);
+              }
+            }
             // Fields are compared against the section that was MATCHED, not the authored name — the
             // deployed section legitimately keeps its own name.
             const deployedSecName = String(secHit.item.name || '').toLowerCase();
@@ -1213,13 +1265,21 @@ function parseFormTopology(xml) {
     }
     if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
-    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), label: undefined, rows: [], fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
+    else if (tag === 'section' && column) {
+      const ratio = attr(raw, 'columns');
+      // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
+      // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
+      // assuming a 1-column grid and inventing an overflow that is not there.
+      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, rows: [], fields: [] };
+      column.sections.push(section);
+      if (selfClosing) section = null;
+    }
     else if (tag === 'row' && section) { row = { cells: [] }; section.rows.push(row); if (selfClosing) row = null; }
     else if (tag === 'cell') {
       inCell = !selfClosing;
       // A cell with no <control> child stays control-less, which is what keeps a SPACER from
       // reading as engine-owned.
-      cell = { };
+      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1 };
       if (row) row.cells.push(cell);
       if (selfClosing) cell = null;
     }

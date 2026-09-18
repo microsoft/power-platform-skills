@@ -104,14 +104,22 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `refusing to delete '${resolved}': it resolves to '${real}', at or directly inside a filesystem root` };
   }
 
-  // 4. IDENTITY. Either the conventional default name, or — for the `--workspace <custom-dir>` case
-  //    the CLIs explicitly support — a directory carrying the SDK's own workspace manifest. A
-  //    live run with `--workspace lvws` is what proved a name-only rule wrongly refuses a real
-  //    workspace; an arbitrary path (repo root, home directory, `.`) still has neither.
-  if (path.basename(real) !== WORKSPACE_DIR_NAME && !looksLikeSdkWorkspace(real, readFileSync)) {
+  // 4. IDENTITY, proven by CONTENT. The directory must carry the SDK's own workspace manifest.
+  //
+  //    The default NAME is deliberately NOT accepted as an alternative. `--workspace` is
+  //    caller-supplied, so `--workspace /some/important/.maker-workspace` would otherwise reach
+  //    recursive deletion on nothing more than a matching basename — and a name is not identity.
+  //    Refusing costs a stale cache directory the operator can delete by hand; accepting costs
+  //    whatever was really in that directory.
+  //
+  //    This does not reject real workspaces: a live `--workspace <custom-name>` run cleared
+  //    successfully through this very check, because a genuine workspace always carries the
+  //    manifest. A directory named `.maker-workspace` WITHOUT one is either not a workspace or is
+  //    empty enough that leaving it costs nothing.
+  if (!looksLikeSdkWorkspace(real, readFileSync)) {
     return {
       ok: false,
-      reason: `refusing to delete '${resolved}': it is neither named '${WORKSPACE_DIR_NAME}' nor an SDK workspace `
+      reason: `refusing to delete '${resolved}': it is not an SDK workspace `
         + `(no readable '${WORKSPACE_MANIFEST}' with instanceUrl + artifacts at its root)`,
     };
   }

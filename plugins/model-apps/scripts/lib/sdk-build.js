@@ -1755,7 +1755,7 @@ async function runSdkBuild(spec, opts = {}) {
   //     imposes no row/cell cardinality rule, only "a cell control must be an object or null"), and
   //     Dataverse accepts the push; how UCI lays the overflow out is NOT verified here. A row
   //     emptied by the move is removed so blank rows cannot accumulate.
-  const applyFieldPositions = async (formId, def) => {
+  const applyFieldPositions = async (formId, def, vacated) => {
     const positions = def.__fieldPositions || {};
     for (const logical of Object.keys(positions)) {
       const anchor = positions[logical];
@@ -1774,6 +1774,16 @@ async function runSdkBuild(spec, opts = {}) {
       // reported such a field as misplaced and moved it on every rebuild — the auto layout switches
       // to 2 columns above 6 fields, so this was the common case, not an edge case.
       if (from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + 1) continue;
+
+      // A positioning move can CROSS sections (`fieldOptions[x].after` may anchor to a field in
+      // another one), which empties the source just as a layout move does. Recording it here is what
+      // keeps the vacated-section sweep honest: without it, a source section emptied by this pass —
+      // and then stripped of its last field by the prune pass — survived as an orphan, because no
+      // one ever added its name to the set.
+      if (vacated && from.sectionPointer !== to.sectionPointer) {
+        const src = sectionAt(form, from.sectionPointer);
+        if (src && src.name) vacated.add(String(src.name).toLowerCase());
+      }
 
       // Which mechanic can actually SATISFY that check?
       //
@@ -2201,7 +2211,7 @@ async function runSdkBuild(spec, opts = {}) {
     await applyFieldControlOptions(formId, def, want, wantCellByLogical);
     // Reposition any field the spec anchors after another (`fieldOptions[x].after`). Runs AFTER the
     // add/attribute passes so a field created in this same run can be positioned in the same run.
-    await applyFieldPositions(formId, def);
+    await applyFieldPositions(formId, def, vacatedSections);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.

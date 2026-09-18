@@ -32,10 +32,19 @@ function makeDir(name, manifest) {
 }
 const SDK_MANIFEST = JSON.stringify({ instanceUrl: 'https://contoso.crm.dynamics.com/', artifacts: [] });
 
-test('the conventionally-named workspace is clearable', () => {
-  const r = checkWorkspaceClearable(makeDir(WORKSPACE_DIR_NAME));
+// A directory named `.maker-workspace` is clearable only when it PROVES it is one. The name alone
+// is not identity: `--workspace` is caller-supplied, so accepting the basename let
+// `--workspace /some/important/.maker-workspace` reach recursive deletion with no manifest at all.
+test('the conventionally-named workspace is clearable WHEN it carries the manifest', () => {
+  const r = checkWorkspaceClearable(makeDir(WORKSPACE_DIR_NAME, SDK_MANIFEST));
   assert.strictEqual(r.ok, true, `a genuine workspace must be clearable, got ${JSON.stringify(r)}`);
   assert.strictEqual(path.basename(r.target), WORKSPACE_DIR_NAME);
+});
+
+test('a directory with the conventional NAME but no manifest is refused', () => {
+  const r = checkWorkspaceClearable(makeDir(WORKSPACE_DIR_NAME));
+  assert.strictEqual(r.ok, false, 'the default name is not proof of identity');
+  assert.match(r.reason, /not an SDK workspace/);
 });
 
 // The regression a LIVE run caught: `--workspace lvws` is supported by every CLI here, and the

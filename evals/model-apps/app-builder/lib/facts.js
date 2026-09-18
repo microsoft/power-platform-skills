@@ -365,6 +365,47 @@ function appFacts(spec) {
 // queryRecords always returns a single-element array (rows[0] truthy) so view/chart/form lookups
 // all pass. Entity/column lookups are derived from the spec. Sitemap XML is built from appShell
 // so entity-subarea checks pass. No pages()/pageCode() needed for intent-only specs.
+// Render a spec form's AUTHORED explicit layout as FormXML, so the all-present reader can answer
+// the layout oracle too. Without it the reader claims every artifact is present while exposing no
+// `formTopology`, and verify now (correctly) reports an explicit layout as UNVERIFIED — a gap in
+// the fixture, not a finding about the spec.
+//
+// Cells are packed by WIDTH exactly as the compiler packs them, because the oracle checks that no
+// row carries more columns of content than its section declares. `columns` is emitted as the width
+// RATIO string FormXML actually uses ("11" = two equal columns), not as a count.
+function formXmlForAuthoredLayout(form) {
+  const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const labels = (text) => `<labels><label description="${esc(text)}" languagecode="1033"/></labels>`;
+  const tabsXml = (form.tabs || []).map((t, ti) => {
+    const cols = Array.isArray(t.columns) ? t.columns : [{ width: '100%', sections: t.sections || [] }];
+    const colsXml = cols.map((col, ci) => {
+      const secsXml = ((col && col.sections) || []).map((sec, si) => {
+        const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
+        const entries = (sec.fields || []).map((f) => (typeof f === 'string' ? { name: f } : (f || {})));
+        const rows = [];
+        let cur = [];
+        let used = 0;
+        for (const e of entries) {
+          const span = Math.min(width, Math.max(1, Number(e.colspan) || 1));
+          if (used + span > width && cur.length) { rows.push(cur); cur = []; used = 0; }
+          cur.push({ name: String(e.name || '').toLowerCase(), colspan: span, rowspan: Math.max(1, Number(e.rowspan) || 1) });
+          used += span;
+        }
+        if (cur.length) rows.push(cur);
+        const rowsXml = rows.map((r) => `<row>${r.map((c) => `<cell colspan="${c.colspan}" rowspan="${c.rowspan}">`
+          + `<control datafieldname="${esc(c.name)}" /></cell>`).join('')}</row>`).join('');
+        const name = sec.name || `section_${ti}_${ci}_${si}`;
+        return `<section name="${esc(name)}" columns="${'1'.repeat(width)}">${labels(sec.label || 'Details')}`
+          + `<rows>${rowsXml}</rows></section>`;
+      }).join('');
+      return `<column width="${esc((col && col.width) || '100%')}"><sections>${secsXml}</sections></column>`;
+    }).join('');
+    const tabName = t.name || `tab_${ti}`;
+    return `<tab name="${esc(tabName)}">${labels(t.label || 'General')}<columns>${colsXml}</columns></tab>`;
+  }).join('');
+  return `<form><tabs>${tabsXml}</tabs></form>`;
+}
+
 function makeAllPresentReader(spec) {
   const entities = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
   const columnsByEntity = {};
@@ -430,6 +471,15 @@ function makeAllPresentReader(spec) {
       ? workflowRow(opts && opts.filter)
       : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }]),
     sitemapXml: async () => xml,
+    // The layout oracle. An "all present" reader that cannot read layouts would make verify report
+    // every explicit form as UNVERIFIED — correct behaviour, but a fixture gap rather than a finding
+    // about the spec. Rendering the AUTHORED layout is the honest synthesis here: the reader's whole
+    // premise is "the environment already matches the spec".
+    formTopology: async (entityLogical, _formId) => {
+      const form = (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical)
+        && Array.isArray(f.tabs) && f.tabs.length);
+      return form ? formXmlForAuthoredLayout(form) : null;
+    },
   };
 }
 

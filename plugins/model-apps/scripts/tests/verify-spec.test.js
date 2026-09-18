@@ -1432,3 +1432,88 @@ test('an omitted TAB label matches the compiler default the deployed form carrie
   assert.strictEqual(chk.present, true,
     `an unlabelled tab must match the compiler's 'General' default; got ${chk && chk.detail}`);
 });
+
+// --- PR review: a missing CAPABILITY is not a verified layout ------------------------------------
+// Gating the whole oracle on `typeof read.formTopology === 'function'` meant a reader without that
+// capability skipped EVERY layout check, so an explicit form passed verify on identity and default
+// checks alone — no layout proof at all. Same fail-open shape as gating a guard on a method's
+// existence elsewhere in this PR.
+test('verify reports an explicit layout as UNVERIFIED when the reader cannot read layouts', async () => {
+  const spec = TOPO_SPEC();
+  const read = topoRead(null);
+  delete read.formTopology; // a reader that simply does not expose the capability
+  const res = await verifySpec(spec, read);
+  const chk = (res.checks || []).find((c) => c.kind === 'form-topology');
+  assert.ok(chk, 'an explicit layout must still produce a form-topology check');
+  assert.strictEqual(chk.present, false, 'no layout source means UNVERIFIED, not verified');
+  assert.match(chk.detail, /no deployed-layout source|UNVERIFIED/);
+});
+
+// A FAILED form-id resolution is not the same as a form that does not exist: the form may be there
+// and correct, and skipping the check let a transient read failure pass as a verified layout.
+test('verify reports UNVERIFIED when the deployed form id cannot be resolved', async () => {
+  const spec = TOPO_SPEC();
+  const res = await verifySpec(spec, topoRead(topoXml({ left: ['new_name'], right: ['new_notes'] }), {
+    queryRecords: async (set) => {
+      if (set === 'systemform') throw new Error('transient systemform read failure');
+      return [];
+    },
+  }));
+  const chk = (res.checks || []).find((c) => c.kind === 'form-topology');
+  assert.ok(chk, 'a resolution FAILURE must be reported, not silently skipped');
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /could not resolve the deployed form id/);
+});
+
+// --- PR review: the oracle must prove SHAPE, not just field-to-section membership ---------------
+// Comparing only "is each field in the right section" meant the exact regression this branch fixes
+// — a field piled into an already-full row, or a widened span overflowing one — still produced a
+// PASSING form-topology check. Occupancy and authored spans are now proven.
+const shapeXml = ({ cells, columns = '11' }) =>
+  `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+  + `<column width="100%"><sections><section name="sec_left" columns="${columns}">`
+  + `<labels><label description="L" languagecode="1033"/></labels><rows><row>`
+  + cells.map((c) => `<cell colspan="${c.span}"><control datafieldname="${c.f}" /></cell>`).join('')
+  + `</row></rows></section></sections></column>`
+  + `</columns></tab></tabs></form>`;
+const shapeSpec = (fields) => (spec) => {
+  spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
+    { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 2, fields }] }] }];
+};
+
+test('verify FAILS when a deployed row carries more content than its grid', async () => {
+  // Two colspan-1 cells plus a widened one: 2 + 1 = 3 columns of content in a 2-column section.
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 2 }, { f: 'new_notes', span: 1 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 2 }, 'new_notes']));
+  assert.strictEqual(chk.present, false, 'an overflowing row must not verify');
+  assert.match(chk.detail, /3 columns of content in a 2-column section/);
+});
+
+test('verify FAILS when an AUTHORED span does not match the deployed one', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 2 }]));
+  assert.strictEqual(chk.present, false, 'a declared span that did not deploy must fail');
+  assert.match(chk.detail, /colspan 1, the spec declares 2/);
+});
+
+// The counterpart rule the build itself follows: an UNDECLARED span is "no opinion", so a cell a
+// maker widened by hand must survive both the rebuild and the verification.
+test('verify TOLERATES a deployed span the spec never declared', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 2 }], columns: '1111' }),
+    shapeSpec(['new_name']));
+  assert.strictEqual(chk.present, true, `an undeclared span must not fail; got ${chk && chk.detail}`);
+});
+
+// A section that declares no width cannot be checked for overflow — unknown is not "one column".
+test('verify skips the occupancy check when the deployed section declares no width', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_left">`
+    + `<labels><label description="L" languagecode="1033"/></labels><rows><row>`
+    + `<cell><control datafieldname="new_name" /></cell><cell><control datafieldname="new_notes" /></cell>`
+    + `</row></rows></section></sections></column></columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, shapeSpec(['new_name', 'new_notes']));
+  assert.strictEqual(chk.present, true, `unknown width must not invent an overflow; got ${chk && chk.detail}`);
+});

@@ -1177,10 +1177,11 @@ function formColumnsOf(tab) {
 
 // The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
 //
-// Cached and fail-soft: a spec must never fail to validate because the manifest could not be read.
-// When the version is unknown the gate SKIPS rather than guesses — a wrong comparison would either
-// block a valid spec or wave through one this build cannot honour, and both are worse than not
-// checking. Callers surface the skip, so it is not silent.
+// Cached, and NULL when the manifest cannot be read. The caller decides what that means, and it is
+// not "satisfied": `validateAppSpec` REJECTS a spec that declares a minimum when the version is
+// unknown, because "we could not read our own version" must not wave an incompatible install
+// through to the write path. A spec that declares NO minimum never consults this at all, so an
+// unreadable manifest cannot break an existing spec.
 let cachedPluginVersion;
 function pluginVersion() {
   if (cachedPluginVersion !== undefined) return cachedPluginVersion;

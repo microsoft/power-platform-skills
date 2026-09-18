@@ -741,22 +741,36 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
     if (!fs.existsSync(tsx)) continue;
     let config = {};
     const configPath = path.join(dir, 'config.json');
-    if (fs.existsSync(configPath)) {
-      try {
-        // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
-        // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
-        // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
-        // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
-        config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
-        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
-      } catch (e) {
-        // Present but unreadable — report it rather than inventing empty metadata.
-        if (unreadable) unreadable.push({ pageId: entry, reason: e && e.message ? e.message : String(e) });
-        config = {};
+    // Read DIRECTLY and let ENOENT — and ONLY ENOENT — mean "absent, therefore optional".
+    // `existsSync` returns false for a file that exists but cannot be OPENED (permissions/ACL), which
+    // made an unreadable config indistinguishable from a missing one: the page was emitted with no
+    // bindings and never recorded as unreadable, so it slipped past the --allow-lossy-download gate
+    // this very function exists to feed.
+    try {
+      // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+      // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
+      // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
+      // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
+    } catch (e) {
+      config = {};
+      // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
+      // config is optional by contract and is NOT reported.
+      if (!(e && e.code === 'ENOENT') && unreadable) {
+        unreadable.push({ pageId: entry, reason: e && e.message ? e.message : String(e) });
       }
     }
-    let prompt = '';
-    try { prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim(); } catch { /* optional */ }
+    // A MISSING prompt.txt is an OMISSION, not an empty prompt. Emitting '' made every downloaded
+    // page lacking that optional file look like an explicitly blank prompt, which the build's
+    // blank-provenance guard then refuses — aborting the rebuild of a perfectly good downloaded app.
+    // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
+    let prompt;
+    try {
+      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim();
+    } catch (e) {
+      prompt = (e && e.code === 'ENOENT') ? undefined : '';
+    }
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,

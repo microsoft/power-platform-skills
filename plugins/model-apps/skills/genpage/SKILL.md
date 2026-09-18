@@ -782,7 +782,7 @@ Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encod
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file <path> --data-sources '<entities>' --prompt-file <working-dir>/prompt.txt --model <model-id> --name "<page name>" --agent-message-file <working-dir>/agent-message.txt --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file "<path>" --data-sources '<entities>' --prompt-file "<working-dir>/prompt.txt" --model <model-id> --name "<page name>" --agent-message-file "<working-dir>/agent-message.txt" --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```

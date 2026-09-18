@@ -2672,3 +2672,59 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
+
+// --- PR review: a MISSING optional file is not an explicitly blank one --------------------------
+// `prompt` used to default to '' for a page with no prompt.txt. The build's blank-provenance guard
+// then read that as "the author supplied an empty prompt" and ABORTED the rebuild — so downloading
+// an app and rebuilding it broke for every page lacking the optional file. Omission must stay
+// omission; a file that EXISTS but is blank stays explicit so it still fails closed.
+test('a page with NO prompt.txt omits prompt entirely, rather than claiming an empty one', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlprompt-'));
+  const mk = (id, promptBytes) => {
+    const d = path.join(root, id);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+    fs.writeFileSync(path.join(d, 'config.json'), Buffer.from(JSON.stringify({ dataSources: [] }), 'utf8'));
+    if (promptBytes !== undefined) fs.writeFileSync(path.join(d, 'prompt.txt'), promptBytes);
+  };
+  mk('11111111-1111-1111-1111-111111111111');                                  // no prompt.txt
+  mk('22222222-2222-2222-2222-222222222222', Buffer.from('   \n', 'utf8'));    // present, blank
+  mk('33333333-3333-3333-3333-333333333333', Buffer.from('real prompt', 'utf8'));
+
+  const pages = parseDownloadedPages(root, root, null, []);
+  const byId = new Map(pages.map((p) => [p.pageId, p]));
+
+  assert.strictEqual(byId.get('11111111-1111-1111-1111-111111111111').prompt, undefined,
+    'a missing prompt.txt is an OMISSION — the wrapper default applies, the build must not refuse');
+  assert.strictEqual(byId.get('22222222-2222-2222-2222-222222222222').prompt, '',
+    'a present-but-blank file stays explicit so the blank-provenance guard still fails closed');
+  assert.strictEqual(byId.get('33333333-3333-3333-3333-333333333333').prompt, 'real prompt');
+
+  // The emitted spec must not carry the key at all for the omitted case — `undefined` is dropped by
+  // JSON.stringify, which is what makes the rebuild use the default rather than refuse.
+  const round = JSON.parse(JSON.stringify(byId.get('11111111-1111-1111-1111-111111111111')));
+  assert.ok(!('prompt' in round), `prompt must be absent from the serialized page; got ${JSON.stringify(round)}`);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// `existsSync` returns false for a file that exists but cannot be OPENED, which made an unreadable
+// config indistinguishable from a missing one: the page was emitted with no bindings and never
+// recorded as unreadable, slipping past the --allow-lossy-download gate entirely.
+test('a config that exists but cannot be READ is recorded unreadable, not treated as absent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlacl-'));
+  const d = path.join(root, '44444444-4444-4444-4444-444444444444');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+  // A DIRECTORY named config.json reproduces "exists but unreadable" portably: readFileSync fails
+  // with EISDIR, which is emphatically not ENOENT.
+  fs.mkdirSync(path.join(d, 'config.json'));
+
+  const unreadable = [];
+  const pages = parseDownloadedPages(root, root, null, unreadable);
+  assert.strictEqual(pages.length, 1, 'the page is still emitted');
+  assert.deepStrictEqual(unreadable.map((u) => u.pageId), ['44444444-4444-4444-4444-444444444444'],
+    'an unreadable config must reach the lossy-download gate rather than read as "no bindings"');
+
+  fs.rmSync(root, { recursive: true, force: true });
+});

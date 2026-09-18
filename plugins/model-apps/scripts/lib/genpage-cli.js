@@ -284,11 +284,11 @@ function makeGenpageCli(env, deps = {}) {
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
         let beforeIds = null;
         for (let i = 0; i < attempts; i += 1) {
-          if (!pid && name && beforeIds === null) {
+          if (!pid && beforeIds === null) {
             const before = await enumerateEnv();
             if (!before.ok) {
               throw new Error(
-                `pac genpage upload for '${name}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
+                `pac genpage upload for '${name || '(unnamed)'}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
               );
             }
             beforeIds = new Set(before.ids);
@@ -303,7 +303,7 @@ function makeGenpageCli(env, deps = {}) {
               // Case-insensitive: PAC can normalize GUID casing across writes.
               if (pid && id.toLowerCase() !== pid.toLowerCase()) {
                 throw new Error(
-                  `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
+                  `pac genpage upload for '${name || '(unnamed)'}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
               return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
@@ -315,11 +315,11 @@ function makeGenpageCli(env, deps = {}) {
           // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
           // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
           // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
-          if (!pid && name) {
+          if (!pid) {
             const after = await enumerateEnv();
             if (!after.ok) {
               throw new Error(
-                `pac genpage upload for '${name}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
+                `pac genpage upload for '${name || '(unnamed)'}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
               );
             }
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
@@ -333,13 +333,13 @@ function makeGenpageCli(env, deps = {}) {
               // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
             } else {
               throw new Error(
-                `pac genpage upload for '${name}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
+                `pac genpage upload for '${name || '(unnamed)'}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
               );
             }
           }
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
-        throw new Error(`pac genpage upload failed for '${name}' after ${attempts} attempt(s): ${lastErr}`);
+        throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}' after ${attempts} attempt(s): ${lastErr}`);
       } finally {
         // Best-effort cleanup on EVERY exit path (success return, retry-exhaustion throw, mid-loop
         // throws). A cleanup failure (e.g. a transient Windows file lock) must NEVER mask the upload's

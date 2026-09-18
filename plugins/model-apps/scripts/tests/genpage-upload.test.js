@@ -843,3 +843,56 @@ test('a cleanup failure does not fail an update whose bindings were read', async
   assert.strictEqual(r.ok, true, `a temp-dir cleanup failure must not abort the update; got ${JSON.stringify(r.payload)}`);
   assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket']);
 });
+
+// --- PR review: --prompt-file must deliver the file byte-for-byte -------------------------------
+// A trailing newline used to be stripped here while the direct /app-builder wrapper path preserved
+// it, so the SAME text deployed differently depending on which path carried it. This transport
+// exists precisely so an arbitrary prompt survives verbatim.
+test('a prompt file reaches pac byte-for-byte, including a trailing newline', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const BODY = 'Conversation with 2 prompts:\n1. Build a list\n2. Add a search box\n';
+  fs.writeFileSync(pf, BODY, 'utf8');
+
+  let onDisk = null;
+  const factory = (env) => makeGenpageCli(env, {
+    run: async (args) => {
+      const i = args.indexOf('--prompt-file');
+      if (i !== -1) onDisk = fs.readFileSync(args[i + 1], 'utf8');
+      if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--name', 'P', '--prompt-file', pf, '--agent-message', 'm'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `expected success, got ${JSON.stringify(r.payload)}`);
+  assert.strictEqual(onDisk, BODY,
+    'the prompt must reach pac exactly as written — no trailing-newline normalization');
+});
+
+// A BOM is an ENCODING MARKER, not content, so it is still removed — the one deliberate exception.
+test('a BOM is still stripped even though the rest of the file is passed through', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  fs.writeFileSync(pf, Buffer.from('\uFEFFkeep this\n', 'utf8'));
+  let onDisk = null;
+  const factory = (env) => makeGenpageCli(env, {
+    run: async (args) => {
+      const i = args.indexOf('--prompt-file');
+      if (i !== -1) onDisk = fs.readFileSync(args[i + 1], 'utf8');
+      if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
+      return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--name', 'P', '--prompt-file', pf, '--agent-message', 'm'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(onDisk, 'keep this\n', 'the BOM goes, the trailing newline stays');
+});

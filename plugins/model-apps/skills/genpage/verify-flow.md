@@ -116,7 +116,7 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
   --env <org-url> `
   --app-id <app-id> `
   --page-id <page-id> `
-  --code-file <working-dir>/<file>.tsx `
+  --code-file "<working-dir>/<file>.tsx" `
   --prompt-file "<working-dir>/prompt.txt" `
   --model "<current-model-id>" `
   --agent-message-file "<working-dir>/agent-message.txt"
