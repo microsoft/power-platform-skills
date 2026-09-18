@@ -2,6 +2,12 @@
 
 Single-dimension edit to an existing design system. Changes one section of `brand/design-system.md`, regenerates `brand/tokens.ts`, optionally re-renders the HTML gallery.
 
+Apply [app-edit-routing.md](../../../shared/references/app-edit-routing.md) first.
+An approved create/edit child call reuses the supplied change and approval rather
+than rerunning intent selection. Return any scope-changing drift resolution to
+the owner. A token refresh still requires the owner's runtime wiring and
+affected-screen verification; a gallery is not proof of app integration.
+
 ## Allowed dimensions
 
 | Dimension | What changes | Tokens affected | Affects screens? |
@@ -9,9 +15,9 @@ Single-dimension edit to an existing design system. Changes one section of `bran
 | `palette` | ## Palette + ## Status palette | color.* | no (tokens swap automatically) |
 | `typography` | ## Typography | typography.* | no (tokens swap) |
 | `components` | ## Components | size.*, radius.* | yes (primitives regenerate) |
-| `density` | ## Spacing + ## Components heights | space.*, size.* | no |
-| `negatives` | ## Negatives | none (advisory) | no |
-| `motion` | ## Motion | motion.* | no |
+| `density` | ## Spacing + ## Components heights | space.*, size.* | inspect affected layouts |
+| `negatives` | ## Negatives | none (screen constraints) | inspect screens for newly forbidden patterns |
+| `motion` | ## Motion | motion.* | inspect consumers |
 
 ## Flow
 
@@ -94,9 +100,9 @@ Continue? [y/N]
 | `--refresh palette` | ~3k | ~30 sec | no |
 | `--refresh typography` | ~3k | ~30 sec | no |
 | `--refresh components` | ~5k | ~45 sec | yes (primitives regenerate) |
-| `--refresh density` | ~3k | ~30 sec | no |
-| `--refresh negatives` | ~2k | ~20 sec | no |
-| `--refresh motion` | ~3k | ~30 sec | no |
+| `--refresh density` | ~3k | ~30 sec | inspect layouts |
+| `--refresh negatives` | ~2k | ~20 sec | inspect screen constraints |
+| `--refresh motion` | ~3k | ~30 sec | inspect consumers |
 | HTML preview render | +25k | +90 sec | no |
 
 ### Step 4 — Prompt for specific change
@@ -149,6 +155,11 @@ Which first? [palette / typography]
 
 ### Step 5 — Update the spec
 
+Before either spec or token write, show the concrete proposed delta and obtain
+approval unless it exactly matches the current owner's approved scope. Capture
+the current spec/tokens as a paired history snapshot first so rollback restores
+the pre-edit state. Cancellation leaves both artifacts unchanged.
+
 1. Read full `brand/design-system.md`
 2. Find the relevant section (e.g. `## Palette`)
 3. Replace ONLY that section with updated content
@@ -162,12 +173,8 @@ Which first? [palette / typography]
 
 ### Step 7 — Snapshot to history
 
-```bash
-mkdir -p brand/.history
-ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
-cp brand/design-system.md "brand/.history/${ts}-refresh-${dimension}.md"
-cp brand/tokens.ts "brand/.history/${ts}-refresh-${dimension}.tokens.ts"
-```
+Retain the paired pre-write snapshot from Step 5. Do not replace it with copies
+of the new artifacts: that would make rollback restore the edited state.
 
 ### Step 8 — Re-render HTML (if requested)
 
@@ -176,6 +183,10 @@ If user said yes to HTML preview:
 2. Open in browser
 
 ### Step 9 — Confirmation gate
+
+Review the applied diff; this is not the first approval. Revisions return to the
+pre-write gate. Return changed files and screen-impact notes to the owning
+orchestrator before it performs runtime verification.
 
 ```
 Updated: ## {{dimension}}
@@ -223,10 +234,10 @@ diff brand/design-system.md vs brand/.history/2026-05-01T14-23-00Z-initial.md
 
 ### `/design-system --rollback <timestamp>`
 
-1. Snapshot current state to `.history/` first (safety net)
-2. Copy the target snapshot to `brand/design-system.md`
-3. Regenerate `brand/tokens.ts` from restored spec
-4. Confirmation gate before write
+1. Resolve the target snapshot and preview the rollback scope without writing.
+2. Obtain confirmation before any write (or reuse the owner's exact approval).
+3. Snapshot current state to `.history/`, then restore the approved spec/tokens.
+4. Return to the owner to reconcile the Design plan, runtime wiring, and affected screens.
 
 ```
 Rolling back to 2026-05-01T14:23:00Z (initial):

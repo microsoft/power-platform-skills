@@ -2,7 +2,7 @@
 name: add-sharepoint
 description: Use when the user wants to read or write SharePoint lists, manage documents in a SharePoint document library, or create a new SharePoint list from a Power Apps mobile app.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Skill
 model: sonnet
 ---
 
@@ -15,6 +15,20 @@ model: sonnet
 - [list-management-reference.md](./references/list-management-reference.md) — Query, create, extend lists and columns
 
 # Add SharePoint
+
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before the workflow below. Direct requests on an existing app use the entry-choice
+gate before invoking `/edit-app`; offer implementation-only work or cancel.
+Approved orchestrated calls skip the question and execute this leaf. Keep
+SharePoint list/library schemas in Connectors, not the Dataverse
+Data Model. Forward supplied site/list/connection choices and ask only for missing
+values; return scope changes to the orchestrator before mutation.
+
+**Removal branch:** after entry routing, `--remove` or an approved list/library
+binding removal executes
+[data-source-removal.md](../../shared/references/data-source-removal.md) and
+returns. Do not create a connection/list or run Steps 1-12 for removal; the
+SharePoint list/library and its contents remain on the server.
 
 Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
@@ -154,6 +168,10 @@ npx power-apps add-data-source --api-id <apiId-from-list> --connection-id <conne
 Run once per list or document library.
 
 ### Step 10: Configure
+
+In orchestrated mode, inspect and return service signatures to the owner for
+screen integration; do not independently edit screens. In implementation-only
+mode provide usage guidance and explicitly report that screens were not wired.
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
 

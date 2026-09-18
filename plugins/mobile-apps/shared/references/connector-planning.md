@@ -1,6 +1,8 @@
 # Connector Planning Reference
 
-Shared logic for inferring and confirming Power Platform connectors from app requirements. Used by `native-app-planner` (Gate 3) and `setup-datamodel` (Phase 2).
+Shared logic for inferring and confirming Power Platform connectors from app
+requirements. Used by `native-app-planner`, `setup-datamodel`, and the read-only
+planning phase of `/edit-app`. Discovery and proposal are not implementation.
 
 ---
 
@@ -21,7 +23,11 @@ Scan the requirements text and wizard answers for keywords. Map matches to conne
 
 If a requirement is vague (e.g., "external data", "third-party API") but no keyword matches, do not infer a connector — flag it as "unknown, will need /add-connector at runtime."
 
-**Important:** Dataverse is NOT listed here. If the requirements need custom business data / tables, that is handled by `/add-dataverse` and captured in the `## Data Model` section, not the `## Connectors` section.
+**Important:** Dataverse is NOT listed here. Dataverse schema belongs in
+`## Data Model` and is implemented by `/add-dataverse`. Do not infer Dataverse
+merely from structured data: SQL/Excel/SharePoint tables remain connector data.
+Action-only integrations need no Dataverse model unless the user separately
+requires Dataverse persistence. Reuse the approved data platform.
 
 **Application Insights is also NOT a connector requirement.** If requirements mention Application Insights, app analytics, diagnostics, telemetry, traces, or monitoring of this generated app:
 
@@ -106,3 +112,7 @@ At execution time, each confirmed connector maps to a skill invocation:
 | Any other non-Dataverse connector | `/add-connector <api-name>` |
 
 `/add-connector` owns the `npx power-apps add-data-source` call for its connector. The orchestrator never calls `npx power-apps add-data-source` directly.
+
+Invoke these skills only in the implementation phase with
+`MOBILE_APP_ORCHESTRATING=1` and the explicit approved context from
+[app-edit-routing.md](app-edit-routing.md). Forward it when a router delegates.

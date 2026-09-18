@@ -2,7 +2,7 @@
 name: add-native
 description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
@@ -10,7 +10,15 @@ model: sonnet
 
 # Add Native Capability
 
-Generate a one-file typed wrapper under `src/native/` for a native device capability that the upstream template already ships. Screens import the wrapper instead of touching Expo modules directly, so the discriminated-union result contract stays consistent across the app.
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before the workflow below. On an existing app, the entry-choice gate asks before
+invoking `/edit-app` for intent, plan, storage, and screen integration. Offer
+implementation-only work or cancel instead. Approved orchestrated calls skip
+this question; implementation-only choices execute the leaf workflow.
+
+The leaf generates typed wrappers under `src/native/` for native capabilities that
+the upstream template already ships. Screens import the wrapper instead of touching
+Expo modules directly, so the discriminated-union result contract stays consistent.
 
 ## Hard rules — do NOT cross these lines
 
@@ -233,7 +241,10 @@ If the check fails, STOP. Do not run `npx expo install`. Print the error verbati
 **Print before starting:**
 > "→ Writing src/native/<wrapper>.ts (typed wrapper with discriminated-union result + iOS/Android platform guards)…"
 
-Create `src/native/<wrapper-filename>.ts` (per the supported-capabilities table). If the file already exists, **do NOT overwrite** — append a comment noting "regeneration skipped — wrapper already exists" and skip to Step 6.
+Create `src/native/<wrapper-filename>.ts` (per the supported-capabilities table). If the file already exists, inspect its exports against the approved capability
+contract. Reuse it unchanged when compatible. If it cannot support the request,
+return the mismatch to the orchestrator (or ask in implementation-only mode)
+before a scoped update; do not silently skip the feature or overwrite custom code.
 
 Each wrapper exports:
 
