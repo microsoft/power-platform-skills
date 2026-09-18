@@ -14,7 +14,11 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 
 ## Core principles
 
-- **Coverage over volume — every table in the manifest gets seeded.** The #1 failure mode of a freshly-scaffolded code app is a home / dashboard / list screen that renders an empty state on first launch because its source table has zero rows. An empty downstream table is **worse than a 3-row table.** Default to minimal-but-complete: small counts everywhere, no table left empty. Volume is a secondary knob — coverage is the contract.
+- **Coverage within approved scope, not the entire manifest.** Cover each eligible
+  approved table with a small useful dataset. The manifest is verified app
+  inventory and can include retiring or unrelated tables; its presence is not
+  permission to seed them. Scope and retirement exclusions override every
+  coverage, fanout, prototype-reuse, media, and retry rule below.
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
 - **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
@@ -24,7 +28,45 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 
 ## Workflow
 
-1. Verify project + auth → 2. Discover tables → 3. Select tables + count → 4. Generate + preview → 5. Insert → 6. Summary
+0. Resolve approved seed scope → 1. Verify project + auth → 2. Discover scoped tables → 3. Select tables + count → 4. Generate + preview → 5. Insert → 6. Summary
+
+### Step 0 — Resolve approved seed scope
+
+Inputs are skill arguments, not flags for `dataverse-request.js`:
+
+- `--working-dir <absolute-root>`: inherit the caller's root; reject conflicting
+  explicit/inherited roots. Never default to shell cwd in a nested invocation.
+- `--tables <comma-separated-logical-names>`: the exact approved seed-table
+  allowlist. Required for every orchestrated call, including fresh creation.
+- `--exclude-tables <comma-separated-logical-names>`: retiring table names from
+  the approved edit; omit or pass an explicit empty string only when none retire.
+
+For an orchestrated call, require the scoped handoff and matching `--tables`
+before auth, record-count queries, or generation. A missing or malformed
+allowlist returns `NEEDS_CONTEXT`; never fall back to all manifest tables.
+An explicitly empty allowlist is a no-op: report no approved seed tables and
+return without cloud calls or writes.
+
+Validate logical names against the manifest and the approved plan/caller scope.
+Build `retiringTables` from the caller's retirement set plus any pending removals
+recorded in the current plan/history; include these in `--exclude-tables`.
+If an allowlisted name is absent/unverified or overlaps `retiringTables`, stop
+before insertion and return the scope mismatch. Do not silently drop unknown
+names or infer permission from a transitional manifest entry.
+
+For a standalone request, honor explicit `--tables` and exclusions. If no table
+list was supplied, discover candidates in Step 2 and ask the user to approve the
+specific table set/counts before Step 5, then freeze that selection as `seedTables`.
+For this standalone discovery path, validate against verified metadata when the
+local manifest is absent; never treat the discovery result itself as approval.
+Pending retirement always excludes a
+candidate; if that state is unclear, ask rather than treating the manifest as
+approval. Read-only fallback discovery is not permission to seed the environment.
+
+Keep a fixed `seedTables` allowlist throughout the invocation. All later
+selection, batches, media jobs, and resume operations must remain within it.
+Do not edit `.datamodel-manifest.json` or the app plan to make an excluded table
+eligible. Expanding scope requires returning to the owning approval gate.
 
 ## Prototype Seed Reuse
 
@@ -35,7 +77,8 @@ src/generated/services/*/*.seed.json
 src/generated/services/*.seed.json
 ```
 
-Map seed objects to Dataverse payloads using `.datamodel-manifest.json`:
+Map only `seedTables` objects to Dataverse payloads using `.datamodel-manifest.json`;
+prototype seed files cannot widen the approved set:
 
 - Keep values only for real manifest columns.
 - Translate lookup references into exact `<schemaName>@odata.bind` keys from the manifest.
@@ -49,9 +92,17 @@ If a seed file cannot be mapped safely, fall back to generated contextual sample
 
 ### Step 1 — Verify project & auth
 
+Run app-local commands from the resolved `working_dir` in each shell call.
+
 ```bash
-test -f power.config.json && test -f app.config.js
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd "<working_dir>" || exit 1
+test -f power.config.json && test -f app.config.js || exit 1
+environment_id="$(node -p "require('./power.config.json').environmentId || ''")" || exit 1
+if [ -z "$environment_id" ]; then
+  printf '%s\n' 'ERROR: selected app has no environmentId' >&2
+  exit 1
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id"
 ```
 
 Capture the **environment URL** for subsequent script calls. If resolution fails, instruct `az login --tenant <env-tenant>` or ask for the environment URL directly, then stop.
@@ -71,27 +122,36 @@ If empty, instruct `az login` and stop.
 #### Step 2a — Path A: read `.datamodel-manifest.json` (preferred)
 
 ```bash
+cd "<working_dir>" || exit 1
 test -f .datamodel-manifest.json
 ```
 
-If present, parse the JSON. It already contains `logicalName`, `displayName`, `status` (`new` / `extended` / `reused`), and `columns` for every table the project uses. **This is the preferred path** — fast, no API calls.
+If present, parse the JSON. It contains `logicalName`, `displayName`, `status`
+(`new` / `extended` / `reused`), and `columns` for the verified app inventory.
+**This is the preferred path** -- fast, no API calls. For scoped calls, take only
+the validated `seedTables` entries before any per-table metadata/count query.
+For standalone discovery, exclude retiring tables from the candidate list.
 
-```bash
-cat .datamodel-manifest.json | jq '.tables[] | { logicalName, displayName, columnCount: (.columns | length) }'
-```
+Keep unrelated manifest entries as inventory only; do not pass them to the
+record-count, generation, or insertion loops.
 
 Skip Step 2b.
 
 #### Step 2b — Path B: query OData (fallback)
 
-If `.datamodel-manifest.json` is missing, discover custom tables via the script:
+If `.datamodel-manifest.json` is missing in an orchestrated call, return `BLOCKED`
+to the owner for verified inventory recovery; do not broaden discovery or invent
+schema facts. For a standalone request with an explicit allowlist, fetch metadata
+only for those logical names. The following broad discovery is for a standalone
+request without a table list, to propose candidates for approval:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
-For each table the project uses, fetch its custom columns:
+For each candidate that the project uses (or each explicitly scoped table),
+fetch its custom columns:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
@@ -102,11 +162,17 @@ Build the same `{ logicalName, displayName, columns: [...] }` shape the manifest
 
 ### Step 3 — Select tables + count
 
-All tables from the manifest are evaluated — including reused ones — because a mobile app that surfaces data from a shared table still needs rows to render on first launch. The only exception is standard system tables (e.g. `contact`, `account`, `systemuser`) where seeding is risky in shared production environments.
+Evaluate only the validated seed allowlist, including reused tables only when
+they are explicitly in that set. For standalone discovery, use only the proposed
+non-retiring candidates and obtain the selection approval before insertion.
+Never seed standard system tables (e.g. `contact`, `account`, `systemuser`)
+without the additional explicit shared-environment confirmation below.
 
 **Pre-seeding row-count check (HARD — runs for every table before generating any rows):**
 
-For each table, query its current record count using the entity set name from the manifest (or derive it by appending `s` to the logical name as a fallback):
+For each scoped table, query its current record count using the verified entity
+set name from the manifest, or fetch that name from metadata as in Step 5a.
+Never derive it by appending `s` to a logical name.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
@@ -120,7 +186,8 @@ Count the rows returned in the `value` array.
 | **≥5** | **Skip this table entirely.** Log: `↷ <table> (≥5 records exist, skipping)`. Do not generate or insert any rows. |
 | **<5** | Seed enough new rows to reach the per-class target count. If some records already exist (e.g. 2), generate only the gap (e.g. 3 more to reach 5). |
 
-If all tables already have ≥5 records, print `→ All tables already have ≥5 records. Nothing to seed.` and stop.
+If all eligible selected tables already have ≥5 records, report that nothing in
+the approved seed scope needs seeding and stop.
 
 **Per-table count by class** (classify each table from manifest signals before generating; this beats a uniform `5` because reference tables don't need volume and transactional tables need state spread):
 
@@ -149,7 +216,13 @@ For the selected tables, build a dependency graph from lookup columns:
 2. Tables with lookups only to Tier 0 → Tier 1
 3. Continue until all selected tables are tiered
 
-If a selected table references an UNSELECTED parent, ask the user whether to add the parent to the selection or skip the lookup field. Don't silently insert null lookups.
+If a selected table references an UNSELECTED parent, reuse a verified existing
+parent record through a bounded read when that lookup is within the approved
+feature. Reading a lookup parent is not permission to insert/update it. If no
+suitable record exists, return `NEEDS_CONTEXT` to the owner (or ask standalone)
+to extend the seed scope or explicitly omit an optional lookup. Never auto-add
+a parent to `seedTables`, create a retiring parent, or omit a required lookup.
+Retiring lookup targets block that dependent seed until the plan is reconciled.
 
 ### Step 4 — Generate sample data + preview
 
@@ -168,7 +241,7 @@ For each selected table, generate N rows. Match values to column names + types:
 | **Boolean** | Mix true/false (~70/30 favoring true for `is_active` style names). |
 | **Choice (Picklist)** | **Query options first** (Step 4b), then pick from valid integer values. |
 | **MultiSelect Choice** | Pick 1-3 valid values per row from the option set. |
-| **Lookup** | Reference a record from the parent table that was (or will be) inserted in this run. Track parent GUIDs from Step 5's POST responses. |
+| **Lookup** | Reference a verified existing parent or one inserted within the approved seed scope. Track live parent GUIDs; never seed an unapproved parent just to satisfy a child. |
 | **Image / File** | Default: skip — leave null. If media seeding is enabled and the column is business data (product image, inspection evidence, NC proof), use generated/synthetic local files from `assets/sample-*` and record provenance. Never upload decorative UI hero assets to Dataverse. |
 
 **Media seeding policy (business data only, only if needed):**
@@ -256,7 +329,12 @@ For tables with lookups, also show which parent record each child references:
 
 #### Step 4d — Proceed to insert
 
-After the preview is shown, proceed directly to Step 5. No confirmation prompt — the row-count pre-check (Step 3) already ensures no existing data is overwritten.
+Proceed without another prompt only when the exact seed tables/count policy and
+any media writes are already approved in the current scoped handoff or explicit
+standalone request. Otherwise obtain explicit approval of the preview first.
+Row counts prevent duplicate volume; they are not consent. Cancellation stops.
+If dependencies or rows require a wider scope, return to the owner rather than
+approving the expansion inside an orchestrated leaf.
 
 ### Step 5 — Insert sample data
 
@@ -285,6 +363,12 @@ Cache the result.
 #### Step 5b — Insert one tier at a time, parallel within the tier
 
 For each tier from 0 → N:
+
+Before constructing or submitting a batch, re-check every target logical name
+against `seedTables` and `retiringTables`. Resolve its exact entity set, and
+reject the entire proposed batch if any insert/update targets an unapproved or
+retiring table. Apply the same guard before media PATCH/upload and every retry;
+an out-of-scope operation is a scope error, not a record failure to continue past.
 
 1. **Build the operations array.** Collect every (entitySet, body) pair across all tables in this tier. Tag each with a unique `index` you'll use to map results back to your row identity.
 
@@ -358,6 +442,9 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
 
 Run this step only when Step 4a created media jobs for business Image/File columns. Never run it for decorative UI assets.
 
+Every media job's target table must still be in `seedTables` and outside
+`retiringTables`; a previously captured GUID does not authorize a new target.
+
 Build a `mediaJobs` sidecar while generating rows:
 
 ```jsonc
@@ -414,6 +501,10 @@ If a tier fails partway and you need to retry, **do NOT write a hand-rolled `see
 
 **The only safe resume pattern:**
 
+Reconfirm the current approved `seedTables` and retirement exclusions before
+resuming. Prior memory-bank successes or seed files do not authorize tables
+removed from the current scope; never retry a retiring table.
+
 1. **Re-query parent GUIDs by a stable business key.** For every parent table referenced in the failed tier's `@odata.bind` values, run a fresh GET filtered by the row's natural identifier (name, tail-number, code — whatever you used as the primary name when seeding). Example:
 
    ```bash
@@ -442,6 +533,7 @@ If a tier fails partway and you need to retry, **do NOT write a hand-rolled `see
 ─────────────────────────────────────────────
 Environment   : <envUrl>
 Solution      : <solution>
+Seed scope    : <approved targets; excluded/retiring targets>
 Tables seeded : <list with counts, e.g. cr3e9_jobsite (5), cr3e9_inspection (5)>
 Total records : <N>
 Failures      : <K> (see list below if K > 0)
@@ -454,9 +546,16 @@ Next steps:
 
 If any record failed, print a sub-table of the failures with the error messages so the user can diagnose.
 
+Return a non-success/concern status for partial results; never describe unseeded
+or excluded tables as successfully populated. Seeding does not change the plan's
+schema or remove transitional entries from `.datamodel-manifest.json`.
+
 ## Hard rules
 
-- **Coverage-first — every table in scope gets at least 1 row.** If you find yourself dropping a table because "its parent count is small" or "the user probably doesn't need it on day 1," you're wrong. Empty downstream tables are the failure mode this skill exists to prevent. The only legitimate exclusions: shared standard tables (`contact`, `account`, `incident`) and reused-as-is tables.
+- **Coverage within the seed allowlist only.** Retiring/unapproved tables are
+  always excluded, even when present in the manifest or needed by a fanout target.
+  Respect row-count skips and standard-system-table confirmations; coverage
+  goals never authorize broadening the seed scope.
 - **Per-parent fanout floor — every parent in Tier K-1 gets at least 1 child in Tier K** (when the relationship is required or implies 1-to-many). Random lookup distribution leaves orphan parents and breaks parent-detail screens. Generate child rows parent-by-parent, not as a flat batch with random parent picks.
 - **State / status distribution for transactional, issue, override, log tables** — mix at least 2 distinct values; never all-`Open`, never all-`InProgress`, never all-`Pending`. See Step 4a for per-class targets.
 - **Date distribution for transactional / log tables** — spread across today + last 14 days, not bunched on a single day. ~30% recent / 50% last week / 20% older.

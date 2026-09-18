@@ -2,13 +2,23 @@
 name: design-system
 description: Creates the Tamagui brand system for an Expo/React Native Power Apps mobile app, including design-system.md, tokens.ts, and an HTML gallery.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch, Skill
 model: opus
 ---
 
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Design System
+
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before writing brand artifacts. Direct changes to an existing app (including
+refresh, reskin, themes, and rollback) use the entry-choice gate before invoking
+`/edit-app` for runtime/screen integration. Offer artifact-only implementation,
+full app integration, or cancel. On full integration, delegate to `/edit-app`
+before entering this leaf workflow or writing artifacts. Approved orchestrated
+calls skip the question and execute this leaf.
+Read-only `--history` / `--diff` and standalone brand generation without an app
+remain here.
 
 Source of truth for every screen built in a Power Apps mobile app. Produces three artifacts:
 
@@ -28,7 +38,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 ## When NOT to use
 
-- Screen-level visual tweaks → use `/tweak-screen` (deterministic, 0 tokens)
+- Screen-level visual tweaks → use `/edit-app`
 - Plan-level screen changes → use `/edit-app screens`
 - Data model changes → use `/add-dataverse` or `/setup-datamodel`
 
@@ -61,8 +71,8 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 Detect invocation mode:
 
 ```
-1. Check env var CODE_APPS_NATIVE_ORCHESTRATING=1
-   → Mode A (folded into /create-mobile-app Step 6.5)
+1. Check MOBILE_APP_ORCHESTRATING=1 AND matching explicit caller context
+   → Mode A (folded into /create-mobile-app or approved /edit-app work)
 
 2. Check cwd for app.config.js + tamagui.config.ts + package.json with expo deps
    → Mode B (standalone in existing project)
@@ -72,9 +82,10 @@ Detect invocation mode:
    → Ask: "No native project detected. Write brand/ to current directory? [y/N]"
 ```
 
-For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
+For Mode A, use the caller's absolute `working_dir`, not the shell cwd.
+For Mode B, resolve `working_dir` from arguments or cwd. For Mode C, confirm with user.
 
-**Drift detection (Mode B only — existing brand/ present):**
+**Drift detection (Mode A/B — existing brand/ present):**
 
 If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 1. Parse current tokens.ts palette + typography tokens
@@ -91,7 +102,10 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+Reuse brand inputs and decisions in the approved caller scope. Ask only for
+missing inputs; return scope-changing choices to `/edit-app` rather than
+reopening an independent design flow. Fresh creation still owns the interactive
+brand selection below when those choices have not yet been made.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
@@ -543,9 +557,9 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 4. Prompt for the specific change to the named dimension
 5. Update ONLY that section (refuse bundled changes)
 6. Regenerate `brand/tokens.ts`
-7. Snapshot to `brand/.history/`
+7. Retain the pre-write snapshot captured before steps 5-6 in `brand/.history/`
 8. Re-render `brand/design-system.html`
-9. Confirmation gate
+9. Review the applied diff (approval must precede steps 5-6)
 10. Append to `## Design history` in memory-bank
 
 **Allowed dimensions:** `palette`, `typography`, `components`, `density`, `negatives`, `motion`
@@ -557,9 +571,9 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 | `--refresh palette` | ~3k | ~30 sec | no (tokens swap) |
 | `--refresh typography` | ~3k | ~30 sec | no (tokens swap) |
 | `--refresh components` | ~5k | ~45 sec | yes (primitives regenerate) |
-| `--refresh density` | ~3k | ~30 sec | no |
-| `--refresh negatives` | ~2k | ~20 sec | no |
-| `--refresh motion` | ~3k | ~30 sec | no |
+| `--refresh density` | ~3k | ~30 sec | inspect affected layouts |
+| `--refresh negatives` | ~2k | ~20 sec | inspect screens for newly forbidden patterns |
+| `--refresh motion` | ~3k | ~30 sec | inspect consumers |
 | `--reskin` | ~50-80k | ~5-10 min | YES (every screen) |
 | `--add-dark-mode` | ~5-8k | ~1 min | yes (ThemeProvider wired) |
 
@@ -582,14 +596,19 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 
 3. User approval gate (show derived palette, allow [y/N/edit])
 
-4. Write `brand/tokens.dark.ts`
+4. Write `brand/tokens.dark.ts` using the named `darkTokens` export and complete
+   `color` shape in
+   [Approved dark palette](./references/tamagui-integration.md#approved-dark-palette-conditional).
+   Use the approved dark values, not copies of the light surfaces/text.
 
-5. Generate theme infrastructure:
-   - `src/theme/index.ts` — themes registry
-   - `src/theme/ThemeProvider.tsx` — system-follow + manual override
-   - `src/theme/useTheme.ts` — convenience hooks
+5. Return the dark palette and required wiring to the owning create/edit
+   orchestrator. It applies [tamagui-integration.md](./references/tamagui-integration.md)
+   to the existing light/dark themes and `PowerAppsProvider`; do not generate an
+   app-owned theme provider or a second theme registry.
 
-6. Patch `app/_layout.tsx` to wrap with ThemeProvider
+6. Let the owner update any approved theme-switching UI and verify it. In
+   implementation-only mode, report the unwired runtime dependency rather than
+   claiming dark mode is active.
 
 7. Snapshot + history
 
@@ -612,9 +631,9 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
 | `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
-| Tamagui integration reference | `brand/tokens.ts` | Applied through native-host theme helpers by `/create-mobile-app` Step 9b |
+| Tamagui integration reference | `brand/tokens.ts` and approved dark palette | Applied through native-host theme helpers by `/create-mobile-app` Step 9b or `/edit-app` Step 5 |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
-| `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
+| `/edit-app` | Routes approved visual changes here | Owns Design plan, runtime wiring, affected screen changes, and final verification |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
 
 ---

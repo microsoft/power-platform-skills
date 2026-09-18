@@ -2,13 +2,28 @@
 name: add-dataverse
 description: Use when the user wants to add Dataverse tables (existing or new) to a Power Apps mobile app, extend an existing Dataverse table with new columns, or apply an approved data model plan.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task, Skill
 model: opus
 ---
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Dataverse
+
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before project/auth work. For direct changes to an existing app, the entry-choice
+gate asks before invoking `/edit-app` to plan schema and screen changes together.
+Offer implementation-only work or cancel. Approved orchestrated calls skip the
+question; implementation-only choices use this leaf.
+An existing plan alone does not mean it includes or approves the new request;
+never replay the old Data Model instead of resolving the requested delta.
+
+**Removal branch:** after entry routing, `--remove` or an approved app-binding
+removal executes
+[data-source-removal.md](../../shared/references/data-source-removal.md), then
+returns without entering Steps 1-9. Removing a plan row is not implemented by
+re-running table creation or by deleting Dataverse metadata. For a mixed edit,
+the owner adds/refreshes first and invokes removal separately after consumer edits.
 
 Two paths:
 
@@ -63,6 +78,13 @@ Build `SERVICE_REQUIRED_TABLES` as the union of:
 
 Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) decisions with their recorded reasons, and apply the alias map to every name you use. A data-modelling conflict never halts this skill — it resolves to `adapt` or `defer` and is reported in Step 9.
 
+For an edit handoff, restrict schema writes to the exact `approved_scope` delta;
+unaffected plan rows are context, not permission to replay their mutations.
+Retain the full required-service set for existing screens. If reconciliation
+would change an approved name, storage target, or screen contract, return the
+proposed adaptation to the owner before writing; update and approve the dependent
+plan/screen changes together rather than silently renaming underneath the app.
+
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
 - **Diagram hint present** → Path A (Step 2.5).
@@ -74,7 +96,9 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
   > (b) Let the data-model-architect agent analyze and propose one (default)
   > (c) Cancel — I'll plan it elsewhere first"
 
-  Default the answer to (b) so empty/cancel input auto-proceeds. The 99% case (user gave a description but no diagram) skips this prompt entirely.
+  Recommend (b), but wait for an explicit answer. Empty input is not approval;
+  cancellation stops the workflow without planning or mutation. A supplied
+  description may select the read-only architect path, not approve its result.
 
 #### Step 2a — Approved operation-manifest fast path
 
@@ -1146,6 +1170,14 @@ and Steps 6c–6d, not by replaying successful schema writes. Recording a reused
 table does not authorize a metadata POST or republish; the existing sample-data
 record-count checks and standard-system-table exclusions still apply.
 
+During an edit with pending removals, preserve retiring entries until the
+removal branch verifies that their app bindings/services are gone. The owner
+then reconciles the final inventory; a shortened plan alone is not cleanup.
+Return the actual created/extended/reused table sets for this invocation to the
+owner; historical manifest status is not `createdThisEdit`. Seeding must use an
+explicit approved allowlist excluding retirements, never this transitional
+inventory as its insertion scope.
+
 ### Step 7 — Inspect generated files
 
 ```text
@@ -1229,7 +1261,10 @@ Fix any errors. Common: missing peer dependencies — `npx expo install <package
 
 A schema change here (new table or new column) can leave an existing Mobile Offline Profile behind — new tables never sync to devices and new columns come down blank. Reconcile the profile with what you just created.
 
-**Skip this step entirely when `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path). `/create-mobile-app`, `/setup-datamodel`, and `/edit-app` own offline reconciliation in their own flow, so running it here too would double-prompt.
+**Skip this step only for a valid scoped orchestrator handoff with
+`--skip-planning`**. `/create-mobile-app`, `/setup-datamodel`, and `/edit-app`
+own offline reconciliation in their own flow, so running it here too would
+double-prompt. The flag alone must not suppress standalone reconciliation.
 
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 
@@ -1288,12 +1323,19 @@ Next:
 
 After printing the summary, **offer one-click sample-data seeding** — but only when invoked manually (not from `/create-mobile-app`, which handles this in its own Step 8.5).
 
-- **If `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path): skip the prompt. The orchestrator invokes `/add-sample-data` separately.
-- **Otherwise (manual invocation)**, if the manifest contains any tables, ask:
+- **For a valid scoped orchestrator handoff with `--skip-planning`**: skip the
+  prompt. The orchestrator invokes `/add-sample-data` separately.
+- **Otherwise (manual invocation)**, propose exact verified, non-retiring seed
+  targets from this operation and a count policy; do not select every table
+  just because it appears in the manifest. Ask:
 
-  > "Seed <N> tables with sample records so the app shows real-looking data on first launch? (yes / no — default: yes)"
+  > "Seed these <N> tables with sample records using the proposed counts? (yes / no)"
 
-  Default to "yes" so empty input auto-proceeds. On "yes", invoke `/add-sample-data`. On "no", print "→ Skipped sample data. Run `/add-sample-data` later to populate." and stop.
+  Only an explicit yes approves seeding. On no/cancel/dismissal, stop without
+  inserts; empty input is not consent. On yes, invoke `/add-sample-data` with the
+  same absolute `--working-dir`, `--tables "<approved-logical-names>"`, and
+  `--exclude-tables "<retiring-logical-names-or-empty>"`. Carry the specific
+  approval forward; do not broaden it if lookups need additional parents.
 
 ## Key Rules
 

@@ -10,36 +10,79 @@ model: opus
 
 # Set Up Data Model + Connectors
 
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before the workflow below. Existing-app redesigns, including diagram imports,
+use the entry-choice gate before invoking `/edit-app` for screen integration.
+Offer data-only implementation or cancel; approved orchestrated calls skip the
+question. Keep this standalone workflow for the data-only choice or a project
+without a complete app plan, subject to the shared missing-plan safeguards.
+
 Combined orchestrator for standalone data source planning. Designs the Dataverse schema, plans connectors, gets approval on both, then delegates execution to `/add-dataverse` and `/add-connector`.
 
 | Use this skill when | Use `/add-dataverse` directly when |
 |---|---|
 | Standalone schema + connector design (project may or may not exist yet) | The plan already exists and you just need to apply tables + generate services |
-| You have an existing ER diagram (image / Mermaid / text) to import | `/create-mobile-app` is invoking this as a sub-step with `--skip-planning` |
+| You have an existing ER diagram (image / Mermaid / text) to import | `/create-mobile-app` is invoking this as a sub-step with approved scoped context |
 | Re-planning the schema or connectors mid-project | You only need to add a single table or a single connector |
 
 ## Workflow
 
-1. Verify project & auth → 2. Design data model → 3. Plan connectors → 4. Combined approval → 5. Execute data model → 6. Execute connectors → 7. Summary
+1. Resolve project root & verify auth → 2. Design data model → 3. Plan connectors → 4. Combined approval → 5. Execute additions/refreshes → 6. Execute connectors → 6.25 Retire approved bindings → 6.5 Reconcile offline profile → 7. Reconcile inventory & summarize
 
 ---
 
 ### Phase 1 — Verify Project & Auth
 
-Confirm we're inside a Power Apps mobile app:
+Resolve one absolute `working_dir` before reading project files or discovering
+the environment:
+
+- For a nested call, inherit the owner's absolute `working_dir`. If
+  `--working-dir` is also supplied, both must resolve to the same directory;
+  a mismatch returns `NEEDS_CONTEXT` before any project or cloud work.
+- For a direct call, resolve an explicit `--working-dir` against the invocation
+  directory. Only a direct call without an override may use that invocation
+  directory as its project root.
+- Require the selected directory to exist, normalize it to one absolute path,
+  and retain it for this invocation. A missing nested owner path is an error:
+  never fall back to the shell's current directory or search neighboring apps.
+
+All relative app paths below, including diagram inputs, `native-app-plan.md`,
+`_dm_section.md`, `.datamodel-manifest.json`, `offline-profile.json`, and
+`memory-bank.md`, are relative to this resolved root, not a later tool's cwd.
+Use absolute paths with file tools. Begin every shell invocation that reads or
+writes app-local files with `cd "<working_dir>" || exit 1`; shell state does not
+carry across tool calls.
+
+Confirm the selected root is a Power Apps mobile app:
 
 ```bash
-test -f power.config.json && echo "OK" || echo "ERROR: not a mobile app — run /create-mobile-app first"
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd "<working_dir>" || exit 1
+if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
+  printf '%s\n' 'ERROR: selected working directory is not an initialized mobile app' >&2
+  exit 1
+fi
+environment_id="$(node -p "require('./power.config.json').environmentId || ''")" || exit 1
+if [ -z "$environment_id" ]; then
+  printf '%s\n' 'ERROR: selected app has no environmentId' >&2
+  exit 1
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id"
 ```
 
-Capture the **environment URL**, **environment ID**, **tenant ID**, and **organization ID** for Phase 5.
+Stop on failure; do not switch directories or re-scaffold. Capture the
+**environment URL**, **environment ID**, **tenant ID**, and **organization ID**
+for this root for Phase 5. Pass this same absolute root in every planner/skill
+handoff and on retries.
 
 ### Phase 2 — Design Data Model
 
 **Telemetry checkpoint: `design_dataverse_schema`**
 
-Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present → Path A. If `$ARGUMENTS` describes the app at all → silently take Path B (architect propose). Only if both are empty, ask:
+Check whether the request needs Dataverse schema first; connector-only requests
+take Path C. Otherwise check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`,
+`erDiagram`, `||--o{`). If present, take Path A. If a Dataverse requirement is
+already supplied, take Path B for a read-only proposal. If the choice is still
+unknown, ask:
 
 > "How would you like to define the data model?"
 
@@ -49,7 +92,9 @@ Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keywor
 | Let the Data Model Architect propose one (default) | Spawns `data-model-architect` agent to infer from requirements |
 | Skip — no Dataverse tables needed | Jump to Phase 3 |
 
-Default the answer to "architect propose" so an empty answer auto-proceeds without blocking the user.
+Recommend "architect propose" only when Dataverse schema is needed. Connector-only
+requirements take Path C without inventing Dataverse tables. Empty/cancel input
+does not approve a choice; wait for an answer or stop.
 
 #### Artifact storage rules for PDFs and signatures
 
@@ -57,7 +102,7 @@ When requirements mention signatures, sign-off, ink, drawings, generated PDFs, e
 
 | User signal | Dataverse model implication |
 |---|---|
-| "capture signature", "sign off", "approval signature", "ink" | Image column on the signed record for one current signature, or child Evidence/Signature table for multiple captures/history |
+| "capture signature", "sign off", "approval signature", "ink" | Ask whether retention is needed; only when Dataverse retention is selected, reuse or propose an Image/File column or child Evidence/Signature table |
 | "generate PDF", "export report", "evidence packet", "certificate PDF" | Ask whether the generated PDF should be retained. If yes, use a Dataverse File column, usually on the parent record or a child Evidence/Attachment table. If no, document on-device/share-only behavior and add no column. |
 | "upload PDF", "attach file", "import document" | File column or child Attachment table with lookup to parent |
 | "view PDF" | Store or reference an HTTPS URL if the app has a durable source. Native PDF viewer 0.2.9+ also supports local `file://` URIs; `content://`, `blob:`, and `http://` remain unsupported. |
@@ -66,7 +111,10 @@ PDF content must never be modeled as long text/base64 text. Use Dataverse File c
 
 #### Path A — Parse user-provided diagram
 
-Accept PNG/JPG (use `Read` to view), Mermaid syntax (paste in chat), or text description. Parse into tables + columns + relationships. Query existing Dataverse tables to mark each as new / extend / reuse. Generate a Mermaid ER diagram for confirmation. Enter `EnterPlanMode` for data model approval. On `ExitPlanMode` approval, write the data model into `native-app-plan.md` `## Data Model` section (creating the file if absent).
+Accept PNG/JPG (use `Read` to view), Mermaid syntax (paste in chat), or text
+description. Parse tables, columns, and relationships. Query existing Dataverse
+tables to mark each as new / extend / reuse. Draft the Mermaid diagram and Data
+Model section for the combined Phase 4 approval; do not update the live plan yet.
 
 #### Path B — Spawn data-model-architect
 
@@ -76,7 +124,8 @@ Task: mobile-app:data-model-architect
 Prompt:
   You are the data-model-architect agent for a Power Apps mobile app.
   Requirements: <$ARGUMENTS or ask the user what the app does>
-  Working directory: <cwd>
+  Working directory: <working_dir>
+  Output proposal: <working_dir>/_dm_section.md
   Plugin root: ${PLUGIN_ROOT}
 
   Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
@@ -87,11 +136,15 @@ Prompt:
   PDF content must use a File column, not long text/base64.
 ```
 
-Present the returned section via `EnterPlanMode` / `ExitPlanMode` for approval.
+Parse the agent's first-line status using the `AGENTS.md` return protocol.
+Keep the returned section as a proposal for Phase 4; stop on `BLOCKED` and return
+missing context to the foreground rather than treating the proposal as approved.
 
 #### Path C — No Dataverse
 
-Write `## Data Model` as "None — no Dataverse tables needed." Continue to Phase 3.
+Propose no Dataverse changes. Preserve any existing Data Model section; only use
+"None — no Dataverse tables needed" when the project has no Dataverse model.
+Continue to Phase 3 without overwriting the plan.
 
 ### Phase 3 — Plan Connectors
 
@@ -111,6 +164,12 @@ If the user provided no requirements context, ask:
 
 **Telemetry checkpoint: `approve_data_model_and_connectors`**
 
+For an existing data-only plan, compare current bindings with the proposal before
+writing it. Apply [data-source-removal.md](../../shared/references/data-source-removal.md)
+to classify and approve removals explicitly. Omitted tables are not automatic
+deletions; retain anything required by existing consumers or route the feature
+through `/edit-app` for their planned update.
+
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
 ```
@@ -127,9 +186,17 @@ Present the full plan — data model + connectors — together in a single `Ente
 Approve both to proceed with execution?
 ```
 
-- **Approved** → proceed to Phase 5
+- **Approved** → save both approved sections to `native-app-plan.md`, preserving
+  unrelated sections, then proceed to Phase 5. This applies to every Phase 2 path,
+  including architect output and connector-only plans.
 - **Change data model** → loop back to Phase 2 for that section only, then re-present Phase 4
 - **Change connectors** → loop back to Phase 3, then re-present Phase 4
+- **Cancel** → stop without applying the proposed plan or data-source mutations.
+
+Save the accepted proposal into `<working_dir>/native-app-plan.md`; scratch
+`_dm_section.md` is not a second source of truth. Do not reuse operation manifests
+or approval receipts bound to the previous plan. The verified materialized
+manifest is updated after execution/verification, not by copying proposed rows.
 
 ### Phase 5 — Execute Data Model
 
@@ -137,12 +204,22 @@ Approve both to proceed with execution?
 
 Invoke `/add-dataverse` with `--skip-planning` so it reads the approved plan directly without re-prompting:
 
+Apply only additions/refreshes here. Skip this phase for a removal-only delta;
+approved retirements have their own Phase 6.25 handoff.
+
 ```
 Invoke skill: /add-dataverse
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: setup-datamodel
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved Data Model operations and answers>
+
 Arguments:
-  --working-dir <cwd>
-  --plan-section native-app-plan.md#data-model
+  --working-dir "<working_dir>"
+  --plan-section "<working_dir>/native-app-plan.md#data-model"
   --skip-planning
 ```
 
@@ -161,17 +238,37 @@ Skip if Phase 2 chose Path C (no Dataverse).
 
 **Telemetry checkpoint: `generate_connector_data_sources`**
 
-Read `## Connectors` from `native-app-plan.md`. For each connector row, invoke `/add-connector`:
+Read `## Connectors` from `native-app-plan.md`. For each approved added/refreshed
+connector row (not retained or retiring rows), invoke `/add-connector`:
 
 ```
 Invoke skill: /add-connector
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: setup-datamodel
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved connector row and answers>
+
 Arguments:
-  --working-dir <cwd>
+  --working-dir "<working_dir>"
   --connector <api-name>
 ```
 
 Run sequentially. Skip if `## Connectors` is "None".
+
+### Phase 6.25 — Retire unused app bindings
+
+For each explicitly approved retirement, invoke the matching leaf with
+`--remove`, `MOBILE_APP_ORCHESTRATING=1`, `orchestrator: setup-datamodel`,
+`phase: implementation`, `working_dir: <working_dir>`, the argument
+`--working-dir "<working_dir>"`, and its `approved_scope`.
+Follow [data-source-removal.md](../../shared/references/data-source-removal.md).
+This standalone data-only flow does not edit consumers: if any remain, stop and
+return their integration work to `/edit-app` instead of breaking them.
+Verify the CLI cleanup and reconcile the actual remaining generated-service
+snapshot and app manifest before the summary. No retirement set means skip.
 
 ### Phase 6.5 — Offline profile reconciliation
 
@@ -182,12 +279,28 @@ If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Prof
 Run the local, no-network delta check:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd "<working_dir>" || exit 1
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
 Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
 
+These offline helpers also inherit the same absolute `working_dir`; no new root
+discovery is permitted during reconciliation.
+
 ### Phase 7 — Summary
+
+Before success, reconcile each affected plan section with this project's verified
+output and refresh the Generated Services snapshot. For Dataverse changes, also
+reconcile `.datamodel-manifest.json`, retaining a valid empty inventory after
+removing the last Dataverse binding. Connector-only work without Dataverse does
+not require or create a Dataverse manifest. Record partial execution or unresolved
+removals in memory-bank and return a non-success status rather than claiming the plan is fully applied.
+
+Render the summary from verified results, not the example's possible artifacts.
+For connector-only work without a Dataverse inventory, report Data Model and
+Manifest as `not applicable`; do not print a nonexistent manifest path. If a
+verified inventory already exists but was untouched, label it `unchanged`.
 
 ```
 ✅ Data sources set up
@@ -196,7 +309,7 @@ Data model:
   Tables reused  : <list>
   Tables extended: <list>
   Tables created : <list>
-  Manifest       : .datamodel-manifest.json
+  Manifest      : <verified manifest path and updated/unchanged status, or "not applicable">
 
 Connectors:
   <list of added connectors, or "None">
@@ -210,7 +323,7 @@ Type-check: PASS
 Next steps:
   /add-datasource   — add more data sources
   /add-native       — add device capabilities
-  screen-builder    — implement screens using the generated services
+  /edit-app         — integrate these services into app screens
 ─────────────────────────────────────────────
 ```
 

@@ -2,7 +2,7 @@
 name: add-native
 description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
@@ -10,7 +10,15 @@ model: sonnet
 
 # Add Native Capability
 
-Generate a one-file typed wrapper under `src/native/` for a native device capability that the upstream template already ships. Screens import the wrapper instead of touching Expo modules directly, so the discriminated-union result contract stays consistent across the app.
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before the workflow below. On an existing app, the entry-choice gate asks before
+invoking `/edit-app` for intent, plan, storage, and screen integration. Offer
+implementation-only work or cancel instead. Approved orchestrated calls skip
+this question; implementation-only choices execute the leaf workflow.
+
+The leaf generates typed wrappers under `src/native/` for native capabilities that
+the upstream template already ships. Screens import the wrapper instead of touching
+Expo modules directly, so the discriminated-union result contract stays consistent.
 
 ## Hard rules — do NOT cross these lines
 
@@ -127,7 +135,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
 | `camera`, `take-photo`, `photo`, `expo-camera` | `expo-camera` | `src/native/camera.ts` | `/add-native` routes internally to `add-camera` |
-| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/imagePicker.ts` | `/add-native` routes internally to `add-camera` |
+| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/camera.ts` (`pickImage`) | `/add-native` routes internally to `add-camera`; preserve compatible existing re-exports |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
 | `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; 0.2.9+ opens HTTPS URLs and file URIs |
@@ -213,7 +221,15 @@ case "<capability>" in
 esac
 ```
 
-- **INTERNAL_HELPER:** read the printed helper file, execute its workflow with the same `--working-dir` and forwarded arguments, then STOP. `/add-native` remains the only user-facing command for these controls.
+- **INTERNAL_HELPER:** read the printed helper file and execute its workflow with
+  the same absolute `working_dir`, arguments, supplied answers, mode flags, and
+  current owner/phase/`approved_scope`. Each helper must execute
+  [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+  before its writes/reuse and before its success summary; outer Step 5 is not
+  reached on this branch. Propagate `NEEDS_CONTEXT`/`BLOCKED` and the artifact
+  result to the owner, then STOP this leaf, not the owning workflow. Do not
+  fall through to inline generation or report success for a partial helper result.
+  `/add-native` remains the only user-facing command for these controls.
 - **INLINE:** continue to Step 4.
 
 ### Step 4 — Verify module is template-shipped
@@ -233,7 +249,14 @@ If the check fails, STOP. Do not run `npx expo install`. Print the error verbati
 **Print before starting:**
 > "→ Writing src/native/<wrapper>.ts (typed wrapper with discriminated-union result + iOS/Android platform guards)…"
 
-Create `src/native/<wrapper-filename>.ts` (per the supported-capabilities table). If the file already exists, **do NOT overwrite** — append a comment noting "regeneration skipped — wrapper already exists" and skip to Step 6.
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the inline capability row before writing or reusing output.
+Create `src/native/<wrapper-filename>.ts` only when missing and in scope. If the
+file already exists, inspect its exports against the approved capability
+contract, including behavior and storage. Reuse it unchanged when compatible;
+make a scoped update without re-asking when already approved. Otherwise return
+`NEEDS_CONTEXT` to the owner (or ask standalone) before updating; never silently
+skip the feature or overwrite custom code.
 
 Each wrapper exports:
 
@@ -296,9 +319,15 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 npx tsc --noEmit
 ```
 
-Fix any wrapper-side errors. Do NOT run platform-specific native build commands here — and you should not need to, because no native config changed.
+Fix only in-scope wrapper-side errors. Execute the shared compatibility contract's
+Step 4 after type-checking: recheck all requested artifacts, API/behavior, and
+storage obligations before returning success. Type-check success alone is
+insufficient. Do NOT run platform-specific native build commands here.
 
 ### Step 7 — Summary
+
+Return the shared compatibility result before the summary; use the actual
+created/updated/reused paths and do not claim completion for unresolved artifacts.
 
 ```
 ✅ Native wrapper generated: <capability>

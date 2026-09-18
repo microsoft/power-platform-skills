@@ -71,9 +71,25 @@ msdyn_altitude, msdyn_accuracy, msdyn_heading, msdyn_speed, msdyn_timestamp
 
 If any active `fieldMap` column is missing, stop. Mark `BLOCKED (target columns missing)` and tell the user to fix the control table through the geolocation-control table provisioning/setup mechanism.
 
+## 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the geolocation row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/geolocation.ts` for all requested tracking/status/location
+exports, `GeoTrackingTarget`, MSAL-only `geoService`/`BgLocationClient`, required
+`connectionUrl`/`trackInBackground`/`persistAcrossRestarts`, durable storage, and
+Dataverse sync. Reuse Step 2's verified `msdyn_locationrecords` columns; one-shot
+location or a wrapper targeting another table is not compatible. An incompatible
+artifact outside approval returns `NEEDS_CONTEXT` to the owner, or asks standalone;
+missing table/columns remain `BLOCKED`, never a usable-control success.
+
 ## 3. Write `src/native/geolocation.ts`
 
-Create or patch `src/native/geolocation.ts` so screens import this wrapper, not the package directly.
+Apply Step 2a's decision for `src/native/geolocation.ts`: create when requested
+and missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom code, exports, and callers; do not overwrite from the
+example. Screens import this wrapper, not the package directly.
 
 The target config must require the README's two tracking flags:
 - `trackInBackground: boolean`
@@ -181,6 +197,8 @@ export async function getCurrentLocation(): Promise<GeoResult<LocationData>> {
 
 ## 4. Usage shape
 
+Integration guidance for the owner; do not edit screens in this helper.
+
 Screens must pass `connectionUrl`, `trackInBackground`, and `persistAcrossRestarts`. Do not pass `tableName` or `fieldMap`; the control uses the default `msdyn_locationrecords` table and default `msdyn_*` field map. `intervalMs`, `distanceFilterMeters`, and `notification` are optional.
 
 ```ts
@@ -199,7 +217,12 @@ await startTracking('my-wrap-app', target);
 npx tsc --noEmit
 ```
 
-Only after table + columns are verified and TypeScript passes, report:
+Execute the shared compatibility contract's Step 4 after type-checking. Recheck
+all requested tracking APIs/flags, MSAL auth, durable storage/sync, and failure
+paths. Type-check success alone is insufficient; do not fix screen/generated
+files. Only after the requested artifact contract, table + columns, and
+TypeScript all pass, return the shared compatibility result and actual
+created/updated/reused paths before reporting:
 
 ```text
 Geolocation status : READY
