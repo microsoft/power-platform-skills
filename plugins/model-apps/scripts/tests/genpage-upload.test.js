@@ -41,14 +41,24 @@ const HOSTILE_PROMPT = [
 // are the content. Passed inline these are collapsed to spaces and the transcript is destroyed.
 const TRANSCRIPT = 'Conversation with 3 prompts:\r\n1. Build a list of inspections\r\n2. Add a search box\r\n3. Sort by "Company Name" desc';
 
-function capturingCli() {
+function capturingCli(opts = {}) {
   const calls = [];
   return {
     calls,
     factory: () => ({
-      upload: async (opts) => { calls.push(opts); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+      upload: async (o) => { calls.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
       // Default: the requested page exists. Tests that care override this.
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      // An update reads the page's CURRENT bindings so omitting `--data-sources` preserves them
+      // instead of persisting `[]`. pac writes this config UTF-8 with a BOM, so the fixture does too.
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of (pageIds || [])) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'] });
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('\uFEFF' + body, 'utf8'));
+        }
+        return true;
+      },
     }),
   };
 }
@@ -477,6 +487,15 @@ test('REAL wrapper: a target that DOES exist still updates (the guard blocks not
     run: async (args) => {
       seen.push(args);
       if (args.includes('list')) return { status: 0, stdout: envListing([id]), stderr: '' };
+      // The update reads current bindings first, so the fake must produce what pac produces: a
+      // per-page directory holding a BOM-prefixed config.json.
+      if (args.includes('download')) {
+        const out = args[args.indexOf('--output-directory') + 1];
+        fs.mkdirSync(path.join(out, id), { recursive: true });
+        fs.writeFileSync(path.join(out, id, 'config.json'),
+          Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
+        return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
+      }
       return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
     },
     sleep: async () => {},
@@ -554,4 +573,143 @@ test('wrapper: an OMITTED agent message still gets the default (that fallback is
   assert.strictEqual(read.text, 'Authored by app-builder', 'omission is not a claim, so the default applies');
   await mk().upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: null });
   assert.strictEqual(read.text, 'Authored by app-builder', 'null is omission too');
+});
+
+// --- #G1: an update must not silently UNBIND the page ---------------------------------------------
+// LIVE-REPRODUCED: pac rewrites the binding list from the flags it is given, so an update that omits
+// `--data-sources` persists `[]`. The page goes on querying the table while its stored binding is
+// gone — and the Phase 7.5 fix-redeploy command in verify-flow.md omits exactly that flag.
+test('an update that says nothing about data sources PRESERVES the existing bindings', async () => {
+  const cli = capturingCli({ liveDataSources: ['contoso_ticket', 'contoso_asset'] });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'fix the sort handler'],
+    { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `the update must succeed; got ${JSON.stringify(r.payload)}`);
+  assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket', 'contoso_asset'],
+    'the page\'s existing bindings must be re-sent, not dropped');
+});
+
+test('an explicit --data-sources still WINS over the preserved list', async () => {
+  const cli = capturingCli({ liveDataSources: ['contoso_ticket'] });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', '--data-sources', 'contoso_other'],
+    { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(cli.calls[0].dataSources, 'contoso_other', 'an explicit value is the caller\'s intent');
+});
+
+test('--clear-data-sources really unbinds, and does not read the old list first', async () => {
+  let probed = false;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    download: async () => { probed = true; return true; },
+    upload: async (o) => { probed = probed || false; return { pageId: o.pageId, _ds: o.dataSources }; },
+  });
+  const seen = [];
+  const capture = () => {
+    const f = factory();
+    return { ...f, upload: async (o) => { seen.push(o); return { pageId: o.pageId }; } };
+  };
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', '--clear-data-sources'],
+    { makeGenpageCli: capture, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `a deliberate unbind must be allowed; got ${JSON.stringify(r.payload)}`);
+  assert.strictEqual(seen[0].dataSources, undefined, 'nothing is sent, so pac clears the bindings');
+  assert.strictEqual(probed, false, 'a deliberate clear need not read the list it is discarding');
+});
+
+test('an unreadable current binding list refuses the update rather than unbinding the page', async () => {
+  // Fail CLOSED: "I could not read it" must never become "it had none".
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    download: async () => true, // writes nothing — the config is then missing
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false, 'an unreadable binding list must not be treated as "no bindings"');
+  assert.match(r.payload.error, /--clear-data-sources/, 'the refusal names the deliberate-unbind escape hatch');
+  assert.strictEqual(uploads, 0);
+});
+
+test('a CREATE never probes for bindings (there is nothing to preserve)', async () => {
+  let probed = false;
+  const seen = [];
+  const factory = () => ({
+    download: async () => { probed = true; return true; },
+    upload: async (o) => { seen.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--name', 'New Page', '--prompt', 'p', '--data-sources', 'contoso_ticket'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `a create must not be gated; got ${JSON.stringify(r.payload)}`);
+  assert.strictEqual(probed, false, 'a create has no existing bindings to read');
+  assert.strictEqual(seen[0].dataSources, 'contoso_ticket');
+});
+
+// Mutation-exposed: an over-strict shape check refused a config that parses but carries no
+// `dataSources` key. That is how a genuinely UNBOUND page looks, and `download-model-app.js` reads
+// it as "no bindings" (`config.dataSources || []`) — so refusing here would have blocked updating
+// any unbound page. Unknown means MISSING or UNPARSEABLE, nothing else.
+test('a page whose config has no dataSources key updates normally (it simply has no bindings)', async () => {
+  const seen = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of (pageIds || [])) {
+        fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+        fs.writeFileSync(path.join(outputDir, pid, 'config.json'),
+          Buffer.from('\uFEFF' + JSON.stringify({ model: 'some-model' }), 'utf8'));
+      }
+      return true;
+    },
+    upload: async (o) => { seen.push(o); return { pageId: o.pageId }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `an unbound page must still be updatable; got ${JSON.stringify(r.payload)}`);
+  assert.deepStrictEqual(seen[0].dataSources, [], 'nothing to preserve, so nothing is sent');
+});
+
+test('a config that is PRESENT but unparseable refuses the update', async () => {
+  // The distinction that matters: corrupt or non-object bytes are UNKNOWN bindings, not absent ones.
+  // `{ truncated` fails JSON.parse; `[]`, `null` and `42` parse but are not a config object, and
+  // reading any of them as "no bindings" would silently unbind the page.
+  for (const body of ['{ truncated', '[]', 'null', '42']) {
+    let uploads = 0;
+    const factory = () => ({
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of (pageIds || [])) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from(body, 'utf8'));
+        }
+        return true;
+      },
+      upload: async () => { uploads += 1; return { pageId: 'x' }; },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+    assert.strictEqual(r.ok, false, `config body ${JSON.stringify(body)} must not be read as "no bindings"`);
+    assert.strictEqual(uploads, 0, `nothing may upload for config body ${JSON.stringify(body)}`);
+  }
 });

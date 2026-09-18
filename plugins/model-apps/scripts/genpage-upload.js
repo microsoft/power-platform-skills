@@ -29,19 +29,21 @@
 //   the documented path precisely because it cannot be mangled by a shell.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank } = require('./lib/genpage-cli.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name',
-  'data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
+  'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
   'model', 'connectors', 'actions', 'add-to-sitemap'];
-// `--add-to-sitemap` is a bare switch; every other flag carries a value.
-const NEED_VALUE = KNOWN.filter((f) => f !== 'add-to-sitemap');
+// Bare switches; every other flag carries a value.
+const SWITCHES = ['add-to-sitemap', 'clear-data-sources'];
+const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
   + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name <text>] '
-  + '[--data-sources <csv>] [--compiled-code-file <path>] [--model <id>] [--connectors <path>] '
-  + '[--actions <path>] [--add-to-sitemap]';
+  + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
+  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap]';
 
 // Resolve one text input that may arrive inline or by file. Returns { ok, value } or { ok:false,
 // error }. Supplying BOTH is rejected rather than silently preferring one: the two would be
@@ -173,6 +175,44 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
   }
 
+  // An UPDATE that says NOTHING about data sources must not DESTROY them. pac rewrites the page's
+  // binding list from the flags it is given, so omitting `--data-sources` persists `[]` — the page
+  // goes on querying the table while its stored binding disappears. Live-reproduced by following
+  // the Phase 7.5 fix-redeploy command, which omits the flag.
+  //
+  // Same rule as an omitted cell span: absence is "no opinion", never "clear it". The current
+  // bindings are read back and re-sent, so a fix-redeploy is non-destructive by default; pass
+  // `--clear-data-sources` to actually unbind. A create has nothing to preserve.
+  let preservedDataSources;
+  if (flags['page-id'] && !flags['data-sources'] && !flags['clear-data-sources']) {
+    const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
+    try {
+      await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
+      // pac writes config.json UTF-8 WITH a BOM, which JSON.parse rejects outright — strip it first
+      // or a perfectly good config reads as unparseable and the bindings are "lost" here too.
+      const raw = fs.readFileSync(path.join(probe, flags['page-id'], 'config.json'), 'utf8').replace(/^\uFEFF/, '');
+      const cfg = JSON.parse(raw);
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+        throw new Error('config.json is not a JSON object');
+      }
+      // A config that parses but carries no `dataSources` key means the page HAS no bindings — the
+      // same reading the download path uses (`config.dataSources || []`). That is a real answer, not
+      // an unreadable one, so an unbound page is not blocked from updating. Only a MISSING or
+      // UNPARSEABLE config is unknown, and that is what the catch below refuses.
+      preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
+    } catch (e) {
+      // Fail CLOSED: guessing "probably none" is exactly the silent unbinding this exists to stop.
+      return emit(false, {
+        error: `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
+          + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
+          + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
+          + ' --clear-data-sources to unbind deliberately.',
+      });
+    } finally {
+      fs.rmSync(probe, { recursive: true, force: true });
+    }
+  }
+
   try {
     const res = await cli.upload({
       appId: flags['app-id'],
@@ -182,8 +222,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       name: flags.name || undefined,
       prompt: prompt.value,
       agentMessage: agentMessage.value,
-      // Passed through as the CSV the caller typed; upload() normalizes array-or-string.
-      dataSources: flags['data-sources'] || undefined,
+      // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
+      // caller said nothing on an update, this carries the page's EXISTING bindings so they survive.
+      dataSources: flags['data-sources'] || preservedDataSources || undefined,
       model: flags.model || undefined,
       connectors: flags.connectors || undefined,
       actions: flags.actions || undefined,

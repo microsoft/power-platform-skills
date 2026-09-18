@@ -102,6 +102,10 @@ re-deploy describes the fix delta only — e.g.
 not a re-statement of the full page description. Write it to a file and pass
 `--prompt-file`; never put it on a command line.
 
+Omitting `--data-sources` here is safe: the page's existing table bindings are
+read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
+to change the bindings, or `--clear-data-sources` to remove them deliberately.
+
 ```powershell
 Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
   -Value "Fix sort handler on Name column; correct accidental DataGrid type prop"
