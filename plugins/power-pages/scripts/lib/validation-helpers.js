@@ -299,6 +299,36 @@ function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location 
   return trustedPollingUrl;
 }
 
+function execAzureCli(args) {
+  if (process.platform !== 'win32') {
+    return execFileSync('az', args, {
+      encoding: 'utf8',
+      timeout: 15000,
+      shell: false,
+    });
+  }
+
+  // The Windows Azure CLI launcher is az.cmd, which Node cannot execute with
+  // shell:false. Invoke the bundled Python module directly instead. Check only
+  // the two fixed MSI locations so untrusted PATH data never becomes an
+  // executable path.
+  const pythonArgs = ['-IBm', 'azure.cli', ...args];
+  try {
+    return execFileSync(
+      'C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\python.exe',
+      pythonArgs,
+      { encoding: 'utf8', timeout: 15000, shell: false },
+    );
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return execFileSync(
+      'C:\\Program Files (x86)\\Microsoft SDKs\\Azure\\CLI2\\python.exe',
+      pythonArgs,
+      { encoding: 'utf8', timeout: 15000, shell: false },
+    );
+  }
+}
+
 /**
  * Gets an Azure CLI access token for the given resource URL.
  * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
@@ -310,10 +340,8 @@ function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location 
 function getAuthToken(resourceUrl) {
   try {
     const trustedResourceUrl = validateTokenResourceUrl(resourceUrl);
-    return execFileSync(
-      'az',
+    return execAzureCli(
       ['account', 'get-access-token', '--resource', trustedResourceUrl, '--query', 'accessToken', '-o', 'tsv'],
-      { encoding: 'utf8', timeout: 15000, shell: false }
     ).trim();
   } catch {
     return null;
@@ -513,6 +541,7 @@ module.exports = {
   validateAuthenticatedRequestUrl,
   validateBapUrl,
   validateBapPollingUrl,
+  execAzureCli,
   getAuthToken,
   makeRequest,
   odataGet,

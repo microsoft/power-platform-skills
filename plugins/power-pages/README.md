@@ -1,8 +1,11 @@
 # Power Pages Plugin
 
-Create and deploy Power Pages code sites using modern frontend frameworks. This plugin provides a complete workflow — from scaffolding a new site to deploying it, setting up data models, authentication, and Web API integrations — all through conversational AI skills.
+Create and deploy Power Pages sites using modern frontend frameworks or first-party Enhanced data
+model templates. This plugin provides a complete workflow—from site creation to deployment, data
+modeling, authentication, Web API integration, and ALM—through conversational AI skills.
 
-**Supported frameworks**: React, Angular, Vue, Astro (static SPAs)
+**Supported creation models**: Enhanced data model declarative sites; React, Angular, Vue, and
+Astro static SPAs
 
 ## Installation
 
@@ -46,12 +49,18 @@ The plugin provides 34 skills that cover the full lifecycle of a Power Pages sit
 
 > "Create a Power Pages site with React for a job board"
 
-Scaffolds a complete code site from a framework template, applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview in the browser throughout development.
+Creates either a code site from a framework template or an Enhanced data model declarative site
+from a template accepted by the documented Power Platform Create Website API.
 
-- Choose from React, Vue, Angular, or Astro
-- Real images from Unsplash (no placeholders)
-- Live browser preview during development
-- Git commits at each milestone
+- **Code sites:** choose React, Vue, Angular, or Astro; scaffold the complete SPA; apply a custom
+  design with real imagery; build pages, components, and routing; preview live throughout
+  development; validate the result; and commit implementation milestones.
+- **Enhanced declarative sites:** confirm the environment EDM setting with an administrator,
+  choose a supported first-party template, follow template previews and live creation status in a
+  generated browser page, provision through the Power Platform API, download explicitly with
+  `--modelVersion Enhanced`, validate identity, and create a Git baseline.
+- Standard data model site creation is not supported. Existing Standard sites can be handled by
+  downstream skills only where their declarative support is explicitly documented.
 
 #### `/deploy-site`
 

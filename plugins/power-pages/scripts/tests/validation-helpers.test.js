@@ -25,10 +25,25 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
   const token = getAuthToken('https://example.crm.dynamics.com');
 
   assert.equal(token, 'fake-token-value');
-  assert.equal(captured.file, 'az');
+  assert.equal(
+    captured.file,
+    process.platform === 'win32'
+      ? 'C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\python.exe'
+      : 'az',
+  );
   assert.deepEqual(
     captured.args,
-    ['account', 'get-access-token', '--resource', 'https://example.crm.dynamics.com', '--query', 'accessToken', '-o', 'tsv'],
+    [
+      ...(process.platform === 'win32' ? ['-IBm', 'azure.cli'] : []),
+      'account',
+      'get-access-token',
+      '--resource',
+      'https://example.crm.dynamics.com',
+      '--query',
+      'accessToken',
+      '-o',
+      'tsv',
+    ],
   );
   assert.equal(captured.options.shell, false);
   assert.ok(

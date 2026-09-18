@@ -468,15 +468,20 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (5 calls)
+### 6.13 `create-site` (10 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
+| `create-site:0.site-type` | gate | plan | 0 | Ambiguous request — choose generated SPA or platform-provisioned Enhanced declarative site | nothing |
 | `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+| `create-site:edm-1-confirm-environment` | gate | consent | EDM 1 | Confirm the exact Dataverse environment before EDM planning or provisioning | nothing |
+| `create-site:edm-1-confirm-capability` | gate | progress | EDM 1 | Administrator confirms **Switch to enhanced data model** because no public read API exists | nothing |
+| `create-site:edm-2-select-template` | gate | plan | EDM 2 | Select an exact supported EDM template identifier | nothing |
+| `create-site:edm-4-provision` | gate | final | EDM 4 | Final consent immediately before Create Website creates the cloud resource | nothing |
 
 ---
 

@@ -53,10 +53,14 @@ references/                    ← Shared reference docs used by multiple skills
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
 skills/
   create-site/
-    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
+    SKILL.md                   ← Routes code-site and Enhanced declarative creation
+    workflows/edm-site.md      ← Environment-backed EDM provisioning and download workflow
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
-    scripts/validate-site.js   ← Node script validating generated sites
+    scripts/list-site-templates.js ← Curated Create Website template metadata and EDM capability disclosure
+    scripts/render-edm-status.js ← Generates the live-refreshing EDM creation page with template previews and current status
+    scripts/resolve-edm-context.js ← Non-secret environment and Dataverse organization resolver
+    scripts/validate-site.js   ← Node script validating code sites or downloaded declarative sites
   deploy-site/
     SKILL.md                   ← Deployment skill definition
   setup-datamodel/
@@ -144,7 +148,13 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
-- `create-site`: 6-step workflow — gather requirements (including design direction), plan (with explicit scaffold prerequisites), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and live Playwright preview, review, deploy
+- `create-site`: Routes between two eight-phase workflows. The existing SPA path retains requirements
+  discovery, early React/Vue/Angular/Astro scaffolding, component and design planning, implementation
+  with live Playwright preview, validation, review, Git checkpoints, and deployment handoff. The
+  Enhanced declarative path confirms the environment and administrator-verified EDM toggle, selects
+  a supported template identifier, provisions through the Power Platform API, downloads with
+  `--modelVersion Enhanced`, validates identity/assets, and creates a Git baseline. It does not
+  create Standard data model sites.
 - `deploy-site`: 6-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, verify deployment (confirm `.powerpages-site` folder, commit, offer activation), handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
@@ -283,7 +293,10 @@ Framework templates use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`, `__PRIM
 
 ### `create-site/scripts/validate-site.js`
 
-Checks generated sites for: required files (`package.json`, `.gitignore`, `powerpages.config.json`), config schema fields (`$schema`, `compiledPath`, `siteName`, `defaultLandingPage`), build/dev scripts in package.json, unreplaced `__PLACEHOLDER__` tokens, git initialization, and `src/` directory existence.
+Branches by project type. Code sites retain checks for `package.json`, `.gitignore`,
+`powerpages.config.json`, config fields, build/dev scripts, placeholders, Git, and `src/`.
+Declarative sites require `.powerpages-site/.portalconfig/`, a non-empty `website.yml` with a valid
+and optionally expected ID, downloaded declarative assets, and Git initialization.
 
 ### `setup-datamodel/scripts/validate-datamodel.js`
 

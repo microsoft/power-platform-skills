@@ -20,6 +20,7 @@
  *
  * Usage:
  *   node website.js --websiteId <guid>
+ *   node website.js --siteName "<name>" --subdomain "<subdomain>"
  *
  * Stdout (JSON): the matching website record, or `null`.
  *
@@ -96,6 +97,32 @@ async function findWebsite(websiteId) {
     throw new Error('websiteId must be a non-empty string.');
   }
   const target = websiteId.toLowerCase();
+  return findWebsiteMatching((site) => {
+    const id = recordIdOf(site);
+    return typeof id === 'string' && id.toLowerCase() === target;
+  });
+}
+
+async function findWebsiteByIdentity({ siteName, subdomain }) {
+  const normalizedName = typeof siteName === 'string' ? siteName.trim().toLowerCase() : '';
+  const normalizedSubdomain =
+    typeof subdomain === 'string' ? subdomain.trim().toLowerCase() : '';
+  if (!normalizedName || !normalizedSubdomain) {
+    throw new Error('siteName and subdomain must both be non-empty strings.');
+  }
+  return findWebsiteMatching((site) => {
+    const name = site.Name || site.name;
+    const siteSubdomain = site.Subdomain || site.subdomain;
+    return (
+      typeof name === 'string' &&
+      typeof siteSubdomain === 'string' &&
+      name.toLowerCase() === normalizedName &&
+      siteSubdomain.toLowerCase() === normalizedSubdomain
+    );
+  });
+}
+
+async function findWebsiteMatching(matches) {
   const context = resolveContext();
   if (context.error) throw new Error(context.error);
 
@@ -111,8 +138,7 @@ async function findWebsite(websiteId) {
 
     const body = response.body && typeof response.body === 'object' ? response.body : {};
     for (const site of body.value || []) {
-      const id = recordIdOf(site);
-      if (typeof id === 'string' && id.toLowerCase() === target) return site;
+      if (matches(site)) return site;
     }
 
     const advance = nextSkipFrom(body['@odata.nextLink'] || body.nextLink);
@@ -126,11 +152,19 @@ async function findWebsite(websiteId) {
 
 async function main() {
   const args = parseCliArgs(process.argv);
-  if (typeof args.websiteId !== 'string') {
-    fail('Usage: node website.js --websiteId <guid>', 1);
+  const hasWebsiteId = typeof args.websiteId === 'string';
+  const hasIdentity = typeof args.siteName === 'string' && typeof args.subdomain === 'string';
+  if (!hasWebsiteId && !hasIdentity) {
+    fail(
+      'Usage: node website.js --websiteId <guid> OR ' +
+        'node website.js --siteName "<name>" --subdomain "<subdomain>"',
+      1,
+    );
   }
   try {
-    const website = await findWebsite(args.websiteId);
+    const website = hasWebsiteId
+      ? await findWebsite(args.websiteId)
+      : await findWebsiteByIdentity({ siteName: args.siteName, subdomain: args.subdomain });
     process.stdout.write(JSON.stringify(website, null, 2) + '\n');
   } catch (err) {
     const message = err.message || String(err);
@@ -138,6 +172,6 @@ async function main() {
   }
 }
 
-module.exports = { findWebsite, nextSkipFrom, recordIdOf };
+module.exports = { findWebsite, findWebsiteByIdentity, nextSkipFrom, recordIdOf };
 
 runCli(module, main);

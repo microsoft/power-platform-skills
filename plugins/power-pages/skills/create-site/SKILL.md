@@ -1,10 +1,12 @@
 ---
 name: create-site
 description: >-
-  Creates a new Power Pages code site (SPA) using React, Angular, Vue, or Astro. Guides through
-  the full process from initial concept to deployed site: requirements discovery, scaffolding,
-  component planning, design, implementation, validation, and deployment. Use when the user
-  wants to create, build, or scaffold a new Power Pages website or portal.
+  Creates a new Power Pages site. For code sites (SPAs) using React, Angular, Vue, or Astro, guides
+  the full process from requirements discovery through scaffolding, component planning, design,
+  implementation, validation, and deployment. For enhanced-data-model declarative sites, provisions
+  a documented Microsoft template, verifies the model, downloads the site, and validates its
+  identity and assets. Use when the user wants to create, build, or scaffold a new Power Pages
+  website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
@@ -13,9 +15,10 @@ model: opus
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Create Power Pages Code Site
+# Create Power Pages Site
 
-Guide the user through creating a complete, production-quality Power Pages code site from initial concept to deployed site. Follow a systematic approach: discover requirements, scaffold and launch immediately, plan components and design, implement with design applied, validate, review, and deploy.
+Route the request to the correct creation workflow before collecting framework- or
+template-specific details.
 
 ## Core Principles
 
@@ -27,11 +30,83 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
 
-**Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
+**Code-site constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro).
+NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
 **Initial request:** $ARGUMENTS
 
 ---
+
+## Site-Type Routing
+
+Determine the site type before creating the phase task list.
+
+Classify the signals in `$ARGUMENTS`:
+
+- React, Vue, Angular, Astro, SPA, or code site → **Code site**
+- EDM, enhanced data model, Program Registration, Event Portal, Schedule Meetings, or Power Pages template
+  → **Enhanced data model site**
+
+Infer the route only when exactly one site type is indicated. If both types are indicated, treat the
+request as ambiguous and ask the site-type question below.
+
+<!-- gate: create-site:0.site-type | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:0.site-type):** Ambiguous creation request — choose between a
+> generated SPA code site and a platform-provisioned Enhanced declarative site.
+>
+> **Trigger:** `$ARGUMENTS` does not establish the site type.
+> **Why we ask:** The two routes create different artifacts and use different provisioning models.
+> **Cancel leaves:** Nothing — no files or cloud resources exist.
+
+If the request is ambiguous, use `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Which type of Power Pages site should I create? | Site type | Enhanced data model site from a Microsoft template, Code site using React/Vue/Angular/Astro |
+
+After the route is known:
+
+- **Enhanced data model site:** Read and follow
+  `${PLUGIN_ROOT}/skills/create-site/workflows/edm-site.md`. Do not continue into the code-site
+  phases below.
+- **Code site:** Continue with the existing workflow below.
+
+`create-site` does not create Standard data model declarative sites. Existing Standard sites may
+be supported by separate model-aware modification and deployment workflows.
+
+### EDM Approval Gates
+
+The EDM workflow file contains the detailed call sites. These markers keep every load-bearing EDM
+question paired with the repository gate catalog.
+
+<!-- gate: create-site:edm-1-confirm-environment | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · create-site:edm-1-confirm-environment):** Confirm the exact target
+> environment before any EDM planning or provisioning.
+
+<!-- gate: create-site:edm-1-confirm-capability | category=progress | cancel-leaves=nothing -->
+
+> 🚦 **Gate (progress · create-site:edm-1-confirm-capability):** Require administrator
+> confirmation because no documented public API reads the environment EDM creation toggle.
+
+<!-- gate: create-site:edm-2-select-template | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:edm-2-select-template):** Select one exact identifier from the
+> supported EDM template allowlist.
+
+<!-- gate: create-site:edm-4-provision | category=final | cancel-leaves=nothing -->
+
+> 🚦 **Gate (final · create-site:edm-4-provision):** Final consent immediately before the Create
+> Website API call.
+
+---
+
+## Code-Site Workflow
+
+Guide the user through creating a complete, production-quality Power Pages code site from initial
+concept to deployed site. Discover requirements, scaffold and launch immediately, plan components
+and design, implement with design applied, validate, review, and deploy.
 
 ## Live Preview Status Protocol
 

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-__ATTR_CSP_NONCE__'">
+  <title>Power Pages site creation status</title>
+  <style>
+    :root {
+      --ink: #17213a;
+      --muted: #69718a;
+      --cobalt: #3454d1;
+      --cobalt-dark: #263fae;
+      --lavender: #eee9ff;
+      --pale: #f7f8fc;
+      --line: #dfe3ee;
+      --success: #13795b;
+      --warning: #a15c00;
+      --danger: #b42318;
+      --white: #fff;
+      --shadow: 0 30px 80px rgba(31, 42, 80, .14);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 84% 8%, rgba(197, 185, 255, .58), transparent 26rem),
+        linear-gradient(135deg, #f3f5fb, #fafaff 55%, #f0edff);
+      font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+    }
+
+    button { font: inherit; }
+
+    .shell {
+      width: min(1440px, calc(100% - 48px));
+      margin: 24px auto;
+      min-height: calc(100vh - 48px);
+      overflow: hidden;
+      border: 1px solid rgba(119, 127, 160, .2);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, .88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .78);
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; }
+    .brand-mark {
+      display: block;
+      width: 34px;
+      height: 34px;
+      object-fit: contain;
+    }
+
+    .status-badge {
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: var(--cobalt-dark);
+      background: var(--lavender);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(360px, .86fr) minmax(480px, 1.14fr);
+      min-height: calc(100vh - 121px);
+    }
+
+    .preview-pane {
+      display: flex;
+      flex-direction: column;
+      padding: 34px;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(150deg, #f8f7ff, #f2f5fb);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--cobalt);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 700px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(34px, 4vw, 58px);
+      font-weight: 400;
+      line-height: 1.02;
+      letter-spacing: -.035em;
+    }
+
+    .lede {
+      margin: 15px 0 24px;
+      max-width: 560px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .preview-card {
+      position: relative;
+      flex: none;
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      border: 1px solid #d9ddec;
+      border-radius: 20px;
+      background: #e9e5ff;
+      box-shadow: 0 24px 50px rgba(60, 66, 110, .16);
+    }
+
+    .preview-card img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: top;
+      transition: opacity .25s ease, transform .4s ease;
+    }
+
+    .preview-card.mobile img {
+      width: auto;
+      max-width: 72%;
+      margin: 0 auto;
+      object-fit: contain;
+    }
+
+    .preview-label {
+      position: absolute;
+      left: 18px;
+      bottom: 18px;
+      padding: 9px 12px;
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: 10px;
+      color: var(--ink);
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 8px 22px rgba(30, 37, 70, .12);
+      font-size: 12px;
+      font-weight: 700;
+      backdrop-filter: blur(12px);
+    }
+
+    .slide-controls {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      padding-top: 14px;
+    }
+
+    .slide-controls button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .slide-controls button::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border: 1.5px solid currentColor;
+      border-radius: 50%;
+    }
+
+    .slide-controls button.active {
+      border-color: #d9d5ee;
+      color: var(--cobalt-dark);
+      background: var(--white);
+    }
+
+    .slide-controls button.active::before { border-color: var(--cobalt); background: var(--cobalt); }
+
+    .preview-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-top: 18px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--white);
+    }
+
+    .segmented button, .ghost {
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      padding: 8px 13px;
+      font-weight: 650;
+    }
+
+    .segmented button.active {
+      color: var(--white);
+      background: var(--cobalt);
+    }
+
+    .template-meta { color: var(--muted); font-size: 13px; text-align: right; }
+
+    .template-info {
+      margin-top: 22px;
+      padding: 19px 20px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,.75);
+    }
+
+    .template-info h2 { margin: 0 0 8px; font-size: 16px; }
+    .template-info > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .feature-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 14px;
+      margin: 14px 0;
+      padding: 0;
+      list-style: none;
+    }
+    .feature-list li {
+      position: relative;
+      padding-left: 17px;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .feature-list li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: var(--success);
+      font-weight: 800;
+    }
+    .template-notes { display: grid; gap: 7px; }
+    .template-note {
+      padding: 8px 10px;
+      border-radius: 9px;
+      color: #594100;
+      background: #fff6d9;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .template-note strong { color: #3f3100; }
+
+    .status-pane {
+      display: flex;
+      flex-direction: column;
+      padding: 40px 48px 32px;
+    }
+
+    .site-identity {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: start;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .site-identity h2 { margin: 0 0 8px; font-size: 25px; letter-spacing: -.025em; }
+    .site-url { color: var(--muted); font-size: 14px; }
+
+    .state-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 13px;
+      border-radius: 999px;
+      color: #2349ae;
+      background: #e9efff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .timeline { display: grid; gap: 4px; margin: 24px 0 0; padding: 0; list-style: none; }
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 14px;
+      align-items: center;
+      min-height: 58px;
+      padding: 8px 10px;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      transition: background .25s ease, border-color .25s ease, box-shadow .25s ease;
+    }
+
+    .step.active {
+      border-color: rgba(52,84,209,.45);
+      background: linear-gradient(90deg, #e9e7ff, #f8f9ff);
+      transform: translateX(4px);
+      animation: active-status 1.9s ease-in-out infinite;
+    }
+    .step.active::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 5px;
+      background: var(--cobalt);
+    }
+    @keyframes active-status {
+      0%, 100% {
+        border-color: rgba(52,84,209,.32);
+        box-shadow: 0 8px 20px rgba(52,84,209,.08);
+      }
+      50% {
+        border-color: rgba(52,84,209,.7);
+        box-shadow: 0 12px 32px rgba(52,84,209,.22);
+      }
+    }
+    .step-marker {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1.5px solid #cbd1e1;
+      border-radius: 50%;
+      color: #8790aa;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .step.complete .step-marker { border-color: var(--success); color: var(--white); background: var(--success); }
+    .step.active .step-marker {
+      border-color: var(--cobalt);
+      color: var(--white);
+      background: var(--cobalt);
+    }
+    .step.error .step-marker { border-color: var(--danger); color: var(--white); background: var(--danger); }
+    .step-title { font-size: 14px; font-weight: 700; }
+    .step-detail { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .step-state { color: var(--muted); font-size: 12px; }
+    .step.active .step-state {
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: var(--white);
+      background: var(--cobalt);
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      margin-top: auto;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-note { max-width: 470px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .actions { display: flex; align-items: center; gap: 10px; }
+    .primary, .secondary {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .primary { border: 1px solid var(--cobalt); color: var(--white); background: var(--cobalt); }
+    .primary:hover { background: var(--cobalt-dark); }
+    .secondary { border: 1px solid var(--line); color: var(--ink); background: var(--white); }
+    button:focus-visible { outline: 3px solid rgba(52,84,209,.3); outline-offset: 2px; }
+
+    .result-card {
+      display: none;
+      margin-top: 20px;
+      padding: 18px;
+      border-radius: 16px;
+      background: #eef9f4;
+      border: 1px solid #b9e0d1;
+    }
+    .result-card.visible { display: block; }
+    .result-card.visible:not(.warning) {
+      box-shadow: 0 14px 32px rgba(19,121,91,.14);
+    }
+    .result-card.warning { background: #fff6e8; border-color: #f1d09d; }
+    .result-card h4 { margin: 0 0 7px; }
+    .result-card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+
+    @media (max-width: 960px) {
+      .shell { width: min(100% - 24px, 760px); }
+      .layout { grid-template-columns: 1fr; }
+      .preview-pane { min-height: 620px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .status-pane { padding: 34px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><img class="brand-mark" id="brandIcon" alt="">Power Pages</div>
+      <span class="status-badge" id="statusBadge">Preparing site</span>
+    </header>
+
+    <section class="layout">
+      <aside class="preview-pane">
+        <p class="eyebrow">Your selected starting point</p>
+        <h1 id="templateDisplayName"></h1>
+        <p class="lede" id="templateDescription"></p>
+        <div class="preview-card" id="previewCard">
+          <img id="previewImage" alt="">
+          <span class="preview-label" id="previewLabel"></span>
+        </div>
+        <div class="slide-controls" id="slideControls" role="tablist" aria-label="Template page preview"></div>
+        <div class="preview-controls">
+          <div class="segmented" aria-label="Preview size">
+            <button class="active" data-view="desktop">Desktop</button>
+            <button data-view="mobile">Mobile</button>
+          </div>
+          <div class="template-meta"><span id="templateName"></span><br>Language · <span id="language"></span></div>
+        </div>
+        <section class="template-info" aria-labelledby="templateInfoTitle">
+          <h2 id="templateInfoTitle">About this template</h2>
+          <p id="aboutDescription"></p>
+          <ul class="feature-list" id="featureList"></ul>
+          <div class="template-notes" id="templateNotes"></div>
+        </section>
+      </aside>
+
+      <section class="status-pane" aria-live="polite">
+        <div class="site-identity">
+          <div>
+            <p class="eyebrow">Creating your site</p>
+            <h2 id="siteName"></h2>
+            <div class="site-url" id="siteUrl"></div>
+          </div>
+          <div class="state-chip"><span class="pulse"></span><span id="chipText"></span></div>
+        </div>
+
+        <ol class="timeline" id="timeline"></ol>
+
+        <div class="result-card" id="resultCard">
+          <h4 id="resultTitle">Your site is ready</h4>
+          <p id="resultMessage">The Enhanced site was verified, downloaded, and validated locally.</p>
+        </div>
+
+        <footer class="footer">
+          <div class="footer-note" id="refreshNote">This page refreshes automatically as Power Pages advances through provisioning, registration, download, and validation.</div>
+        </footer>
+      </section>
+    </section>
+  </main>
+
+  <script nonce="__CSP_NONCE__">
+    const model = __JSON_MODEL__;
+    const storageKey = `power-pages-create-site:${location.pathname}`;
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || "{}");
+    let currentView = saved.view === "mobile" ? "mobile" : "desktop";
+    let currentSlide = model.template.previews.some((preview) => preview.name === saved.slide)
+      ? saved.slide
+      : model.template.previews[0]?.name;
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value || "";
+    }
+
+    function updatePreview() {
+      const preview = model.template.previews.find((candidate) => candidate.name === currentSlide);
+      if (!preview) {
+        document.getElementById("previewCard").hidden = true;
+        document.getElementById("slideControls").hidden = true;
+        return;
+      }
+
+      const image = document.getElementById("previewImage");
+      image.src = preview[currentView];
+      image.alt = `${currentView} preview of ${model.template.displayName}: ${preview.displayName}`;
+      setText("previewLabel", `${preview.displayName} · template preview`);
+      document.getElementById("previewCard").classList.toggle("mobile", currentView === "mobile");
+      document.querySelectorAll("[data-view]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === currentView);
+      });
+      document.querySelectorAll("[data-slide]").forEach((button) => {
+        const selected = button.dataset.slide === currentSlide;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-selected", String(selected));
+      });
+      sessionStorage.setItem(storageKey, JSON.stringify({ view: currentView, slide: currentSlide }));
+    }
+
+    setText("templateDisplayName", model.template.displayName);
+    setText("templateDescription", model.template.description);
+    setText("aboutDescription", model.template.description);
+    setText("templateName", model.template.name);
+    setText("language", model.site.language);
+    setText("siteName", model.site.name);
+    setText("siteUrl", model.site.url);
+    document.getElementById("brandIcon").src = model.brandIcon;
+    setText("chipText", model.status.chip);
+    setText("statusBadge", model.status.terminal ? model.status.chip : "Live creation status");
+
+    document.getElementById("featureList").replaceChildren(
+      ...model.template.capabilities.map((capability) => {
+        const item = document.createElement("li");
+        item.textContent = capability;
+        return item;
+      })
+    );
+
+    const notes = [];
+    if (model.template.requirements.length) {
+      const requirement = document.createElement("div");
+      requirement.className = "template-note";
+      const heading = document.createElement("strong");
+      heading.textContent = "Requires: ";
+      requirement.append(heading, document.createTextNode(model.template.requirements.join(", ") + "."));
+      notes.push(requirement);
+    }
+    if (model.template.warning) {
+      const warning = document.createElement("div");
+      warning.className = "template-note";
+      const heading = document.createElement("strong");
+      heading.textContent = "Editing note: ";
+      warning.append(heading, document.createTextNode(model.template.warning));
+      notes.push(warning);
+    }
+    document.getElementById("templateNotes").replaceChildren(...notes);
+
+    const slideControls = document.getElementById("slideControls");
+    slideControls.replaceChildren(...model.template.previews.map((preview) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.slide = preview.name;
+      button.setAttribute("role", "tab");
+      button.textContent = preview.displayName;
+      button.addEventListener("click", () => {
+        currentSlide = preview.name;
+        updatePreview();
+      });
+      return button;
+    }));
+
+    document.querySelectorAll("[data-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentView = button.dataset.view;
+        updatePreview();
+      });
+    });
+
+    const timeline = document.getElementById("timeline");
+    timeline.replaceChildren(...model.timeline.map((step, index) => {
+      const complete = index < model.status.step || model.status.key === "ready";
+      const active = index === model.status.step && !model.status.terminal;
+      const failed = index === model.status.step && model.status.error;
+      const item = document.createElement("li");
+      item.className = `step ${failed ? "error" : complete ? "complete" : active ? "active" : ""}`;
+      const marker = document.createElement("span");
+      marker.className = "step-marker";
+      marker.textContent = complete ? "✓" : failed ? "!" : String(index + 1).padStart(2, "0");
+      const copy = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "step-title";
+      title.textContent = step[0];
+      const detail = document.createElement("div");
+      detail.className = "step-detail";
+      detail.textContent = active || failed ? model.status.message : step[1];
+      copy.append(title, detail);
+      const state = document.createElement("span");
+      state.className = "step-state";
+      state.textContent = complete ? "Complete" : failed ? "Stopped" : active ? "Working" : "Waiting";
+      item.append(marker, copy, state);
+      return item;
+    }));
+
+    if (model.status.result) {
+      const resultCard = document.getElementById("resultCard");
+      resultCard.className = `result-card visible${model.status.error ? " warning" : ""}`;
+      setText("resultTitle", model.status.result.title);
+      setText("resultMessage", model.status.result.message);
+    }
+
+    if (model.status.terminal) {
+      document.querySelector(".pulse").style.animation = "none";
+      setText("refreshNote", "This status is final. You can keep this page open while you begin customizing the downloaded site.");
+    } else if (model.refresh) {
+      window.setTimeout(() => location.reload(), 5000);
+    }
+
+    updatePreview();
+  </script>
+</body>
+</html>

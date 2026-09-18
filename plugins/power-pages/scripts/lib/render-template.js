@@ -20,8 +20,18 @@ const PLACEHOLDER_RE = /__(?:(HTML|ATTR|JSON|RAW)_)?([A-Z][A-Z0-9_]*)__/g;
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
+ * @param {boolean} [options.overwrite=false] - Replace an existing output file.
+ * @param {boolean} [options.emitStatus=true] - Print the JSON completion line.
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
+function renderTemplate({
+  templatePath,
+  outputPath,
+  dataPath,
+  dataObject,
+  requiredKeys,
+  overwrite = false,
+  emitStatus = true,
+}) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -77,7 +87,7 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   }
 
   // Never overwrite an existing file — the caller must choose a unique name
-  if (fs.existsSync(outputPath)) {
+  if (fs.existsSync(outputPath) && !overwrite) {
     console.error(
       `Error: Output file already exists: ${outputPath}\n` +
       'Choose a different filename to avoid overwriting the previous plan.'
@@ -101,7 +111,9 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     // non-fatal
   }
 
-  console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+  if (emitStatus) {
+    console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+  }
 }
 
 function escapeHtml(value) {

@@ -48,3 +48,27 @@ test('renderTemplate encodes each placeholder for its declared output context', 
   const nonce = html.match(/<script nonce="([^"]+)">/)[1];
   assert.match(nonce, /^[A-Za-z0-9+/]{22}==$/);
 });
+
+test('renderTemplate replaces an existing file only when overwrite is enabled', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-template-overwrite-'));
+  const templatePath = path.join(tempDir, 'template.html');
+  const outputPath = path.join(tempDir, 'output.html');
+
+  try {
+    fs.writeFileSync(templatePath, '<p>__VALUE__</p>');
+    fs.writeFileSync(outputPath, 'old');
+
+    renderTemplate({
+      templatePath,
+      outputPath,
+      dataObject: { VALUE: 'new' },
+      requiredKeys: ['VALUE'],
+      overwrite: true,
+      emitStatus: false,
+    });
+
+    assert.equal(fs.readFileSync(outputPath, 'utf8'), '<p>new</p>');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

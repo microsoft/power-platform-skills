@@ -1,7 +1,7 @@
 {
   "name": "power-pages",
-  "version": "2.6.6",
-  "description": "Create and deploy Power Pages sites using modern development approaches. Supports code sites (SPAs) with React, Angular, Vue, or Astro. Includes ALM orchestration (plan-alm) with a solution-splitting decision tree, per-solution pipelines, Azure Blob asset advisory, manifest schema v2 for multi-solution deployments, and force-link remediation for cross-host pipeline migrations.",
+  "version": "2.7.0",
+  "description": "Create and deploy Power Pages sites using modern development approaches. Supports Enhanced data model sites provisioned from documented first-party templates and code sites (SPAs) with React, Angular, Vue, or Astro. Includes ALM orchestration, per-solution pipelines, solution splitting, and deployment diagnostics.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"
@@ -13,6 +13,8 @@
     "power-pages",
     "site-builder",
     "code-sites",
+    "enhanced-data-model",
+    "declarative-sites",
     "spa",
     "react",
     "angular",
