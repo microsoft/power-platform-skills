@@ -53772,6 +53772,9 @@ function getAzTenantId() {
   }
   return cachedTenantId;
 }
+function resetAzTenantIdCache() {
+  cachedTenantId = null;
+}
 
 // packages/core/dist/auth/composite-auth.js
 var CONNECTIVITY_RESOURCE_COMMERCIAL = "https://api.powerplatform.com";
@@ -53820,6 +53823,18 @@ function buildCompositeAuth(opts = {}) {
     invalidateAccessToken(resource) {
       azAuth.invalidateAccessToken?.(resource);
       msalAuth?.invalidateAccessToken?.(resource);
+    },
+    // Dropping tokens is not enough. `msalAuth` is built once and binds both
+    // the tenant authority (from the process-global `getAzTenantId` cache) and
+    // the resolved MSAL account. Keeping it across `az account set` or
+    // `switch_account` means the next connectivity call silently re-acquires
+    // for the *old* account, while the tool that triggered the reset reports
+    // success. Drop the provider and the tenant cache together so the next
+    // call rebuilds against whatever `az` now says. (#602 review)
+    resetConnectivityAuth() {
+      msalAuth?.invalidateAccessToken?.();
+      msalAuth = null;
+      resetAzTenantIdCache();
     }
   };
 }
@@ -53974,7 +53989,12 @@ function loadConfig() {
   } else {
     cloud = resolveCloud();
   }
-  const cloudEndpoints = getCloudEndpoints(cloud);
+  const baseCloudEndpoints = getCloudEndpoints(cloud);
+  const cloudEndpoints = {
+    ...baseCloudEndpoints,
+    ...process.env.PA_FLOW_RESOURCE ? { flowResource: process.env.PA_FLOW_RESOURCE } : {},
+    ...process.env.PA_PPAPI_RESOURCE ? { powerPlatformApiUrl: process.env.PA_PPAPI_RESOURCE } : {}
+  };
   return {
     defaultEnvironmentId: process.env.PA_DEFAULT_ENVIRONMENT ?? fileConfig.defaultEnvironmentId,
     baseUrl: process.env.PA_BASE_URL ?? fileConfig.baseUrl ?? cloudEndpoints.flowBaseUrl,
@@ -55809,6 +55829,7 @@ import { spawnSync as spawnSync3 } from "node:child_process";
 import fs4 from "node:fs";
 import path5 from "node:path";
 init_msal_disk_cache();
+init_msal_auth();
 async function readTokenIdentity(auth2, resource) {
   try {
     const token = await auth2.getAccessToken(resource);
@@ -55822,7 +55843,14 @@ async function whoAmI(auth2, config3, opts = {}) {
   const tokenIdentity = await readTokenIdentity(auth2, config3.cloudEndpoints.flowResource);
   const identityMismatch = Boolean(azIdentity?.tenantId && tokenIdentity?.tenantId && azIdentity.tenantId !== tokenIdentity.tenantId);
   const connectivityIdentity = readCachedMsalIdentities();
-  const connectivityIdentityMismatch = Boolean(azIdentity?.tenantId && connectivityIdentity.some((i) => i.tenantId && i.tenantId !== azIdentity.tenantId));
+  const azUser = azIdentity?.user?.trim().toLowerCase();
+  const connectivityIdentityMismatch = Boolean(connectivityIdentity.some((i) => {
+    if (azIdentity?.tenantId && i.tenantId && i.tenantId !== azIdentity.tenantId)
+      return true;
+    if (azUser && i.username && i.username.trim().toLowerCase() !== azUser)
+      return true;
+    return false;
+  }));
   return {
     azIdentity,
     azureConfigDir: azureConfigDir(),
@@ -55848,6 +55876,7 @@ async function reconnect(auth2, config3) {
   }
   new DiskTokenCache().clear();
   auth2.invalidateAccessToken?.();
+  auth2.resetConnectivityAuth?.();
   const clearedConnectivityEntries = clearMsalDiskCache();
   let reacquired = false;
   try {
@@ -55857,7 +55886,7 @@ async function reconnect(auth2, config3) {
     reacquired = false;
   }
   const azIdentity = readActiveAzIdentity();
-  const connSuffix = clearedConnectivityEntries > 0 ? ` Connectivity sign-in cleared (${clearedConnectivityEntries} file${clearedConnectivityEntries === 1 ? "" : "s"}); the next connection command will prompt for an account.` : "";
+  const connSuffix = clearedConnectivityEntries > 0 ? ` Connectivity sign-in cleared (${clearedConnectivityEntries} file${clearedConnectivityEntries === 1 ? "" : "s"}); ${describeNextConnectivitySignIn()}.` : "";
   return {
     clearedEntries,
     tokenCacheDir: dir,
@@ -55867,6 +55896,19 @@ async function reconnect(auth2, config3) {
     reacquired,
     message: reacquired ? `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) and a fresh token acquired as ${azIdentity?.user ?? "(unknown)"}.${connSuffix}` : `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) but re-acquisition failed. Run: az login${connSuffix}`
   };
+}
+function describeNextConnectivitySignIn(opts) {
+  const resolved = resolveInteractiveAccountOptions(process.env, {
+    storedHint: readPreferredAccount(opts)
+  });
+  if (resolved.loginHint) {
+    const source = process.env.PA_LOGIN_HINT?.trim() ? "PA_LOGIN_HINT" : "your switch_account preference";
+    return `the next connection command will sign in as ${resolved.loginHint} (${source})`;
+  }
+  if (resolved.prompt === "select_account") {
+    return "the next connection command will show an account picker";
+  }
+  return "the next connection command will use your browser's current account (PA_NO_ACCOUNT_PICKER is set)";
 }
 function azVersionInstalled() {
   try {
@@ -56016,7 +56058,8 @@ function listAccounts(opts) {
     matchesAzTenant: Boolean(azIdentity?.tenantId && i.tenantId === azIdentity.tenantId),
     preferred: Boolean(preferredAccount && i.username?.toLowerCase() === preferredAccount.toLowerCase())
   }));
-  const identityMismatch = accounts.some((a) => a.tenantId && !a.matchesAzTenant);
+  const azUserLc = azIdentity?.user?.trim().toLowerCase();
+  const identityMismatch = accounts.some((a) => a.tenantId && !a.matchesAzTenant || Boolean(azUserLc && a.username && a.username.trim().toLowerCase() !== azUserLc));
   let message;
   if (accounts.length === 0) {
     message = preferredAccount ? `No Connectivity sign-in is cached. The next connection command will sign in as ${preferredAccount}.` : "No Connectivity sign-in is cached. The next connection command will show an account picker.";
@@ -56036,8 +56079,9 @@ function listAccounts(opts) {
 }
 function switchAccount(username, opts) {
   const target = username?.trim() ? username.trim() : null;
-  writePreferredAccount(target, opts);
+  const persisted = writePreferredAccount(target, opts);
   const clearedConnectivityEntries = clearMsalDiskCache(opts);
+  opts?.auth?.resetConnectivityAuth?.();
   const azIdentity = readActiveAzIdentity();
   let warning;
   if (target && azIdentity?.user && azIdentity.user.includes("@") && target.includes("@")) {
@@ -56048,12 +56092,25 @@ function switchAccount(username, opts) {
     }
   }
   const cleared = `Cleared ${clearedConnectivityEntries} cached Connectivity sign-in${clearedConnectivityEntries === 1 ? "" : "s"}.`;
+  if (!persisted) {
+    const failure = `${cleared} But the account preference could not be saved to ${opts?.cacheDir ?? defaultMsalCacheDir()}, so ${describeNextConnectivitySignIn(opts)}. ` + (target ? `To sign in as ${target} anyway, set PA_LOGIN_HINT=${target}, or fix the permissions on that directory and retry.` : "Check the permissions on that directory and retry.");
+    return {
+      preferredAccount: null,
+      clearedConnectivityEntries,
+      connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+      azIdentity,
+      preferencePersisted: false,
+      warning: failure,
+      message: failure
+    };
+  }
   const message = target ? `${cleared} The next connection command will sign in as ${target}.` : `${cleared} The next connection command will show an account picker.`;
   return {
     preferredAccount: target,
     clearedConnectivityEntries,
     connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
     azIdentity,
+    preferencePersisted: true,
     warning,
     message
   };
@@ -66468,7 +66525,7 @@ async function createMcpServer(authProvider, deps = {}) {
     username: external_exports.string().optional().describe("UPN to sign in as next (e.g. user@contoso.com). Omit to force an account picker instead.")
   }, { title: "Switch Account" }, async ({ username }) => {
     try {
-      return safeResult(switchAccount(username ?? null));
+      return safeResult(switchAccount(username ?? null, { auth: getActiveMcpContext().auth }));
     } catch (e) {
       return safeError(e);
     }
