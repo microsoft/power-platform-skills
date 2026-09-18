@@ -54,9 +54,25 @@ If `expo-sharing` is missing:
 - Do not generate `sharePdfReport(...)`.
 - If the user's requirement specifically includes sharing, STOP and say sharing is not supported by this template.
 
+### 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the PDF report row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/pdfReport.ts` for the full requested API: `createPdfReport`,
+`wrapPdfDocument`, `escapePdfHtml`, requested `includeBase64` output for retention,
+and `sharePdfReport`/`PdfShareResult` when sharing is approved. Generate-only
+compatibility does not satisfy a share/upload request. Verify local-file and
+generated File-service payload requirements; missing required storage or an
+incompatible artifact outside approval returns `NEEDS_CONTEXT` to the owner, or
+asks standalone.
+
 ### 3. Write or verify `src/native/pdfReport.ts`
 
-Create `src/native/pdfReport.ts` if it does not exist. If it already exists, inspect it and patch only if it throws instead of returning a result, imports missing packages, or routes local URIs to the native PDF viewer.
+Apply Step 2a's decision for `src/native/pdfReport.ts`: create when requested and
+missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom HTML logic and existing exports; the example is not an
+overwrite template.
 
 The wrapper MUST:
 
@@ -67,7 +83,7 @@ The wrapper MUST:
 - Never import `@microsoft/power-apps-native-pdf-viewer` directly from this wrapper.
 - Keep HTML generation deterministic and app-owned; do not fetch remote HTML inside the wrapper.
 
-Base wrapper when `expo-sharing` is present:
+Base wrapper when sharing is requested and `expo-sharing` is present:
 
 ```ts
 // src/native/pdfReport.ts
@@ -160,11 +176,17 @@ export async function sharePdfReport(uri: string, options?: { dialogTitle?: stri
 }
 ```
 
-When `expo-sharing` is absent, generate the same file without the `expo-sharing` import, without `PdfShareResult`, and without `sharePdfReport(...)`. Keep `createPdfReport(...)`, `wrapPdfDocument(...)`, and `escapePdfHtml(...)`.
+For a new generate-only wrapper (or when `expo-sharing` is absent), omit the
+`expo-sharing` import, `PdfShareResult`, and `sharePdfReport(...)`. Keep
+`createPdfReport(...)`, `wrapPdfDocument(...)`, and `escapePdfHtml(...)`. Do not
+remove compatible existing share exports merely because sharing is not requested
+this time; any incompatible existing import follows Step 2a's scoped-update gate.
 
 ### 4. Use the wrapper
 
-Screens import the wrapper, not Expo modules directly:
+Integration guidance for the owner, not instructions to edit screens here.
+Screens import the wrapper, not Expo modules directly. This example includes
+sharing only when approved and available:
 
 ```ts
 import { createPdfReport, escapePdfHtml, sharePdfReport, wrapPdfDocument } from '@/native/pdfReport';
@@ -189,6 +211,11 @@ if (!share.ok) {
 If `expo-sharing` is absent, screens may still call `createPdfReport(...)`, preview the returned `file://` URI through native PDF viewer 0.2.9+, or upload it to a Dataverse File column through generated services. They must not render a Share button.
 
 ### 5. Optional Dataverse upload
+
+Optional means unrequested, not skippable when retention is approved. Step 2a
+verifies wrapper payload support and the generated signature; the owner supplies
+the app-specific adapter/screen integration below. Return missing helper-owned
+support or unknown required storage as `NEEDS_CONTEXT`, not a capture-only success.
 
 Retained PDFs use Dataverse File columns. Save or update the parent row first, verify `success`, then upload a payload compatible with the generated service's `upload(id, columnName, file, fileDisplayName?)` signature. Never put File column bytes in create/update JSON.
 
@@ -236,13 +263,20 @@ if (!upload.success) {
 npx tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix only in-scope helper errors, then execute the shared compatibility contract's
+Step 4. Recheck requested generation, sharing, and retention payloads, including
+empty HTML, unavailable sharing, print/share failures, and absent required base64.
+Type-check success alone is insufficient; do not fix screen/generated files.
 
 ### 7. Native rebuild note
 
 This skill does not install native code. If `expo-print` or `expo-sharing` was just added outside the skill, the app needs a native rebuild outside this workflow. If the packages were already in the build, Metro hot reload is enough for wrapper edits.
 
 ### 8. Summary
+
+Return the shared compatibility result and actual created/updated/reused paths
+before this summary. Report owner-side upload/integration separately; update
+memory-bank only after success, and leave final updates to the owner when orchestrated.
 
 Tell the user:
 

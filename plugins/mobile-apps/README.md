@@ -246,6 +246,12 @@ generated services. `npm run generate-schemas` refreshes the runtime map afterwa
 it is not an unused-table scanner. Server tables/records and shared dependencies
 are preserved. See [data-source retirement](shared/references/data-source-removal.md).
 
+During a mixed replacement, the manifest may temporarily include a retiring
+table until its consumers and app binding are removed. Sample-data seeding uses
+an explicit approved table list, not that whole manifest; retiring targets are
+excluded from inserts, media jobs, and retries. Plan updates record approved
+intent, while manifest/service snapshots record verified execution outcomes.
+
 ### 5. Iterate on the generated app after the fact
 
 ```text

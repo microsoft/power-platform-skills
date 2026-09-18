@@ -59,7 +59,13 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
 
-**Before proceeding, check if the connector has a dedicated skill. If it does, delegate immediately and STOP:**
+Classify the requested operation before matching the delegation table. Dataverse
+actions/functions follow the discovery-only branch in Step 3 directly, skipping
+connection lookup and data-source generation, never the table CRUD workflow.
+If the operation is ambiguous, ask before delegating.
+Use aliases only for routing; pass the exact discovered API ID to CLI commands.
+
+**Then check if this operation has a dedicated skill. If it does, delegate and STOP:**
 
 | Connector API name      | Delegate to        |
 | ----------------------- | ------------------ |
@@ -67,10 +73,6 @@ Otherwise, ask the user which connector they want to add. Browse available conne
 | `dataverse`, `commondataservice`, `shared_commondataservice`, `commondataserviceforapps`, `shared_commondataserviceforapps` (table CRUD only) | `/add-dataverse` |
 
 Invoke the appropriate skill with the same `$ARGUMENTS` and **do not continue this skill's workflow**.
-
-Classify the requested operation before this delegation: Dataverse
-actions/functions follow the discovery-only branch in Step 3, not table CRUD.
-Use aliases only for routing; pass the exact discovered API ID to CLI commands.
 
 Common connector API names:
 

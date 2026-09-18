@@ -445,6 +445,8 @@ Show the user a side-by-side diff (or before/after) for every changed plan secti
 - Edit brief: intent, target screens/routes, data/native/JavaScript/design dependencies, and assumptions
 - Data/schema operations to run (`/add-dataverse --skip-planning`, connector add, native wrapper add)
 - Exact app data-source removals, consumer updates, and server data that will be preserved
+- Exact sample-data table allowlist and count/media policy, if requested; exclude
+  retiring tables and include required seed parents only with explicit approval
 - Screen files to create, rewrite, rename, or delete
 - Navigation/layout files to update
 - Verification commands to run
@@ -476,6 +478,14 @@ diff --git native-app-plan.md native-app-plan.md
 
 If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print the exact follow-up commands, and stop. Otherwise continue immediately.
 
+The saved plan describes approved intent, not successful application. When the
+Data Model changed, merge its newly accepted `_dm_section.md` proposal here;
+never replay stale scratch output for an unrelated edit. Preserve unrelated
+sections and do not reuse execution artifacts/approval receipts bound to an older plan. The leaf
+updates `.datamodel-manifest.json` only from verified schema/service outcomes;
+pending retirements stay transitional until Step 6.5. Record any failure and
+remaining operations in memory-bank rather than claiming this plan is applied.
+
 ### Step 5 — Apply app mutations
 
 **Telemetry checkpoint: `apply_app_mutations`**
@@ -489,7 +499,15 @@ answers, and return to the approval gate if an unresolved choice changes scope.
 
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
 1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
-2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
+2. **Sample Data** — seed only the explicit table allowlist approved in Step 3.
+   Propose newly created Dataverse tables used by changed screens as candidates,
+   not the entire project manifest. Distinguish `createdThisEdit` from historical
+   manifest `status: new`; existing/reused parent tables need explicit inclusion.
+   Validate the approved names against verified output and the retirement set.
+   Empty scope means skip. Missing/unverified/retiring targets return to the owner
+   for correction, not a fallback to project-wide seeding. Pass the handoff below.
+   If insertion fails, record the partial result and continue only if the app
+   handles empty states; never report complete seed coverage.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
@@ -506,6 +524,29 @@ plan: it would neither unregister the old source nor safely update its consumers
 Defer approved retirements until Step 6.5, after source consumers are updated.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
+
+Sample-data handoff (only for a nonempty approved seed scope):
+
+```text
+Invoke skill: /add-sample-data
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: edit-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved seed tables, count/media policy, and lookup decisions>
+  retiring_tables: <approved retirement list, or empty>
+
+Arguments:
+  --working-dir "<working_dir>"
+  --tables "<approved-seed-table-logical-names>"
+  --exclude-tables "<retiring-table-logical-names-or-empty>"
+```
+
+These are skill arguments, not Dataverse CLI flags. A required parent outside
+the allowlist returns `NEEDS_CONTEXT`; the seeding leaf must not expand scope
+or seed a transitional retiring table to satisfy its coverage rules.
 
 #### Step 5.5 — Refresh generated service snapshot
 
