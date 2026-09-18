@@ -1,7 +1,8 @@
 # Tamagui Integration
 
-Internal reference used by `/create-mobile-app` Step 9b after `/design-system`
-writes `brand/tokens.ts`. This is not a user-invocable skill.
+Internal reference used by `/create-mobile-app` Step 9b and `/edit-app` Step 5
+after `/design-system` writes approved brand artifacts. This is not a
+user-invocable skill.
 
 The native host owns the baseline Tamagui contract. Generated applications
 must extend that contract rather than copying its semantic aliases, color
@@ -115,6 +116,11 @@ declare module 'tamagui' {
 The generated schema has one palette. Light mode receives its approved
 surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces
 and text while carrying the approved accent and status colors.
+
+If the approved design also supplies `brand/tokens.dark.ts`, overlay its palette
+in the existing `appDarkTheme` through `withPowerAppsSemanticAliases`. Keep the
+same exported themes and provider wiring; do not introduce a parallel theme
+registry/provider. Include any requested switch UI in the owner's screen scope.
 
 Never copy `parseColorChannels`, `readableForeground`, or
 `withSemanticAliases` into the app. The host helper owns those rules.

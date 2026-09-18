@@ -98,8 +98,13 @@ Cloud flows are added with `add-flow`, not `add-data-source`:
 
 ```bash
 npx power-apps add-flow --flow-id <flow-guid> --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
+
+For removal, use [data-source-removal.md](references/data-source-removal.md).
+`delete-data-source` / `remove-flow` own app registration, schema, and
+model/service cleanup; they do not delete server data. `npm run generate-schemas`
+only rebuilds the mobile runtime schema map afterward. Use the removal workflow
+for approval, `--force`, shared-reference preflight, and postcondition checks.
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
 

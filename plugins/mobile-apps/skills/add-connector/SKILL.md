@@ -10,6 +10,18 @@ model: sonnet
 
 # Add Connector (Generic)
 
+**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
+before the workflow below. For direct requests on an existing app, the entry-choice
+gate asks before invoking `/edit-app`; offer implementation-only work or cancel.
+Approved orchestrated calls skip this question and run the scoped leaf.
+Preserve the original intent, chosen mode, and orchestration context when delegating.
+Action connectors and cloud flows do not imply Dataverse Data Model changes.
+
+**Removal branch:** after entry routing, if `--remove` or the approved scope
+requests removal, execute
+[data-source-removal.md](../../shared/references/data-source-removal.md) and return.
+Do not run Steps 1-6, connection creation, or `add-data-source` for a removal.
+
 Fallback skill for any connector not covered by a dedicated `/add-*` skill. For common connectors, prefer the dedicated skills:
 
 - `/add-dataverse` — Dataverse tables
@@ -51,10 +63,14 @@ Otherwise, ask the user which connector they want to add. Browse available conne
 
 | Connector API name      | Delegate to        |
 | ----------------------- | ------------------ |
-| `sharepointonline`      | `/add-sharepoint`  |
-| `commondataservice`     | `/add-dataverse`   |
+| `sharepointonline`, `shared_sharepointonline` | `/add-sharepoint` |
+| `dataverse`, `commondataservice`, `shared_commondataservice`, `commondataserviceforapps`, `shared_commondataserviceforapps` (table CRUD only) | `/add-dataverse` |
 
 Invoke the appropriate skill with the same `$ARGUMENTS` and **do not continue this skill's workflow**.
+
+Classify the requested operation before this delegation: Dataverse
+actions/functions follow the discovery-only branch in Step 3, not table CRUD.
+Use aliases only for routing; pass the exact discovered API ID to CLI commands.
 
 Common connector API names:
 
@@ -70,11 +86,8 @@ npx power-apps list-flows --search '<flow-name-or-keyword>' --json
 npx power-apps add-flow --flow-id <flow-guid> --non-interactive
 ```
 
-To remove a flow later:
-
-```bash
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
-```
+To remove a flow later, use the removal branch, which verifies consumers and
+approval before the CLI removes the app binding.
 
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
@@ -165,7 +178,9 @@ For each method the user needs:
 2. Read just that method's section (use `offset` and `limit` parameters on Read)
 3. Identify required vs optional parameters and response type
 
-Help the user write code using the generated service methods.
+Return the needed method signatures and integration notes to the orchestrator.
+Screen implementations belong to `/edit-app` or `/create-mobile-app`; in
+implementation-only mode provide usage guidance without changing screens.
 
 ### Step 5 — Build
 
@@ -181,7 +196,13 @@ npm run generate-schemas
 npx tsc --noEmit
 ```
 
-Fix TypeScript errors before proceeding. Common gotcha: the new generated service may import a peer dependency you don't have installed yet — if so, `npx expo install <missing-package>` (NOT plain `npm install`, so versions stay Expo-compatible).
+Fix TypeScript errors before proceeding. If a generated service requires a missing
+dependency, inspect its package contents before choosing a repair. Do not install
+native packages absent from the template. Return a JS-only dependency requirement
+to the orchestrator for the approved exact-version
+[JavaScript dependency plan](../../shared/references/javascript-dependency-planning.md);
+in implementation-only mode obtain that approval before installation. Do not
+install an unplanned package merely to silence TypeScript.
 
 Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
 
@@ -191,15 +212,15 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 
 ## Remove a data source or flow
 
-If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
+Apply the entry routing first for removals too. `/edit-app` must identify consuming
+screens/services and approve their update or removal before deleting a dependency;
+implementation-only removal must stop if it would leave broken consumers.
 
-```bash
-npx power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --non-interactive
-npx power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
-```
-
-Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting success.
+Read and execute
+[data-source-removal.md](../../shared/references/data-source-removal.md) for the
+supported command, scope preflight, generated/config cleanup checks, and
+inventory reconciliation. This also covers sources originally added outside
+this skill; use the actual registered identity rather than assuming its name.
 
 ## Runtime connector handling
 
