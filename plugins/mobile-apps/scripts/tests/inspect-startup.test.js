@@ -171,6 +171,64 @@ test('optional package omissions are identifiable without declaring installation
   assert.equal(optional.installedStatus, 'missing');
 });
 
+test('missing optional lock entries are allowed while installed findings remain independent', (t) => {
+  const { root, write, manifest, lock } = fixture(t);
+  manifest.optionalDependencies = { 'optional-package': '1.0.0' };
+  lock.packages[''].optionalDependencies = manifest.optionalDependencies;
+  write('package.json', manifest);
+  write('package-lock.json', lock);
+
+  let result = inspectStartup(root, []);
+  assert.equal(result.lockfile.status, 'direct-declarations-match');
+  assert.deepEqual(result.lockfile.mismatches, []);
+  let optional = result.packages.find(({ name }) => name === 'optional-package');
+  assert.equal(optional.optional, true);
+  assert.equal(optional.installedStatus, 'missing');
+  assert.equal(optional.lockedVersion, null);
+  assert.equal(optional.matchesLock, null);
+  assert.equal(result.repairAuthorized, false);
+
+  write('node_modules/optional-package/package.json', {
+    name: 'optional-package', version: '1.0.0',
+  });
+  result = inspectStartup(root, []);
+  optional = result.packages.find(({ name }) => name === 'optional-package');
+  assert.equal(result.lockfile.status, 'direct-declarations-match');
+  assert.equal(optional.installedStatus, 'read');
+  assert.equal(optional.installedVersion, '1.0.0');
+  assert.equal(optional.lockedVersion, null);
+  assert.equal(optional.matchesLock, null);
+});
+
+test('optional omission exception preserves malformed, linked, and required-entry findings', (t) => {
+  const { root, write, manifest, lock } = fixture(t);
+  manifest.optionalDependencies = { 'optional-package': '1.0.0' };
+  lock.packages[''].optionalDependencies = manifest.optionalDependencies;
+  write('package.json', manifest);
+
+  for (const entry of [null, false, {}, [], { version: null }, { version: '1.0.0', link: true }]) {
+    lock.packages['node_modules/optional-package'] = entry;
+    write('package-lock.json', lock);
+    const result = inspectStartup(root, []);
+    assert.equal(result.lockfile.status, 'inconsistent');
+    assert.deepEqual(result.lockfile.mismatches, [{ section: 'packages', name: 'optional-package' }]);
+  }
+
+  delete lock.packages['node_modules/optional-package'];
+  delete lock.packages['node_modules/sample-package'];
+  write('package-lock.json', lock);
+  let result = inspectStartup(root, []);
+  assert.equal(result.lockfile.status, 'inconsistent');
+  assert.deepEqual(result.lockfile.mismatches, [{ section: 'packages', name: 'sample-package' }]);
+
+  lock.packages['node_modules/sample-package'] = { version: '1.0.0' };
+  lock.packages[''].optionalDependencies = { 'optional-package': '2.0.0' };
+  write('package-lock.json', lock);
+  result = inspectStartup(root, []);
+  assert.equal(result.lockfile.status, 'inconsistent');
+  assert.deepEqual(result.lockfile.mismatches, [{ section: 'optionalDependencies', name: 'optional-package' }]);
+});
+
 test('npm-normalized optional overrides match without hiding genuine declaration drift', (t) => {
   const { root, write, manifest, lock } = fixture(t);
   manifest.dependencies['sample-package'] = 'file:./shadowed';
