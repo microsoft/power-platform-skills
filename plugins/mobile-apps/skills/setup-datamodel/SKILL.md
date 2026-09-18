@@ -297,6 +297,11 @@ removing the last Dataverse binding. Connector-only work without Dataverse does
 not require or create a Dataverse manifest. Record partial execution or unresolved
 removals in memory-bank and return a non-success status rather than claiming the plan is fully applied.
 
+Render the summary from verified results, not the example's possible artifacts.
+For connector-only work without a Dataverse inventory, report Data Model and
+Manifest as `not applicable`; do not print a nonexistent manifest path. If a
+verified inventory already exists but was untouched, label it `unchanged`.
+
 ```
 ✅ Data sources set up
 ─────────────────────────────────────────────
@@ -304,7 +309,7 @@ Data model:
   Tables reused  : <list>
   Tables extended: <list>
   Tables created : <list>
-  Manifest       : .datamodel-manifest.json
+  Manifest      : <verified manifest path and updated/unchanged status, or "not applicable">
 
 Connectors:
   <list of added connectors, or "None">

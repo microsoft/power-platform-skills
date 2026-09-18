@@ -155,6 +155,7 @@ Invoke skill: /setup-app-insights
 Environment:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: edit-app
+  working_dir: <working_dir>
   phase: configuration
   approved_scope: <requested configuration action; setup-app-insights owns approval>
 

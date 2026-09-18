@@ -60,10 +60,21 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
 
 Classify the requested operation before matching the delegation table. Dataverse
-actions/functions follow the discovery-only branch in Step 3 directly, skipping
+actions/functions follow the discovery-only branch below directly, skipping
 connection lookup and data-source generation, never the table CRUD workflow.
 If the operation is ambiguous, ask before delegating.
 Use aliases only for routing; pass the exact discovered API ID to CLI commands.
+
+**Dataverse actions/functions: discover and return here.**
+
+```bash
+npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
+```
+
+Surface the matching metadata and STOP this leaf with a clear note that this
+plugin adds Dataverse table CRUD, not actions/functions. Do not enter Step 3,
+invoke `/list-connections`, or generate a table service on this branch.
+If the user actually needs table CRUD, use the delegation table below.
 
 **Then check if this operation has a dedicated skill. If it does, delegate and STOP:**
 
@@ -97,9 +108,28 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 **Telemetry checkpoint: `generate_connector_data_source`**
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+**First, preserve or resolve the connection binding** using
+[connector-reference.md](../../shared/connector-reference.md#step-1--get-a-connection):
 
-Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
+- Supplied `--connection-id` (or approved caller `connectionId`): reuse that exact
+  ID for the confirmed connector/environment; skip `/list-connections` and creation.
+- Supplied `--connection-ref` (or approved caller `connectionRef`): preserve that
+  reference for generation; skip `/list-connections` and creation. Do not replace
+  it with a newly selected ID.
+- Missing binding only: invoke `/list-connections` with the connector API ID
+  and current scoped context to resolve the missing value. Conflicting, blank,
+  or ambiguous supplied values return to the owner instead of creating a fallback.
+
+The commands below show the connection-ID path. For a reference binding,
+replace `--connection-id <connectionId>` with
+`--connection-ref '<connectionRef>'` on `add-data-source` only. Reuse supplied
+dataset/table/procedure choices and skip their discovery. If discovery is still
+needed and requires an ID, obtain the backing ID for the approved reference or
+the missing concrete choices; do not create another connection or pass an
+unsupported reference flag to a picker command.
+
+If creation was needed but cannot complete in the CLI, direct the user to the
+environment-specific Connections URL from `power.config.json` `environmentId`:
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
 **Classify the connector before running `add-data-source`:**
@@ -138,16 +168,6 @@ npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> -
 npx power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
 npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
-
-**For Dataverse actions/functions rather than tables, discovery is available but this plugin only adds Dataverse table CRUD:**
-
-```bash
-npx power-apps find-dataverse-api --search '<operation-name>' --json
-```
-
-Surface the matching operation metadata and STOP with a clear note that this plugin can add Dataverse table CRUD through `/add-dataverse`, but does not add Dataverse actions/functions.
-
-If the user actually needs Dataverse table CRUD, stop and delegate to `/add-dataverse`; do not add Dataverse tables from this generic connector skill.
 
 **Parameter reference:**
 
