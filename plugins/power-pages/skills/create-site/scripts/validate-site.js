@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Validates either a generated code site or a downloaded declarative EDM site.
+// Validates either a generated code site or a PAC-downloaded declarative site.
 // The PostToolUse hook uses structural checks; the EDM workflow also passes the
 // expected website record ID for an identity match before creating the Git baseline.
 
@@ -127,19 +127,24 @@ function validateDeclarativeProject(
   { expectedWebsiteRecordId = null, skipGit = false } = {},
 ) {
   const errors = [];
-  const siteDir = path.join(projectRoot, '.powerpages-site');
+  // Create-site stores its download under `.powerpages-site`, while users who download
+  // manually can open the PAC site root itself. Both layouts carry the same declarative
+  // markers, so validate the selected site rather than requiring one wrapper directory.
+  const nestedSiteDir = path.join(projectRoot, '.powerpages-site');
+  const siteDir = fs.existsSync(nestedSiteDir) ? nestedSiteDir : projectRoot;
+  const displayPrefix = siteDir === projectRoot ? '' : '.powerpages-site/';
   const portalConfigDir = path.join(siteDir, '.portalconfig');
   const websitePath = path.join(siteDir, 'website.yml');
 
   if (!fs.existsSync(portalConfigDir) || !fs.statSync(portalConfigDir).isDirectory()) {
-    errors.push('Missing declarative marker: .powerpages-site/.portalconfig/');
+    errors.push(`Missing declarative marker: ${displayPrefix}.portalconfig/`);
   }
   if (!fs.existsSync(websitePath) || fs.statSync(websitePath).size === 0) {
-    errors.push('Missing or empty identity file: .powerpages-site/website.yml');
+    errors.push(`Missing or empty identity file: ${displayPrefix}website.yml`);
   } else {
     const identity = readWebsiteIdentity(websitePath);
     if (!identity.id || !UUID_REGEX.test(identity.id)) {
-      errors.push('.powerpages-site/website.yml: missing or invalid id');
+      errors.push(`${displayPrefix}website.yml: missing or invalid id`);
     } else if (
       expectedWebsiteRecordId &&
       identity.id.toLowerCase() !== expectedWebsiteRecordId.toLowerCase()
@@ -171,7 +176,13 @@ function validateProject(projectRoot, options = {}) {
   if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) {
     return { siteType: 'code', errors: validateCodeProject(projectRoot) };
   }
-  if (fs.existsSync(path.join(projectRoot, '.powerpages-site'))) {
+  if (
+    fs.existsSync(path.join(projectRoot, '.powerpages-site')) ||
+    (
+      fs.existsSync(path.join(projectRoot, '.portalconfig')) &&
+      fs.existsSync(path.join(projectRoot, 'website.yml'))
+    )
+  ) {
     return {
       siteType: 'declarative',
       errors: validateDeclarativeProject(projectRoot, options),

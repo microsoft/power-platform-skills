@@ -93,6 +93,18 @@ test('can validate downloaded identity and assets before Git initialization', ()
     assert.deepEqual(result.errors, []);
   }));
 
+test('validates a manually downloaded declarative site opened at its site root', () =>
+  withTempDir((root) => {
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.mkdirSync(path.join(root, '.portalconfig'), { recursive: true });
+    writeFile(root, 'website.yml', `id: ${WEBSITE_ID}\nname: Manual Download\n`);
+    writeFile(root, path.join('web-pages', 'home.webpage.yml'), 'name: Home\n');
+
+    const result = validateProject(root, { expectedWebsiteRecordId: WEBSITE_ID });
+    assert.equal(result.siteType, 'declarative');
+    assert.deepEqual(result.errors, []);
+  }));
+
 test('readWebsiteIdentity strips quotes and inline comments', () =>
   withTempDir((root) => {
     const filePath = path.join(root, 'website.yml');

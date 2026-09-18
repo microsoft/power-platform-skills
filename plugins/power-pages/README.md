@@ -43,7 +43,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 41 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, classic-site authoring and styling, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 42 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, declarative-site customization, classic-site authoring and styling, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 The `/practice-site-check` and `/add-button` descriptions below are retained for reference, but these skills are not bundled with the plugin and are excluded from this count.
 
@@ -62,7 +62,8 @@ from a template accepted by the documented Power Platform Create Website API.
 - **Enhanced declarative sites:** confirm the environment EDM setting with an administrator,
   choose a supported first-party template, follow template previews and live creation status in a
   generated browser page, provision through the Power Platform API, download explicitly with
-  `--modelVersion Enhanced`, validate identity, and create a Git baseline.
+  `--modelVersion Enhanced`, validate identity, create a Git baseline, and optionally continue
+  into `/customize-declarative-site`.
 - Standard data model site creation is not supported. Existing Standard sites can be handled by
   downstream skills only where their declarative support is explicitly documented.
 
@@ -70,11 +71,29 @@ from a template accepted by the documented Power Platform Create Website API.
 
 > "Deploy my site to Power Pages"
 
-Builds your project and uploads it to your Power Pages environment using `pac pages upload-code-site`. Handles common blockers like JavaScript attachment restrictions.
+Routes by project type and deploys either a code site or a PAC-downloaded declarative site.
 
 - Verifies PAC CLI installation and authentication
 - Confirms target environment before deploying
-- Creates `.powerpages-site` folder with deployment artifacts
+- Code sites retain the existing build, `pac pages upload-code-site`, blocked-JavaScript, and
+  activation workflow
+- Declarative sites validate website identity and model, summarize local component changes, obtain
+  final upload approval, and use `pac pages upload` with an explicit model
+
+#### `/customize-declarative-site`
+
+> "Turn this downloaded Event Portal into our developer conference site"
+
+Plans and coordinates broad local customization of an existing PAC-downloaded declarative site,
+whether it was provisioned by `/create-site` or created manually in Design Studio.
+
+- Keeps one current approved JSON/HTML plan under `docs/customize-declarative-site/` and archives
+  earlier approved plans in timestamped history
+- Coordinates assets, snippets, Liquid/web templates, page layouts, webpages, localized content,
+  and styling through their owning skills
+- Preserves the downloaded template intentionally and resolves dependencies before consumers run
+- Verifies and commits the combined local result, then optionally hands off to `/deploy-site`
+- Leaves narrow changes directly available through the individual authoring skills
 
 #### `/activate-site`
 
@@ -555,27 +574,36 @@ The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAU
 A common end-to-end workflow looks like this:
 
 ```
+Code site:
 1.  /create-site            →  Scaffold + design + build pages
-2.  /deploy-site            →  Upload to Power Pages environment
-3.  /activate-site          →  Provision a public URL
+2.  /deploy-site            →  Build and upload the code site
+3.  /activate-site          →  Provision a public URL when needed
 4.  /setup-datamodel        →  Create Dataverse tables
 5.  /add-sample-data        →  Populate tables with test records
-6.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
-7.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
+6.  /integrate-backend      →  Pick the right backend approach
+7.  /add-ai-webapi          →  Wire AI summarization APIs into pages
 8.  /create-webroles        →  Define access roles
 9.  /setup-auth             →  Add login/logout + role-based UI
 10. /audit-permissions      →  Verify table permissions are safe
-11. /add-seo                →  Search engine optimization
+11. /add-seo                →  Add search engine optimization
 12. /deploy-site            →  Push final changes live
-13. /test-site              →  Runtime smoke test on the live URL
-14. /security-review        →  Full security review (headers, firewall, scan, permissions)
-15. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
-16. /setup-solution         →  Package the site into a Dataverse solution
-17. /setup-pipeline         →  Set up the Power Platform pipeline
-18. /deploy-pipeline        →  Promote through staging → production (run per stage)
+13. /test-site              →  Runtime smoke test
+
+Declarative site:
+1.  /create-site                    →  Provision and download an Enhanced template
+2.  /customize-declarative-site     →  Plan and coordinate local declarative changes
+3.  /deploy-site                    →  Verify identity/model and upload the declarative site
+
+ALM and release:
+1.  /security-review        →  Review security before release
+2.  /plan-alm               →  Plan multi-environment promotion
+3.  /setup-solution         →  Package the site into a Dataverse solution
+4.  /setup-pipeline         →  Set up the Power Platform pipeline
+5.  /deploy-pipeline        →  Promote through staging → production
 ```
 
-> Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
+> The ALM execution skills detect and update the approved `/plan-alm` plan. `/plan-alm` never runs
+> them automatically.
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 

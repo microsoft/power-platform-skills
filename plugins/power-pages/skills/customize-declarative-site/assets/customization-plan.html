@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Declarative customization plan - __SITE_NAME__</title>
+<style>
+:root{
+  --ink:#1f1b24;--muted:#655e6b;--paper:#f7f5f8;--panel:#fff;--line:#ddd6e2;
+  --plum:#6b2d75;--plum-dark:#43194d;--plum-soft:#f1e6f3;--cyan:#087e8b;
+  --cyan-soft:#e2f4f5;--amber:#9a5b00;--amber-soft:#fff2d8;--green:#24744a;
+  --shadow:0 18px 55px rgba(44,27,49,.1);--radius:18px;
+  --sans:"Segoe UI",system-ui,sans-serif;--mono:"Cascadia Code","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.55 var(--sans)}
+button{font:inherit}
+.masthead{background:linear-gradient(118deg,var(--plum-dark),#713676 68%,#87508d);color:#fff;padding:28px clamp(20px,5vw,64px) 34px;position:relative;overflow:hidden}
+.masthead:after{content:"";position:absolute;right:-55px;top:-120px;width:330px;height:330px;border:55px solid rgba(255,255,255,.08);border-radius:50%}
+.brand{display:flex;align-items:center;gap:12px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+.brand img{width:34px;height:34px;object-fit:contain;background:#fff;border-radius:9px;padding:4px}
+.hero{max-width:920px;margin-top:32px;position:relative;z-index:1}
+.eyebrow{font:600 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#e8c9ec}
+h1{font-size:clamp(34px,5vw,62px);line-height:1.02;letter-spacing:-.045em;margin:12px 0 16px;max-width:780px}
+.hero p{font-size:17px;max-width:760px;color:#f4eaf5;margin:0}
+.hero-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px}
+.tag{border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.09);padding:6px 10px;border-radius:999px;font-size:12px}
+.shell{display:grid;grid-template-columns:220px minmax(0,960px);gap:32px;max-width:1260px;margin:0 auto;padding:34px 24px 72px}
+.nav{position:sticky;top:20px;align-self:start;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 8px 30px rgba(44,27,49,.06)}
+.nav button{display:block;width:100%;border:0;background:transparent;text-align:left;padding:11px 12px;border-radius:10px;color:var(--muted);cursor:pointer}
+.nav button:hover,.nav button:focus-visible{background:var(--plum-soft);color:var(--plum-dark);outline:0}
+.nav button.active{background:var(--plum);color:#fff;font-weight:650}
+.main{min-width:0}
+.view{display:none}.view.active{display:block;animation:arrive .24s ease-out}
+@keyframes arrive{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+h2{font-size:27px;letter-spacing:-.025em;margin:0 0 6px}
+.lede{color:var(--muted);margin:0 0 22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:14px;box-shadow:0 8px 28px rgba(44,27,49,.05)}
+.summary{font-size:16px;line-height:1.7}
+.preserve{border-left:5px solid var(--cyan)}
+.label{font:650 11px/1.2 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:8px}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.fact{padding:16px;background:#fbfafc;border:1px solid var(--line);border-radius:13px}
+.fact strong{display:block;margin-top:4px;overflow-wrap:anywhere}
+.capability{display:grid;grid-template-columns:12px 1fr auto;gap:13px;align-items:start}
+.dot{width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--green)}
+.dot.blocked{background:var(--amber)}
+.capability h3,.operation h3{margin:0;font-size:16px}
+.capability p,.operation p{margin:5px 0 0;color:var(--muted)}
+.owner{font:600 11px/1.2 var(--mono);color:var(--plum);background:var(--plum-soft);padding:5px 8px;border-radius:7px}
+.operation{position:relative;padding-left:48px}
+.operation:before{content:attr(data-step);position:absolute;left:16px;top:20px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--plum);color:#fff;font:700 11px var(--mono)}
+.operation:not(:last-child):after{content:"";position:absolute;left:28px;top:46px;bottom:-16px;width:1px;background:var(--line)}
+.op-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.chip{font:600 11px var(--mono);padding:4px 8px;border-radius:7px;background:#f3f0f5;color:#514957}
+.warning{background:var(--amber-soft);border-color:#e6c47f;color:#663d00}
+.check{display:flex;gap:11px;align-items:flex-start}
+.check-mark{width:20px;height:20px;border:2px solid var(--cyan);border-radius:6px;flex:0 0 auto;margin-top:1px}
+.deploy.recommended{border-color:#b88cc0;background:linear-gradient(135deg,#fff,var(--plum-soft))}
+.deploy strong{font-size:16px}
+.empty{color:var(--muted);font-style:italic}
+code{font-family:var(--mono);font-size:12px;background:#f1edf3;padding:2px 5px;border-radius:5px;overflow-wrap:anywhere}
+@media(max-width:780px){.shell{grid-template-columns:1fr}.nav{position:static;display:flex;overflow:auto}.nav button{white-space:nowrap;width:auto}.facts{grid-template-columns:1fr}.masthead{padding-bottom:28px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.view.active{animation:none}}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="brand"><img src="./power-pages-icon.png" alt=""><span>Power Pages declarative authoring</span></div>
+  <div class="hero">
+    <div class="eyebrow">Customization blueprint</div>
+    <h1>__SITE_NAME__</h1>
+    <p id="heroSummary"></p>
+    <div class="hero-meta">
+      <span class="tag">__TEMPLATE_NAME__</span>
+      <span class="tag">__AESTHETIC__</span>
+      <span class="tag">__MOOD__</span>
+    </div>
+  </div>
+</header>
+<div class="shell">
+  <nav class="nav" aria-label="Plan sections">
+    <button class="active" data-view="overview">Overview</button>
+    <button data-view="readiness">Readiness</button>
+    <button data-view="operations">Operations</button>
+    <button data-view="verification">Verification</button>
+  </nav>
+  <main class="main">
+    <section class="view active" id="overview">
+      <h2>What will change</h2>
+      <p class="lede">The approved intent before any declarative authoring skill changes local site files.</p>
+      <div class="card summary" id="summary"></div>
+      <div class="card preserve"><div class="label">Template preservation</div><div id="preservation"></div></div>
+      <div class="facts" id="siteFacts"></div>
+      <h2 style="margin-top:28px">Warnings</h2>
+      <div id="warnings"></div>
+    </section>
+    <section class="view" id="readiness">
+      <h2>Customization readiness</h2>
+      <p class="lede">Capabilities are based on metadata present in this downloaded site, not permanent template limits.</p>
+      <div id="capabilities"></div>
+    </section>
+    <section class="view" id="operations">
+      <h2>Dependency-ordered operations</h2>
+      <p class="lede">Each operation is delegated to the skill that owns that component type.</p>
+      <div id="operationList"></div>
+    </section>
+    <section class="view" id="verification">
+      <h2>Verification and deployment</h2>
+      <p class="lede">Plan approval authorizes local customization only. Deployment confirms the environment separately.</p>
+      <div id="checks"></div>
+      <h2 style="margin-top:28px">After local verification</h2>
+      <div id="deployments"></div>
+    </section>
+  </main>
+</div>
+<script id="summaryData" type="application/json">__JSON_SUMMARY_DATA__</script>
+<script id="preservationData" type="application/json">__JSON_PRESERVATION_DATA__</script>
+<script id="siteData" type="application/json">__JSON_SITE_DATA__</script>
+<script id="capabilitiesData" type="application/json">__JSON_CAPABILITIES_DATA__</script>
+<script id="operationsData" type="application/json">__JSON_OPERATIONS_DATA__</script>
+<script id="warningsData" type="application/json">__JSON_WARNINGS_DATA__</script>
+<script id="verificationData" type="application/json">__JSON_VERIFICATION_DATA__</script>
+<script id="deploymentData" type="application/json">__JSON_DEPLOYMENT_DATA__</script>
+<script>
+const read=id=>JSON.parse(document.getElementById(id).textContent);
+const esc=value=>{const node=document.createElement("span");node.textContent=value==null?"":String(value);return node.innerHTML};
+const summary=read("summaryData").text;
+document.getElementById("heroSummary").textContent=summary;
+document.getElementById("summary").textContent=summary;
+document.getElementById("preservation").textContent=read("preservationData").text;
+const site=read("siteData");
+const facts=[
+  ["Website record",site.websiteRecordId||"Not recorded"],
+  ["Local site root",site.siteRoot],
+  ["Languages",(site.languages||[]).join(", ")||"Not resolved"],
+  ["Template",site.templateName||"Existing declarative site"]
+];
+document.getElementById("siteFacts").innerHTML=facts.map(([label,value])=>`<div class="fact"><div class="label">${esc(label)}</div><strong>${esc(value)}</strong></div>`).join("");
+const warnings=read("warningsData");
+document.getElementById("warnings").innerHTML=warnings.length?warnings.map(item=>`<div class="card warning">${esc(typeof item==="string"?item:item.description||item.label)}</div>`).join(""):`<div class="card empty">No plan-level warnings.</div>`;
+const capabilities=read("capabilitiesData");
+document.getElementById("capabilities").innerHTML=capabilities.length?capabilities.map(item=>`<div class="card capability"><span class="dot ${item.status==="blocked"?"blocked":""}"></span><div><h3>${esc(item.name)}</h3><p>${esc(item.note||"")}</p>${(item.evidence||[]).map(value=>`<code>${esc(value)}</code>`).join(" ")}</div><span class="owner">${esc(item.ownerSkill||item.status)}</span></div>`).join(""):`<div class="card empty">No capabilities recorded.</div>`;
+const operations=read("operationsData");
+document.getElementById("operationList").innerHTML=operations.length?operations.map((item,index)=>`<article class="card operation" data-step="${index+1}"><h3>${esc(item.id)}</h3><p>${esc(item.summary||item.action||"Planned operation")}</p><div class="op-meta"><span class="chip">${esc(item.skill)}</span><span class="chip">${esc(item.action)}</span>${(item.locales||[]).map(value=>`<span class="chip">${esc(value)}</span>`).join("")}${(item.dependsOn||[]).map(value=>`<span class="chip">after ${esc(value)}</span>`).join("")}</div></article>`).join(""):`<div class="card empty">No local changes are planned.</div>`;
+const checks=read("verificationData");
+document.getElementById("checks").innerHTML=checks.length?checks.map(item=>`<div class="card check"><span class="check-mark"></span><div><strong>${esc(typeof item==="string"?item:item.label)}</strong>${typeof item==="object"&&item.description?`<div>${esc(item.description)}</div>`:""}</div></div>`).join(""):`<div class="card empty">No verification checks recorded.</div>`;
+const deployments=read("deploymentData");
+document.getElementById("deployments").innerHTML=deployments.length?deployments.map(item=>`<div class="card deploy ${item.recommended?"recommended":""}"><strong>${esc(item.title)}</strong><p>${esc(item.description||"")}</p></div>`).join(""):`<div class="card empty">Keep the verified changes local.</div>`;
+document.querySelectorAll(".nav button").forEach(button=>button.addEventListener("click",()=>{
+  document.querySelectorAll(".nav button").forEach(node=>node.classList.toggle("active",node===button));
+  document.querySelectorAll(".view").forEach(node=>node.classList.toggle("active",node.id===button.dataset.view));
+}));
+</script>
+</body>
+</html>

@@ -1,9 +1,11 @@
 ---
 name: deploy-site
 description: >-
-  Deploys an existing Power Pages code site to a Power Pages environment using PAC CLI.
-  Handles tooling verification, authentication, environment confirmation, building, and
-  uploading. Use when the user wants to deploy, upload, or publish their code site.
+  Deploys an existing Power Pages site to a Power Pages environment using PAC CLI. Routes code
+  sites to the existing build and upload-code-site workflow, and PAC-downloaded declarative sites
+  to an isolated upload workflow with explicit data-model and website-identity checks. Handles
+  tooling verification, authentication, environment confirmation, upload approval, and
+  verification. Use when the user wants to deploy, upload, publish, or push either site type.
 user-invocable: true
 allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 model: sonnet
@@ -11,9 +13,10 @@ model: sonnet
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Deploy Power Pages Code Site
+# Deploy Power Pages Site
 
-Guide the user through deploying an existing Power Pages code site to a Power Pages environment using PAC CLI. Follow a systematic approach: verify tooling, authenticate, confirm the target environment, build and upload the site, and handle any blockers.
+Route to the correct deployment workflow before running code-site build, attachment, or activation
+logic.
 
 ## Core Principles
 
@@ -22,6 +25,56 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 - **Never change environment settings without consent**: If deployment requires modifying environment configuration (e.g., unblocking JavaScript attachments), always explain the change and get explicit user permission first.
 
 **Initial request:** $ARGUMENTS
+
+---
+
+## Site-Type Routing
+
+Classify explicit request signals first:
+
+- React, Vue, Angular, Astro, SPA, code site, or `powerpages.config.json` → **Code site**
+- declarative, Enhanced, EDM, Standard data model, `.portalconfig`, or `website.yml`
+  → **Declarative site**
+
+When the request is not explicit, search the current workspace for:
+
+- code-site roots containing `powerpages.config.json`;
+- declarative roots containing both `.portalconfig/` and `website.yml`, including a nested
+  `.powerpages-site/`.
+
+Exclude dependency, build-output, temporary, generated-output, and version-control directories.
+Use request paths and the current directory to resolve one project. Never choose the first result
+arbitrarily.
+
+<!-- gate: deploy-site:0.project-type | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:0.project-type):** Select the exact project when code and
+> declarative sites, or multiple valid roots, remain possible.
+>
+> **Trigger:** Project type or root is ambiguous after discovery.
+> **Why:** The two site types require incompatible PAC upload commands.
+> **Cancel leaves:** Nothing; no build or upload has started.
+
+If ambiguous, use `AskUserQuestion` to select the exact project root and detected type.
+
+- **Declarative site:** Read and follow
+  `${PLUGIN_ROOT}/skills/deploy-site/workflows/declarative-site.md`. Do not continue into the
+  code-site phases below.
+- **Code site:** Continue with the existing workflow below.
+
+### Declarative upload approval
+
+The declarative workflow contains the detailed call site below. This marker keeps its
+cloud-mutation gate visible to the repository gate catalog.
+
+<!-- gate: deploy-site:declarative-5.upload | category=final | cancel-leaves=local-customization -->
+
+> 🚦 **Gate (final · deploy-site:declarative-5.upload):** Approve the exact declarative root,
+> environment, website identity, model, and local change summary immediately before upload.
+
+## Code-Site Deployment Workflow
+
+The following phases retain the existing SPA/code-site behavior.
 
 ---
 

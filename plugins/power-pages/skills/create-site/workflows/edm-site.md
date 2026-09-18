@@ -32,7 +32,7 @@ Create all eight tasks before starting:
 | Provision the EDM site | Provisioning the EDM site | Create the website and poll the accepted operation |
 | Download the EDM site | Downloading the EDM site | Verify the created model and download explicitly as Enhanced |
 | Validate the EDM baseline | Validating the EDM baseline | Validate declarative artifacts and initialize Git |
-| Complete EDM setup | Completing EDM setup | Present cloud/local results and compatible next steps |
+| Complete EDM setup | Completing EDM setup | Present cloud/local results and optionally customize the downloaded template |
 
 ## Phase 1: Verify Prerequisites and EDM Availability
 
@@ -299,6 +299,37 @@ Present:
 - Validation and Git baseline result
 - Creation status page URL
 
-Do not ask to deploy. Explain that the local files are the downloaded baseline of the site already
-created in the environment. Recommend only downstream skills whose declarative support has been
-verified.
+Explain that the local files are the validated, committed baseline of the site already created in
+the environment. Do not ask to deploy the unchanged baseline.
+
+<!-- gate: create-site:edm-8-customize | category=plan | cancel-leaves=edm-baseline -->
+
+> 🚦 **Gate (plan · create-site:edm-8-customize):** Choose whether to continue into coordinated
+> local declarative customization.
+>
+> **Trigger:** Enhanced download, identity validation, and the untouched-template Git baseline
+> succeeded.
+> **Why:** Customization can create or modify several local declarative records, while declining
+> should leave the verified Microsoft template unchanged.
+> **Cancel leaves:** The created live site and verified local baseline.
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Would you like to customize the downloaded declarative template now? | Customize site | Customize now, Keep the template unchanged |
+
+On **Customize now**, invoke `/customize-declarative-site` through the `Skill` tool and provide:
+
+- exact `PROJECT_ROOT` and declarative site root;
+- site name and selected template;
+- environment URL;
+- `WEBSITE_RECORD_ID`;
+- configured base language;
+- the user's original site intent, when present.
+
+The customization skill owns its own plan approval, authoring-skill coordination, local
+verification, commits, and deployment handoff. Do not duplicate those phases here.
+
+On **Keep the template unchanged**, finish after recommending only downstream skills whose
+declarative support has been verified.

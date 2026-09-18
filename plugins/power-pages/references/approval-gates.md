@@ -469,7 +469,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (10 calls)
+### 6.13 `create-site` (11 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -483,20 +483,32 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:edm-1-confirm-capability` | gate | progress | EDM 1 | Administrator confirms **Switch to enhanced data model** because no public read API exists | nothing |
 | `create-site:edm-2-select-template` | gate | plan | EDM 2 | Select an exact supported EDM template identifier | nothing |
 | `create-site:edm-4-provision` | gate | final | EDM 4 | Final consent immediately before Create Website creates the cloud resource | nothing |
+| `create-site:edm-8-customize` | gate | plan | EDM 8 | Verified Enhanced baseline — *"Customize now / Keep the template unchanged"* | edm-baseline |
 
 ---
 
-### 6.14 `deploy-site` (8 calls)
+### 6.13.1 `customize-declarative-site` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `customize-declarative-site:4.approve` | gate | plan | 4 | JSON and HTML plan complete — *"Approve and customize / Revise plan / Cancel"* | plan-artifacts |
+| `customize-declarative-site:7.deploy` | gate | plan | 7 | Verified local customization — *"Deploy now / Keep changes local"* | local-customization |
+
+---
+
+### 6.14 `deploy-site` (10 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `deploy-site:2.auth-url` | not-a-gate | — | 2 | Free-text env URL when PAC CLI not authenticated — data-gathering | — |
+| `deploy-site:0.project-type` | gate | plan | 0 | Multiple/mixed code and declarative candidates — select the exact project and type | nothing |
 | `deploy-site:3.confirm-env` | gate | consent | 3 | Echoes current env — *"Deploy to this environment? Yes / No, choose different"*. Covers the follow-up "pick different env" sub-prompt at the same step (single section, paired by marker proximity). Wrong-env deploy is destructive — confirmation is mandatory. | nothing |
 | `deploy-site:4.1.multi-project` | gate | plan | 4.1 | Multiple `powerpages.config.json` candidates found — *"Which project to deploy?"* | nothing |
 | `deploy-site:4.2.audit-permissions` | gate | plan | 4.2 | Re-deployment detected (`.powerpages-site` exists) — *"Run permissions audit first / Skip"* | nothing |
 | `deploy-site:5.5.1.activate` | gate | plan | 5.5.1 | Site not yet activated — *"Activate now / Skip"* | nothing |
 | `deploy-site:5.6.restart-cache` | gate | plan | 5.6 | Site activated — *"Restart site to flush cache? (brief downtime) / Skip"* | nothing |
 | `deploy-site:6.2.unblock-js` | gate | consent | 6.2 | Upload failed because `.js` is blocked — *"Remove .js block from `blockedattachments`? / No"*. Modifies tenant-wide env setting — destructive shared state. | `attachment-block-modified` |
+| `deploy-site:declarative-5.upload` | gate | final | Declarative 5 | Exact root/environment/website/model/diff confirmed — *"Upload changes / Review again / Cancel"* | local-customization |
 
 ---
 

@@ -9,7 +9,7 @@ description: >-
   website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 ---
 
@@ -99,6 +99,11 @@ question paired with the repository gate catalog.
 
 > 🚦 **Gate (final · create-site:edm-4-provision):** Final consent immediately before the Create
 > Website API call.
+
+<!-- gate: create-site:edm-8-customize | category=plan | cancel-leaves=edm-baseline -->
+
+> 🚦 **Gate (plan · create-site:edm-8-customize):** Choose whether to customize the verified
+> downloaded template through `/customize-declarative-site`.
 
 ---
 
