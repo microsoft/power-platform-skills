@@ -8,6 +8,7 @@ const RUNTIME_MANIFEST = '.tmp/mobile-authoring-runtime.json';
 const DERIVED_FILES = Object.freeze([REGISTRY, RUNTIME_MANIFEST, 'src/authoring/registry.ts']);
 const RUNTIME_HELPERS = Object.freeze([
   'src/authoring/index.tsx', 'src/authoring/controller.ts', 'src/authoring/README.md',
+  'scripts/authoring-attach.js',
 ]);
 const RUNTIME_INSTALL_FILES = Object.freeze([...DERIVED_FILES, ...RUNTIME_HELPERS, 'app/_layout.tsx', 'tsconfig.json']);
 

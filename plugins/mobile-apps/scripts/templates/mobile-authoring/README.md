@@ -125,6 +125,30 @@ generator has emitted real screen TSX, compiled packs and the local registry.
 Its success means helper files were generated/verified, **not** that root
 wiring, publishing, binary support or a device mount was verified.
 
+For a compatible generated project whose Metro server is already running:
+
+```sh
+npm run dev
+npm run authoring:attach -- --metro-url <the-normal-Metro-QR-url>
+```
+
+The second command contacts only a loopback authoring bridge (default
+`http://127.0.0.1:5177`) and registers this canonical project folder with the
+running Metro origin. The Metro verification response includes this generated
+app's UUID, preventing a reused port from authorizing a different app.
+Scanning that normal QR becomes editable only while the bridge has this
+explicit registration; an unregistered or stale URL remains preview-only.
+Candidate generation stays isolated, and Player Apply is the only step that
+writes the reviewed file delta back to this project. If the project changes
+manually, re-run `authoring:attach` to establish a new baseline. The local
+bridge and native vault create the maker credential automatically; there is no
+token to copy into the app.
+
+For an older generated app that has this helper but not the npm script, run
+`node scripts/authoring-attach.js --metro-url <the-normal-Metro-QR-url>`.
+Attachment rejects local credential files plus editor or agent/tool
+configuration before copying source into the isolated workspace.
+
 The generator must perform root wrapping and screen instrumentation, then run
 the existing TypeScript/source gates before publishing. Native authoring APIs
 require a rebuilt compatible Player. Ordinary standalone apps without that

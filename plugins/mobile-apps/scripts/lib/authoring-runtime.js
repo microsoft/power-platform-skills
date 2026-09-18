@@ -13,7 +13,13 @@ const MANIFEST_PATH = '.tmp/mobile-authoring-runtime.json';
 const STAMP_PATH = '.devplayer-builder/runtime.json';
 const TEMPLATE_ROOT = path.join(__dirname, '../templates/mobile-authoring');
 const OWNER = 'mobile-authoring-runtime';
-const OWNED_PATHS = ['src/authoring/index.tsx', 'src/authoring/controller.ts', 'src/authoring/registry.ts', 'src/authoring/README.md'];
+const OWNED_PATHS = [
+  'src/authoring/index.tsx',
+  'src/authoring/controller.ts',
+  'src/authoring/registry.ts',
+  'src/authoring/README.md',
+  'scripts/authoring-attach.js',
+];
 
 function exact(value, keys, label) {
   protocol.object(value, label);
@@ -106,6 +112,7 @@ function renderAuthoringRuntime(registry) {
     'src/authoring/controller.ts': fs.readFileSync(path.join(TEMPLATE_ROOT, 'controller.ts'), 'utf8'),
     'src/authoring/registry.ts': `export const registry = ${JSON.stringify(projection, null, 2)} as const;\n`,
     'src/authoring/README.md': fs.readFileSync(path.join(TEMPLATE_ROOT, 'README.md'), 'utf8'),
+    'scripts/authoring-attach.js': fs.readFileSync(path.join(TEMPLATE_ROOT, 'attach.js'), 'utf8'),
   };
 }
 

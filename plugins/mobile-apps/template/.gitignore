@@ -10,6 +10,7 @@ node_modules/
 
 # ── Expo / Metro ─────────────────────────────────────────────────────────────
 .expo/
+.powernative/
 dist/
 dist-web/
 web-build/
@@ -43,6 +44,7 @@ build-output.txt
 build.log
 *.log
 kc.log
+.devplayer-builder/logs/
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store

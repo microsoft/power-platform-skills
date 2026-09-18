@@ -508,6 +508,7 @@ test('installed pinned template type-checks the actual no-environment generated 
   const verification = await response.json();
   await new Promise((resolve) => server.close(resolve));
   assert.equal(verification.type, 'pawrap-app');
+  assert.equal(verification.appInstanceId, JSON.parse(fs.readFileSync(path.join(root, 'app.json'))).expo.extra.telemetry.appInstanceId);
   assert.equal(Number.isInteger(verification.nativeRuntimeVersions.android), true);
   const result = spawnSync(process.execPath, [path.join(modules, 'typescript/lib/tsc.js'), '--noEmit', '--project', path.join(root, 'tsconfig.json')], {
     cwd: root, encoding: 'utf8', env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },

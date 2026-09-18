@@ -508,6 +508,24 @@ not Apply, and Apply is not evidence that the native screen mounted. Report
 each real state accurately and keep the last-good active preview on failure,
 stop, stale context, or discard.
 
+When the descriptor identifies an explicitly attached external project, this
+same workflow remains mandatory. The bridge copied the registered baseline
+into this isolated workspace; do not edit the developer's original folder,
+start or stop its Metro process, or run the ordinary in-place `/edit-app`
+publication path. Candidate submission remains source-hash bound. Player's
+Apply review lists the exact write/delete delta, then the bridge verifies that
+the original source has not drifted and transactionally writes only those
+reviewed files back. Protected credential, dependency, editor, agent, and tool
+configuration paths are never eligible. Attached projects do not expose bridge
+Undo; source control or a new reviewed edit owns recovery after a successful
+writeback.
+
+The developer-owned Metro process should hot-reload the committed files. Native
+authoring identity is still revision-bound: the prior runtime can discover the
+new active preview, but the new revision must mount and acknowledge before old
+preview authority is retired. Never describe filesystem Apply alone as a
+successful device mount.
+
 `authoring-edit.js` commands: `inspect --intent`, `prepare --input`,
 `authorize --plan [--wait-ms]`, `integration --plan --gate-receipt`,
 `capture --plan`, `teach --plan`, `check --plan`, and

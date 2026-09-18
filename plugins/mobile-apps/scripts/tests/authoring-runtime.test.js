@@ -3,9 +3,10 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const Module = require('node:module');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const test = require('node:test');
 const { configureMobileAuthoring, validateAuthoringRegistry } = require('../lib/authoring-runtime');
 const { localStartup } = require('../lib/prototype-startup');
@@ -69,7 +70,13 @@ test('configurator writes importable owned helpers, inactive descriptor and no p
   assert.equal(result.status, 'configured');
   assert.equal(result.publicationReady, false);
   assert.equal(result.rootWiring.outside, 'PrototypeProvider');
-  assert.equal(result.changed.length, 4);
+  assert.deepEqual(result.changed.sort(), [
+    'scripts/authoring-attach.js',
+    'src/authoring/README.md',
+    'src/authoring/controller.ts',
+    'src/authoring/index.tsx',
+    'src/authoring/registry.ts',
+  ]);
   const projection = fs.readFileSync(path.join(root, 'src/authoring/registry.ts'), 'utf8');
   assert.doesNotMatch(projection, /sourceFile|app\/\(app\)|runtimeToken|sourcePath/);
   const index = fs.readFileSync(path.join(root, 'src/authoring/index.tsx'), 'utf8');
@@ -78,6 +85,10 @@ test('configurator writes importable owned helpers, inactive descriptor and no p
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.devplayer-builder/runtime.json'))), { protocolVersion: 2, active: false });
   assert.equal(fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8'), rootBefore);
   assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), packageBefore);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ROOT, 'template/package.json'), 'utf8')).scripts['authoring:attach'],
+    'node scripts/authoring-attach.js');
+  assert.equal(fs.readFileSync(path.join(root, 'scripts/authoring-attach.js'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'scripts/templates/mobile-authoring/attach.js'), 'utf8'));
   assert.equal(fs.existsSync(path.join(root, 'src/data/runtime.ts')), false);
   assert.equal(configureMobileAuthoring(root, { check: true }).status, 'verified');
   const mtime = fs.statSync(path.join(root, 'src/authoring/controller.ts')).mtimeMs;
@@ -103,6 +114,68 @@ test('owned regeneration updates explicit metadata but never overwrites manual/u
   write(unowned, 'src/authoring/index.tsx', 'export const manuallyOwned = true;\n');
   assert.throws(() => configureMobileAuthoring(unowned), /unowned/);
   assert.equal(fs.existsSync(path.join(unowned, 'src/authoring/controller.ts')), false);
+});
+
+test('authoring attach script is exact, loopback-only, and sends only the project and Metro address', async (t) => {
+  const root = project(t);
+  configureMobileAuthoring(root);
+  let request;
+  const server = http.createServer((incoming, response) => {
+    const chunks = [];
+    incoming.on('data', chunk => chunks.push(chunk));
+    incoming.on('end', () => {
+      request = {
+        method: incoming.method,
+        path: incoming.url,
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+      };
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ appName: 'Orders', metroUrl: 'http://127.0.0.1:8081' }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const script = path.join(root, 'scripts/authoring-attach.js');
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [
+      script,
+      '--bridge', `http://127.0.0.1:${server.address().port}`,
+      '--metro-url', 'exp://127.0.0.1:8081',
+    ], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', chunk => stdout.push(chunk));
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('close', code => resolve({
+      code,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+    }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /Attached Orders/);
+  assert.deepEqual(request, {
+    method: 'POST',
+    path: '/demo/attach',
+    body: { projectRoot: fs.realpathSync(root), metroUrl: 'exp://127.0.0.1:8081' },
+  });
+
+  const denied = spawnSync(process.execPath, [
+    script,
+    '--bridge', 'http://192.168.1.50:5177',
+  ], { cwd: root, encoding: 'utf8' });
+  assert.equal(denied.status, 1);
+  assert.match(denied.stderr, /loopback HTTP bridge origin/);
+});
+
+test('authoring configuration detects a stale attach helper', (t) => {
+  const stale = project(t);
+  configureMobileAuthoring(stale);
+  fs.appendFileSync(path.join(stale, 'scripts/authoring-attach.js'), '\n// Manual edit\n');
+  assert.throws(() => configureMobileAuthoring(stale, { check: true }), /manually edited/);
 });
 
 test('publisher identity remains publisher-owned and credentials cannot enter the stamp', (t) => {
