@@ -99,7 +99,11 @@ function compareLock(manifest, dependencies, lock) {
     }
   }
   for (const dependency of dependencies) {
-    const entry = data.packages[`node_modules/${dependency.name}`];
+    const key = `node_modules/${dependency.name}`;
+    // Platform-specific optional packages may be omitted from lock metadata.
+    // Only absence is exempt: present null/malformed/link entries remain findings.
+    if (!Object.hasOwn(data.packages, key) && dependency.sections.includes('optionalDependencies')) continue;
+    const entry = data.packages[key];
     if (!entry || typeof entry.version !== 'string' || entry.link) {
       mismatches.push({ section: 'packages', name: dependency.name });
     }
