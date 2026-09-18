@@ -65,10 +65,16 @@ az cloud show --query name -o tsv
 | `AzureCloud` (commercial) | `https://service.flow.microsoft.com` |
 | `AzureCloud` + GCC tenant | `https://gov.service.flow.microsoft.us` |
 | `AzureUSGovernment` (GCC High) | `https://high.service.flow.microsoft.us` |
-| `AzureUSGovernment` (DoD) | `https://dod.service.flow.microsoft.us` |
+| `AzureUSGovernment` (DoD) | `https://service.flow.appsplatform.us` |
 
 `az cloud show` cannot distinguish commercial from GCC, or GCC High from DoD —
 for those, set `PA_CLOUD=gcc` / `PA_CLOUD=dod` explicitly.
+
+DoD is served from `appsplatform.us`, not `powerplatform.microsoft.us` — the
+sovereign naming does not extend from the GCC/GCC High pattern. The DoD resource
+above follows that domain but is **unverified**: it is an audience (App ID URI),
+not an address, so DNS cannot confirm it. If you have a DoD tenant and it fails,
+please report the working value.
 
 Then request a token for the matching resource, e.g. for commercial:
 ```bash
@@ -79,10 +85,51 @@ detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 - **If it works**: Move on.
 - **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
 - **If it fails with other errors**: Show the error and suggest they contact IT support.
-- **If they're on a sovereign cloud and connection-management commands fail**: the
-  PAC CLI app registration isn't preauthorized in those tenants. They need to
-  register their own Azure AD app with Power Platform Connectivity scopes and set
-  `PA_CLIENT_ID=<app-id>`. Flow management (list/create/run) works without it.
+- **If they're on a sovereign cloud and connection-management commands fail**: get
+  the actual error before assuming a cause. If Entra returns `AADSTS650057`
+  (invalid resource / app not preauthorized), they can register their own Azure AD
+  app with Power Platform Connectivity scopes and set `PA_CLIENT_ID=<app-id>`. Any
+  other failure is not a preauthorization problem — FlowAgent used to assert that
+  it was, for every non-commercial cloud, without ever attempting the call. Flow
+  management (list/create/run) works without `PA_CLIENT_ID` regardless.
+
+## Signing in to a specific account
+
+Connection management authenticates separately from `az` — it uses its own MSAL
+session with its own on-disk token cache, so `az login` / `az account set` do
+**not** switch the account it uses.
+
+Three tools cover this:
+
+| Tool | Use it to |
+|---|---|
+| `list_accounts` | See the cached Connectivity accounts, each one's tenant, and whether it matches the active Azure CLI tenant. Acquires no token, so it never opens a browser. |
+| `switch_account` | Choose the account the next Connectivity sign-in uses. Pass `username`, or omit it to be shown an account picker. |
+| `whoami` / `doctor` | See both identities side by side, with the mismatch called out. |
+
+**When a connection tool fails with `ServiceToServiceEnvironmentNotFound`**, read
+it as an identity error before an environment one. Run `list_accounts`: if a
+cached account's tenant differs from the Azure CLI tenant, that is the cause.
+`switch_account` with the account you want fixes it — it both clears the cached
+sign-in and pins the next one, which is why it works where deleting the cache
+file by hand does not. A bare cache delete lands you back on whatever account
+the browser already has signed in.
+
+`switch_account` does not change the Azure CLI identity. `az` is yours to set;
+where the two disagree, the tool says so rather than silently re-pointing one.
+`reconnect` keeps a recorded preference — it drops credentials, and the
+preference is a stated intent rather than a credential.
+
+On interactive sign-in FlowAgent forces the account picker by default, so the
+browser's currently-signed-in account is never used silently. Two overrides:
+
+| Variable | Effect |
+|---|---|
+| `PA_LOGIN_HINT=<upn>` | Pre-select that account. Suppresses the picker, since the account is already targeted. |
+| `PA_NO_ACCOUNT_PICKER=1` | Restore plain browser SSO. For single-account users who don't want the extra click. |
+
+Precedence, most specific first: `PA_LOGIN_HINT`, then a `switch_account`
+preference, then `PA_NO_ACCOUNT_PICKER`, then the picker.
 
 ## Step 4: Check the FlowAgent tools are wired
 

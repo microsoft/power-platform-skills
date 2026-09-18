@@ -18,7 +18,7 @@
 | `TriggerInputMissing` | The trigger body is missing keys listed in the trigger schema `required[]` | The error lists the missing keys and expected shape; pass them via `--body=@file`. Applies to **every** trigger kind, including `PowerApps` / `PowerAppsV2`: the connector does not validate required inputs itself (it returns `202` with nulls), so the check must happen client-side. |
 | `InvalidEnvironmentId` | An environment id that is not a GUID (e.g. a display name or a slug) was passed to `--env` | Pass the environment **id**, not its name: `list-environments` shows the GUID. `Default-<tenantGuid>` is also accepted. Previously this produced an opaque `ENOTFOUND` on `*.environment.api.powerplatform.com`. |
 | `ENOTFOUND *.environment.api.powerplatform.com` | Almost always a malformed environment id (see above); occasionally a network/proxy block | Run `doctor`. If the id is a bare tenant GUID, use `Default-<tenantGuid>` instead. |
-| `EnvironmentAccessDenied` / `ServiceToServiceEnvironmentNotFound` | FlowAgent is authenticated as a different account than intended, or a cached token outlived an `az logout`/`az login` | Run `whoami` to see the active identity, then `reconnect` to clear cached tokens and re-acquire. No session restart needed. |
+| `EnvironmentAccessDenied` / `ServiceToServiceEnvironmentNotFound` | FlowAgent is authenticated as a different account than intended, or a cached token outlived an `az logout`/`az login` | Run `whoami` to see the active identity and `list_accounts` to see the separate Connectivity one, then `switch_account` (or `reconnect`) to fix it. No session restart needed. |
 | Calls still succeed as the *old* account after `az login` | Stale disk token entry | Fixed: cache entries are now stamped with the active `az` identity and are rejected on mismatch. If you still see it, run `reconnect`. |
 | `az` account looks right but FlowAgent disagrees | `AZURE_CONFIG_DIR` points at a different CLI profile | `whoami` reports the profile directory in use; `doctor` flags a custom `AZURE_CONFIG_DIR`. |
 | Machine-group calls return `400` on `$select` | Old builds selected a non-existent `grouptype` column | Fixed — the real column is `flowgrouptype` (label `flowgrouptypename`). Rebuild/update the plugin. |
@@ -34,6 +34,8 @@ never mention identity. Three tools make it visible and recoverable in-session:
 | `whoami` | First stop for any auth-shaped failure — shows the active `az` account, the CLI profile dir (honours `AZURE_CONFIG_DIR`), the resolved cloud, the token cache location, and the tenant the token actually carries. |
 | `reconnect` | After `az login` / `az account set` switched accounts, or when a stale token is causing 401/403. Clears cached tokens and re-acquires. |
 | `doctor` | Full checklist: CLI present, signed in, config dir, cloud, token acquisition, token-vs-`az` identity agreement, current environment, environment reachability — each with a concrete fix. |
+| `list_accounts` | Connection commands sign in separately from `az`. This lists those cached accounts, their tenants, and which match the active `az` tenant. Acquires no token. |
+| `switch_account` | Choose the account connection commands sign in as. Clears the cached sign-in and pins the next one; omit `username` to get an account picker instead. |
 
 ## Diagnostic Steps
 
