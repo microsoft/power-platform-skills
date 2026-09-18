@@ -263,11 +263,17 @@ function mockSdk(opts = {}) {
     // Generic mutation surface (mirrors the SDK). The mock does NOT mint layout ids (tests don't
     // assert on them); it just maintains a coherent in-memory tree so getArtifact/firstSectionRowsPointer
     // and reconcile see the effects of adds/removes.
-    addElement: async (t, id, ptr, el) => { await Promise.resolve();
-      calls.push({ name: 'addElement', args: [t, id, ptr, el] });
+    addElement: async (t, id, ptr, el, opts) => { await Promise.resolve();
+      calls.push({ name: 'addElement', args: [t, id, ptr, el, opts] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       const arr = jpGet(art, ptr);
-      if (Array.isArray(arr)) arr.push(clone(el));
+      // The real SDK splices at `opts.position` for an ARRAY parent and appends when it is absent
+      // (`s.splice(K7(s, a?.position), 0, l)`), so the mock must too — an append-only mock would
+      // hide a wrong insertion index.
+      if (Array.isArray(arr)) {
+        const at = opts && Number.isInteger(opts.position) ? Math.max(0, Math.min(arr.length, opts.position)) : arr.length;
+        arr.splice(at, 0, clone(el));
+      }
       return clone(art);
     },
     updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
@@ -4470,4 +4476,63 @@ test('form topology: a span already at the authored value is not rewritten', asy
     && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
   assert.deepStrictEqual(patches, [],
     'an absent colspan already MEANS 1, so declaring 1 must not produce a write');
+});
+
+// --- #N2: widening a field on a DEPLOYED form must re-pack its row -------------------------------
+// LIVE-REPRODUCED: widening an existing field left three columns of content in a two-column row.
+// The span was patched in place, but the packing that the create path applies (`rowsFromCells`)
+// never re-ran, so the row kept both its original cells and the newly widened one.
+test('form topology: widening a field re-packs the row it overflows', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  // Deployed: two colspan-1 cells sharing one row of a 2-column section — occupancy 2, exactly full.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  // Reconstruct what the row writes left behind: the widened cell must not share its row.
+  const sec = '/tabs/0/columns/0/sections/0';
+  const rowWrites = find(calls, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && Array.isArray(c.args[3].cells));
+  assert.ok(rowWrites.length > 0,
+    `the overflowing row must be re-packed; saw ${JSON.stringify(find(calls, 'updateElement').map((c) => [c.args[2], c.args[3]]))}`);
+
+  const row0 = rowWrites.filter((c) => String(c.args[2]) === sec + '/rows/0').pop();
+  assert.ok(row0, 'the original row must be rewritten');
+  const widths = (row0.args[3].cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
+  assert.ok(widths <= 2, `row 0 must not exceed the section's 2 columns; got ${JSON.stringify(row0.args[3].cells)}`);
+
+  // The displaced field moves DOWN, not to the bottom of the section: a row is inserted right after.
+  const inserted = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.ok(inserted.length >= 1, 'a row must be created for the displaced cell');
+  assert.strictEqual(inserted[0].args[4] && inserted[0].args[4].position, 1,
+    `the new row goes immediately below the widened one; got ${JSON.stringify(inserted[0].args[4])}`);
+});
+
+// A span change that does NOT overflow must not churn the form.
+test('form topology: widening a field that still fits re-packs nothing', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 4, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const sec = '/tabs/0/columns/0/sections/0';
+  // 2 + 1 = 3 <= 4, so the row still fits and must be left alone.
+  assert.deepStrictEqual(find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows'), [],
+    'no row may be created when the widened cell still fits');
+  assert.deepStrictEqual(
+    find(calls, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2])) && c.args[3] && Array.isArray(c.args[3].cells)),
+    [], 'no row may be rewritten when nothing overflowed');
 });

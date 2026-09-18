@@ -73,6 +73,7 @@ const {
   viewColumnsIntent,
   firstColumnSectionsPointer,
   cellFitsInRow,
+  rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
@@ -1997,7 +1998,40 @@ async function runSdkBuild(spec, opts = {}) {
       const current = live[key] === undefined ? 1 : live[key];
       if (current !== want) patch[key] = want;
     }
-    if (Object.keys(patch).length) await provision.updateElement('form', formId, location.cellPointer, patch);
+    if (Object.keys(patch).length) {
+      await provision.updateElement('form', formId, location.cellPointer, patch);
+      // A WIDENED span can overflow the row it sits in: a 2-column section holding two colspan-1
+      // cells becomes 2+1 = 3 columns of content the moment one is widened to 2. The create path
+      // packs rows by WIDTH (`rowsFromCells`), but an in-place span change never re-ran that
+      // packing, so the row was left overflowing — a shape `rowsFromCells` would never emit, and one
+      // Dataverse renders unpredictably. Live-reproduced: widening a field left three columns of
+      // content in a two-column row across two applies.
+      await repackRowAt(formId, location);
+    }
+  };
+
+  // Re-pack the row a span change just overflowed, using the create path's own packer so both routes
+  // produce the same shape. The displaced cells move DOWN into rows inserted immediately below,
+  // rather than to the bottom of the section, so the author's field order survives.
+  //
+  // The cells are moved by `updateElement` (the same mechanism `appendCellPacked` uses to write a
+  // cells array), and the new rows are created EMPTY first — an existing cell carries an `id`, and
+  // handing one to `addElement` risks re-keying the node rather than moving it.
+  const repackRowAt = async (formId, location) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    if (!row) return;
+    const packed = rowsFromCells(row.cells || [], section.columns);
+    if (packed.length <= 1) return; // still fits — nothing to do
+    for (let k = 1; k < packed.length; k += 1) {
+      await provision.addElement('form', formId, location.sectionPointer + '/rows', { cells: [] },
+        { position: location.rowIndex + k });
+      await provision.updateElement('form', formId,
+        `${location.sectionPointer}/rows/${location.rowIndex + k}`, { cells: packed[k].cells });
+    }
+    await provision.updateElement('form', formId,
+      `${location.sectionPointer}/rows/${location.rowIndex}`, { cells: packed[0].cells });
   };
 
   // The live cell a findFieldCellLocation result points at.

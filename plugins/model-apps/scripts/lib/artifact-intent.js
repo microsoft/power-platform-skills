@@ -848,6 +848,10 @@ module.exports = {
   compileFormIntent,
   clampedCellSpan,
   cellFitsInRow,
+  // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its
+  // row, and the reconcile must re-pack it with the SAME rule the create path uses, not a second
+  // implementation that can drift.
+  rowsFromCells,
   fieldCellIntent,
   notesCellIntent,
   notesSectionIntent,
