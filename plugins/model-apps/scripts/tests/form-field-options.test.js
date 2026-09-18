@@ -182,14 +182,22 @@ test('normalizeFieldEntry lower-cases both name and anchor (every downstream com
   assert.deepStrictEqual(normalizeFieldEntry({ name: 'New_B', after: 'New_A' }), { name: 'new_b', readOnly: false, hidden: false, after: 'new_a', colspan: undefined, rowspan: undefined });
 });
 
-test('normalizeFieldEntry keeps a span only when it exceeds the adapter default of 1', () => {
-  // A colspan of 1 IS the default, so recording it would make the cell builder emit an explicit
-  // attribute for every ordinary field and overwrite a span widened by hand in the designer.
-  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 1 }).colspan, undefined);
+test('normalizeFieldEntry keeps an explicit span, including 1, and drops only omission', () => {
+  // An explicit `colspan: 1` is the author CLAIMING the default, which is different from saying
+  // nothing. The old rule folded both to undefined, so a reset from 2 to 1 was unrepresentable and
+  // the deployed cell kept its old span — live-reproduced across two applies.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 1 }).colspan, 1);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', rowspan: 1 }).rowspan, 1);
   assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2 }).colspan, 2);
   assert.strictEqual(normalizeFieldEntry({ name: 'a', rowspan: 3 }).rowspan, 3);
-  // Non-numeric and fractional values must not reach the serializer as-is.
+  // Omission stays omission — this is what keeps an ordinary cell from overwriting a span widened
+  // by hand in the designer.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a' }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry('a').colspan, undefined);
+  // Non-numeric, fractional and nonsensical values must not reach the serializer as-is.
   assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 'wide' }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 0 }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: -2 }).colspan, undefined);
   assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2.7 }).colspan, 2);
 });
 

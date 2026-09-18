@@ -510,8 +510,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   prompts. The `ai` block in the App Spec configures the full set; see
   [`references/app-spec-schema.md`](references/app-spec-schema.md) → `## ai`.
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
-  wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
-  JS) from the App Spec, so the user can review a form visually during authoring before approving.
+  wireframe** (tabs, sections, fields with widget hints and authored `hidden`/`readOnly` state, the
+  Notes/timeline block, sub-grids, form JS) from the App Spec, so the user can review a form
+  visually during authoring before approving. A hidden field is annotated rather than omitted, and
+  state is never truncated — the widget hint and then the label give way first, because a
+  half-printed `(read-on…` is the silent-state failure the annotation exists to prevent.
   **`scripts/preview-app.js` → `scripts/lib/app-preview.js`** — renders the WHOLE app design
   (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
   as a single ASCII preview — the design gate #2 / plan-mode approval artifact.
@@ -614,6 +617,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
@@ -657,6 +661,7 @@ scripts/
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
     apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
+    workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)

@@ -235,6 +235,18 @@ function readerFor(sdk, appUnique, opts) {
       const row = rows && rows[0];
       return row ? { isDefault: row.isdefault === true } : null;
     },
+    // formTopology(entity, formId): the deployed FormXml, so verify can prove the LAYOUT and not just
+    // that a form row exists. Errors propagate to verify-spec, which reports the read failure as a
+    // not-present check — a layout nobody could read is unverified, not correct.
+    formTopology: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'formxml'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      return (row && row.formxml) || null;
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },

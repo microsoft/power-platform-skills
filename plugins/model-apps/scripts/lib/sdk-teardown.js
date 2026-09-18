@@ -196,7 +196,22 @@ const KIND_HANDLERS = {
   app: {
     async resolve(sdk, target) {
       const items = await sdk.resolveArtifact('app', { uniqueName: target.uniqueName });
-      return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique }));
+      // `uniqueName` is carried so `confirmAbsent` below can re-query this exact app.
+      return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique, uniqueName: target.uniqueName }));
+    },
+    // Is the app REALLY gone? A 404 from the delete is not proof: the SDK also surfaces 404 when
+    // the ATOMIC app+sitemap changeset is ROLLED BACK by the platform, and the app is still there.
+    // deleteStep used to record that as a successful delete, so the abort never fired and dependent
+    // teardown stripped a LIVE app while reporting ok:true. Asking the platform is authoritative;
+    // inferring absence from an error code is not. A read failure returns false (fail closed) —
+    // "cannot prove it is gone" must not license deleting everything it renders.
+    async confirmAbsent(sdk, item) {
+      try {
+        const rows = await sdk.resolveArtifact('app', { uniqueName: item.uniqueName });
+        return !(rows || []).length;
+      } catch {
+        return false;
+      }
     },
     // deleteAppCascade fail-fast-deletes the app module together with its sitemap (atomically), and
     // returns a structured { success, deleted, failures, retained } result (older vendored bundles
@@ -219,9 +234,14 @@ const KIND_HANDLERS = {
         const detail = failures
           .map((f) => `${f.operation} ${f.type}${f.id ? ` ${f.id}` : ''}: ${errMsg(f.error)}`)
           .join('; ');
-        throw new Error(
+        const err = new Error(
           `app "${item.name}" deleted, but ${failures.length} cascade cleanup step(s) failed (orphaned rows remain): ${detail}`
         );
+        // The app ROW is gone by this point — only a cleanup step failed. runTeardown keys its
+        // abort on this flag: here the dependents MUST still be torn down, because stopping would
+        // strand more orphans, not fewer. See #587 item 5.
+        err.appDeleted = true;
+        throw err;
       }
     },
   },
@@ -345,22 +365,40 @@ const KIND_HANDLERS = {
       // loss: teardown deletes the app FIRST, so if the role is STILL associated with any app module, that
       // association belongs to ANOTHER app that shares this (same name+BU) persona — deleting the role
       // would break that app. Skip those; delete only roles no app still uses (this app's link is already
-      // gone, or a data-only role). Best-effort: if the association check can't run, fall back to the
-      // BU+marker decision (delete) — the extra guard only ever REMOVES candidates, never adds them.
+      // gone, or a data-only role).
+      //
+      // The guard FAILS CLOSED (#587 item 7). It used to be best-effort — an unreadable association fell
+      // back to "not shared", i.e. delete — which is the wrong direction for a destructive decision and
+      // was inconsistent with this same function, where a failure to resolve the business unit already
+      // returns [] and deletes nothing. Costs are asymmetric: retaining a role an operator can delete by
+      // hand, versus silently stripping permissions from a DIFFERENT app that shares the persona.
       const owned = (rows || []).filter((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER && r.roleid);
       const kept = [];
       for (const r of owned) {
         const id = String(r.roleid);
-        let sharedWithAnotherApp = false;
+        // Starts FALSE: a role is deletable only once the check has actually PROVED no app still
+        // references it. Every path that cannot produce that proof leaves it false.
+        let provedUnused = false;
         if (FORM_GUID_RE.test(id)) {
           try {
             // OData `any()` over the appmodule<->role N:N (live-verified). id is a Dataverse GUID (Edm.Guid,
             // unquoted) validated above, so interpolation is injection-safe.
             const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `appmoduleroles_association/any(x:x/roleid eq ${id})`, top: 1 });
-            sharedWithAnotherApp = Array.isArray(apps) && apps.length > 0;
-          } catch { sharedWithAnotherApp = false; }
+            provedUnused = Array.isArray(apps) && apps.length === 0;
+          } catch {
+            // Unreadable association (403, transient 5xx, an old bundle): treat exactly like "still in
+            // use". We did not learn that it is unused, so we have not earned the right to delete it.
+            provedUnused = false;
+          }
+        } else {
+          // FORM_GUID_RE is an INJECTION guard on the OData filter, not an existence check. Every
+          // Dataverse `roleid` is an Edm.Guid, so an id that fails it did not come from the platform;
+          // it has no app association to protect, and `deleteSecurityRole` would reject it anyway.
+          // Treating it as a FAILED check was considered and rejected: it adds no safety on any real
+          // row while making ownership resolution depend on id formatting.
+          provedUnused = true;
         }
-        if (!sharedWithAnotherApp) kept.push({ id, name: target.name });
+        if (provedUnused) kept.push({ id, name: target.name });
       }
       return kept;
     },
@@ -1060,7 +1098,15 @@ async function deleteStep(sdk, handler, items) {
         continue;
       }
       if (isNotFound(err)) {
-        // Already gone (e.g. cascade) — tolerate
+        // Already gone (e.g. cascade) — tolerate.
+        //
+        // EXCEPT where the handler can check. For a dependency ROOT a 404 is ambiguous: it means
+        // "already gone" OR "the atomic changeset rolled back and the record is still live", and
+        // treating the second as a delete let teardown strip an app that still existed. A handler
+        // exposing `confirmAbsent` gets to ask the platform instead of inferring.
+        if (typeof handler.confirmAbsent === 'function' && !(await handler.confirmAbsent(sdk, item))) {
+          throw err;
+        }
         deletedIds.push(item.id);
         continue;
       }
@@ -1151,7 +1197,24 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       const message = errMsg(err);
       result.errors.push({ step: step.label, message });
       emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
-      // best-effort: continue to the next step so a single failure doesn't strand the rest.
+      // Best-effort continue-on-error is right for the steps AFTER the dependency root is gone — one
+      // undeletable view should not strand the rest. It is WRONG for the root itself (#587 item 5):
+      // tables, forms, views and charts are COMPONENTS of the app module, so continuing past a failed
+      // app delete strips a LIVE app of everything it renders and leaves it broken in the environment.
+      // Stopping leaves a consistent app the operator can retry against.
+      //
+      // `err.appDeleted` marks the other case: the app row WAS removed and only a cascade cleanup step
+      // failed. There the dependents are already orphaned, so continuing removes them rather than
+      // leaving more behind.
+      if (step.kind === 'app' && !err.appDeleted) {
+        for (let i = myN; i < plan.length; i += 1) {
+          const rest = plan[i];
+          const why = `${rest.label} (not attempted — the app was not deleted)`;
+          result.skipped.push(why);
+          emit({ phase: rest.phase, status: 'skip', label: why, n: i + 1, total });
+        }
+        break;
+      }
     }
   }
   return result;

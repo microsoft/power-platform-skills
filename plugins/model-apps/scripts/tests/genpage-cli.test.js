@@ -600,3 +600,37 @@ test('download passes --page-id for a single id (no trailing comma)', async () =
   const i = seen.indexOf('--page-id');
   assert.ok(i > 0 && seen[i + 1] === GP_A, 'single id, no trailing comma');
 });
+
+// --- PR review: duplicate-create recovery must not depend on a NAME ------------------------------
+// Both the pre-create snapshot and the uncertain-result reconciliation used to require `name`, so a
+// name-less create skipped both and retried BLINDLY after an uncertain result — the way pac ends up
+// with duplicate pages. The recovery is pure id arithmetic (enumerateEnv is id-keyed and name
+// matching is explicitly never used), so the name was vestigial in those gates.
+test('a name-less create still snapshots and reconciles an uncertain result (no blind retry)', async () => {
+  const GP_NEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const seen = [];
+  let uploads = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      seen.push(args);
+      if (args.includes('list')) {
+        // Before the create: empty. After it: the page exists, so the create DID land.
+        return { status: 0, stdout: uploads === 0 ? LIST_EMPTY : listText([{ pageId: GP_NEW, name: 'Whatever' }]), stderr: '' };
+      }
+      uploads += 1;
+      // An UNCERTAIN result: zero exit, no Page ID. The create may or may not have landed.
+      if (uploads === 1) return { status: 0, stdout: 'done', stderr: '' };
+      return { status: 0, stdout: `Page ID: ${GP_NEW}`, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', prompt: 'p', agentMessage: 'm' }); // NO name
+  assert.strictEqual(res.pageId, GP_NEW,
+    'the landed create must be ADOPTED, not created a second time');
+  // The retry must have run as an UPDATE against the adopted id, never as a second blind create.
+  const uploadCalls = seen.filter((a) => a.includes('upload'));
+  assert.strictEqual(uploadCalls.length, 2, `expected one create + one adopted update; got ${uploadCalls.length}`);
+  assert.ok(!uploadCalls[0].includes('--page-id'), 'the first attempt is a create');
+  assert.deepStrictEqual(uploadCalls[1].slice(uploadCalls[1].indexOf('--page-id'), uploadCalls[1].indexOf('--page-id') + 2),
+    ['--page-id', GP_NEW], 'the retry targets the adopted page instead of creating a duplicate');
+});

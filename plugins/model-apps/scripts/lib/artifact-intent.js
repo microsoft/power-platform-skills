@@ -17,6 +17,28 @@ const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 // Arrange field cells into `columns` cells-per-row.
 // Mirrors rowsFromCells in sdk-build.js but lives here so this module is
 // self-contained — the build engine should call compileFormIntent, not rowsFromCells.
+
+// The width a cell occupies in a section of `columns` columns, clamped exactly as rowsFromCells
+// clamps it. Shared so the RECONCILE path (which appends a cell to an already-deployed section) packs
+// by the same rule the CREATE path uses. They used to disagree: `placeFieldInSection` appended every
+// added field as its own single-cell row and moved every relocated field onto the last row
+// regardless of width, so the same spec produced a different shape depending only on whether the
+// form already existed.
+function clampedCellSpan(cell, columns) {
+  const cols = Math.max(1, Math.min(4, columns || 1));
+  return Math.min(cols, Math.max(1, Number(cell && cell.colspan) || 1));
+}
+
+// True when `cell` still fits on the END of `row`. This is the exact complement of the
+// "start a new row" test in rowsFromCells (`used + span > cols && current.length`): an EMPTY row
+// always accepts the cell, because a span wider than the section is clamped to it rather than
+// overflowing into a row of its own.
+function cellFitsInRow(row, cell, columns) {
+  const cols = Math.max(1, Math.min(4, columns || 1));
+  const used = ((row && row.cells) || []).reduce((n, c) => n + clampedCellSpan(c, cols), 0);
+  return used === 0 || used + clampedCellSpan(cell, cols) <= cols;
+}
+
 function rowsFromCells(cells, columns) {
   const cols = Math.max(1, Math.min(4, columns || 1));
   const rows = [];
@@ -101,12 +123,19 @@ function fieldCellIntent(logical, opts) {
   // Same asymmetry, same reason: only `visible: false` is written. An explicit `true` would
   // un-hide a control someone deliberately hid outside the spec.
   if (opts.hidden) cell.visible = false;
-  // Spans are written only when they are NOT the adapter's default of 1, for the same reason
-  // `isReadOnly: false` is never written: emitting the default on every ordinary cell would
-  // overwrite a span a maker widened by hand on a form the spec never claimed to own that of.
+  // Spans are written when the author EXPRESSED one — including an explicit 1.
+  //
+  // The asymmetry that matters here is OMISSION vs VALUE, not 1 vs >1. Omitting a span means the
+  // spec has no opinion, and emitting the adapter default for every ordinary cell would overwrite a
+  // span a maker widened by hand on a form the spec never claimed to own that of — the same reason
+  // `isReadOnly: false` is never written. But an author who WRITES `colspan: 1` is claiming it.
+  //
+  // Collapsing those two cases made a reset unrepresentable: changing an authored span from 2 to 1
+  // compiled to "no colspan", reconcile read that as "no desired span", and the deployed cell stayed
+  // at 2 — live-reproduced across two applies. `undefined` is still omission; a number is intent.
   // Both serialize to real `colspan`/`rowspan` attributes (verified against the vendored bundle).
-  if (opts.colspan > 1) cell.colspan = opts.colspan;
-  if (opts.rowspan > 1) cell.rowspan = opts.rowspan;
+  if (typeof opts.colspan === 'number' && opts.colspan >= 1) cell.colspan = opts.colspan;
+  if (typeof opts.rowspan === 'number' && opts.rowspan >= 1) cell.rowspan = opts.rowspan;
   return cell;
 }
 
@@ -131,10 +160,19 @@ const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 //   { "name": "co_description",    "colspan": 2 }
 // Returns a canonical { name, readOnly, hidden, after, colspan, rowspan } with `name`/`after`
 // lower-cased, because every downstream comparison (form field logicals, cell pointers, Dataverse
-// attribute logical names) is lower-case. Spans normalize to `undefined` rather than 1 so the cell
-// builder can distinguish "author asked for the default" from "author said nothing".
+// attribute logical names) is lower-case.
+//
+// A span is `undefined` only when the author SAID NOTHING. An explicit 1 is preserved as 1: the
+// previous rule mapped every value <= 1 to undefined, which made "author asked for the default"
+// and "author said nothing" IDENTICAL — the opposite of what its comment claimed. The consequence
+// was live-reproduced: changing an authored colspan from 2 to 1 compiled to "no colspan",
+// reconcile read that as "no desired span", and the deployed cell stayed at 2 across two applies.
 function normalizeFieldEntry(entry) {
-  const span = (v) => (Number.isFinite(Number(v)) && Number(v) > 1 ? Math.floor(Number(v)) : undefined);
+  const span = (v) => {
+    if (v === undefined || v === null || v === '') return undefined; // said nothing
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined; // an explicit 1 IS intent
+  };
   if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
     return {
       name: String(entry.name || '').toLowerCase(),
@@ -154,6 +192,12 @@ function normalizeFieldEntry(entry) {
 // This is the ONLY way to reach these attributes under an AUTO layout, which has no field list to
 // hang an inline object off. Under an EXPLICIT layout both work and the inline entry wins, because
 // the more specific declaration should not be silently overridden by a form-wide default.
+function optSpan(v) {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
+}
+
 function fieldOptionsMap(formSpec) {
   const map = {};
   const fo = formSpec && formSpec.fieldOptions;
@@ -166,8 +210,9 @@ function fieldOptionsMap(formSpec) {
       readOnly: v.readOnly === true,
       hidden: v.hidden === true,
       after: v.after ? String(v.after).toLowerCase() : undefined,
-      colspan: Number(v.colspan) > 1 ? Math.floor(Number(v.colspan)) : undefined,
-      rowspan: Number(v.rowspan) > 1 ? Math.floor(Number(v.rowspan)) : undefined,
+      // Same omission-vs-value rule as normalizeFieldEntry: an explicit 1 is a claim, absence is not.
+      colspan: optSpan(v.colspan),
+      rowspan: optSpan(v.rowspan),
     };
   }
   return map;
@@ -801,6 +846,12 @@ function findFieldCellPointer(formJson, logical) {
 
 module.exports = {
   compileFormIntent,
+  clampedCellSpan,
+  cellFitsInRow,
+  // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its
+  // row, and the reconcile must re-pack it with the SAME rule the create path uses, not a second
+  // implementation that can drift.
+  rowsFromCells,
   fieldCellIntent,
   notesCellIntent,
   notesSectionIntent,

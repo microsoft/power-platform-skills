@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -2493,4 +2493,238 @@ test('#574 follow-up: IsBaseCurrency is read through the Money CAST and drops th
   const e = entityFromMetadata(meta, 'cfo_rtproject');
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
     `the base-currency twin must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+// --- #584 item 1: an N:N whose deployed SchemaName diverges from the generated default -----------
+//
+// The N:N read already retrieved `SchemaName` and then threw it away, emitting only
+// { type, entity1, entity2 }. A relationship deployed as `new_CustomTicketTagLink` therefore came
+// back as the generated `new_tag_new_ticket`, so a rebuild into the SAME environment creates a
+// SECOND intersect relationship beside the existing one instead of matching it — while the download
+// presents itself as rebuildable. The 1:N branch had carried the deployed name for exactly this
+// reason; this applies the identical rule.
+test('readRelationships carries a divergent N:N SchemaName, and omits it when it matches the default', async () => {
+  const mk = (schemaName) => ({
+    dataverse: {
+      get: async (url) => {
+        if (/ManyToManyRelationships/.test(url)) {
+          return { status: 200, body: { value: [{ SchemaName: schemaName, Entity1LogicalName: 'new_ticket', Entity2LogicalName: 'new_tag', IsCustomRelationship: true }] } };
+        }
+        // No 1:N and no lookup metadata for this probe.
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  });
+
+  // 1. DIVERGENT and correctly prefixed -> carried verbatim.
+  const divergent = await readRelationships(mk('new_CustomTicketTagLink'), ['new_ticket', 'new_tag'], 'new');
+  const nn = (divergent.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn.length, 1, `expected one N:N; got ${JSON.stringify(divergent.relationships)}`);
+  assert.strictEqual(nn[0].schemaName, 'new_CustomTicketTagLink', 'a deployed name a rebuild could not guess must be carried');
+
+  // 2. The GENERATED default -> omitted, so the spec stays minimal and the build composes it.
+  const { manyToManySchemaName } = require('../lib/app-spec.js');
+  const auto = manyToManySchemaName({ entity1: 'new_ticket', entity2: 'new_tag' }, 'new');
+  const matching = await readRelationships(mk(auto), ['new_ticket', 'new_tag'], 'new');
+  const nn2 = (matching.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn2.length, 1);
+  assert.ok(!('schemaName' in nn2[0]), `a name equal to the generated default adds nothing; got ${JSON.stringify(nn2[0])}`);
+
+  // 3. FOREIGN publisher prefix -> reported as a rename, NOT carried (it would fail the spec's own
+  //    lint) and NOT counted as skipped (the relationship is still in the spec).
+  const warnings = [];
+  const foreign = await readRelationships(mk('zzz_ForeignPrefixLink'), ['new_ticket', 'new_tag'], 'new', (m) => warnings.push(m));
+  const nn3 = (foreign.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.strictEqual(nn3.length, 1, 'the relationship is still carried');
+  assert.ok(!('schemaName' in nn3[0]), 'but not under a name that fails the publisher-prefix lint');
+  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /publisher prefix/.test(w)),
+    `the rename must be reported; got ${JSON.stringify(warnings)}`);
+  assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
+    'and never counted as skipped — it IS in the rebuildable spec');
+});
+// LIVE-REPRODUCED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+// 'utf8' decode keeps that BOM as U+FEFF and JSON.parse REJECTS a leading U+FEFF, so a perfectly
+// valid downloaded config threw and the old catch substituted `{}` — the page's table bindings
+// vanished from the emitted spec, and the rebuilt page queried a table it was no longer bound to.
+//
+// Also separates the two cases the old code conflated: a MISSING config is genuinely optional,
+// while a PRESENT-but-unparseable one means the bindings are UNKNOWN and must not be reported as
+// none.
+test('a BOM-prefixed downloaded config.json keeps its data-source bindings', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlbom-'));
+  const mk = (id, bytes) => {
+    const d = path.join(root, id);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+    if (bytes !== undefined) fs.writeFileSync(path.join(d, 'config.json'), bytes);
+    return d;
+  };
+
+  const CONFIG = JSON.stringify({ dataSources: ['contoso_ticket'] });
+  mk('11111111-1111-1111-1111-111111111111', Buffer.from('\uFEFF' + CONFIG, 'utf8')); // BOM, as pac writes it
+  mk('22222222-2222-2222-2222-222222222222', Buffer.from(CONFIG, 'utf8'));            // plain
+  mk('33333333-3333-3333-3333-333333333333');                                          // no config at all
+  mk('44444444-4444-4444-4444-444444444444', Buffer.from('{ not json', 'utf8'));      // present, broken
+
+  // The fixture really is BOM-prefixed on disk, so this cannot pass by writing a plain file.
+  const first = fs.readFileSync(path.join(root, '11111111-1111-1111-1111-111111111111', 'config.json'));
+  assert.deepStrictEqual([...first.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+
+  const unreadable = [];
+  const pages = parseDownloadedPages(root, root, null, unreadable);
+  const byId = new Map(pages.map((x) => [x.pageId, x]));
+
+  assert.deepStrictEqual(byId.get('11111111-1111-1111-1111-111111111111').dataSources, ['contoso_ticket'],
+    'a BOM must not cost the page its bindings');
+  assert.deepStrictEqual(byId.get('22222222-2222-2222-2222-222222222222').dataSources, ['contoso_ticket'],
+    'and a plain config must still work');
+  assert.deepStrictEqual(byId.get('33333333-3333-3333-3333-333333333333').dataSources, [],
+    'a MISSING config is optional — no bindings, no complaint');
+
+  assert.deepStrictEqual(unreadable.map((u) => u.pageId), ['44444444-4444-4444-4444-444444444444'],
+    'only the present-but-broken config counts as unreadable — not the absent one, not the BOM one');
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// A prompt.txt carries the same BOM, and it becomes the rebuilt page's prompt.
+test('a BOM-prefixed downloaded prompt.txt does not keep the BOM in the prompt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlbom2-'));
+  const d = path.join(root, '55555555-5555-5555-5555-555555555555');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'page.tsx'), 'x', 'utf8');
+  fs.writeFileSync(path.join(d, 'prompt.txt'), Buffer.from('\uFEFFConversation with 1 prompts:', 'utf8'));
+  const pages = parseDownloadedPages(root, root, null, []);
+  assert.strictEqual(pages[0].prompt.charCodeAt(0) !== 0xFEFF, true, 'the prompt must not start with a BOM');
+  assert.strictEqual(pages[0].prompt, 'Conversation with 1 prompts:');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// The parse-level test above proves an unreadable config is RECORDED. It does not prove the
+// download REFUSES to emit a spec because of it — the policy is what protects the user, and making
+// the gate unconditionally false left the parse test passing while `runDownload` happily returned
+// ok:true with the bindings silently dropped. This asserts the GATE, not just the parse.
+test('runDownload REFUSES to emit a spec when a page config is unreadable, unless the loss is accepted', async () => {
+  const GP = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-00000000beef';
+  const APP_UNIQ_VALUE = 'c0ffee00-0000-4000-8000-00000000cafe';
+  const SM_ID = '5111e0f2-0000-4000-8000-0000000000ab';
+  const APP_UNIQUE = 'test_gate';
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP}" Title="Sitemap Page"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
+
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gate-'));
+  const mkSdk = () => ({
+    fetchArtifact: async () => ({
+      name: 'Gate App', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+        { type: 'GenPage', genPageId: GP, title: 'Sitemap Page' },
+        { type: 'Entity', entity: 'contoso_item' },
+      ] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE, uniquename: APP_UNIQUE }];
+      }
+      if (logical === 'appmodulecomponent') return [{ objectid: SM_ID, componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
+    }),
+  });
+  // pac downloads the page, but its config.json is unreadable — the live BOM case before the fix,
+  // and any future pac format change after it.
+  const genpageCli = {
+    enumerateEnv: async () => ({ ok: true, ids: [GP.toLowerCase()], pages: [{ pageId: GP, name: 'Env Page' }] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of (pageIds || [])) {
+        fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+        fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default () => null;');
+        fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('{ truncated', 'utf8'));
+      }
+      return true;
+    },
+  };
+
+  try {
+    const refused = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    assert.strictEqual(refused.ok, false, `an unreadable config must abort the download; got ${JSON.stringify(refused).slice(0, 300)}`);
+    assert.match(refused.error, /config\.json/, 'the failure names what could not be read');
+    assert.match(refused.error, /--allow-lossy-download/, 'and advertises the override');
+    assert.strictEqual(refused.spec, undefined, 'no spec may be produced — emitting one IS the silent loss');
+
+    // With the loss explicitly accepted it completes, warns, and the bindings are simply absent.
+    const warned = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return realWrite(chunk, ...rest); };
+    let lossy;
+    try {
+      lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+    } finally { process.stderr.write = realWrite; }
+    assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let it through: ${JSON.stringify(lossy).slice(0, 300)}`);
+    assert.ok(warned.some((w) => /unreadable/i.test(w) && /DROPPED/.test(w)),
+      `the accepted loss must still be announced; saw ${JSON.stringify(warned)}`);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+// --- PR review: a MISSING optional file is not an explicitly blank one --------------------------
+// `prompt` used to default to '' for a page with no prompt.txt. The build's blank-provenance guard
+// then read that as "the author supplied an empty prompt" and ABORTED the rebuild — so downloading
+// an app and rebuilding it broke for every page lacking the optional file. Omission must stay
+// omission; a file that EXISTS but is blank stays explicit so it still fails closed.
+test('a page with NO prompt.txt omits prompt entirely, rather than claiming an empty one', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlprompt-'));
+  const mk = (id, promptBytes) => {
+    const d = path.join(root, id);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+    fs.writeFileSync(path.join(d, 'config.json'), Buffer.from(JSON.stringify({ dataSources: [] }), 'utf8'));
+    if (promptBytes !== undefined) fs.writeFileSync(path.join(d, 'prompt.txt'), promptBytes);
+  };
+  mk('11111111-1111-1111-1111-111111111111');                                  // no prompt.txt
+  mk('22222222-2222-2222-2222-222222222222', Buffer.from('   \n', 'utf8'));    // present, blank
+  mk('33333333-3333-3333-3333-333333333333', Buffer.from('real prompt', 'utf8'));
+
+  const pages = parseDownloadedPages(root, root, null, []);
+  const byId = new Map(pages.map((p) => [p.pageId, p]));
+
+  assert.strictEqual(byId.get('11111111-1111-1111-1111-111111111111').prompt, undefined,
+    'a missing prompt.txt is an OMISSION — the wrapper default applies, the build must not refuse');
+  assert.strictEqual(byId.get('22222222-2222-2222-2222-222222222222').prompt, '',
+    'a present-but-blank file stays explicit so the blank-provenance guard still fails closed');
+  assert.strictEqual(byId.get('33333333-3333-3333-3333-333333333333').prompt, 'real prompt');
+
+  // The emitted spec must not carry the key at all for the omitted case — `undefined` is dropped by
+  // JSON.stringify, which is what makes the rebuild use the default rather than refuse.
+  const round = JSON.parse(JSON.stringify(byId.get('11111111-1111-1111-1111-111111111111')));
+  assert.ok(!('prompt' in round), `prompt must be absent from the serialized page; got ${JSON.stringify(round)}`);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// `existsSync` returns false for a file that exists but cannot be OPENED, which made an unreadable
+// config indistinguishable from a missing one: the page was emitted with no bindings and never
+// recorded as unreadable, slipping past the --allow-lossy-download gate entirely.
+test('a config that exists but cannot be READ is recorded unreadable, not treated as absent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlacl-'));
+  const d = path.join(root, '44444444-4444-4444-4444-444444444444');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+  // A DIRECTORY named config.json reproduces "exists but unreadable" portably: readFileSync fails
+  // with EISDIR, which is emphatically not ENOENT.
+  fs.mkdirSync(path.join(d, 'config.json'));
+
+  const unreadable = [];
+  const pages = parseDownloadedPages(root, root, null, unreadable);
+  assert.strictEqual(pages.length, 1, 'the page is still emitted');
+  assert.deepStrictEqual(unreadable.map((u) => u.pageId), ['44444444-4444-4444-4444-444444444444'],
+    'an unreadable config must reach the lossy-download gate rather than read as "no bindings"');
+
+  fs.rmSync(root, { recursive: true, force: true });
 });

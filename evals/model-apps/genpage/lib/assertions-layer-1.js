@@ -15,6 +15,29 @@
 
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
+
+// The two upload transports, recognised in ONE place.
+//
+// New runs deploy through `scripts/genpage-upload.js`, which hands the prompt to pac BY FILE so a
+// shell cannot reinterpret quotes/newlines (#589). The fixtures checked in here are captured
+// transcripts from before that change and show the raw `pac model genpage upload` form; rewriting a
+// captured transcript to match today's skill would be falsifying the evidence it exists to be.
+//
+// Defined once because the two DID drift: the common assertion was updated and the per-eval Phase
+// expectations were not, so a correct new-transport run failed the evals while a raw
+// `pac … --prompt "…"` run passed — the evals were grading the quoting-unsafe transport as correct.
+const UPLOAD_CMD = /pac\s+model\s+genpage\s+upload|genpage-upload\.js/;
+const uploadLinesOf = (log) => String(log || '').split('\n').filter((l) => UPLOAD_CMD.test(l));
+
+// What the log records about an upload's PROMPT, whichever transport carried it: the inline quoted
+// value, or — for the file transport, where there is no inline value to read — the `Prompt scope:`
+// line the skill requires alongside the command.
+function promptEvidence(log, uploadLine) {
+  const inline = /--prompt\s+"([^"]*)"/.exec(uploadLine || '');
+  if (inline) return inline[1];
+  const scope = /^\s*[-*]?\s*Prompt scope:\s*(.+)$/im.exec(String(log || ''));
+  return scope ? scope[1].trim() : null;
+}
 function skip(reason) { return { status: 'skip', reason }; }
 
 // An EDIT-flow fixture produces `genpage-edit-plan.md` and never `genpage-plan.md`: the create
@@ -602,8 +625,10 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('no upload invocation recorded');
-    if (!/--prompt/.test(log)) return fail('upload lacks --prompt flag');
+    if (!UPLOAD_CMD.test(log)) return fail('no upload invocation recorded');
+    // `--prompt` also matches `--prompt-file`, which is the intent: what is asserted is that a
+    // prompt was recorded and scoped, not which flag carried it.
+    if (!/--prompt/.test(log)) return fail('upload lacks a --prompt/--prompt-file flag');
     return pass();
   }
 );
@@ -806,8 +831,8 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('upload command not recorded');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    if (!UPLOAD_CMD.test(log)) return fail('upload command not recorded');
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.some((l) => /--data-sources/.test(l))) {
       return fail('upload includes --data-sources on mock-data page');
     }
@@ -820,8 +845,8 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('upload command not recorded');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    if (!UPLOAD_CMD.test(log)) return fail('upload command not recorded');
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.some((l) => /--data-sources/.test(l))) {
       return fail('upload includes --data-sources on mock-data page');
     }
@@ -933,7 +958,7 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.length === 0) return fail('upload not recorded');
     const editUpload = uploadLines.find((l) => /--page-id/.test(l));
     if (!editUpload) return fail('edit upload missing --page-id');
@@ -1233,21 +1258,25 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    const upload = (log.split('\n').find((l) => /genpage upload/.test(l)) || '');
-    if (!upload) return fail('no `pac model genpage upload` command in the workflow log');
+    const upload = uploadLinesOf(log)[0] || '';
+    if (!upload) return fail('no genpage upload command in the workflow log');
 
     if (!/--page-id\b/.test(upload)) return fail('edit upload must pass --page-id');
     if (!/--connectors\b/.test(upload)) return fail('edit upload must pass --connectors');
     // An existing page is already in the sitemap; re-adding it creates a duplicate subarea.
     if (/--add-to-sitemap\b/.test(upload)) return fail('edit upload must omit --add-to-sitemap');
 
-    // --prompt must be the DELTA. The page's original description ("dashboard showing the current
+    // The prompt must be the DELTA. The page's original description ("dashboard showing the current
     // weather ... temperature, conditions, and humidity") must not be restated, or each edit
     // re-sends the whole history and the stored prompt drifts from what the page now is.
-    const m = upload.match(/--prompt\s+"([^"]*)"/);
-    if (!m) return fail('edit upload has no quoted --prompt value');
-    if (/temperature, conditions, and humidity/i.test(m[1])) {
-      return fail('--prompt restates the original page description instead of this edit\'s delta');
+    //
+    // Read through `promptEvidence` rather than demanding an inline quoted value: the file
+    // transport has no inline value to read, and requiring one made a correct run fail while a raw
+    // `--prompt "…"` run passed — grading the quoting-unsafe transport as the correct one.
+    const value = promptEvidence(log, upload);
+    if (value === null) return fail('edit upload records no prompt value or `Prompt scope:` line');
+    if (/temperature, conditions, and humidity/i.test(value)) {
+      return fail('the prompt restates the original page description instead of this edit\'s delta');
     }
     return pass();
   }

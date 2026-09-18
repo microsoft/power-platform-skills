@@ -5,7 +5,9 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
+const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { decodeXmlEntities } = require('./sitemap-pages.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
@@ -223,6 +225,156 @@ async function verifySpec(spec, read, opts = {}) {
         relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
       }
       add('relationship', schema, relCache.get(child).has(schema));
+    }
+  }
+
+  // Form TOPOLOGY. Existence is not proof of shape: every wrong-layout defect this plugin has hit —
+  // fields flattened into the first section, a duplicate tab appended on each rebuild, a relocated
+  // field piled into an already-full row — deployed a form that EXISTS with the right name and type,
+  // so verify reported an unqualified PASS while the layout was wrong.
+  //
+  // Scope is deliberately the AUTHORED subset, not an exact match: the engine appends sub-grid and
+  // notes sections the spec never declares, and a maker may add their own. So this asserts that every
+  // tab and section the author declared is present, and that every field lands in the section the
+  // author put it in — and says nothing about containers it did not declare.
+  //
+  // Only EXPLICIT layouts are checked. An `auto` layout declares no shape to honour, so there is
+  // nothing to verify beyond the field list the existing checks already cover.
+  //
+  // Fail-closed: when the formxml cannot be read the check is reported NOT present with the read
+  // error, never skipped — "we could not look" must not read as "the layout is correct". That
+  // applies to a MISSING READER CAPABILITY too: gating the whole oracle on
+  // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
+  // explicit form passed verify on identity and default checks alone with no layout proof at all.
+  const canReadTopology = typeof read.formTopology === 'function';
+  {
+    for (const f of spec.forms || []) {
+      if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
+      const entity = String(f.entity || '').toLowerCase();
+      const name = f.name || `${f.entity} form`;
+      if (!canReadTopology) {
+        add('form-topology', `${entity}.${name}`, false,
+          'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
+        continue;
+      }
+      let id = null;
+      let idError = null;
+      try {
+        id = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
+      } catch (e) { idError = (e && e.message) || String(e); }
+      if (!id) {
+        // A form that genuinely does not exist was already reported by the existence check above, so
+        // saying it twice adds nothing. A FAILED resolution is different: the form may well be there
+        // and correct, and silently skipping the layout check let a transient read failure pass as a
+        // verified layout.
+        if (idError) {
+          add('form-topology', `${entity}.${name}`, false,
+            `could not resolve the deployed form id (${idError}) — the layout is unverified, not proven correct`);
+        }
+        continue;
+      }
+
+      let xml = null;
+      let readError = null;
+      try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
+      if (!xml) {
+        add('form-topology', `${entity}.${name}`, false,
+          `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
+        continue;
+      }
+
+      const deployed = parseFormTopology(xml);
+      // Where the DEPLOYED form actually placed each bound field, keyed by section name.
+      const placedIn = new Map();
+      for (const t of deployed) for (const c of t.columns || []) for (const sec of c.sections || []) {
+        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, String(sec.name || '').toLowerCase());
+      }
+
+      const problems = [];
+      // Match containers the way the BUILD does — name, then label, then position — using the same
+      // function it uses. A label- or position-matched container deliberately KEEPS its deployed
+      // name (form scripts and business rules reference section names), so looking one up by the
+      // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
+      // failed a build that had done exactly what was asked. Live-reproduced.
+      const claimedTabs = new Set();
+      f.tabs.forEach((t, ti) => {
+        if (!t || typeof t !== 'object') return;
+        const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
+        // Match the label the COMPILER emits, not the raw authored one. `compileFormIntent` defaults
+        // a tab to 'General' and a section to 'Details', so the deployed container carries the
+        // default — comparing against `undefined` would skip the label pass and fall through to
+        // position, picking a different container than the build did.
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs });
+        if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
+        claimedTabs.add(tabHit.index);
+        const got = tabHit.item;
+        const authoredColumns = formColumnsOf(t);
+        if ((got.columns || []).length < authoredColumns.length) {
+          problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
+        }
+        authoredColumns.forEach((col, ci) => {
+          const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
+          const deployedSections = ((got.columns || [])[ci] || {}).sections || [];
+          const claimedSections = new Set();
+          sections.forEach((sec, si) => {
+            if (!sec || typeof sec !== 'object') return;
+            const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
+            const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
+              { claimed: claimedSections, skip: isEngineOwnedSection });
+            if (!secHit) {
+              problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
+              return;
+            }
+            claimedSections.add(secHit.index);
+            // OCCUPANCY: no deployed row may carry more columns of content than its section has.
+            // This is the shape defect the reconcile fixes (a field packed into a full row, or a
+            // widened span overflowing one), and a field-to-section check alone cannot see it.
+            // Skipped when the deployed section declares no width — unknown is not "one".
+            const secCols = Number(secHit.item.columns);
+            if (Number.isFinite(secCols) && secCols >= 1) {
+              for (const [ri, drow] of (secHit.item.rows || []).entries()) {
+                const used = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                if (used > secCols) {
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content in a ${secCols}-column section`);
+                }
+              }
+            }
+            // A span the author DECLARED must be the deployed span. An UNDECLARED one is not
+            // checked — the build never writes it, so a maker's hand-widened cell must survive
+            // both the rebuild and the verification.
+            const deployedCellOf = (logical) => (secHit.item.rows || [])
+              .flatMap((r2) => r2.cells || [])
+              .find((c) => c.control && c.control.fieldName === logical);
+            for (const entry of (sec.fields || [])) {
+              if (!entry || typeof entry !== 'object') continue;
+              const fl = String(entry.name || '').toLowerCase();
+              if (!fl) continue;
+              const dc = deployedCellOf(fl);
+              if (!dc) continue; // placement is reported separately below
+              for (const key of ['colspan', 'rowspan']) {
+                const want = Number(entry[key]);
+                if (!Number.isFinite(want) || want < 1) continue; // not declared
+                const got = Number(dc[key]) || 1;
+                if (got !== want) problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${want}`);
+              }
+            }
+            // Fields are compared against the section that was MATCHED, not the authored name — the
+            // deployed section legitimately keeps its own name.
+            const deployedSecName = String(secHit.item.name || '').toLowerCase();
+            for (const entry of (sec.fields || [])) {
+              const fieldName = typeof entry === 'string' ? entry : (entry && entry.name);
+              if (!fieldName) continue;
+              const fl = String(fieldName).toLowerCase();
+              const where = placedIn.get(fl);
+              if (where === undefined) problems.push(`field '${fl}' is not placed on the deployed form`);
+              else if (where !== deployedSecName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
+            }
+          });
+        });
+      });
+
+      add('form-topology', `${entity}.${name}`, problems.length === 0,
+        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
     }
   }
 
@@ -1064,6 +1216,94 @@ function parseFetchXml(xml) {
     });
   }
   return { conditions, orders };
+}
+
+// Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
+//
+// Why this exists: form verification used to prove only that a form row EXISTS with the right
+// (entity, name, type), plus whether it is the table default. Every wrong-layout failure this plugin
+// has hit — fields flattened into the first section, a tab appended on every rebuild, a relocated
+// field piled into a full row — therefore finished with an unqualified PASS. Existence is not proof
+// of shape.
+//
+// Shape being parsed (attribute order varies; quotes may be single or double):
+//   <form><tabs>
+//     <tab name="tab_overview" ...><columns>
+//       <column width="60%"><sections>
+//         <section name="sec_summary" ...><rows>
+//           <row><cell ...><control datafieldname="new_name" .../></cell></row>
+//   … and a cell may carry no control at all (a spacer), or a control with no datafieldname
+//   (a sub-grid, the notes timeline, a web resource) — those are NOT bound fields and are skipped.
+//
+// Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
+// sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
+// first close tag, which for nested containers attributes children to the wrong parent.
+function parseFormTopology(xml) {
+  const s = String(xml || '');
+  const tabs = [];
+  let tab = null, column = null, section = null, row = null, cell = null;
+  // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
+  let inCell = false;
+  const re = /<(\/?)(tab|column|section|row|cell|control|label)\b([^>]*?)(\/?)>/gi;
+  const attr = (raw, name) => {
+    const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
+    return m ? (m[1] != null ? m[1] : m[2]) : undefined;
+  };
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    const raw = m[3];
+    const selfClosing = m[4] === '/';
+    if (closing) {
+      if (tag === 'tab') { tab = null; column = null; section = null; }
+      else if (tag === 'column') { column = null; section = null; }
+      else if (tag === 'section') { section = null; row = null; cell = null; }
+      else if (tag === 'row') { row = null; cell = null; }
+      else if (tag === 'cell') { inCell = false; cell = null; }
+      continue;
+    }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
+    else if (tag === 'section' && column) {
+      const ratio = attr(raw, 'columns');
+      // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
+      // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
+      // assuming a 1-column grid and inventing an overflow that is not there.
+      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, rows: [], fields: [] };
+      column.sections.push(section);
+      if (selfClosing) section = null;
+    }
+    else if (tag === 'row' && section) { row = { cells: [] }; section.rows.push(row); if (selfClosing) row = null; }
+    else if (tag === 'cell') {
+      inCell = !selfClosing;
+      // A cell with no <control> child stays control-less, which is what keeps a SPACER from
+      // reading as engine-owned.
+      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1 };
+      if (row) row.cells.push(cell);
+      if (selfClosing) cell = null;
+    }
+    // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
+    // not an attribute. The BUILD matches containers name -> label -> position, so without this the
+    // verifier can never make the label pass and would disagree with a label-matched reshape.
+    else if (tag === 'label' && !inCell) {
+      const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
+      if (d !== undefined) {
+        if (section && section.label === undefined) section.label = d;
+        else if (!section && tab && tab.label === undefined) tab.label = d;
+      }
+    }
+    else if (tag === 'control' && section) {
+      // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
+      // notes timeline or a web resource — engine-owned, never something the spec's field list
+      // claims to place. The CELL still records that a control was present, because that is what
+      // distinguishes an engine-owned section from a merely empty one.
+      const f = attr(raw, 'datafieldname');
+      if (f) section.fields.push(String(f).toLowerCase());
+      if (cell) cell.control = f ? { fieldName: String(f).toLowerCase() } : {};
+    }
+  }
+  return tabs;
 }
 
 function conditionMatches(want, got) {

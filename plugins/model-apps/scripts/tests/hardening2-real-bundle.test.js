@@ -344,3 +344,100 @@ test('REAL BUNDLE: an unrecognised tab or section property is refused, not silen
   assert.strictEqual(await attempt({ expanded: true }, { columns: 2 }), null,
     'the properties the compiler emits must remain accepted');
 });
+// --- The real SDK's addElement POSITION contract -------------------------------------------------
+// The row re-pack that follows a span widening inserts a row immediately below the widened one. It
+// does that with `addElement(..., { position: { index } })`, and the SDK resolves position as
+// `undefined | 'end' | 'start' | { index } | { before } | { after } ` — testing `'index' in position`.
+//
+// A BARE NUMBER therefore throws, and the test mock originally accepted one: the whole suite passed
+// green while every real insertion failed with "Cannot use 'in' operator to search for 'index' in 1".
+// Only the real bundle can hold this contract honest, so it is pinned here.
+test('real SDK: addElement inserts at { position: { index } } and REJECTS a bare number', async () => {
+  const sdk = await freshSdk(null, null);
+  const art = await sdk.createArtifact('form', {
+    name: 'PositionContract', entityLogicalName: 'new_customer', formType: 'Main', status: 'Draft',
+  });
+  await sdk.addElement('form', art.id, '/tabs', {
+    name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+      rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }, { cells: [{ control: { fieldName: 'new_tier' } }] }] }] }],
+  });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+  const rowsPtr = '/tabs/0/columns/0/sections/0/rows';
+
+  // Insert BETWEEN the two existing rows — the case the re-pack depends on.
+  await sdk.addElement('form', art.id, rowsPtr, { cells: [] }, { position: { index: 1 } });
+  let form = await sdk.getArtifact('form', art.id);
+  let rows = form.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 3, 'a row was inserted');
+  assert.strictEqual((rows[0].cells[0].control || {}).fieldName, 'new_name');
+  assert.strictEqual((rows[1].cells || []).length, 0, 'the NEW row lands at index 1, between the two');
+  assert.strictEqual((rows[2].cells[0].control || {}).fieldName, 'new_tier');
+
+  // The contract the mock got wrong: a bare number is not a position. Written as an explicit
+  // try/catch with a real `await` so the repo's "every SDK call is awaited" guard still sees it —
+  // an `assert.rejects(() => sdk...)` thunk hides the call from that check.
+  let threw = null;
+  try {
+    await sdk.addElement('form', art.id, rowsPtr, { cells: [] }, { position: 1 });
+  } catch (e) { threw = e; }
+  assert.ok(threw && /index/.test(String(threw.message)),
+    `a bare numeric position must be rejected, not silently appended; got ${threw && threw.message}`);
+
+  // Omitting position still appends, which is what every other call site relies on.
+  await sdk.addElement('form', art.id, rowsPtr, { cells: [] });
+  form = await sdk.getArtifact('form', art.id);
+  rows = form.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 4, 'an omitted position appends');
+  assert.strictEqual((rows[3].cells || []).length, 0);
+});
+
+// The row re-pack moves existing cells between rows with `updateElement`, having created the new row
+// EMPTY with `addElement`. That strategy rests on two real-engine behaviours the mock cannot prove:
+// `updateElement` must REPLACE a cells array rather than merge it, and a cell object moved between
+// rows must keep its id (a re-keyed cell loses maker-edited control state). Pinned against the real
+// bundle because the mock's permissiveness already hid one contract bug on this exact call.
+test('real SDK: the row re-pack sequence preserves cell identity and lands the rows correctly', async () => {
+  const sdk = await freshSdk(null, null);
+  const art = await sdk.createArtifact('form', {
+    name: 'RepackSequence', entityLogicalName: 'new_customer', formType: 'Main', status: 'Draft',
+  });
+  await sdk.addElement('form', art.id, '/tabs', {
+    name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+      rows: [{ cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] }] }] }],
+  });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+
+  const secPtr = '/tabs/0/columns/0/sections/0';
+  const before = await sdk.getArtifact('form', art.id);
+  const [cellA, cellB] = before.tabs[0].columns[0].sections[0].rows[0].cells;
+  assert.ok(cellA.id && cellB.id, 'the engine assigned cell ids');
+
+  // 1. Widen the first cell — the row now holds 2 + 1 = 3 columns of content in a 2-column section.
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/0/cells/0`, { colspan: 2 });
+  // 2. Re-pack exactly as `repackRowAt` does: new EMPTY row directly below, then fill it, then
+  //    rewrite the original row.
+  await sdk.addElement('form', art.id, `${secPtr}/rows`, { cells: [] }, { position: { index: 1 } });
+  const widened = await sdk.getArtifact('form', art.id);
+  const live = widened.tabs[0].columns[0].sections[0].rows[0].cells;
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/1`, { cells: [live[1]] });
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/0`, { cells: [live[0]] });
+
+  const after = await sdk.getArtifact('form', art.id);
+  const rows = after.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 2, `the row split in two; got ${JSON.stringify(rows)}`);
+  assert.strictEqual(rows[0].cells.length, 1, 'updateElement REPLACED the cells array rather than merging it');
+  assert.strictEqual(rows[0].cells[0].control.fieldName, 'new_name');
+  assert.strictEqual(rows[0].cells[0].colspan, 2, 'the widened span survives the re-pack');
+  assert.strictEqual(rows[0].cells[0].id, cellA.id, 'the widened cell keeps its identity');
+  assert.strictEqual(rows[1].cells.length, 1);
+  assert.strictEqual(rows[1].cells[0].control.fieldName, 'new_tier');
+  assert.strictEqual(rows[1].cells[0].id, cellB.id, 'the displaced cell is MOVED, not re-keyed');
+
+  // Occupancy is now legal in every row — the defect was 3 columns of content in a 2-column section.
+  for (const r of rows) {
+    const used = r.cells.reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(used <= 2, `row exceeds the section width: ${JSON.stringify(r.cells)}`);
+  }
+});
