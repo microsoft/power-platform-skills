@@ -95,6 +95,15 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `cannot resolve '${resolved}' (${e.code || e.message})` };
   }
 
+  // 3b. Re-apply the root rules to the CANONICAL target. Adversarial review found the lexical-only
+  //     check bypassable: `D:\review-link\project\.maker-workspace` reached through an ancestor
+  //     junction resolves to `D:\.maker-workspace`, which passing directly would be refused. The
+  //     rules have to hold for the path actually deleted, not merely the one typed.
+  const realParent = path.dirname(real);
+  if (real === path.parse(real).root || realParent === real || realParent === path.parse(realParent).root) {
+    return { ok: false, reason: `refusing to delete '${resolved}': it resolves to '${real}', at or directly inside a filesystem root` };
+  }
+
   // 4. IDENTITY. Either the conventional default name, or — for the `--workspace <custom-dir>` case
   //    the CLIs explicitly support — a directory carrying the SDK's own workspace manifest. A
   //    live run with `--workspace lvws` is what proved a name-only rule wrongly refuses a real

@@ -196,7 +196,22 @@ const KIND_HANDLERS = {
   app: {
     async resolve(sdk, target) {
       const items = await sdk.resolveArtifact('app', { uniqueName: target.uniqueName });
-      return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique }));
+      // `uniqueName` is carried so `confirmAbsent` below can re-query this exact app.
+      return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique, uniqueName: target.uniqueName }));
+    },
+    // Is the app REALLY gone? A 404 from the delete is not proof: the SDK also surfaces 404 when
+    // the ATOMIC app+sitemap changeset is ROLLED BACK by the platform, and the app is still there.
+    // deleteStep used to record that as a successful delete, so the abort never fired and dependent
+    // teardown stripped a LIVE app while reporting ok:true. Asking the platform is authoritative;
+    // inferring absence from an error code is not. A read failure returns false (fail closed) —
+    // "cannot prove it is gone" must not license deleting everything it renders.
+    async confirmAbsent(sdk, item) {
+      try {
+        const rows = await sdk.resolveArtifact('app', { uniqueName: item.uniqueName });
+        return !(rows || []).length;
+      } catch {
+        return false;
+      }
     },
     // deleteAppCascade fail-fast-deletes the app module together with its sitemap (atomically), and
     // returns a structured { success, deleted, failures, retained } result (older vendored bundles
@@ -1083,7 +1098,15 @@ async function deleteStep(sdk, handler, items) {
         continue;
       }
       if (isNotFound(err)) {
-        // Already gone (e.g. cascade) — tolerate
+        // Already gone (e.g. cascade) — tolerate.
+        //
+        // EXCEPT where the handler can check. For a dependency ROOT a 404 is ambiguous: it means
+        // "already gone" OR "the atomic changeset rolled back and the record is still live", and
+        // treating the second as a delete let teardown strip an app that still existed. A handler
+        // exposing `confirmAbsent` gets to ask the platform instead of inferring.
+        if (typeof handler.confirmAbsent === 'function' && !(await handler.confirmAbsent(sdk, item))) {
+          throw err;
+        }
         deletedIds.push(item.id);
         continue;
       }

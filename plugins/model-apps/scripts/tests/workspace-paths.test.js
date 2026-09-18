@@ -131,3 +131,28 @@ test('a missing workspace is reported as nothing to clear, not as an error to fi
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /nothing to clear/);
 });
+
+// Adversarial review: the root rules were applied to the LEXICAL path only, so an ancestor junction
+// could land the delete at a root-level directory that passing directly would have refused.
+// Measured: `D:\review-link\project\.maker-workspace` resolving to `D:\.maker-workspace` was
+// accepted. The rules must hold for the path actually deleted, not merely the one typed.
+test('an ancestor junction cannot land the delete at a filesystem root', () => {
+  const root = path.parse(process.cwd()).root;
+  const typed = path.join(root, 'review-link', 'project', WORKSPACE_DIR_NAME);
+  const r = checkWorkspaceClearable(typed, {
+    lstatSync: () => ({ isSymbolicLink: () => false, isDirectory: () => true }),
+    realpathSync: () => path.join(root, WORKSPACE_DIR_NAME),
+    readFileSync: () => JSON.stringify({ instanceUrl: 'https://x/', artifacts: [] }),
+  });
+  assert.strictEqual(r.ok, false, 'the canonical target is root-level and must be refused');
+  assert.match(r.reason, /filesystem root/);
+
+  // CONTROL: the same junction landing somewhere ordinary is still allowed, so this is a root rule
+  // and not a blanket ban on resolving elsewhere.
+  const ok = checkWorkspaceClearable(typed, {
+    lstatSync: () => ({ isSymbolicLink: () => false, isDirectory: () => true }),
+    realpathSync: () => path.join(root, 'real', 'project', WORKSPACE_DIR_NAME),
+    readFileSync: () => JSON.stringify({ instanceUrl: 'https://x/', artifacts: [] }),
+  });
+  assert.strictEqual(ok.ok, true, `an ordinary canonical target must still clear: ${JSON.stringify(ok)}`);
+});

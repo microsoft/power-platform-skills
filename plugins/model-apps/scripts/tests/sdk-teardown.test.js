@@ -1790,6 +1790,62 @@ test('#587 a cascade-cleanup failure still lets teardown continue — the app it
 });
 // is not a GUID skips the association query entirely — and that is deliberate: FORM_GUID_RE is an
 // injection guard on the OData filter, not an existence check. Every Dataverse `roleid` is an
+// astra HIGH — the abort added above is DOWNSTREAM of deleteStep, which treats any not-found error
+// as a successful delete. But the SDK also throws 404 when an ATOMIC app+sitemap changeset is
+// ROLLED BACK by the platform — the app is still there. That was recorded as a phantom delete, the
+// abort never fired, and dependent teardown went on to strip a live app: `ok: true`, no errors.
+//
+// For the dependency ROOT, "not found" must be MEASURED, not inferred.
+test('#587 a rolled-back atomic app delete is not mistaken for a successful one', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    // The app row is deliberately LEFT IN PLACE: the changeset rolled back.
+    deleteAppCascade: async (id, unique) => {
+      base.calls.push({ method: 'deleteAppCascade', appModuleId: id, appModuleIdUnique: unique });
+      const err = new Error('The atomic delete of app and sitemap was rolled back');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'a rolled-back delete must not report success');
+  assert.deepStrictEqual(r.deleted.app || [], [], 'and must not be recorded as a deleted app');
+  const destructive = base.calls.filter((c) => /^delete/.test(c.method) && c.method !== 'deleteAppCascade');
+  assert.deepStrictEqual(destructive.map((c) => c.method), [],
+    'the app is still live, so nothing it renders may be deleted');
+  assert.strictEqual(base.db.tables.size, 3, 'its tables must survive');
+});
+
+// The CONTROL that keeps the rule honest: an app genuinely already gone (a re-run of a completed
+// teardown) must still be tolerated, or every second teardown would fail.
+test('#587 an app that is genuinely absent is still tolerated as already deleted', async () => {
+  const base = mockSdk({
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  });
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      // Remove the row (it really is gone), THEN report 404 — the shape a cascade race produces.
+      await base.deleteAppCascade(id, unique);
+      const err = new Error('Not Found');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(r.ok, true, `a genuinely-absent app is not a failure: ${JSON.stringify(r.errors)}`);
+  assert.strictEqual(base.db.tables.size, 0, 'and its dependents are still torn down');
+});
+
 // The OTHER branch of the same resolver, pinned so it is not "fixed" later without being thought
 // through. A roleid that is not a GUID skips the association query entirely — deliberately:
 // FORM_GUID_RE is an injection guard on the OData filter, not an existence check. Every Dataverse
