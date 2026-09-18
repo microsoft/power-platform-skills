@@ -518,6 +518,10 @@ answers, and return to the approval gate if an unresolved choice changes scope.
    does not prove runtime integration. Token-only changes usually do not require
    screen TSX rewrites; component/density/negative-rule changes may. Rebuild
    affected screens in Step 6 rather than returning early.
+   For an approved custom dark palette, execute the reference's **Approved dark
+   palette** branch: wire `darkTokens.color` into `appDarkTheme`, then into the
+   provider's `brandedDarkTheme`. Verify the export/keys and resolved dark
+   surface/text values; writing `brand/tokens.dark.ts` alone is not completion.
 
 Step 5 applies additions/refreshes, not removals. If the Data Model change is
 removal-only, do not run `/add-dataverse`'s add workflow against the shortened

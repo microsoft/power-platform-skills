@@ -59,9 +59,16 @@ public boolean permission helpers report the failure and return false. Scanner
 permission rejection renders a failure state instead of escaping its effect.
 
 **Storage is part of compatibility when requested.** Resolve the approved local-only
-or retained-artifact behavior before judging reuse. Do not infer uploads from
-unrelated generated columns or an old plan. For retained artifacts, inspect the
-actual generated target column type and service signature read-only:
+or retained-artifact behavior and storage platform before judging reuse. Do not
+infer uploads from unrelated generated columns or an old plan. A known approved
+connector/local destination does not require Dataverse columns. Validate the
+native output against that destination's payload contract and return persistence
+integration to the owner; do not create a Dataverse upload helper or claim the
+whole retained-artifact feature is complete. Only genuinely unknown required
+destination/payload information returns `NEEDS_CONTEXT`.
+
+For approved Dataverse retention, inspect the actual generated target column
+type and service signature read-only:
 
 - Custom camera/pen **Image** updates use the generated service's supported image
   payload; strip the PNG data URI prefix when raw base64 is expected. Camera's
