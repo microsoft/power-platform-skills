@@ -44,6 +44,23 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A downloaded page no longer loses its table bindings to a byte-order mark.** `pac` writes
+  `config.json` with a BOM, which `JSON.parse` rejects — the failure was caught and treated as "this
+  page has no data sources", so the rebuilt page queried a table it was no longer bound to. The BOM
+  is now stripped, and a config that is present but unreadable is no longer reported as "no
+  bindings": the download stops unless you pass `--allow-lossy-download`.
+- **`/genpage` refuses to "update" a page that does not exist.** `pac` treats an unknown
+  `--page-id` as a create and returns the new page's id, so a stale or mistyped id silently produced
+  a second, unplaced page and reported it as an update. The target is now verified first, and an
+  environment listing that cannot be read stops the upload rather than allowing it.
+- **An explicitly empty prompt or agent message is refused, not replaced.** A blank file used to be
+  swapped for generated text, so a page carried provenance nobody wrote. Omitting the value still
+  gets the default — only a supplied-but-blank value is rejected — and both `/genpage` and
+  `/app-builder` now behave the same way, with `/app-builder` failing before any page is deployed.
+- **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
+  indistinguishable from not setting one at all, so changing a field from `2` back to `1` never
+  reached the form. A span you *don't* declare is still left alone, so a column widened by hand in
+  the designer survives a rebuild.
 - **A plain `--apply` halts when the changed-only snapshot cannot be invalidated** ([#587]). The
   result was discarded and a throw swallowed, so a full apply could mutate the environment while an
   *eligible* snapshot survived — and a later `--changed-only` run would then trust it and skip work
