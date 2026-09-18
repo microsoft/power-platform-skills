@@ -31,11 +31,11 @@ Local generated PDFs are usually `file://` URIs and can be passed to `openHttpsP
 
 ### 1. Verify app
 
-```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-```
-
-If this fails, tell the user to run `/create-mobile-app` first and STOP.
+Read [prototype-mode.md](../references/prototype-mode.md) and run its
+`verify-prototype-native.js` command, forwarding `--prototype` when selected.
+Apply the parent template-package policy. In local mode, use the
+generate/view/share path and skip optional Dataverse upload; a cache PDF is not
+automatically durable retained evidence.
 
 ### 2. Verify packages are already present
 

@@ -15,9 +15,8 @@ tools:
 
 # Screen Builder
 
-Implement one assigned screen, not an app or a new plan. Preserve the approved actor,
-journey, primary action, operation, success evidence, and recovery behavior. Samples
-demonstrate APIs, not mandatory layouts or permission to ship an unwired action.
+Implement only the assigned screen; preserve its approved actor, journey, action, operation, success evidence and recovery.
+Samples demonstrate APIs, not mandatory layouts or permission to ship an unwired action.
 
 ## Input and ownership
 
@@ -75,6 +74,7 @@ Load a reference **only when its trigger applies**; do not preload this table.
 
 | Trigger in assigned spec/skeleton | Read |
 |---|---|
+| Phone/local-data profile and native authoring | [phone.md](references/screen-builder/phone.md) |
 | Dataverse reads, displays, or remote query | [data-reads.md](references/screen-builder/data-reads.md) |
 | Create/update/delete/upload or another persisted action | [mutations.md](references/screen-builder/mutations.md) |
 | List/queue, including a list section of a dashboard | [list.md](references/screen-builder/list.md) |

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "App-owned logical mobile domain",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "appInstanceId", "schemaVersionNumber", "entities", "actions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "appInstanceId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$" },
+    "schemaVersionNumber": { "type": "integer", "minimum": 1 },
+    "entities": {
+      "type": "array", "minItems": 0, "maxItems": 50,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "fields", "operations"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/label" },
+          "fields": {
+            "type": "array", "minItems": 1, "maxItems": 100,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["id", "label", "type"],
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "label": { "$ref": "#/$defs/label" },
+                "type": { "enum": ["text", "number", "boolean", "datetime", "choice", "lookup", "photo"] },
+                "required": { "type": "boolean" },
+                "targetEntityId": { "$ref": "#/$defs/id" },
+                "options": {
+                  "type": "array", "minItems": 1, "maxItems": 100,
+                  "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["id", "label"],
+                    "properties": { "id": { "$ref": "#/$defs/id" }, "label": { "$ref": "#/$defs/label" } }
+                  }
+                }
+              }
+            }
+          },
+          "operations": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["list", "get", "create", "update", "delete"] } }
+        }
+      }
+    },
+    "actions": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "entityId", "operation"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" }, "label": { "$ref": "#/$defs/label" },
+          "entityId": { "$ref": "#/$defs/id" }, "operation": { "enum": ["save", "create", "update", "delete"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 200 }
+  }
+}

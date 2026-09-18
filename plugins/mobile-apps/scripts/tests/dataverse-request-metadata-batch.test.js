@@ -265,6 +265,42 @@ test('in-process request executor reuses one token across sequential metadata re
   assert.deepEqual(new Set(requests.map((item) => item.token)), new Set(['shared-token']));
 });
 
+test('metadata batch refreshes the rejected token and reuses its replacement', async () => {
+  const environmentUrl = 'https://example.crm.dynamics.com';
+  const refreshes = [];
+  const requests = [];
+  const operations = [
+    { method: 'POST', apiPath: 'EntityDefinitions', body: { SchemaName: 'cr1_Item' } },
+    { method: 'POST', apiPath: 'PublishXml', body: { ParameterXml: '<importexportxml />' } },
+  ];
+  const result = await runMetadataBatch(
+    environmentUrl,
+    operations,
+    'rejected-token',
+    'Default',
+    'tenant-1',
+    false,
+    {
+      getToken: async (...args) => {
+        refreshes.push(args);
+        return args[2] === 'rejected-token' ? 'replacement-token' : 'rejected-token';
+      },
+      sendRequest: async (_url, method, apiPath, body, token) => {
+        requests.push({ method, apiPath, body, token });
+        return { statusCode: token === 'rejected-token' ? 401 : 204, headers: {} };
+      },
+    },
+  );
+
+  assert.equal(result.failed, false);
+  assert.deepEqual(refreshes, [[environmentUrl, 'tenant-1', 'rejected-token']]);
+  assert.deepEqual(requests.map(({ token }) => token), [
+    'rejected-token', 'replacement-token', 'replacement-token',
+  ]);
+  assert.deepEqual(requests[1], { ...requests[0], token: 'replacement-token' });
+  assert.equal(requests[2].apiPath, operations[1].apiPath);
+});
+
 test('metadata transport loss is uncertain and mutation is not retried', async () => {
   let requests = 0;
   const result = await runOneMetadataOperation(

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    { "id": "camera", "title": "Camera", "summary": "Capture a photo with permission from the device owner.", "package": "expo-image-picker", "legacyPackages": ["expo-camera"], "wrapper": "src/native/camera.ts", "prototypeWrapper": "src/data/capture.ts", "nativeModule": "ExponentImagePicker", "requiredMethods": ["requestCameraPermissionsAsync", "launchCameraAsync"] },
+    { "id": "image-picker", "title": "Photo picker", "summary": "Choose specific photos using the system picker.", "package": "expo-image-picker", "legacyPackages": ["expo-camera"], "wrapper": "src/native/camera.ts", "prototypeWrapper": "src/data/capture.ts", "nativeModule": "ExponentImagePicker", "requiredMethods": ["requestMediaLibraryPermissionsAsync", "launchImageLibraryAsync"] },
+    { "id": "barcode-scanner", "title": "Barcode and QR scanner", "summary": "Scan a code in a dedicated camera workflow.", "package": "expo-camera", "wrapper": "src/native/barcodeScanner.tsx", "nativeModule": "ExpoCamera" },
+    { "id": "document-picker", "title": "Document picker", "summary": "Import a document selected by the device owner.", "package": "expo-document-picker", "wrapper": "src/native/documentPicker.ts", "nativeModule": "ExpoDocumentPicker" },
+    { "id": "pdf-report", "title": "PDF report", "summary": "Generate a local report; this does not provide a general PDF viewer.", "package": "expo-print", "wrapper": "src/native/pdfReport.ts", "nativeModule": "ExpoPrint" },
+    { "id": "pdf-viewer", "title": "PDF viewer", "summary": "Open supported HTTPS or local file PDFs.", "package": "@microsoft/power-apps-native-pdf-viewer", "wrapper": "src/native/pdfViewer.ts", "minimumVersion": "0.2.9" },
+    { "id": "pen-input", "title": "Signature and drawing", "summary": "Capture ink or a signature; storing it is a separate data decision.", "package": "@microsoft/power-apps-native-pen-input", "wrapper": "src/native/penInput.ts" },
+    { "id": "location", "title": "Current location", "summary": "Request a foreground location fix, not continuous tracking.", "package": "expo-location", "wrapper": "src/native/location.ts", "nativeModule": "ExpoLocation" },
+    { "id": "geolocation", "title": "Background location", "summary": "Continuous tracking requires explicit permission and an approved storage/upload scope.", "package": "@microsoft/power-apps-native-bglocation", "wrapper": "src/native/geolocation.ts" },
+    { "id": "biometrics", "title": "Device authentication", "summary": "Use the device's available local authentication methods.", "package": "expo-local-authentication", "wrapper": "src/native/biometrics.ts", "nativeModule": "ExpoLocalAuthentication" },
+    { "id": "date-time-picker", "title": "Date and time picker", "summary": "Use the platform date/time control in a form.", "package": "@react-native-community/datetimepicker" },
+    { "id": "sharing", "title": "Share sheet", "summary": "Let the device owner share an app-generated local file.", "package": "expo-sharing", "wrapper": "src/native/sharing.ts", "nativeModule": "ExpoSharing" },
+    { "id": "mail-composer", "title": "Email draft", "summary": "Open a local email draft. Server-side sends require an approved connector.", "package": "expo-mail-composer", "wrapper": "src/native/mailComposer.ts", "nativeModule": "ExpoMailComposer" },
+    { "id": "audio", "title": "Audio", "summary": "Record or play audio using the shipped native module.", "package": "expo-audio", "wrapper": "src/native/audio.ts", "nativeModule": "ExpoAudio" },
+    { "id": "video", "title": "Video", "summary": "Play video using the shipped native module.", "package": "expo-video", "wrapper": "src/native/video.ts", "nativeModule": "ExpoVideo" },
+    { "id": "secure-store", "title": "Secure storage", "summary": "Store app secrets through the platform's secure storage.", "package": "expo-secure-store", "wrapper": "src/native/secureStore.ts", "nativeModule": "ExpoSecureStore" },
+    { "id": "file-system", "title": "Local files", "summary": "Manage app-owned files without adding a remote data source.", "package": "expo-file-system", "wrapper": "src/native/fileSystem.ts", "nativeModule": "ExpoFileSystem" },
+    { "id": "clipboard", "title": "Clipboard", "summary": "Copy or read clipboard content as part of an explicit user action.", "package": "expo-clipboard", "wrapper": "src/native/clipboard.ts", "nativeModule": "ExpoClipboard" },
+    { "id": "screen-orientation", "title": "Screen orientation", "summary": "Use the orientations supported by the installed app configuration.", "package": "expo-screen-orientation", "wrapper": "src/native/screenOrientation.ts", "nativeModule": "ExpoScreenOrientation" },
+    { "id": "device-info", "title": "Device information", "summary": "Read supported device metadata without collecting a device-owner identity.", "package": "expo-device", "wrapper": "src/native/deviceInfo.ts", "nativeModule": "ExpoDevice" },
+    { "id": "sensors", "title": "Device sensors", "summary": "Use only sensors exposed by the installed package and device.", "package": "expo-sensors", "wrapper": "src/native/sensors.ts" },
+    { "id": "haptics", "title": "Haptic feedback", "summary": "Not enabled by this mobile runtime policy; use visual feedback.", "package": "expo-haptics", "blocked": true }
+  ]
+}

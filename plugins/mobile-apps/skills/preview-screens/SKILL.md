@@ -8,6 +8,12 @@ model: sonnet
 
 # Preview Screens
 
+**Phone profile with HTML companions off:** do not generate or open HTML and do
+not launch another Metro server. Native app publication belongs to the current
+bridge job. Return to that workflow with the actual ready screen IDs and retain
+the same source/quality checks. Do not claim rendered native verification from
+a source check. Normal standalone/browser-preview requests below are unchanged.
+
 Follow applicable [shared instructions](../../shared/shared-instructions.md). Produce model-authored HTML/CSS with a small local interaction script—not a new renderer framework, not execution of React Native.
 
 ## 1 — Locate and select mode

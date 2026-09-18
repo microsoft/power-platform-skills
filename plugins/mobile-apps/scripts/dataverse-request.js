@@ -188,13 +188,16 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
   return res;
 }
 
-function createDataverseRequestExecutor({
+function createDataverseRequestExecutor(options) {
+  const broker = require('./lib/player-dataverse').playerDataverse(options);
+  if (broker) return (method, apiPath, body = null) => broker.metadata(options.environmentUrl, method, apiPath, body);
+  const {
   environmentUrl,
   tenantId,
   solution = null,
   getToken = getAuthToken,
   sendRequest = doRequest,
-}) {
+  } = options;
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
 
@@ -259,6 +262,14 @@ async function main() {
     manifestFile,
   } = parseArgs();
 
+  const broker = require('./lib/player-dataverse').playerDataverse();
+  if (broker) {
+    if (method !== 'GET' || body !== null || operations || manifestFile) {
+      throw new Error('Player discovery is GET-only. Use the approved operation-manifest workflow for schema changes; generic writes are not permitted.');
+    }
+    console.log(JSON.stringify(await broker.metadata(envUrl, method, apiPath)));
+    return;
+  }
   let token = await getAuthToken(envUrl, tenantId);
   if (!token) {
     process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
@@ -930,6 +941,8 @@ async function runMetadataBatch(
       Boolean(op.includeHeaders),
       op.solution || defaultSolution,
       tenantId,
+      journalOptions.getToken,
+      journalOptions.sendRequest,
     );
     token = executed.token;
     const result = {
@@ -1015,7 +1028,7 @@ async function runOneMetadataOperation(
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId, token);
       if (!refreshed) {
         return { status: 401, error: 'Token refresh failed', token, rateLimited };
       }

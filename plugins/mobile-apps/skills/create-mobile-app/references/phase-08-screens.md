@@ -44,6 +44,11 @@ For stack-only use `Stack`; for Tabs/Tabs+Stack use `Tabs` from `expo-router`; f
 [layout sample](${PLUGIN_ROOT}/shared/samples/_layout.tsx) or
 [drawer sample](${PLUGIN_ROOT}/shared/samples/_layout-drawer.tsx) for API shape only.
 Do not paste over auth/provider logic. Add only required imports and change the navigator return.
+Navigator child names are relative to the nearest layout, not the public URL.
+For `bookings/index.tsx` without `bookings/_layout.tsx`, register `bookings/index`;
+with that nested layout, register `bookings` in the parent and `index` inside it.
+Run `validate-navigation-layout.js --project-root "<working_dir>"` alongside
+the skeleton gate so runtime warnings are not deferred until publication.
 Use `useThemeTokens()` semantic colors and appropriate Ionicons icons for actual destinations.
 Drawer needs a reachable hamburger/header; hide non-destination template routes rather than
 allowing auto-registration to expose phantom tabs. Preserve approved visibility/presentation.
@@ -121,6 +126,12 @@ New skeletons contain actual resolved imports, typed route params, planned hooks
 JSX return. They must compile; remove/avoid unused scaffolding that fails the project's compiler.
 Skeleton imports/hook calls are the implementation handoff, not a duplicate per-screen import
 catalog appended to the plan.
+
+For the Player/local-data profile, prepare the authoring runtime and planned
+registry now using the [authoring-ready shell contract](phone-app-profile.md#authoring-ready-shell-before-screen-implementation).
+No readiness flags are granted. Include the returned runtime API/source
+contract in each bounded builder handoff so Select, Teach, dirty-state and
+scroll wiring do not require a structural rewrite after implementation.
 
 | Spec | Skeleton contract / API reference |
 |---|---|

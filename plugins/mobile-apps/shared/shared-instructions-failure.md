@@ -1,7 +1,21 @@
 # Command failure handling
 
-Load when `az`, `npm`, `npx` or Expo exits nonzero. Capture exact stderr; never continue past
-a failed gate or retry silently. Workflow-specific phase/retry gates take precedence.
+Load when a command fails, output is incomplete or an agent is unavailable. Capture exact
+stderr; never continue past a failed gate or retry silently. Workflow-specific phase/retry gates take precedence.
+
+## Execution context and output
+
+Keep the supplied absolute `working_dir` in every command and delegate handoff.
+Set command `cwd` explicitly (or `cd "<working_dir>" && ...`) and pass that same
+root to validators; a reused terminal may now be in the plugin or parent repo.
+Do not search the user's home for a similarly named app. Missing/truncated output
+or an unknown exit status is not a pass; retrieve the command's own output before
+claiming success or retrying it.
+
+Use the exact advertised agent name for the selected plugin. Prefer
+`mobile-app:<agent-name>` when exposed; an explicitly advertised bare alias for
+that same plugin is valid. If unavailable, execute its bounded contract in
+foreground without installing another agent or repeatedly probing names.
 
 ## Power Apps commands
 
@@ -19,6 +33,11 @@ Retry the original command with the same arguments **once after correction**, th
 `az account set` does not switch the standalone Power Apps CLI user.
 
 ## TypeScript
+
+If a copied `node_modules/.bin/tsc` shim is broken but the installed compiler is
+intact, use `node "<working_dir>/node_modules/typescript/bin/tsc" --project "<working_dir>/tsconfig.json" --noEmit`.
+This preserves the selected version and full gate without an install, dependency
+rewrite or global compiler.
 
 Capture all errors once; batch repair by root cause and rerun the same gate.
 `TS6133`: remove unused imports. `TS2305`/`TS2307`: verify generated exports and installed

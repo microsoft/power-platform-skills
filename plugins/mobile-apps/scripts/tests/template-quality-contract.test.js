@@ -6,7 +6,7 @@ const path = require('path');
 const test = require('node:test');
 const { readSkillWorkflow } = require('./helpers/workflow-documents');
 const {
-  hasNavigationTapGuard,
+  hasNavigationTapGuard, hasSubmitLock,
 } = require('../../hooks/validate-navigation-idempotency');
 
 const pluginRoot = path.resolve(__dirname, '../..');
@@ -62,6 +62,29 @@ test('navigation ref guards must reset unless the route performs a terminal repl
   assert.strictEqual(hasNavigationTapGuard(resettableNavigation), true);
 });
 
+test('the documented phone submit pattern handles long actions without losing pending or double-tap guards', async () => {
+  const document = read('agents/references/screen-builder/phone.md');
+  const snippet = document.match(/```tsx\n([\s\S]*?)\n```/)[1];
+  const longAction = snippet.replace('await saveWithValidatedRecovery();', `${'// Preserve domain validation and recovery.\n'.repeat(100)}await saveWithValidatedRecovery();`);
+  assert.strictEqual(hasSubmitLock(`${longAction}\n<Button disabled={isPending || !eligible} />`), true);
+  assert.strictEqual(hasSubmitLock(`${longAction}\n<Button disabled={false} />`), false);
+  const states = [];
+  let writes = 0;
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const submit = new Function('useRef', 'useState', 'saveWithValidatedRecovery', `${snippet}\nreturn submit;`)(
+    value => ({ current: value }),
+    value => [value, next => states.push(next)],
+    async () => { writes += 1; await pending; },
+  );
+  const first = submit();
+  await submit();
+  assert.strictEqual(writes, 1);
+  assert.deepStrictEqual(states, [true]);
+  release();
+  await first;
+  assert.deepStrictEqual(states, [true, false]);
+});
 test('root runtime owns context but not route content edges', () => {
   const layout = read('template/app/_layout.tsx');
   assert.match(layout, /<SafeAreaProvider>/);

@@ -249,15 +249,24 @@ async function resolveEnvironmentId(environmentId, tenantId) {
 }
 
 async function resolveEnvironment(target, projectRoot = process.cwd(), allowLegacyCache = false) {
+  if (projectRoot === null || Array.isArray(projectRoot)
+    || !['string', 'object'].includes(typeof projectRoot)) throw new Error('Environment resolution requires a project directory or options object');
+  const options = projectRoot && typeof projectRoot === 'object' ? projectRoot : { projectRoot };
+  projectRoot = options.projectRoot || process.cwd();
+  const broker = require('./player-dataverse').playerDataverse(options);
+  if (broker) {
+    if (!target) throw new Error('Choose the environment in Player before discovery');
+    return broker.resolveEnvironment(target, options);
+  }
   if (!target) {
     const powerConfig = readJsonFile(path.join(projectRoot, 'power.config.json'));
     target = powerConfig?.environmentId || readCachedResolution(null, projectRoot)?.environmentId;
     if (typeof target !== 'string' || !GUID_RE.test(target)) return null;
   }
-  const cached = readCachedResolution(target, projectRoot);
+  const cached = options.noCache ? null : readCachedResolution(target, projectRoot);
   if (canUseCachedResolution(cached, target, allowLegacyCache)) {
     const result = toEnvironmentResult(cached, 'cache');
-    writeCacheIfProject(result, projectRoot);
+    if (!options.noCache) writeCacheIfProject(result, projectRoot);
     return result;
   }
 
@@ -305,7 +314,7 @@ async function resolveEnvironment(target, projectRoot = process.cwd(), allowLega
   }
 
   const result = toEnvironmentResult(resolved, resolved.source || (isUrl(target) ? 'environment-url' : 'environment-id'));
-  writeCacheIfProject(result, projectRoot);
+  if (!options.noCache) writeCacheIfProject(result, projectRoot);
   return result;
 }
 

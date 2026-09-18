@@ -10,6 +10,8 @@ model: opus
 
 Follow the applicable safety, telemetry, and changed-file rules in [shared instructions](../../shared/shared-instructions.md). Read only the active step and input reference below; do not preload the reference catalog.
 
+**Phone only:** [profile](../create-mobile-app/references/phone-app-profile.md).
+
 ## Contract
 
 Design for the primary job, journey, content, and context. Infer presentation when the user chooses it, not merely because no brand input arrived; never force a preset or comparison.

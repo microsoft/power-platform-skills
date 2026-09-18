@@ -153,6 +153,8 @@ function buildBlockMessage(filePath, errors, warnings) {
   lines.push('Required fixes:');
   lines.push('  - Singleton routes must use `router.navigate(...)`, not `router.push(...)`.');
   lines.push('  - Async save flows must use a submit lock (`isSubmitting` or `isPending`) and disabled busy CTA.');
+  lines.push('  - For long or multi-write handlers, use an `isPending` state directly in `disabled={isPending || ...}` plus a synchronous ref lock; reset both in finally. A renamed/indirect disabled alias is not recognized by this conservative check.');
+  lines.push('  - The phone screen contract includes this complete guard pattern; do not remove the gate or shorten business recovery logic to satisfy a regex.');
   lines.push('  - Primary navigation actions should use an `isNavigating` lock or a ref guard that resets on focus/failure; terminal replace-only callbacks may remain one-shot.');
 
   return lines.join('\n');

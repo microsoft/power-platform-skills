@@ -12,6 +12,25 @@ Read [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md) firs
 This foreground skill owns user questions, approvals, phase transitions, and mutation dispatch.
 Agents propose bounded sections or build assigned screens; they never approve their own work.
 
+## Phone-started app profile
+
+Before environment discovery, template writes or host-side questions, check whether
+the request supplies a Player command wrapper/descriptor or the explicit
+`--prototype` compatibility flag. For a verified Player `prototype` operation,
+read [phone-app-profile.md](references/phone-app-profile.md) and apply its
+phase mapping below instead of the environment-first defaults. A VS Code
+process need not have the callback variables itself: use the request's exact
+wrapper for **every** plugin script and nested skill.
+
+This profile keeps this skill's foreground ownership, main-based experience
+planning, design guidance and bounded screen builders. It starts with one
+complete 2-3-screen journey, then offers later expansion. No client-registration,
+Dataverse-provisioning or HTML-preview detour blocks that first app. Default
+creation without the phone profile remains unchanged.
+If the explicit phone/`--prototype` entry has no verified Player context, stop
+with connection guidance; do not silently fall through to environment-first
+creation or a desktop product questionnaire.
+
 ## Load only the active phase
 
 Read **one phase reference when entering that phase**, not every reference at startup.
@@ -58,6 +77,8 @@ pre-mutation manifest is not evidence that an approved Dataverse app is connecto
   host policy requires a structured question. If approval cannot be captured, STOP with the pending question.
 - **No test dispatches:** no no-op `Task` probes or run-wide degraded mode.
   Dispatch real bounded work using the available agent interface and `mobile-app:<agent-name>`.
+  Use a bare name only when the host explicitly advertises it for that same selected
+  plugin; see the shared execution-context contract. Do not guess an unregistered alias.
   If that interface is absent or an actual dispatch reports unavailable/unknown agent, read that
   leaf agent's contract and execute the same bounded work in foreground. This changes execution
   location, never approvals, outputs, evidence or quality gates. Other failures follow the status switch.

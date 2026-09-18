@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 24 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 26 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -56,7 +56,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 7. **Persisted plan and bounded context** — Keep `native-app-plan.md` as the human-readable source of approved requirements, primary journeys, per-screen UX/navigation contracts, and data/native decisions. Load only the active phase reference and the relevant plan section. Give a screen builder its bounded screen context and actual service/token interfaces, not every pattern or the complete app specification. Existing Dataverse execution/approval contracts remain authoritative; do not introduce duplicate product or preview authorities.
    Approved behavior and explicit brand requirements stay fixed; model-inferred layout is provisional until visual approval. Use the [design authority boundary](shared/references/design-planning.md#entry-composition-and-reference-transfer) and [rendered experience review](skills/preview-screens/references/intent-authoring.md#rendered-experience-review), including media-subject proportions and usable viewport measurements. Functional checks alone are not visual evidence.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
-9. **Agent invocation namespace** — Foreground dispatch uses the fully-qualified `mobile-app:<agent-name>` form supported by the host (for example, `mobile-app:screen-builder`). Do not run no-op dispatch probes or require nested child-agent orchestration. When dispatch is unavailable, the foreground follows the same bounded proposal or implementation contract without inventing new tools or bypassing approval.
+9. **Agent invocation namespace** — Foreground dispatch prefers the fully-qualified `mobile-app:<agent-name>` form when the host advertises it (for example, `mobile-app:screen-builder`); an advertised bare alias for the same selected plugin is also valid. Do not guess agent names, run no-op dispatch probes or require nested child-agent orchestration. When dispatch is unavailable, the foreground follows the same bounded proposal or implementation contract without inventing new tools or bypassing approval.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
 12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
@@ -74,6 +74,23 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Product/domain ambiguity uses `NEEDS_CONTEXT` with the exact missing decision. The foreground asks only when that decision changes the requested outcome; style preferences do not establish an industry.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+## Phone authoring profile
+
+The connected Player profile is a mode of the main creation/edit workflows.
+It keeps experience-led planning, current design guidance and bounded screen
+builders; it does not restore the older Product Experience creation pipeline.
+The initial reviewed plan covers one complete 2-3-screen journey, the logical
+model, selected native capabilities, staged connectors and deferred screens.
+Further screens use an ordinary scoped edit of the same app.
+
+Real local repositories are valid before a separate data connection; never
+replace them with screen-local mock arrays or fake generated services. Keep
+internal protocol IDs stable while using app/build/update terminology in
+Player-facing copy. HTML companions and new client-registration wizards do
+not block the phone profile. Design, source checks and actual authentication
+requirements still apply. Every phone product question uses the scoped
+wrapper and signed Player transport, including nested skills.
+
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.

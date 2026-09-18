@@ -10,6 +10,13 @@ model: opus
 
 # Edit App (`/edit-app`)
 
+For a Player-started request (including a supplied VS Code command wrapper),
+read [player-authoring.md](references/player-authoring.md) before health probes
+or questions and apply it as this skill's phone profile. It keeps the same
+main-based UX/implementation guidance, but routes decisions to Player and
+does not restart client-registration or HTML-preview flows. `Build more screens`
+is a bounded `screen` edit of this app, not a new app or a new operation type.
+
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 
 This foreground skill owns every question and approval using the host's actually exposed question

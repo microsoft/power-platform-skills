@@ -1,7 +1,8 @@
 # Shared Instructions — Power Apps Native Code Apps
 
-Read this small core at skill entry. **Do not read every linked topic.**
-Load the matching reference only when the active operation needs it.
+Read this small core at skill entry. **Do not read every linked topic.** Load matching references only when the active operation needs them.
+
+When a Player wrapper/descriptor is supplied, load [the authoring transport](references/mobile-authoring.md) and use its exact wrapper for every plugin script, including nested skills. Product questions and approvals stay in Player.
 
 ## Safety Guardrails
 
@@ -35,6 +36,9 @@ If host policy requires a structured question, do not fall back to plain text.
 When no permitted approval interface exists, stop with the pending question.
 Silence, cancel, a recommendation, agent `DONE`, or an inferred default is **not approval**.
 Reuse supplied answers; ask only unresolved trade-offs. Deterministic read-only checks need no prompt.
+
+Commands and handoffs must use the supplied absolute `working_dir` and explicit `cwd`; validators use the same root. Missing/truncated output or unknown exit status is not a pass.
+Use only advertised agent names for the selected plugin; if dispatch is unavailable, follow its same bounded contract in foreground.
 
 ## Mandatory changed-file validation
 
@@ -81,7 +85,7 @@ For detailed lifecycle rules, load [memory/context](${PLUGIN_ROOT}/shared/shared
 | Tool versions (at most once/day) | [version-check.md](${PLUGIN_ROOT}/shared/version-check.md) |
 | Selecting/changing environment | [preferred-environment.md](${PLUGIN_ROOT}/shared/preferred-environment.md); config → bank → user, confirm changes |
 | Running CLI commands/auth | [CLI contract](${PLUGIN_ROOT}/shared/shared-instructions-cli.md) |
-| A command failed | [failure handling](${PLUGIN_ROOT}/shared/shared-instructions-failure.md); no silent retries or advancing on failure |
+| Failed command, incomplete output or unavailable agent | [failure handling](${PLUGIN_ROOT}/shared/shared-instructions-failure.md); no silent retries or advancing on failure |
 | Non-Dataverse connector work | [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md); resolve a connection before generation |
 
 ## Microsoft Learn MCP (authoritative Microsoft docs)

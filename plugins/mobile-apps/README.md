@@ -2,6 +2,35 @@
 
 This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
 
+## Phone authoring profile
+
+This branch also supports the connected Player's Node-to-VS-Code authoring
+flow. Use a compatible installed template and the selected plugin; the Player
+host supplies the scoped command wrapper. No new extension or MCP layer is
+introduced by this profile.
+
+The first delivery is one complete **2-3-screen app journey**, with a reviewed
+logical data model, real persistent local records and main's task-specific UX.
+Native needs and connector staging remain visible in the plan. The phone flow
+does not stop for a new client registration or an HTML preview before building
+screens. Sample/local data stays clearly distinguished from connected data.
+
+After the first app, **Build more screens**, chat/visual edits, **Teach app**,
+native controls, existing connectors and **Connect to Dataverse** operate on the
+same app. Basic teaching adds reviewed validation rules, not model training.
+Dataverse discovery/schema changes, source Apply/Discard and optional record
+imports remain separate decisions. Real integrations reuse existing configured
+desktop/Player authentication; missing sign-in or template support is reported,
+not bypassed.
+
+Internal entry points remain `create-mobile-prototype`, `edit-app` and
+`prototype-to-real-app` for protocol compatibility. Player-facing wording uses
+app/build/update. See the
+[phone profile](skills/create-mobile-app/references/phone-app-profile.md) and
+[authoring transport](shared/references/mobile-authoring.md).
+The environment-first setup below is the ordinary standalone workflow, not the
+phone profile's first-app prerequisite.
+
 ## Requirements
 
 - Node.js 24 LTS.
