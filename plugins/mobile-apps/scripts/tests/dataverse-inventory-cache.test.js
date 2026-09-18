@@ -38,6 +38,13 @@ function inventoryItem() {
   return {
     logicalName: 'new_item', schemaName: 'new_Item',
     entitySetName: 'new_items', primaryIdAttribute: 'new_itemid',
+    displayName: 'Item', displayCollectionName: 'Items', description: '',
+    primaryNameAttribute: 'new_name', ownershipType: 'UserOwned',
+    customEntity: true, managed: false, customizable: true,
+    canCreateAttributes: true, canBePrimaryEntityInRelationship: true,
+    canBeRelatedEntityInRelationship: true, canBeInManyToMany: true,
+    hasActivities: false, hasNotes: false,
+    isAvailableOffline: true, changeTrackingEnabled: true,
   };
 }
 
@@ -182,7 +189,7 @@ test('cached exact-name refresh chunks more than fifty requested names', async (
   assert.equal(snapshot.inventoryFacts.exactNameTables, 0);
 });
 
-test('live and cached inventory produce identical ranking and selected table evidence', async () => {
+test('live and cached inventory produce identical ranking and selected table evidence', async (testContext) => {
   const rawEntity = {
     LogicalName: 'new_item',
     SchemaName: 'new_Item',
@@ -212,9 +219,13 @@ test('live and cached inventory produce identical ranking and selected table evi
     nowIso: () => '2026-08-28T00:00:00.000Z',
   };
   const live = await createSnapshot({ ...options, request: makeRequest(true) });
+  const file = tempFile(testContext);
+  writeInventoryCache(file, context, cacheablePlanningInventory(live));
+  const cache = readInventoryCache(file, context);
+  assert.equal(cache.hit, true);
   const cached = await createSnapshot({
     ...options,
-    inventory: live.inventory,
+    inventory: cache.inventory,
     inventorySource: 'cache',
     inventoryCacheAgeMs: 10,
     request: makeRequest(false),
@@ -227,8 +238,26 @@ test('live and cached inventory produce identical ranking and selected table evi
 test('malformed cached inventories recover through a live read instead of an empty or crashed discovery', async (testContext) => {
   const file = tempFile(testContext);
   const valid = writeInventoryCache(file, context, [inventoryItem()]);
+  const requiredFields = ['displayName', 'displayCollectionName', 'description',
+    'ownershipType', 'customEntity', 'managed', 'customizable', 'canCreateAttributes',
+    'canBePrimaryEntityInRelationship', 'canBeRelatedEntityInRelationship', 'canBeInManyToMany',
+    'hasActivities', 'hasNotes', 'isAvailableOffline', 'changeTrackingEnabled'];
+  const missingFields = requiredFields.map((field) => {
+    const item = inventoryItem();
+    delete item[field];
+    return [item];
+  });
+  const invalidFields = [
+    { customizable: false }, { customizable: 'true' }, { displayName: [] },
+    { displayCollectionName: null }, { description: {} }, { customEntity: 'false' },
+    { managed: null }, { canCreateAttributes: 'false' }, { isAvailableOffline: 1 },
+    { primaryNameAttribute: 'bad name' }, { ownershipType: {} },
+  ].map((updates) => [{ ...inventoryItem(), ...updates }]);
   const invalidInventories = [null, {}, [null], [[]], ['invalid'], [{}],
-    [{ logicalName: 'new_item' }], [{ ...inventoryItem(), logicalName: 'bad name' }]];
+    [{ logicalName: 'new_item' }], [{ ...inventoryItem(), logicalName: 'bad name' }],
+    [inventoryItem(), inventoryItem()],
+    [inventoryItem(), { ...inventoryItem(), logicalName: 'NEW_ITEM' }],
+    ...missingFields, ...invalidFields];
   for (const body of [null, [], 'invalid', ...invalidInventories.map((inventory) => ({ ...valid, inventory }))]) {
     fs.writeFileSync(file, JSON.stringify(body));
     const cache = readInventoryCache(file, context);
@@ -247,6 +276,19 @@ test('malformed cached inventories recover through a live read instead of an emp
     assert.equal(liveReads, 1);
     assert.deepEqual(snapshot.inventory, []);
   }
+});
+
+test('cache preserves customizable managed tables and explicit unknown capabilities', (testContext) => {
+  const file = tempFile(testContext);
+  const item = { ...inventoryItem(), managed: true, customEntity: false,
+    primaryNameAttribute: null, ownershipType: null, canCreateAttributes: null,
+    canBePrimaryEntityInRelationship: null, canBeRelatedEntityInRelationship: null,
+    canBeInManyToMany: null, hasActivities: null, hasNotes: null,
+    isAvailableOffline: null, changeTrackingEnabled: null };
+  writeInventoryCache(file, context, [item]);
+  const cache = readInventoryCache(file, context);
+  assert.equal(cache.hit, true);
+  assert.deepEqual(cache.inventory, [item]);
 });
 
 test('cached advisory tables refresh live identity flags without broad discovery or duplicate exact reads', async () => {
@@ -336,6 +378,61 @@ test('both successful metadata publish paths invalidate planning inventory', () 
   assert.doesNotMatch(skill, /CLAUDE_SKILL_DIR.*dataverse-inventory-cache/);
   assert.match(skill, /After the `publish` phase succeeds[\s\S]*dataverse-inventory-cache\.js/);
   assert.match(skill, /After a 2xx publish[\s\S]*dataverse-inventory-cache\.js/);
+});
+
+test('post-publish invalidation failures return to recovery before dependent steps', (testContext) => {
+  const pluginRoot = path.resolve(__dirname, '..', '..');
+  const skill = fs.readFileSync(path.join(pluginRoot, 'skills/add-dataverse/SKILL.md'), 'utf8');
+  const blocks = [...skill.matchAll(/```bash\r?\n([\s\S]*?)\r?\n```/g)]
+    .map((match) => match[1])
+    .filter((block) => block.includes('/scripts/dataverse-inventory-cache.js'));
+  assert.equal(blocks.length, 2);
+  assert.match(skill, /at most two targeted retries\s+of the invalidation command/);
+  assert.match(skill, /do not replay metadata writes or publish/);
+  assert.match(skill, /Continue to Step 6c only after invalidation exits `0`/);
+  const bashPaths = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = bashPaths.find((entry) => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
+  const directory = path.dirname(tempFile(testContext));
+  fs.mkdirSync(path.join(directory, '.tmp'));
+  const cachePath = path.join(directory, '.tmp/dataverse-inventory-cache.json');
+  const checkpointPath = path.join(directory, '.tmp/dataverse-publish-pending.json');
+  const stub = `
+node() {
+  case "$1" in
+    */dataverse-inventory-cache.js)
+      if [ "$FAIL_INVALIDATION" = 1 ]; then
+        printf 'injected cache deletion failure\\n' >&2
+        return 2
+      fi
+      ;;
+  esac
+  "$REAL_NODE" "$@"
+}
+`;
+  for (const block of blocks) {
+    fs.writeFileSync(cachePath, '{}');
+    fs.writeFileSync(checkpointPath, '{}');
+    const input = `${stub}\n${block.replaceAll('<working_dir>', directory.replaceAll('\\', '/'))}\nprintf 'DEPENDENT_STEP_REACHED\\n'\n`;
+    const env = { ...process.env, PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'),
+      REAL_NODE: process.execPath.replaceAll('\\', '/'),
+      PUBLISH_CHECKPOINT: checkpointPath.replaceAll('\\', '/'),
+      POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' };
+    const failed = spawnSync(bash, ['-s'], {
+      input, env: { ...env, FAIL_INVALIDATION: '1' }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(failed.status, 2, failed.stderr);
+    assert.match(failed.stderr, /NEEDS_RECOVERY: dataverse-inventory-cache/);
+    assert.doesNotMatch(failed.stdout, /DEPENDENT_STEP_REACHED/);
+    assert.equal(fs.existsSync(cachePath), true);
+    const recovered = spawnSync(bash, ['-s'], {
+      input, env: { ...env, FAIL_INVALIDATION: '' }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.match(recovered.stdout, /DEPENDENT_STEP_REACHED/);
+    assert.equal(fs.existsSync(cachePath), false);
+  }
 });
 
 test('publish checkpoint cleanup tolerates an absent path but surfaces deletion errors', (testContext) => {

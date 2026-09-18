@@ -225,6 +225,66 @@ test('full evidence satisfies existing-table decisions', () => {
   });
 });
 
+test('snapshot-only unverified tables require revision even without a detail failure', () => {
+  const result = validatePlanningDecisions(
+    contract({ new_target: 'unverified' }),
+    snapshot([]),
+  );
+  assert.equal(result.valid, false);
+  assert.deepEqual(getBlockingErrors(result), []);
+  assert.deepEqual(result.contextNames, []);
+  assert.deepEqual(result.proposedContextNames, []);
+  assert.match(getRevisionErrors(result).join('; '), /new_target.*unverified.*defer/i);
+});
+
+test('snapshot-only unverified columns relationships and keys require revision', () => {
+  for (const kind of ['columns', 'relationships', 'alternateKeys']) {
+    const source = contract({ new_left: 'extend', new_right: 'reuse' });
+    source.tables[0].columns.push({
+      logicalName: 'new_code', schemaName: 'new_Code', displayName: 'Code',
+      type: 'string', plannedDecision: 'reuse',
+    });
+    if (kind === 'relationships') {
+      source.tables[0].relationships.push({
+        kind: 'many-to-many', schemaName: 'new_Left_Right', plannedDecision: 'reuse',
+        entity1: 'new_left', entity2: 'new_right', intersectTable: 'new_left_right',
+      });
+    } else if (kind === 'alternateKeys') {
+      source.tables[0].alternateKeys.push({
+        schemaName: 'new_Left_Code', plannedDecision: 'reuse', columns: ['new_code'],
+      });
+    }
+    const component = source.tables[0][kind][0];
+    component.plannedDecision = 'unverified';
+    const evidence = snapshot([table('new_left'), table('new_right')]);
+    const result = validatePlanningDecisions(source, evidence);
+    assert.equal(result.valid, false, kind);
+    assert.deepEqual(getBlockingErrors(result), [], kind);
+    assert.deepEqual(result.contextNames, [], kind);
+    assert.deepEqual(result.proposedContextNames, [], kind);
+    assert.match(getRevisionErrors(result).join('; '), /unverified.*defer/i, kind);
+    component.plannedDecision = 'defer';
+    assert.equal(validatePlanningDecisions(source, evidence).valid, true, kind);
+  }
+});
+
+test('unverified CLI decisions request revision instead of approval or extra discovery', (testContext) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-unverified-'));
+  testContext.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const contractPath = path.join(directory, 'contract.json');
+  const snapshotPath = path.join(directory, 'snapshot.json');
+  fs.writeFileSync(contractPath, JSON.stringify(contract({ new_target: 'unverified' })));
+  fs.writeFileSync(snapshotPath, JSON.stringify(snapshot([])));
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'validate-dataverse-planning-decisions.js'),
+    '--contract', contractPath, '--snapshot', snapshotPath,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 4, result.stderr);
+  assert.match(result.stderr, /^NEEDS_REVISION: dataverse-plan-validation/m);
+  assert.match(result.stderr, /new_target.*unverified.*defer/);
+  assert.doesNotMatch(result.stderr, /NEEDS_CONTEXT:|BLOCKED:/);
+});
+
 test('attempted unavailable detail metadata must be deferred', () => {
   const failure = {
     logicalName: 'new_target',
@@ -242,7 +302,10 @@ test('attempted unavailable detail metadata must be deferred', () => {
   assert.match(invalid.errors.join('; '), /must be deferred/);
   assert.deepEqual(
     getRevisionErrors(invalid),
-    ['tables with attempted unavailable detail metadata must be deferred'],
+    [
+      'tables with attempted unavailable detail metadata must be deferred',
+      'table new_target is unverified; revise the decision from snapshot evidence or defer it',
+    ],
   );
 
   const deferred = validatePlanningDecisions(

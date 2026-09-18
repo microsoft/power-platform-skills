@@ -30,6 +30,37 @@ function sameIdentity(left, right) {
     && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
 }
 
+function hasValidInventory(inventory) {
+  if (!Array.isArray(inventory)) return false;
+  const names = new Set();
+  const identifier = /^[A-Za-z][A-Za-z0-9_]*$/;
+  return inventory.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    if (['logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute'].some(
+      (field) => typeof item[field] !== 'string' || !identifier.test(item[field]),
+    )) return false;
+    if (['displayName', 'displayCollectionName', 'description'].some(
+      (field) => typeof item[field] !== 'string',
+    )) return false;
+    if (item.customizable !== true || typeof item.customEntity !== 'boolean'
+      || typeof item.managed !== 'boolean') return false;
+    if (item.ownershipType !== null && typeof item.ownershipType !== 'string') return false;
+    if (item.primaryNameAttribute != null && (typeof item.primaryNameAttribute !== 'string'
+      || !identifier.test(item.primaryNameAttribute))) return false;
+    // Normalized inventory records unavailable capability facts as null, e.g.
+    // { customizable: true, canCreateAttributes: null }, never an omitted flag.
+    if (['hasActivities', 'hasNotes', 'isAvailableOffline', 'changeTrackingEnabled',
+      'canCreateAttributes', 'canBePrimaryEntityInRelationship',
+      'canBeRelatedEntityInRelationship', 'canBeInManyToMany'].some(
+      (field) => item[field] !== null && typeof item[field] !== 'boolean',
+    )) return false;
+    const name = item.logicalName.toLowerCase();
+    if (names.has(name)) return false;
+    names.add(name);
+    return true;
+  });
+}
+
 function readInventoryCache(file, context, {
   ttlMs = DEFAULT_TTL_MS,
   nowMs = () => Date.now(),
@@ -45,11 +76,7 @@ function readInventoryCache(file, context, {
     return { hit: false, reason: 'invalid-json', inventory: null };
   }
   if (!cache || typeof cache !== 'object' || Array.isArray(cache)
-    || cache.schemaVersion !== CACHE_SCHEMA_VERSION || !Array.isArray(cache.inventory)
-    || cache.inventory.some((item) => !item || typeof item !== 'object' || Array.isArray(item)
-      || ['logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute'].some(
-        (field) => typeof item[field] !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*$/.test(item[field]),
-      ))) {
+    || cache.schemaVersion !== CACHE_SCHEMA_VERSION || !hasValidInventory(cache.inventory)) {
     return { hit: false, reason: 'invalid-shape', inventory: null };
   }
   if (!sameIdentity(cache.identity || {}, identity(context))) {

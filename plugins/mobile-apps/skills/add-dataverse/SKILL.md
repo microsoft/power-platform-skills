@@ -514,11 +514,24 @@ unsupported projections are explicit `defer` rows. After the `publish` phase suc
 ```bash
 node -e "const checkpoint = process.argv[1]; if (checkpoint) require('node:fs').rmSync(checkpoint, { force: true });" \
   "${PUBLISH_CHECKPOINT:-}"
-node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
-  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
+  exit 2
+fi
 ```
 
-Then continue to Step 6. When there were zero writes and no checkpoint,
+**Cache-invalidation recovery (both publish paths):** a nonzero exit returns
+control to the foreground agent for local recovery, not success. Diagnose the
+cache path or filesystem permission error and allow at most two targeted retries
+of the invalidation command. Preserve the successful publish result and execution
+journal; do not replay metadata writes or publish to repair a local cache failure.
+Do not reuse the failed cache or continue to service generation, verification,
+sample data, or offline setup until invalidation exits `0`. If local recovery
+cannot complete, report the remaining blocker and resume this cleanup after it is
+resolved; never mark the phase complete just because publication succeeded.
+
+Only after successful invalidation continue to Step 6. When there were zero writes and no checkpoint,
 continue without deleting anything. Skip the
 fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
 was already part of the validated phase order.
@@ -1096,9 +1109,15 @@ After a 2xx publish, invalidate the planning-only inventory cache before
 verification so a later planning run cannot reuse pre-publication inventory:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
-  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
+  exit 2
+fi
 ```
+
+Apply the same cache-invalidation recovery rule from the validated publish path
+above. Continue to Step 6c only after invalidation exits `0`.
 
 ### Step 6c — Verify tables exist
 

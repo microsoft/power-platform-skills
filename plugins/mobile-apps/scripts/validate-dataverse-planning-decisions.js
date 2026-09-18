@@ -67,6 +67,20 @@ function validatePlanningDecisions(contract, snapshot) {
   );
   for (const table of contract.tables || []) {
     const decision = normalize(table.plannedDecision);
+    // Unverified remains valid for legacy discovery contracts, but a trusted
+    // snapshot requires a grounded decision or explicit deferral before approval.
+    for (const [kind, components] of [
+      ['table', [table]],
+      ['column', table.columns || []],
+      ['relationship', table.relationships || []],
+      ['alternate key', table.alternateKeys || []],
+    ]) {
+      for (const component of components) {
+        if (normalize(component.plannedDecision) !== 'unverified') continue;
+        const name = component.logicalName || component.schemaName;
+        errors.push(`${kind} ${name} is unverified; revise the decision from snapshot evidence or defer it`);
+      }
+    }
     if (unavailableDetails.has(normalize(table.logicalName)) && decision !== 'defer') {
       contextNames.add(table.logicalName);
       deferRequiredNames.add(table.logicalName);
