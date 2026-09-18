@@ -99,8 +99,10 @@ the current approval/mode from `/add-native`; do not repeat a valid scoped appro
 Inventory `src/native/camera.ts` (including gallery `pickImage`, not a required
 `imagePicker.ts`), requested `src/native/barcodeScanner.tsx`, and requested
 `src/native/cameraUpload.ts` independently. Check requested exports, options,
-failure paths, scanner lock/reset/overlay behavior, and native Image-upload payload
-semantics. Resolve the Step 4 storage requirements read-only now, before writes.
+failure paths, scanner lock/reset/overlay behavior, and any requested Dataverse
+Image-upload payload semantics. Resolve the approved storage platform and Step 4
+requirements read-only now, before writes; non-Dataverse retention must not
+require Dataverse columns or `cameraUpload.ts`.
 Missing required storage or an incompatible artifact outside approval returns
 `NEEDS_CONTEXT` to the owner, or asks standalone; it is not a successful skip.
 
@@ -398,8 +400,17 @@ Scanner loading UI rule: when scan processing takes time (lookup/create mutation
 ### Step 4 — Detect Dataverse image/file columns
 
 Reuse Step 2a's read-only storage findings; repeat the check only if those files
-changed. Inspect actual column types and generated service signatures, not just
-whether a marker occurs:
+changed. Classify the approved storage destination before searching Dataverse:
+
+| Approved storage scope | Helper action |
+|---|---|
+| No retention / local preview only | Skip the Dataverse search and Step 5; fulfill the requested capture/scanner artifacts. |
+| Non-Dataverse retention (for example an existing SharePoint document library) or approved local-file retention | Skip the Dataverse search and Step 5. Validate the required capture output/payload against the approved destination contract, then return the connector/local persistence work to the owner. Missing Dataverse columns are not an error on this path. Do not generate `cameraUpload.ts` or claim persistence is implemented by capture alone. |
+| Dataverse File retention or a normal host File/Image field | Apply the shared storage checks and return the File/host-control integration to the owner; do not use the custom Image `update()` helper. A File target is not supported by the Image `update()` example. |
+| Custom Dataverse Image upload helper requested | Inspect the actual approved Image column and generated service signature below, then apply Step 5. |
+| Destination or required payload contract is unknown | Return `NEEDS_CONTEXT` to the owner (ask standalone); do not assume Dataverse or silently drop retention. |
+
+Only the custom Dataverse Image-helper branch requires this column search:
 
 ```text
 Grep pattern="ImageColumnName|FileColumnName|UploadColumnName" path="src/generated/"
@@ -408,15 +419,16 @@ Grep pattern="ImageColumnName|FileColumnName|UploadColumnName" path="src/generat
 **If matches found:** verify the approved target, column type, payload, and write
 result contract. Continue to Step 5 only for requested custom camera/gallery
 **Image** retention outside host controls. Mere presence of generated columns does
-not authorize an upload helper. A File target is not supported by the Image
-`update()` example: return the required File-upload integration to the owner, or
-ask standalone, without claiming it implemented.
+not authorize an upload helper. If the matched target is File rather than the
+approved Image target, return the mismatch to the owner without generating an
+Image helper or claiming File persistence is implemented.
 
 File/Image host-control safety: this skill does not replace normal Dataverse form controls. Keep host `ImagePicker` / `FilePicker` for standard Dataverse form-bound Image/File fields.
 
-**If no matches (or `src/generated/` doesn't exist):** skip Step 5 only when
-retention is not requested. If retention is required, return `NEEDS_CONTEXT` to
-the owner, or ask standalone; do not silently deliver a capture-only success.
+**If the requested Dataverse Image target is missing/unverified:** return
+`NEEDS_CONTEXT` to the owner, or ask standalone; do not silently deliver a
+capture-only success for that requested helper. This blocker applies only to
+the Dataverse Image-helper branch, not an approved connector/local destination.
 Do not generate schema/services or hand-edit `src/generated/`.
 
 ### Step 5 — Write image upload helper

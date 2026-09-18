@@ -240,8 +240,9 @@ test('camera inventory covers the actual gallery export and independent scanner/
 test('camera does not turn missing requested storage into capture-only success', () => {
   const camera = skill('add-camera');
   const storage = section(camera, '### Step 4 — Detect Dataverse image/file columns');
-  assert.match(storage, /skip Step 5 only when\s+retention is not requested/);
-  assert.match(storage, /If retention is required, return `NEEDS_CONTEXT`/);
+  assert.match(storage, /requested Dataverse Image target is missing\/unverified/);
+  assert.match(storage, /`NEEDS_CONTEXT` to the owner/);
+  assert.match(storage, /blocker applies only to\nthe Dataverse Image-helper branch/);
   assert.match(storage, /File target is not supported by the Image\s+`update\(\)` example/);
   assert.match(storage, /Mere presence of generated columns does\s+not authorize an upload helper/);
   assert.doesNotMatch(prose(camera), /If no matches[^\n]*skip Step 5\./);
@@ -250,6 +251,24 @@ test('camera does not turn missing requested storage into capture-only success',
   assert.match(gate, /not unrelated\s+matches in an older plan/);
   assert.match(section(camera, helpers[0].writes[2]),
     /explicit implementation-only upload-helper request; a screen plan is not required/);
+});
+
+test('approved connector retention does not require Dataverse columns or an Image helper', () => {
+  const camera = skill('add-camera');
+  const storage = section(camera, '### Step 4 — Detect Dataverse image/file columns');
+  const connector = storage.split('\n').find((line) => line.startsWith('| Non-Dataverse retention'));
+  assert.ok(connector);
+  assert.match(connector, /SharePoint document library/);
+  assert.match(connector, /Skip the Dataverse search and Step 5/);
+  assert.match(connector, /Missing Dataverse columns are not an error/);
+  assert.match(connector, /return the connector\/local persistence work to the owner/);
+  assert.match(connector, /Do not generate `cameraUpload\.ts`/);
+  assert.doesNotMatch(connector, /NEEDS_CONTEXT/);
+  assert.doesNotMatch(storage, /If retention is required, return `NEEDS_CONTEXT`/);
+  assert.ok(storage.indexOf('| Non-Dataverse retention') < storage.indexOf('Grep pattern='));
+  assert.match(section(camera, helpers[0].reconcile), /non-Dataverse retention must not\nrequire Dataverse columns/);
+  assert.match(reference, /known approved\nconnector\/local destination does not require Dataverse columns/);
+  assert.match(reference, /For approved Dataverse retention, inspect the actual generated target column/);
 });
 
 test('PDF generation does not mistake generate-only output or package presence for share/upload support', () => {

@@ -13,8 +13,10 @@ model: opus
 **Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
 before writing brand artifacts. Direct changes to an existing app (including
 refresh, reskin, themes, and rollback) use the entry-choice gate before invoking
-`/edit-app` for runtime/screen integration. Offer artifact-only implementation or
-cancel. Approved orchestrated calls skip the question and execute this leaf.
+`/edit-app` for runtime/screen integration. Offer artifact-only implementation,
+full app integration, or cancel. On full integration, delegate to `/edit-app`
+before entering this leaf workflow or writing artifacts. Approved orchestrated
+calls skip the question and execute this leaf.
 Read-only `--history` / `--diff` and standalone brand generation without an app
 remain here.
 
@@ -594,7 +596,10 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 
 3. User approval gate (show derived palette, allow [y/N/edit])
 
-4. Write `brand/tokens.dark.ts`
+4. Write `brand/tokens.dark.ts` using the named `darkTokens` export and complete
+   `color` shape in
+   [Approved dark palette](./references/tamagui-integration.md#approved-dark-palette-conditional).
+   Use the approved dark values, not copies of the light surfaces/text.
 
 5. Return the dark palette and required wiring to the owning create/edit
    orchestrator. It applies [tamagui-integration.md](./references/tamagui-integration.md)

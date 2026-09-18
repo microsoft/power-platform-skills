@@ -1952,6 +1952,12 @@ summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
 into the host themes so `useTheme()` and `useThemeTokens()` cannot drift:
 
+If the approved design includes a custom dark palette, apply the reference's
+**Approved dark palette** branch first: import `darkTokens` from
+`brand/tokens.dark.ts` in `tamagui.config.ts` and derive `appDarkTheme` from
+`darkTokens.color`. The provider mapping below then consumes that resolved theme;
+do not leave the base accent-only dark declaration in place.
+
 ```tsx
 import {
   PowerAppsProvider,
