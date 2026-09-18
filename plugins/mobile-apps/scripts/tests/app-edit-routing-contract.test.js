@@ -77,6 +77,34 @@ test('the entry choice precedes costly work and requires explicit integration co
   assert.match(direct, /Stop without invoking `\/edit-app`, running implementation commands, or changing files/);
 });
 
+test('shared prompt defaults cannot override explicit consent gates', () => {
+  const policy = section(
+    read('shared/shared-instructions.md'),
+    '## Execution Style',
+    '## Inline Shell',
+  );
+  assert.match(policy, /Explicit approval gates take precedence/);
+  assert.match(policy, /entry-choice, plan\/mutation, data-source removal, and deployment/);
+  assert.match(policy, /Cancellation or dismissal stops the pending operation/);
+  assert.match(policy, /empty or ambiguous answer requires clarification/);
+  assert.match(policy, /already-approved scoped child calls do not repeat approvals/);
+  assert.doesNotMatch(policy, /empty\/cancel answer auto-proceeds|empty answer proceeds|default-yes/);
+});
+
+test('shared connector setup follows entry consent and approved implementation', () => {
+  const connector = section(
+    read('shared/shared-instructions.md'),
+    '## Connector Reference',
+    '## App feature entry points',
+  );
+  assert.doesNotMatch(connector, /Always run `\/list-connections` first/);
+  assert.match(connector, /entry-choice gate precedes `\/list-connections`/);
+  assert.match(connector, /only in the approved implementation phase/);
+  assert.match(connector, /Reuse a supplied connection ID or reference/);
+  assert.match(connector, /Do not invoke it during planning, `--plan-only`, cancellation, or removal-only work/);
+  assert.match(connector, /Direct operational `\/list-connections` requests keep their own workflow/);
+});
+
 test('implementation-only choice is forwarded rather than silently escalated', () => {
   const direct = section(routing, '## Direct requests', '## Orchestrated calls');
   assert.match(direct, /forward\n`--implementation-only` through any router/);

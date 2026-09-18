@@ -100,7 +100,21 @@ Note on `az`: on Windows where it is installed as a `.cmd` shim and not on the b
 
 **📋 [connector-reference.md](./connector-reference.md)**
 
-All non-Dataverse connectors require a connection ID or connection reference before `npx power-apps add-data-source`. Read this before any `/add-*` connector skill. Always run `/list-connections` first to create a supported connection, reuse a caller-provided connection ID, or resolve a solution connection reference.
+All non-Dataverse connectors require a connection ID or connection reference
+before `npx power-apps add-data-source`. Read this reference before implementing
+any `/add-*` connector operation.
+
+For feature requests, the entry-choice gate precedes `/list-connections` and
+all connection discovery/creation. After the mode is selected, resolve connections
+only in the approved implementation phase, before adding the data source.
+Reuse a supplied connection ID or reference for the confirmed connector/environment;
+invoke `/list-connections` only when lookup or creation is needed.
+Do not invoke it during planning, `--plan-only`, cancellation, or removal-only work.
+Selecting full integration alone does not approve connection creation.
+
+Approved creation/edit child calls reuse their scoped handoff without repeating
+the entry question. Direct operational `/list-connections` requests keep their own workflow;
+they do not require full app integration or authorize unrelated feature changes.
 
 ## App feature entry points
 
@@ -334,13 +348,24 @@ When a skill is invoked from another skill (e.g., `/create-mobile-app` calls `/a
 ## Execution Style
 
 - Do not announce steps before executing them. Proceed directly through the workflow.
-- Do not ask for permission to do read-only operations (Glob, Grep, Read, `node scripts/resolve-environment.js <environment-id-or-url>`).
+- Within the current approved phase, do not ask separately for read-only operations
+  (Glob, Grep, Read, `node scripts/resolve-environment.js <environment-id-or-url>`).
+  This does not authorize discovery or costly scans before the entry-choice gate.
 - For multi-step operations, use `manage_todo_list` to give the user visibility.
 - After completing each step, update the memory bank — don't batch updates at the end.
 
 ### When to use `AskUserQuestion` — and when NOT to
 
-The user shouldn't have to read a question whose answer is mechanical. Each prompt costs a context switch. Apply this filter before calling `AskUserQuestion`:
+**Explicit approval gates take precedence** over the efficiency rules below:
+entry-choice, plan/mutation, data-source removal, and deployment gates require
+the user's explicit selection or approval. A recommended option, one viable
+path, stored preference, or deterministic recovery is not consent. Reuse approval
+only for the same current operation: already-approved scoped child calls do not repeat approvals,
+but expanded scope returns to the owner for a new decision.
+
+The user shouldn't have to read a question whose answer is mechanical. Apply this
+filter only to read-only work allowed in the current phase or decisions within
+an already-approved scope, never to skip a required approval gate:
 
 | Situation | Action |
 |---|---|
@@ -348,10 +373,13 @@ The user shouldn't have to read a question whose answer is mechanical. Each prom
 | Auto-recoverable failure with a deterministic fix (e.g. probe alt names, retry with backoff, fall back to default) | **Auto-recover.** Surface only if recovery itself fails. |
 | Detectable state (e.g. "is Metro running?") | **Probe first.** Use the available tool (MCP, file check, command) and only ask if the probe is inconclusive. |
 | Display preference repeated across runs (e.g. "open in browser?") | **Use the persisted flag** (`memory-bank.md`, project config). Don't re-ask each time. |
-| One option is tagged `(Recommended)` AND alternatives are clearly worse | **Default to the recommended option** without prompting. If you must prompt (e.g. options have different costs), make the recommended option the default so an empty answer proceeds. |
+| One option is tagged `(Recommended)` AND alternatives are clearly worse | Explain the recommendation. If a decision requires consent or has different costs/scope, ask and wait for an explicit selection; the label does not approve it. |
 | Genuinely ambiguous (multiple valid paths with real trade-offs the user must weigh) | **Ask.** This is the legitimate case. |
 
-The "Recommended (default-yes)" pattern: when you do call `AskUserQuestion`, structure the options so an empty/cancel answer auto-proceeds with the safe default — never block on a prompt the user can ignore.
+Cancellation or dismissal stops the pending operation without further work.
+An empty or ambiguous answer requires clarification or waiting; never convert
+it into approval or proceed with a recommended default. Preserve existing work
+and do not interpret stopping as permission to roll it back.
 
 ---
 
