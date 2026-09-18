@@ -25,8 +25,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Wizard answers collected by the skill (target users + device, aesthetic, features); target platforms are always iOS and Android
 - The working directory where `native-app-plan.md` should be written
 - The plugin root directory (`${PLUGIN_ROOT}`)
-- The foreground-generated normalized Dataverse planning snapshot path, when available
-- The deterministic Dataverse planning evidence appendix path, when available
+- The foreground-generated normalized Dataverse planning snapshot path for
+  deterministic validation, when available
+- The compact hash-bound Dataverse architect evidence sidecar path, when available
 - Dataverse planning mode: `required` or `connector-only` in `complete` phase
 - Architecture phase: `gate-only` or `complete`
 - Approved architecture artifact path for `complete` phase
@@ -51,19 +52,30 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   the Dataverse model only when required, then spawn `screen-planner` with every
   approved dependency.
 - **Application Insights is outside the plan gates.** Treat requests to enable telemetry for the generated app as host/runtime configuration owned by the `/setup-app-insights` skill (standalone or via `/edit-app`). Do not model Application Insights in the data model, native-capability matrix, connector list, or as a telemetry-specific screen. In particular, never propose the deprecated Azure Application Insights connector or a custom connector for telemetry ingestion. When the user explicitly names custom events, preserve them as `Custom events` annotations on the corresponding normal business-screen specs; this records behavior without turning telemetry into a planning gate or data source.
-- **Dataverse planning forwarding is verbatim.** In `complete` phase, for every `required`
-  `data-model-architect` dispatch and revision, pass the planning mode and both
-  planning-snapshot/evidence absolute paths unchanged. Never dispatch the
-  architect in `connector-only` mode and never invent placeholder artifact
+- **Dataverse planning forwarding is verbatim.** In `complete` phase, pass the
+  planning mode to every `required` `data-model-architect` dispatch and revision,
+  with both full-snapshot validation and compact-evidence absolute paths unchanged.
+  The architect may read only the compact sidecar; the full snapshot is an opaque
+  input to deterministic validators. Never dispatch the architect in
+  `connector-only` mode and never invent placeholder artifact
   paths. Do not
   resolve the environment, verify Dataverse access, run broad discovery, or
   issue any live Dataverse
   query in this planner. The foreground orchestrator owns planning-snapshot creation,
   degradation, and exact-name expansion.
 - **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
-  rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
+  rationale, ER diagram, tiers, and risks verbatim. Keep the compact sidecar as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
   tables into `native-app-plan.md`.
+- **Timing ownership.** The foreground `/create-mobile-app` skill measures the
+  outer `nativePlanner` wall. This planner measures only nested
+  `modelArchitect`, `screenPlanner`, `artifactValidation`, `planRevision`, and
+  `userApproval` stages with `${PLUGIN_ROOT}/scripts/planning-timings.js`.
+  Start immediately before work and finish immediately after success. Use
+  `needs-context` or `fail` for those returns and `start --retry` only for a
+  corrective re-dispatch. Omit token/cost fields unless the host exposes them;
+  never put prompts, requirements, credentials, URLs, or response bodies in a
+  timing reason.
 - **Connectivity intent ownership.** Follow
   [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
   throughout planning.
@@ -256,6 +268,10 @@ Always present this gate before any data-model architect dispatch. Present the
 foreground's provisional Dataverse recommendation, but let this gate make the
 first user-visible data-platform decision:
 
+Time the actual `EnterPlanMode` / `ExitPlanMode` interval as `userApproval`.
+Finish the interval before returning the architecture-completion signal. Time
+corrections after rejection separately as `planRevision`.
+
 ```markdown
 ## Gate 1 of 4 — Architecture
 
@@ -324,6 +340,12 @@ is auto-skipped as not applicable.
 Only now dispatch `mobile-app:data-model-architect` with the locked
 architecture inputs:
 
+Immediately before the Task call, start `modelArchitect` timing. When its
+literal status is available, close the same attempt with `finish`,
+`needs-context --reason bounded-metadata-required`, or `fail --reason
+architect-blocked`. A re-spawn caused by missing context or validation feedback
+uses `start --retry`.
+
 > Requirements: [paste confirmed requirements]
 > Wizard answers: [target users & device, aesthetic, features]
 > Target platforms: iOS and Android
@@ -334,21 +356,44 @@ architecture inputs:
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
 > Dataverse planning mode: required
-> Normalized Dataverse foreground planning snapshot: [absolute path supplied by foreground verbatim]
-> Dataverse planning evidence: [absolute path supplied by foreground verbatim]
+> Normalized Dataverse foreground planning snapshot (validator input only; do not read into model context): [absolute path supplied by foreground verbatim]
+> Compact Dataverse architect evidence: [absolute path supplied by foreground verbatim]
 > Structured schema contract output: `<working_dir>/.tmp/dataverse-schema-contract.json`
+
+The architect validates the compact evidence against the full snapshot before
+reading it, then writes and normalizes the contract covering every proposed
+table, column, relationship, and alternate key. It does not resolve the
+environment or run live discovery. Retained PDFs use approved File storage, not
+long text/base64; connector-owned storage remains owned by that connector.
 
 The architect must account for approved capture/storage targets and avoid
 duplicating entities owned by approved connectors. Wait for its return and
 apply the standard status switch:
 
 - `DONE` or `DONE_WITH_CONCERNS:` — require `_dm_section.md` and the normalized
-  schema contract, then continue.
+  `.tmp/dataverse-schema-contract.json`, then time the decision check as
+  `artifactValidation` and run
+  `validate-dataverse-planning-decisions.js --contract <contract> --snapshot <snapshot>`.
+  Exit `3` must preserve the validator's exact stderr first line:
+  `NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-logical-names>` or
+  `NEEDS_CONTEXT: proposed-dataverse-names:<sorted-logical-names>`. Do not
+  rewrite one signal as the other. Exit `4` begins with
+  `NEEDS_REVISION: dataverse-plan-validation`; re-spawn the architect with the
+  validator's safe error lines, the approved architecture, and the same
+  snapshot/compact-evidence paths. This is an automatic decision revision:
+  do not request more metadata or ask the user. If the revised contract repeats
+  the same validation conflict, return
+  `NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>` for the
+  foreground's inline revision fallback. Exit `2` is reserved for an invalid
+  contract/snapshot artifact and is `BLOCKED`; only exit `0` permits
+  embedding and Gate 2. A missing sidecar is `BLOCKED`, not a Markdown-parsing
+  fallback. Propagate any architect concerns after the same validation.
 - `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` or
   `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>` — return the exact
   signal to the foreground for one bounded expansion.
 - Other `NEEDS_CONTEXT:` — re-dispatch once with the missing context and the
-  same approved architecture sections.
+  same approved architecture sections and snapshot/compact-evidence paths.
+  If the second return also needs context, propagate the unresolved blocker.
 - `BLOCKED:` — propagate as a substantive planner block.
 
 ## Design Planning
@@ -453,6 +498,12 @@ dispatch or re-dispatch `data-model-architect`, and do not create a schema
 contract or data-model approval receipt. Mark the Data Model section
 `not applicable — no Dataverse` and continue to screen planning.
 
+In `required` mode, Gate 2 has a mechanical precondition: the most recent
+`validate-dataverse-planning-decisions.js` run for the current normalized schema
+contract and foreground snapshot exited `0`. Never show Gate 2 while a Reuse,
+Extend, or Adapt decision is backed only by missing or `core` detail. Gate 1
+architecture acceptance does not satisfy this data-model precondition.
+
 For `required` mode, call `EnterPlanMode` and present:
 
 ```
@@ -467,14 +518,21 @@ Approve? (Reject → revise data model only)
 
 Call `ExitPlanMode` to request approval.
 
+Start `userApproval` timing immediately before `EnterPlanMode` and finish it
+immediately after `ExitPlanMode` returns, whether the answer approves or rejects.
+On rejection, time only the corrective work as `planRevision`; then start a new
+approval attempt without `--retry` because approval attempts are not model
+retries.
+
 - **Approved:** mark `[x] Data model approved` in the plan doc and immediately
   initialize/update `<working_dir>/.tmp/mobile-plan-status.json` with the
   normalized contract's exact content/hash and a `dataModel` approval record.
   This receipt is written by this gate-owning planner, never by the Step 8
   manifest builder. Continue to screen planning.
 - **Rejected:** re-spawn `data-model-architect` with the user's feedback and
-  the original planning-snapshot/evidence paths verbatim, regenerate that section, and
-  regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
+  the original planning-snapshot/compact-evidence paths verbatim, regenerate that section, and
+  regenerate/normalize the structured sidecar, then rerun Step 5's decision
+  validation before re-entering plan mode. Loop
   until approved; do not run discovery during a revision. Every revision must
   retain the Gate 1-approved native capabilities and connectors as architect
   inputs.
@@ -495,6 +553,10 @@ Only run after Gate 2 is approved or auto-skipped. Screen planning has two bound
 This cuts the cost of a screen-list rejection from "regenerate everything" to "regenerate just the specs."
 
 #### 5b.1 — Spawn planner with `phase: graph`
+
+Start `screenPlanner` timing immediately before dispatch. Finish it on `DONE`;
+use `needs-context` or `fail` for those literal statuses. A graph re-dispatch
+after deterministic validation failure uses `start --retry`.
 
 Pass the data model + connectors + design + an explicit `phase: graph`:
 
@@ -553,6 +615,10 @@ Reject loop = re-spawn with `phase: graph` and the user's feedback. Approve = pr
 Re-spawn the planner with the canonical `native-app-plan.md`; read its `## Screens` section
 as the locked graph. `_screens_section.md` remains graph-only scratch and is
 not the specs input or output.
+
+Start a new `screenPlanner` attempt without `--retry`; graph and specs are two
+normal phases. Use `--retry` only when re-running the same specs phase after a
+failure or missing-context return.
 
 ```
 You are the screen-planner agent. PHASE 2 OF 2 — specs only.
@@ -661,6 +727,9 @@ synthesizes calculated/formula metadata and must preserve the already approved
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
+Time this as a new `modelArchitect` attempt without `--retry`; it is a distinct
+audit phase. A corrective audit re-dispatch after user feedback uses `--retry`.
+
 ```
 You are the data-model-architect agent. ROUND 2 — cross-entity audit only.
 
@@ -686,6 +755,8 @@ Wait for return; apply the Step 3.0 status switch:
 #### 5c.2 — Gate 2 addendum (cross-entity read paths)
 
 If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a Gate 2 addendum (not a fresh Gate 2 — the original schema is already approved and unchanged):
+
+Time the addendum's `EnterPlanMode`/`ExitPlanMode` interval as `userApproval`.
 
 ```
 ## Gate 2 — Addendum: Cross-entity Reads

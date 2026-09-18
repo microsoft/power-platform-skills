@@ -3,6 +3,8 @@
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -17,7 +19,10 @@ const {
   stableJson,
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
-const { operationFingerprint } = require('../dataverse-request');
+const { operationFingerprint, runMetadataBatch } = require('../dataverse-request');
+const { createFixtureRequest, createScaleScenario } = require('../benchmark-dataverse-planning');
+const { createSnapshot, createReconciliationSnapshot } = require('../create-dataverse-snapshot');
+const { buildArchitectEvidence } = require('../render-dataverse-architect-evidence');
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const SNAPSHOT_AT = '2026-08-18T23:55:00.000Z';
@@ -96,6 +101,8 @@ function table(logicalName, columns, overrides = {}) {
     canBePrimaryEntityInRelationship: true,
     canBeRelatedEntityInRelationship: true,
     canBeInManyToMany: true,
+    detailLevel: 'full',
+    missingDetailClasses: [],
     columns,
     manyToOneRelationships: [],
     oneToManyRelationships: [],
@@ -142,6 +149,15 @@ function snapshot({
   exactUnavailable = [],
   generatedAt = SNAPSHOT_AT,
 } = {}) {
+  tables = tables.map((item) => ({
+    ...item,
+    facts: {
+      columnCount: item.columns.length,
+      relationshipCount: item.manyToOneRelationships.length
+        + item.oneToManyRelationships.length + item.manyToManyRelationships.length,
+      keyCount: item.alternateKeys.length,
+    },
+  }));
   const exactLoaded = tables.map((item) => item.logicalName);
   const requested = [...new Set([
     ...exactLoaded,
@@ -483,6 +499,229 @@ function fullyAppliedSnapshot() {
     proposedCollisions: ['cr1_category', 'cr1_item'],
     exactUnavailable: ['cr1_deferred'],
   });
+}
+
+for (const tableCount of [6, 12, 24]) {
+  for (const scenario of ['best', 'base', 'worst', 'all-reuse', 'all-create']) {
+    test(`${tableCount}-table ${scenario} mixed manifest preserves mutation boundaries`, async (testContext) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-scale-'));
+      testContext.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      let requests = 0;
+      let active = 0;
+      let maximumActive = 0;
+      let failure = null;
+      const server = http.createServer((request, response) => {
+        requests += 1;
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        request.resume();
+        request.on('end', () => {
+          active -= 1;
+          if (failure && requests >= failure.at) {
+            if (failure.kind === 'collision' && !failure.throttled) {
+              failure.throttled = true;
+              response.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '0' });
+              response.end(JSON.stringify({ error: { message: 'Metadata lock is busy' } }));
+              return;
+            }
+            if (failure.kind === 'transport') {
+              request.socket.destroy();
+            } else {
+              response.writeHead(400, { 'Content-Type': 'application/json' });
+              response.end(JSON.stringify({ error: { message: failure.kind === 'collision'
+                ? 'Object with same name exists in solution' : 'PublishXml failed' } }));
+            }
+            failure = null;
+            return;
+          }
+          response.writeHead(204);
+          response.end();
+        });
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      testContext.after(() => new Promise((resolve) => server.close(resolve)));
+      const environmentUrl = `http://127.0.0.1:${server.address().port}`;
+      const fixture = createScaleScenario(tableCount, scenario);
+      const { tables } = fixture.contract;
+      const scope = reconciliationScope(normalizedContract(fixture.contract));
+      const reconcile = (calls) => createReconciliationSnapshot({
+        environmentUrl, tenantId: CONTEXT.tenantId,
+        tableNames: scope.exactTables, proposedTableNames: scope.proposedTables,
+        request: createFixtureRequest(fixture, calls), nowIso: () => SNAPSHOT_AT,
+      });
+      const prepareInputs = (reconciliation) => ({
+        ...buildInputs(fixture.contract, reconciliation, `# Mock requirements\n${fixture.prompt}\n`),
+        context: { ...CONTEXT, environmentUrl },
+      });
+      const inputs = prepareInputs(await reconcile([]));
+      const manifest = buildManifest(inputs);
+      assert.equal(manifest.executable, true, JSON.stringify({
+        verification: manifest.verification,
+        decisions: manifest.decisions.filter((item) => ['unverified', 'conflict'].includes(item.decision)),
+      }));
+      assert.deepEqual(manifest, buildManifest(inputs));
+      const phase = (name) => manifest.execution.phases.find((item) => item.name === name);
+      const created = tables.filter((item) => item.plannedDecision === 'create').length;
+      const extended = tables.filter((item) => item.plannedDecision === 'extend').length;
+      const reused = tables.filter((item) => item.plannedDecision === 'reuse').length;
+      const adapted = tables.filter((item) => item.plannedDecision === 'adapt').length;
+      assert.equal(phase('tableCreates').operations.length, created + adapted);
+      assert.equal(phase('extensions').operations.length,
+        extended * fixture.extensionFieldCount);
+      assert.equal(phase('relationships').operations.length,
+        tables.reduce((total, item) => total + item.relationships.length, 0));
+      assert.equal(phase('alternateKeys').operations.length,
+        tables.reduce((total, item) => total + item.alternateKeys.length, 0));
+      assert.equal(phase('publish').operations.length, scenario === 'all-reuse' ? 0 : 1);
+      assert.equal(manifest.service.requiredTables.length, tableCount);
+      const allOperations = manifest.execution.phases.flatMap((item) => item.operations);
+      const samples = [];
+      for (let repetition = 0; repetition < 6; repetition += 1) {
+        const discoveryCalls = [];
+        const discoveryStartedAt = process.hrtime.bigint();
+        const discovery = await createSnapshot({
+          environmentUrl, tenantId: CONTEXT.tenantId,
+          concepts: fixture.concepts,
+          tableNames: scenario === 'best' ? fixture.expectedDetailed : [],
+          proposedTableNames: fixture.proposedNames,
+          progressiveDetail: true, combinedBaseRead: true,
+          request: createFixtureRequest(fixture, discoveryCalls), nowIso: () => SNAPSHOT_AT,
+        });
+        const snapshotBytes = Buffer.from(JSON.stringify(discovery));
+        const evidence = buildArchitectEvidence(discovery, sha256(snapshotBytes));
+        const discoveryMs = Number(process.hrtime.bigint() - discoveryStartedAt) / 1e6;
+        assert.deepEqual(discovery.detailLoadFailures, []);
+        for (const logicalName of fixture.expectedDetailed) {
+          assert.ok(discovery.tables.some((item) => item.logicalName === logicalName),
+            `${fixture.id}: discovery omitted ${logicalName}`);
+        }
+        assert.ok(discovery.candidateRanking.filter((item) => !item.discoverTable)
+          .every((item) => item.candidates.length === 0));
+        const reconciliationCalls = [];
+        const reconciliationStartedAt = process.hrtime.bigint();
+        const currentInputs = prepareInputs(await reconcile(reconciliationCalls));
+        const reconciliationMs = Number(process.hrtime.bigint() - reconciliationStartedAt) / 1e6;
+        assert.ok(reconciliationCalls.every((apiPath) => !apiPath.includes('IsCustomizable/Value')));
+        const buildStartedAt = process.hrtime.bigint();
+        const currentManifest = buildManifest(currentInputs);
+        const buildMs = Number(process.hrtime.bigint() - buildStartedAt) / 1e6;
+        assert.equal(currentManifest.executable, true);
+        assert.deepEqual(currentManifest.execution, manifest.execution);
+        assert.deepEqual(currentManifest.decisions, manifest.decisions);
+        assert.deepEqual(currentManifest.aliases, manifest.aliases);
+        const journalOptions = {
+          journalPath: path.join(directory, `journal-${repetition}.json`),
+          manifestHash: currentManifest.integritySha256,
+          reconciliationHash: currentManifest.binding.reconciliationSha256,
+          allOperations,
+          manifest: currentManifest,
+        };
+        const executionStartedAt = process.hrtime.bigint();
+        for (const item of manifest.execution.phases) {
+          if (item.operations.length === 0) continue;
+          const result = await runMetadataBatch(environmentUrl, item.operations,
+            'fixture-token', CONTEXT.solutionUniqueName, CONTEXT.tenantId, false, journalOptions);
+          assert.equal(result.failed, false, JSON.stringify(result.results));
+        }
+        const executionMs = Number(process.hrtime.bigint() - executionStartedAt) / 1e6;
+        const requestCountBeforeReplay = requests;
+        for (const item of manifest.execution.phases) {
+          if (item.operations.length === 0) continue;
+          const replay = await runMetadataBatch(environmentUrl, item.operations,
+            'fixture-token', CONTEXT.solutionUniqueName, CONTEXT.tenantId, false, journalOptions);
+          assert.equal(replay.failed, false, JSON.stringify(replay.results));
+          assert.ok(replay.results.every((result) => result.journalStatus === 'already-completed'));
+        }
+        assert.equal(requests, requestCountBeforeReplay);
+        if (allOperations.length > 0) {
+          const journal = JSON.parse(fs.readFileSync(journalOptions.journalPath, 'utf8'));
+          assert.equal(journal.inFlight, null);
+          assert.equal(Object.keys(journal.completed).length, allOperations.length);
+        } else {
+          assert.equal(fs.existsSync(journalOptions.journalPath), false);
+        }
+        if (repetition > 0) samples.push({
+          discoveryMs, reconciliationMs, buildMs, executionMs,
+          discoveryRequests: discoveryCalls.length, reconciliationRequests: reconciliationCalls.length,
+          snapshotBytes: snapshotBytes.length, evidenceBytes: Buffer.byteLength(JSON.stringify(evidence)),
+        });
+      }
+      const distribution = (key) => {
+        const values = samples.map((sample) => sample[key]).sort((left, right) => left - right);
+        return {
+          median: Number(values[Math.floor(values.length / 2)].toFixed(3)),
+          p95: Number(values[Math.ceil(values.length * 0.95) - 1].toFixed(3)),
+        };
+      };
+      assert.equal(maximumActive, allOperations.length > 0 ? 1 : 0);
+      assert.equal(requests, allOperations.length * 6);
+      testContext.diagnostic(JSON.stringify({
+        tableCount,
+        scenario,
+        mockPrompt: fixture.prompt,
+        mix: { create: created, reuse: reused, extend: extended, adapt: adapted },
+        inventoryTables: fixture.entities.length,
+        repetitions: samples.length,
+        discoveryProcessingMs: distribution('discoveryMs'),
+        reconciliationProcessingMs: distribution('reconciliationMs'),
+        manifestProcessingMs: distribution('buildMs'),
+        loopbackExecutionMs: distribution('executionMs'),
+        discoveryRequests: samples[0].discoveryRequests,
+        reconciliationRequests: samples[0].reconciliationRequests,
+        snapshotBytes: samples[0].snapshotBytes,
+        evidenceBytes: samples[0].evidenceBytes,
+        metadataOperations: allOperations.length,
+        replayRequests: 0,
+        timingScope: 'local manifest validation and loopback HTTP with disk journaling; no Dataverse or model calls',
+      }));
+      if (scenario === 'worst') {
+        for (const kind of ['collision', 'transport', 'publish']) {
+          await testContext.test(`${tableCount}-table ${kind} failure stops and requires fresh reconciliation`, async () => {
+            const failedOperation = kind === 'publish'
+              ? allOperations.at(-1)
+              : kind === 'collision'
+                ? phase('tableCreates').operations.at(-1)
+                : phase('extensions').operations.at(-1);
+            const beforeFailure = requests;
+            failure = { kind, at: beforeFailure + failedOperation.index + 1, throttled: false };
+            const journalOptions = {
+              journalPath: path.join(directory, `failure-${kind}.json`),
+              manifestHash: manifest.integritySha256,
+              reconciliationHash: manifest.binding.reconciliationSha256,
+              allOperations,
+              manifest,
+            };
+            let failedPhase = null;
+            let failureResult = null;
+            for (const item of manifest.execution.phases) {
+              if (item.operations.length === 0) continue;
+              const result = await runMetadataBatch(environmentUrl, item.operations,
+                'fixture-token', CONTEXT.solutionUniqueName, CONTEXT.tenantId, false, journalOptions);
+              if (result.failed) {
+                failedPhase = item;
+                failureResult = result.results.at(-1);
+                break;
+              }
+            }
+            assert.ok(failedPhase, `${kind} did not stop execution`);
+            assert.equal(failureResult.index, failedOperation.index);
+            assert.equal(requests - beforeFailure, failedOperation.index + (kind === 'collision' ? 2 : 1));
+            if (kind === 'collision') assert.equal(failureResult.rateLimited, true);
+            if (kind === 'transport') assert.equal(failureResult.uncertain, true);
+            const journal = JSON.parse(fs.readFileSync(journalOptions.journalPath, 'utf8'));
+            assert.equal(Object.keys(journal.completed).length, failedOperation.index);
+            assert.equal(journal.inFlight.operationId, failedOperation.id);
+            const beforeResume = requests;
+            const resume = await runMetadataBatch(environmentUrl, failedPhase.operations,
+              'fixture-token', CONTEXT.solutionUniqueName, CONTEXT.tenantId, false, journalOptions);
+            assert.equal(resume.failed, true);
+            assert.match(resume.results[0].error, /fresh bounded reconciliation/);
+            assert.equal(requests, beforeResume);
+          });
+        }
+      }
+    });
+  }
 }
 
 test('manifest output is deterministic with complete coverage and dependency order', () => {
@@ -1149,7 +1388,7 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
   }
 });
 
-test('existing image full-size configuration is repaired once with a full-definition PUT', () => {
+function imageRepairFixture() {
   const contract = {
     schemaVersion: 1,
     publisherPrefix: 'cr1',
@@ -1187,6 +1426,11 @@ test('existing image full-size configuration is repaired once with a full-defini
       imageUpdateDefinition: imageDefinition,
     }),
   ]);
+  return { contract, imageDefinition, existing };
+}
+
+test('existing image full-size configuration is repaired once with a full-definition PUT', () => {
+  const { contract, imageDefinition, existing } = imageRepairFixture();
   const repair = buildManifest(buildInputs(contract, snapshot({ tables: [existing] })));
   const update = repair.execution.phases[1].operations[0];
 
@@ -1826,6 +2070,203 @@ test('collision checkpoint roll-forward preserves prior writes and rebinds revis
     }),
     /checkpoint table cr1_category is outside the revised contract without collision evidence/,
   );
+});
+
+function imageCollisionRecoveryFixture({ adaptedImage = false, existingSize = 10240, existingPrimaryImage = false } = {}) {
+  const { contract, existing } = imageRepairFixture();
+  const item = contract.tables[0];
+  const image = item.columns.find((value) => value.type === 'image');
+  const liveImage = existing.columns.find((value) => value.logicalName === 'cr1_photo');
+  liveImage.maxSizeInKB = existingSize;
+  liveImage.imageUpdateDefinition.MaxSizeInKB = existingSize;
+  liveImage.imageUpdateDefinition.DisplayName = {
+    LocalizedLabels: [{ Label: 'Existing localized image label', LanguageCode: 1033 }],
+  };
+  liveImage.isPrimaryImage = existingPrimaryImage;
+  liveImage.imageUpdateDefinition.IsPrimaryImage = existingPrimaryImage;
+  if (adaptedImage) {
+    image.plannedDecision = 'adapt';
+    image.adaptedLogicalName = 'cr1_photov2';
+    image.adaptedSchemaName = 'cr1_PhotoV2';
+    liveImage.logicalName = image.adaptedLogicalName;
+    liveImage.schemaName = image.adaptedSchemaName;
+    liveImage.imageUpdateDefinition.LogicalName = image.adaptedLogicalName;
+    liveImage.imageUpdateDefinition.SchemaName = image.adaptedSchemaName;
+  }
+  item.dependencyTier = 1;
+  item.columns.push(contractColumn('cr1_categoryid', 'lookup', 'create', {
+    lookupTarget: 'cr1_category',
+  }));
+  item.relationships.push({
+    kind: 'many-to-one',
+    schemaName: 'cr1_Category_Item',
+    plannedDecision: 'create',
+    parentTable: 'cr1_category',
+    childTable: 'cr1_item',
+    lookup: {
+      logicalName: 'cr1_categoryid',
+      schemaName: 'cr1_categoryid',
+      displayName: 'Category',
+      requiredLevel: 'None',
+    },
+  });
+  contract.tables.push(contractTable('cr1_category', 'reuse', 0, []));
+  const reconciliation = snapshot({ tables: [
+    existing,
+    table('cr1_category', [column('cr1_name', 'String', { primaryName: true })]),
+  ] });
+  const priorInputs = buildInputs(contract, reconciliation, '# Prior image plan\n');
+  const priorManifest = buildManifest(priorInputs);
+  const operations = priorManifest.execution.phases.flatMap((phase) => phase.operations);
+  assert.equal(priorManifest.executable, true);
+  assert.deepEqual(operations.map((value) => value.method), ['PUT', 'POST', 'POST']);
+  const [completedOperation, collisionOperation] = operations;
+  const journal = {
+    schemaVersion: 1,
+    binding: {
+      environmentUrl: CONTEXT.environmentUrl,
+      solution: CONTEXT.solutionUniqueName,
+    },
+    completed: {
+      [operationFingerprint(completedOperation, CONTEXT.solutionUniqueName)]: {
+        operationId: completedOperation.id,
+        status: 204,
+      },
+    },
+    recoveries: [],
+    inFlight: {
+      index: collisionOperation.index,
+      operationId: collisionOperation.id,
+      fingerprint: operationFingerprint(collisionOperation, CONTEXT.solutionUniqueName),
+      manifestHash: priorManifest.integritySha256,
+      reconciliationHash: priorManifest.binding.reconciliationSha256,
+      failure: { status: 400, collision: true },
+    },
+  };
+  liveImage.canStoreFullImage = true;
+  liveImage.imageUpdateDefinition = structuredClone(completedOperation.body);
+  const revisedContract = structuredClone(contract);
+  const revisedItem = revisedContract.tables.find((value) => value.logicalName === 'cr1_item');
+  const relationship = revisedItem.relationships[0];
+  relationship.plannedDecision = 'adapt';
+  relationship.adaptedSchemaName = 'cr1_Category_ItemV2';
+  relationship.lookup.adaptedLogicalName = 'cr1_categoryidv2';
+  relationship.lookup.adaptedSchemaName = 'cr1_CategoryIdV2';
+  const lookup = revisedItem.columns.find((value) => value.type === 'lookup');
+  lookup.plannedDecision = 'adapt';
+  lookup.adaptedLogicalName = relationship.lookup.adaptedLogicalName;
+  lookup.adaptedSchemaName = relationship.lookup.adaptedSchemaName;
+  function revisionInputs(revise = () => {}) {
+    const revised = structuredClone(revisedContract);
+    revise(revised.tables.find((value) => value.logicalName === 'cr1_item'));
+    return buildInputs(revised, reconciliation, '# Revised image plan\n');
+  }
+  function rollForward(inputs) {
+    return rollForwardPublishCheckpoint({
+      checkpoint: priorManifest.publishCheckpoint,
+      previousManifest: priorManifest,
+      journal,
+      contract: inputs.contract,
+      approvalReceipt: inputs.approvalReceipt,
+      contractBytes: inputs.contractBytes,
+      planBytes: inputs.planBytes,
+      context: CONTEXT,
+      rolledAt: NOW,
+    });
+  }
+  return { priorManifest, completedOperation, revisionInputs, rollForward };
+}
+
+test('image checkpoint roll-forward preserves completed PUTs and resumes relationship publication', () => {
+  for (const adaptedImage of [false, true]) {
+    const fixture = imageCollisionRecoveryFixture({ adaptedImage, existingSize: 20480 });
+    const priorBytes = stableJson(fixture.priorManifest);
+    const inputs = fixture.revisionInputs();
+    const rolled = fixture.rollForward(inputs);
+    assert.deepEqual(rolled.tables, ['cr1_item']);
+    assert.equal(rolled.binding.planSha256, sha256(inputs.planBytes));
+    assert.deepEqual(rolled.rollForwards[0].previousCheckpoint, fixture.priorManifest.publishCheckpoint);
+    assert.equal(stableJson(fixture.priorManifest), priorBytes);
+    assert.equal(fixture.completedOperation.body.MaxSizeInKB, 20480);
+    assert.equal(fixture.completedOperation.body.MaxHeight, 144);
+    assert.equal(fixture.completedOperation.body.IsPrimaryImage, false);
+    assert.equal(fixture.completedOperation.body.DisplayName.LocalizedLabels[0].Label, 'Existing localized image label');
+
+    const manifest = buildManifest({ ...inputs, publishCheckpoint: rolled });
+    assert.equal(manifest.executable, true);
+    assert.deepEqual(
+      manifest.execution.phases.flatMap((phase) => phase.operations).map((value) => value.id),
+      ['create-relationship:cr1_category_itemv2', 'publish-customizations'],
+    );
+    assert.match(
+      manifest.execution.phases[4].operations[0].body.ParameterXml,
+      /<entity>cr1_item<\/entity>/,
+    );
+    const validation = validateManifest(manifest, {
+      ...inputs, publishCheckpoint: rolled, requireExecutable: true,
+    });
+    assert.equal(validation.valid, true, validation.errors.join('; '));
+  }
+});
+
+test('image checkpoint roll-forward rejects incompatible or removed completed image components', () => {
+  const fixture = imageCollisionRecoveryFixture();
+  const cases = [
+    ['removed', (item) => { item.columns = item.columns.filter((value) => value.type !== 'image'); }],
+    ['table deferred', (item) => { item.plannedDecision = 'defer'; }],
+    ['table unverified', (item) => { item.plannedDecision = 'unverified'; }],
+    ['table renamed', (item) => {
+      item.plannedDecision = 'adapt';
+      item.adaptedLogicalName = 'cr1_itemv2';
+      item.adaptedSchemaName = 'cr1_ItemV2';
+    }],
+    ...[
+      ['type', { type: 'file' }],
+      ['deferred', { plannedDecision: 'defer' }],
+      ['unverified', { plannedDecision: 'unverified' }],
+      ['reuse', { plannedDecision: 'reuse' }],
+      ['retention', { canStoreFullImage: false }],
+      ['larger size', { maxSizeInKB: 20480 }],
+      ['required level', { requiredLevel: 'ApplicationRequired' }],
+      ['primary name', { primaryName: true }],
+      ['renamed', {
+        plannedDecision: 'adapt',
+        adaptedLogicalName: 'cr1_photov2',
+        adaptedSchemaName: 'cr1_PhotoV2',
+      }],
+    ].map(([name, updates]) => [
+      name,
+      (item) => Object.assign(item.columns.find((value) => value.type === 'image'), updates),
+    ]),
+  ];
+  for (const [name, revise] of cases) {
+    assert.throws(
+      () => fixture.rollForward(fixture.revisionInputs(revise)),
+      /completed metadata component configure-image:cr1_item:cr1_photo was removed or changed/,
+      name,
+    );
+  }
+});
+
+test('image checkpoint recovery verifies explicitly approved primary-image semantics', () => {
+  for (const existingPrimaryImage of [false, true]) {
+    const fixture = imageCollisionRecoveryFixture({ existingPrimaryImage });
+    const matching = fixture.revisionInputs((item) => {
+      item.columns.find((column) => column.type === 'image').isPrimaryImage = existingPrimaryImage;
+    });
+    const rolled = fixture.rollForward(matching);
+    const manifest = buildManifest({ ...matching, publishCheckpoint: rolled });
+    assert.equal(manifest.executable, true);
+    assert.equal(manifest.execution.phases.flatMap((phase) => phase.operations)
+      .some((operation) => operation.id.startsWith('configure-image:')), false);
+
+    const changed = fixture.revisionInputs((item) => {
+      item.columns.find((column) => column.type === 'image').isPrimaryImage = !existingPrimaryImage;
+    });
+    assert.throws(() => fixture.rollForward(changed),
+      /completed metadata component configure-image:cr1_item:cr1_photo was removed or changed/);
+    assert.equal(buildManifest(changed).executable, false);
+  }
 });
 
 test('checkpoint roll-forward rejects removed completed columns, relationships, and keys', () => {
