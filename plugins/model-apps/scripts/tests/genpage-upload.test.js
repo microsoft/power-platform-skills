@@ -713,3 +713,33 @@ test('a config that is PRESENT but unparseable refuses the update', async () => 
     assert.strictEqual(uploads, 0, `nothing may upload for config body ${JSON.stringify(body)}`);
   }
 });
+
+// Regression: pac names the downloaded directory with its own casing of the page id. Joining the
+// CALLER's spelling passed on Windows (case-insensitive paths) and failed on Linux, where a
+// differently-cased --page-id lost the config and refused a perfectly good update.
+//
+// NOTE: this test is VACUOUS on a case-insensitive filesystem — Windows resolves the path either
+// way, so it passes there with or without the fix. It is a real guard only on Linux/macOS-CI, which
+// is precisely where the defect surfaced. Do not read a local pass as proof.
+test('the current bindings are found even when --page-id casing differs from pac\'s directory', async () => {
+  const canonical = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const seen = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    download: async ({ outputDir }) => {
+      // pac writes the directory in ITS casing, not the caller's.
+      fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      fs.writeFileSync(path.join(outputDir, canonical, 'config.json'),
+        Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
+      return true;
+    },
+    upload: async (o) => { seen.push(o); return { pageId: o.pageId }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', canonical.toUpperCase(), '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, `casing must not lose the config; got ${JSON.stringify(r.payload)}`);
+  assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket'], 'the bindings must still be preserved');
+});

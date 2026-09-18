@@ -188,9 +188,16 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
     try {
       await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
+      // pac names the downloaded directory with ITS OWN casing of the page id, which need not match
+      // the casing the caller typed. Joining the caller's spelling works on a case-INSENSITIVE
+      // filesystem and fails on Linux, where a differently-cased --page-id would "lose" the config
+      // and refuse a perfectly good update. Resolve the directory case-insensitively instead.
+      const wantDir = String(flags['page-id']).toLowerCase();
+      const entry = fs.readdirSync(probe).find((d) => d.toLowerCase() === wantDir);
+      if (!entry) throw new Error('pac wrote no directory for this page');
       // pac writes config.json UTF-8 WITH a BOM, which JSON.parse rejects outright — strip it first
       // or a perfectly good config reads as unparseable and the bindings are "lost" here too.
-      const raw = fs.readFileSync(path.join(probe, flags['page-id'], 'config.json'), 'utf8').replace(/^\uFEFF/, '');
+      const raw = fs.readFileSync(path.join(probe, entry, 'config.json'), 'utf8').replace(/^\uFEFF/, '');
       const cfg = JSON.parse(raw);
       if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
         throw new Error('config.json is not a JSON object');
