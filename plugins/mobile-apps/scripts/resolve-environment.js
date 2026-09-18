@@ -22,16 +22,6 @@ function writeCacheIfProject(result, options = {}) {
   return environmentResolution.writeCacheIfProject(result, process.cwd(), options);
 }
 
-async function resolveEnvironment(target, options = {}) {
-  if (!target) {
-    throw new Error('Pass the environment ID from power.config.json, or pass the Dataverse environment URL directly.');
-  }
-  const projectRoot = process.cwd();
-  return environmentResolution.resolveEnvironment(
-    target, projectRoot, Boolean(readTelemetryCluster(projectRoot)), options,
-  );
-}
-
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (!options.target) {
@@ -39,9 +29,12 @@ async function main(argv = process.argv.slice(2)) {
     process.exitCode = 1;
     return;
   }
-  const result = await resolveEnvironment(options.target, options);
+  const projectRoot = process.cwd();
+  const result = await environmentResolution.resolveEnvironment(
+    options.target, projectRoot, Boolean(readTelemetryCluster(projectRoot)), options,
+  );
   // Planning must not persist cluster routing or replay telemetry before approval.
-  if (!options.noCache) await flushPriorEvents(process.cwd(), result);
+  if (!options.noCache) await flushPriorEvents(projectRoot, result);
   console.log(JSON.stringify(result, null, 2));
 }
 
@@ -55,6 +48,5 @@ if (require.main === module) {
 module.exports = {
   ...environmentResolution,
   parseArgs,
-  resolveEnvironment,
   writeCacheIfProject,
 };
