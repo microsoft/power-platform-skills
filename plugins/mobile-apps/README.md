@@ -12,6 +12,8 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
 
+Have questions or feedback? Join the [Native Apps Office Hours](OFFICE_HOURS.md).
+
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
