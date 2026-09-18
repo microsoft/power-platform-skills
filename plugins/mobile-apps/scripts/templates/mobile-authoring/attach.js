@@ -4,10 +4,15 @@
 const fs = require('node:fs');
 const http = require('node:http');
 
+function reuseVscodeWindow(env = process.env) {
+  return env.TERM_PROGRAM === 'vscode';
+}
+
 function options(argv = process.argv.slice(2), env = process.env) {
   const result = {
     bridgeUrl: env.DEV_PLAYER_BUILDER_URL || 'http://127.0.0.1:5177',
     metroUrl: env.DEV_PLAYER_METRO_URL || 'http://127.0.0.1:8081',
+    reuseVscodeWindow: reuseVscodeWindow(env),
   };
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
@@ -30,7 +35,11 @@ function options(argv = process.argv.slice(2), env = process.env) {
 function requestAttach(input, projectRoot = fs.realpathSync(process.cwd())) {
   return new Promise((resolve, reject) => {
     const endpoint = new URL('/demo/attach', input.bridgeUrl);
-    const body = Buffer.from(JSON.stringify({ projectRoot, metroUrl: input.metroUrl }));
+    const body = Buffer.from(JSON.stringify({
+      projectRoot,
+      metroUrl: input.metroUrl,
+      ...(input.reuseVscodeWindow ? { vscodeWindow: true } : {}),
+    }));
     const request = http.request(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'content-length': body.length },
@@ -68,6 +77,9 @@ async function main(argv = process.argv.slice(2)) {
   }
   const result = await requestAttach(input);
   process.stdout.write(`Attached ${result.appName || 'app'} to ${result.metroUrl}.\n`);
+  if (result.vscodeWindow) {
+    process.stdout.write('Authoring will reuse this VS Code window and preserve its running terminals.\n');
+  }
   process.stdout.write('Scan the normal Metro QR in Mobile Preview. Edit app will use an isolated candidate and write back only after Apply.\n');
   return 0;
 }
@@ -79,4 +91,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { options, requestAttach, main };
+module.exports = { reuseVscodeWindow, options, requestAttach, main };

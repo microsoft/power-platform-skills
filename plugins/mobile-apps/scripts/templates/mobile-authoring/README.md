@@ -136,6 +136,13 @@ The second command contacts only a loopback authoring bridge (default
 `http://127.0.0.1:5177`) and registers this canonical project folder with the
 running Metro origin. The Metro verification response includes this generated
 app's UUID, preventing a reused port from authorizing a different app.
+When the command runs in that app's VS Code integrated terminal, it sends only
+a boolean window-reuse preference. The bridge focuses the already-open app
+folder, temporarily adds its isolated candidate and pinned worker folders, and
+removes them when the job ends; it does not replace the workspace or stop the
+developer-owned Metro terminal. Temporary job folders are excluded from VS Code
+Recent. Running attach outside VS Code keeps the dedicated authoring-window
+fallback.
 Scanning that normal QR becomes editable only while the bridge has this
 explicit registration; an unregistered or stale URL remains preview-only.
 Candidate generation stays isolated, and Player Apply is the only step that

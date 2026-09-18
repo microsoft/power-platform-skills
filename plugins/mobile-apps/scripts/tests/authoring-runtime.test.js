@@ -116,21 +116,26 @@ test('owned regeneration updates explicit metadata but never overwrites manual/u
   assert.equal(fs.existsSync(path.join(unowned, 'src/authoring/controller.ts')), false);
 });
 
-test('authoring attach script is exact, loopback-only, and sends only the project and Metro address', async (t) => {
+test('authoring attach script is exact, loopback-only, and sends only a bounded VS Code window preference', async (t) => {
   const root = project(t);
   configureMobileAuthoring(root);
-  let request;
+  const requests = [];
   const server = http.createServer((incoming, response) => {
     const chunks = [];
     incoming.on('data', chunk => chunks.push(chunk));
     incoming.on('end', () => {
-      request = {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      requests.push({
         method: incoming.method,
         path: incoming.url,
-        body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
-      };
+        body,
+      });
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ appName: 'Orders', metroUrl: 'http://127.0.0.1:8081' }));
+      response.end(JSON.stringify({
+        appName: 'Orders',
+        metroUrl: 'http://127.0.0.1:8081',
+        vscodeWindow: body.vscodeWindow === true,
+      }));
     });
   });
   await new Promise((resolve, reject) => {
@@ -139,12 +144,12 @@ test('authoring attach script is exact, loopback-only, and sends only the projec
   });
   t.after(() => new Promise(resolve => server.close(resolve)));
   const script = path.join(root, 'scripts/authoring-attach.js');
-  const result = await new Promise((resolve) => {
+  const runAttach = (env) => new Promise((resolve) => {
     const child = spawn(process.execPath, [
       script,
       '--bridge', `http://127.0.0.1:${server.address().port}`,
       '--metro-url', 'exp://127.0.0.1:8081',
-    ], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = [];
     const stderr = [];
     child.stdout.on('data', chunk => stdout.push(chunk));
@@ -155,13 +160,31 @@ test('authoring attach script is exact, loopback-only, and sends only the projec
       stderr: Buffer.concat(stderr).toString('utf8'),
     }));
   });
-  assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /Attached Orders/);
-  assert.deepEqual(request, {
+  const regular = await runAttach({ TERM_PROGRAM: 'Apple_Terminal', VSCODE_IPC_HOOK_CLI: '' });
+  assert.equal(regular.code, 0, regular.stderr);
+  assert.match(regular.stdout, /Attached Orders/);
+  assert.doesNotMatch(regular.stdout, /reuse this VS Code window/);
+  assert.deepEqual(requests[0], {
     method: 'POST',
     path: '/demo/attach',
     body: { projectRoot: fs.realpathSync(root), metroUrl: 'exp://127.0.0.1:8081' },
   });
+  const integrated = await runAttach({
+    TERM_PROGRAM: 'vscode',
+    VSCODE_IPC_HOOK_CLI: '/private/tmp/private-window.sock',
+  });
+  assert.equal(integrated.code, 0, integrated.stderr);
+  assert.match(integrated.stdout, /reuse this VS Code window/);
+  assert.deepEqual(requests[1], {
+    method: 'POST',
+    path: '/demo/attach',
+    body: {
+      projectRoot: fs.realpathSync(root),
+      metroUrl: 'exp://127.0.0.1:8081',
+      vscodeWindow: true,
+    },
+  });
+  assert.equal(JSON.stringify(requests).includes('private-window.sock'), false);
 
   const denied = spawnSync(process.execPath, [
     script,
