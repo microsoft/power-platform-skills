@@ -14309,11 +14309,16 @@ function defaultMsalCacheDir() {
   const xdg = process.env.XDG_CACHE_HOME || path2.join(os2.homedir(), ".cache");
   return path2.join(xdg, "flowagent", "msal-cache");
 }
+function safeIdentity(identity) {
+  return identity.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64) || "common";
+}
+function isTokenCacheFile(name3) {
+  return name3.endsWith(".json") && name3 !== PREFERRED_ACCOUNT_FILE;
+}
 function createMsalDiskCachePlugin(opts) {
   const cacheDir = opts.cacheDir ?? defaultMsalCacheDir();
   const disabled = opts.disabled === true || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "1" || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "true";
-  const safeIdentity = opts.identity.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
-  const cacheFile = path2.join(cacheDir, `${safeIdentity || "common"}.json`);
+  const cacheFile = path2.join(cacheDir, `${safeIdentity(opts.identity)}.json`);
   return {
     beforeCacheAccess: async (ctx) => {
       if (disabled)
@@ -14344,20 +14349,122 @@ function createMsalDiskCachePlugin(opts) {
     }
   };
 }
+function clearMsalDiskCache(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  let removed = 0;
+  try {
+    if (!fs2.existsSync(cacheDir))
+      return 0;
+    const only = opts?.identity ? `${safeIdentity(opts.identity)}.json` : null;
+    for (const f of fs2.readdirSync(cacheDir)) {
+      if (!isTokenCacheFile(f))
+        continue;
+      if (only && f !== only)
+        continue;
+      try {
+        fs2.unlinkSync(path2.join(cacheDir, f));
+        removed++;
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return removed;
+}
+function readPreferredAccount(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  try {
+    const file2 = path2.join(cacheDir, PREFERRED_ACCOUNT_FILE);
+    if (!fs2.existsSync(file2))
+      return null;
+    const parsed = JSON.parse(fs2.readFileSync(file2, { encoding: "utf-8" }));
+    const username = typeof parsed.username === "string" ? parsed.username.trim() : "";
+    return username.length > 0 ? username : null;
+  } catch {
+    return null;
+  }
+}
+function writePreferredAccount(username, opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  const file2 = path2.join(cacheDir, PREFERRED_ACCOUNT_FILE);
+  try {
+    if (username === null || username.trim().length === 0) {
+      if (fs2.existsSync(file2))
+        fs2.unlinkSync(file2);
+      return true;
+    }
+    fs2.mkdirSync(cacheDir, { recursive: true });
+    const tmp = `${file2}.tmp`;
+    fs2.writeFileSync(tmp, JSON.stringify({ username: username.trim() }, null, 2), {
+      encoding: "utf-8",
+      mode: 384
+    });
+    fs2.renameSync(tmp, file2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function readCachedMsalIdentities(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  const out = [];
+  try {
+    if (!fs2.existsSync(cacheDir))
+      return out;
+    for (const f of fs2.readdirSync(cacheDir)) {
+      if (!isTokenCacheFile(f))
+        continue;
+      const full = path2.join(cacheDir, f);
+      try {
+        const parsed = JSON.parse(fs2.readFileSync(full, { encoding: "utf-8" }));
+        const accounts = Object.values(parsed.Account ?? {});
+        if (accounts.length === 0) {
+          out.push({ cacheFile: full });
+          continue;
+        }
+        for (const a of accounts) {
+          out.push({ cacheFile: full, username: a.username, tenantId: a.realm });
+        }
+      } catch {
+        out.push({ cacheFile: full });
+      }
+    }
+  } catch {
+  }
+  return out;
+}
+var PREFERRED_ACCOUNT_FILE;
 var init_msal_disk_cache = __esm({
   "packages/core/dist/auth/msal-disk-cache.js"() {
     "use strict";
+    PREFERRED_ACCOUNT_FILE = "@preferred-account.json";
   }
 });
 
 // packages/core/dist/auth/msal-auth.js
 var msal_auth_exports = {};
 __export(msal_auth_exports, {
-  MsalTokenProvider: () => MsalTokenProvider
+  MsalTokenProvider: () => MsalTokenProvider,
+  resolveInteractiveAccountOptions: () => resolveInteractiveAccountOptions
 });
 import { execFile as execFile2 } from "node:child_process";
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function resolveInteractiveAccountOptions(env = process.env, opts = {}) {
+  const hint = env.PA_LOGIN_HINT?.trim();
+  if (hint) {
+    return { loginHint: hint };
+  }
+  const stored = opts.storedHint?.trim();
+  if (stored) {
+    return { loginHint: stored };
+  }
+  const optOut = env.PA_NO_ACCOUNT_PICKER?.trim().toLowerCase();
+  if (optOut === "1" || optOut === "true" || optOut === "yes") {
+    return {};
+  }
+  return { prompt: "select_account" };
 }
 var DEFAULT_CLIENT_ID, MsalTokenProvider;
 var init_msal_auth = __esm({
@@ -14369,6 +14476,8 @@ var init_msal_auth = __esm({
     MsalTokenProvider = class {
       pca;
       account = null;
+      /** Cache identity this provider was constructed with (tenant id or "common"). */
+      identity;
       constructor(clientIdOrOpts, tenantId2) {
         let clientId;
         let tenant;
@@ -14392,7 +14501,37 @@ var init_msal_auth = __esm({
             cachePlugin: createMsalDiskCachePlugin({ identity: tenant })
           }
         };
+        this.identity = tenant;
         this.pca = new PublicClientApplication(config3);
+      }
+      /**
+       * Drop the cached Connectivity identity so the next call re-authenticates.
+       *
+       * Without this, `reconnect` was a no-op for the Connectivity path: it
+       * cleared the az-CLI token cache, then called
+       * `msalAuth?.invalidateAccessToken?.()`, which optional-chained into
+       * nothing because this class did not implement the (optional) method. The
+       * stale MSAL account and its on-disk refresh token both survived, so the
+       * tool reported success while the next connectivity call reused exactly the
+       * identity the user was trying to get rid of. (#446)
+       *
+       * Clears in-memory account, MSAL's own cache, and the persisted file.
+       */
+      invalidateAccessToken() {
+        this.account = null;
+        try {
+          const cache = this.pca.getTokenCache();
+          void (async () => {
+            try {
+              for (const a of await cache.getAllAccounts()) {
+                await cache.removeAccount(a);
+              }
+            } catch {
+            }
+          })();
+        } catch {
+        }
+        clearMsalDiskCache({ identity: this.identity });
       }
       async getAccessToken(resource) {
         const scopes = resource ? [`${resource}/.default`] : ["https://api.powerplatform.com/.default"];
@@ -14402,8 +14541,9 @@ var init_msal_auth = __esm({
             const cache = this.pca.getTokenCache();
             const accounts = await cache.getAllAccounts();
             if (accounts.length > 0) {
-              const preferred = process.env.PA_TENANT_ID ? accounts.find((a) => a.tenantId === process.env.PA_TENANT_ID) : null;
-              this.account = preferred ?? accounts[0];
+              const byIdentity = this.identity && this.identity !== "common" ? accounts.find((a) => a.tenantId === this.identity) : null;
+              const byEnv = process.env.PA_TENANT_ID ? accounts.find((a) => a.tenantId === process.env.PA_TENANT_ID) : null;
+              this.account = byIdentity ?? byEnv ?? accounts[0];
             }
           } catch {
           }
@@ -14438,6 +14578,10 @@ var init_msal_auth = __esm({
 </body></html>`;
         const result = await this.pca.acquireTokenInteractive({
           scopes,
+          // Account picker on by default; PA_LOGIN_HINT, a stored switch_account
+          // preference, or PA_NO_ACCOUNT_PICKER override it.
+          // See resolveInteractiveAccountOptions. (#446)
+          ...resolveInteractiveAccountOptions(process.env, { storedHint: readPreferredAccount() }),
           openBrowser: (url2) => this.openBrowser(url2),
           successTemplate,
           errorTemplate: '<!doctype html><html><body style="font-family:sans-serif;padding:2em"><h2 style="color:#a4262c">FlowAgent CLI sign-in failed</h2><p>Check the CLI output for details, then re-run the command.</p></body></html>'
@@ -53619,7 +53763,8 @@ var cachedTenantId = null;
 function getAzTenantId() {
   if (cachedTenantId !== null)
     return cachedTenantId ?? void 0;
-  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { encoding: "utf-8", shell: false });
+  const isWindows = process.platform === "win32";
+  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { encoding: "utf-8", shell: isWindows, windowsHide: true });
   if (result.status === 0 && result.stdout) {
     cachedTenantId = result.stdout.trim() || void 0;
   } else {
@@ -53647,9 +53792,6 @@ function buildCompositeAuth(opts = {}) {
       return msalAuth;
     }
     const customClientId = process.env.PA_CLIENT_ID;
-    if (cloud !== "commercial" && !customClientId) {
-      throw new Error(`Connection management commands require MSAL authentication, but the PAC CLI app (9cee029c) is not preauthorized in ${cloud.toUpperCase()} tenants. To use connection commands, register your own Azure AD app with Power Platform Connectivity scopes and set PA_CLIENT_ID=<your-app-id>. Flow management commands (list, create, run flows) work without this.`);
-    }
     const tenantId2 = getAzTenantId();
     const authorityHost = opts.cloudEndpoints?.authorityHost ?? "https://login.microsoftonline.com";
     const mod = await Promise.resolve().then(() => (init_msal_auth(), msal_auth_exports));
@@ -53665,7 +53807,11 @@ function buildCompositeAuth(opts = {}) {
     async getAccessToken(resource) {
       if (resource === connectivityResource || resource === CONNECTIVITY_RESOURCE_COMMERCIAL) {
         const provider = await getMsalAuth();
-        return provider.getAccessToken(resource);
+        try {
+          return await provider.getAccessToken(resource);
+        } catch (err) {
+          throw enrichConnectivityAuthError(err, cloud);
+        }
       }
       return azAuth.getAccessToken(resource);
     },
@@ -53676,6 +53822,21 @@ function buildCompositeAuth(opts = {}) {
       msalAuth?.invalidateAccessToken?.(resource);
     }
   };
+}
+function enrichConnectivityAuthError(err, cloud) {
+  if (cloud === "commercial")
+    return err;
+  if (process.env.PA_CLIENT_ID)
+    return err;
+  const message = err instanceof Error ? err.message : String(err);
+  const looksLikeAppProblem = /AADSTS(700016|650057|65001|500011)/i.test(message) || /not\s+(found|preauthoriz|authoriz)/i.test(message) || /consent/i.test(message);
+  if (!looksLikeAppProblem)
+    return err;
+  const enriched = new Error(`${message}
+
+Connection commands authenticate against the Power Platform API with a first-party client ID that may not be preauthorized in ${cloud.toUpperCase()} tenants. Register an Azure AD app in this tenant with Power Platform API permissions and set PA_CLIENT_ID=<your-app-id>. Flow commands (list, create, run) do not need this.`);
+  enriched.cause = err;
+  return enriched;
 }
 
 // packages/core/dist/index.js
@@ -53710,16 +53871,29 @@ var CLOUD_ENDPOINTS = {
     flowBaseUrl: "https://high.api.flow.microsoft.us",
     flowResource: "https://high.service.flow.microsoft.us",
     bapBaseUrl: "https://high.api.bap.microsoft.us",
-    powerPlatformApiUrl: "https://high.api.powerplatform.microsoft.us",
+    // `api.high.` - not `high.api.`, which has no DNS record. The segment
+    // order here is the opposite of the flow/bap hosts above, and matches
+    // ppapiSuffix below, which already had it right.
+    powerPlatformApiUrl: "https://api.high.powerplatform.microsoft.us",
     ppapiSuffix: "environment.api.high.powerplatform.microsoft.us"
   },
+  // DoD does not use the powerplatform.microsoft.us domain at all - it is
+  // served from appsplatform.us. The previously shipped `dod.*.microsoft.us`
+  // values were pattern-extended from gcc/gcchigh and none of them resolve.
+  // Corroborated by the power-pages plugin (organization.api.appsplatform.us)
+  // and the canvas-apps maker host table (make.apps.appsplatform.us), then
+  // DNS-verified here.
   dod: {
     authorityHost: "https://login.microsoftonline.us",
-    flowBaseUrl: "https://dod.api.flow.microsoft.us",
-    flowResource: "https://dod.service.flow.microsoft.us",
-    bapBaseUrl: "https://dod.api.bap.microsoft.us",
-    powerPlatformApiUrl: "https://dod.api.powerplatform.microsoft.us",
-    ppapiSuffix: "environment.api.dod.powerplatform.microsoft.us"
+    flowBaseUrl: "https://api.flow.appsplatform.us",
+    // UNVERIFIED. flowResource is an audience (App ID URI), not an address,
+    // so DNS cannot confirm it - `service.flow.microsoft.com` does not
+    // resolve in commercial either. The value below follows the domain but
+    // has not been checked against a real DoD token, so treat it as a guess.
+    flowResource: "https://service.flow.appsplatform.us",
+    bapBaseUrl: "https://api.bap.appsplatform.us",
+    powerPlatformApiUrl: "https://api.appsplatform.us",
+    ppapiSuffix: "environment.api.appsplatform.us"
   }
 };
 function detectAzureCloud() {
@@ -55634,6 +55808,7 @@ init_trigger_emulators();
 import { spawnSync as spawnSync3 } from "node:child_process";
 import fs4 from "node:fs";
 import path5 from "node:path";
+init_msal_disk_cache();
 async function readTokenIdentity(auth2, resource) {
   try {
     const token = await auth2.getAccessToken(resource);
@@ -55646,6 +55821,8 @@ async function whoAmI(auth2, config3, opts = {}) {
   const azIdentity = readActiveAzIdentity();
   const tokenIdentity = await readTokenIdentity(auth2, config3.cloudEndpoints.flowResource);
   const identityMismatch = Boolean(azIdentity?.tenantId && tokenIdentity?.tenantId && azIdentity.tenantId !== tokenIdentity.tenantId);
+  const connectivityIdentity = readCachedMsalIdentities();
+  const connectivityIdentityMismatch = Boolean(azIdentity?.tenantId && connectivityIdentity.some((i) => i.tenantId && i.tenantId !== azIdentity.tenantId));
   return {
     azIdentity,
     azureConfigDir: azureConfigDir(),
@@ -55654,6 +55831,9 @@ async function whoAmI(auth2, config3, opts = {}) {
     tokenCacheDir: defaultCacheDir(),
     tokenIdentity,
     identityMismatch,
+    connectivityIdentity,
+    connectivityCacheDir: defaultMsalCacheDir(),
+    connectivityIdentityMismatch,
     currentEnv: opts.currentEnv ?? null
   };
 }
@@ -55668,6 +55848,7 @@ async function reconnect(auth2, config3) {
   }
   new DiskTokenCache().clear();
   auth2.invalidateAccessToken?.();
+  const clearedConnectivityEntries = clearMsalDiskCache();
   let reacquired = false;
   try {
     await auth2.getAccessToken(config3.cloudEndpoints.flowResource);
@@ -55676,12 +55857,15 @@ async function reconnect(auth2, config3) {
     reacquired = false;
   }
   const azIdentity = readActiveAzIdentity();
+  const connSuffix = clearedConnectivityEntries > 0 ? ` Connectivity sign-in cleared (${clearedConnectivityEntries} file${clearedConnectivityEntries === 1 ? "" : "s"}); the next connection command will prompt for an account.` : "";
   return {
     clearedEntries,
     tokenCacheDir: dir,
+    clearedConnectivityEntries,
+    connectivityCacheDir: defaultMsalCacheDir(),
     azIdentity,
     reacquired,
-    message: reacquired ? `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) and a fresh token acquired as ${azIdentity?.user ?? "(unknown)"}.` : `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) but re-acquisition failed. Run: az login`
+    message: reacquired ? `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) and a fresh token acquired as ${azIdentity?.user ?? "(unknown)"}.${connSuffix}` : `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) but re-acquisition failed. Run: az login${connSuffix}`
   };
 }
 function azVersionInstalled() {
@@ -55767,6 +55951,17 @@ async function doctor(auth2, config3, opts = {}) {
       fix: match ? void 0 : "Call the reconnect tool (clears the token cache and re-acquires)."
     });
   }
+  const connectivityIdentities = readCachedMsalIdentities();
+  if (connectivityIdentities.length > 0 && azIdentity?.tenantId) {
+    const foreign = connectivityIdentities.filter((i) => i.tenantId && i.tenantId !== azIdentity.tenantId);
+    const describe3 = (i) => `${i.username ?? "(unknown account)"} in tenant ${i.tenantId ?? "unknown"}`;
+    checks.push({
+      name: "connectivity-identity",
+      status: foreign.length > 0 ? "fail" : "pass",
+      detail: foreign.length > 0 ? `Connection commands authenticate separately (MSAL, api.powerplatform.com) and that cache holds ${foreign.map(describe3).join("; ")} \u2014 not the az tenant ${azIdentity.tenantId}. Cache: ${defaultMsalCacheDir()}` : `Connectivity sign-in matches the az tenant (${connectivityIdentities.map(describe3).join("; ")}).`,
+      fix: foreign.length > 0 ? "Call switch_account with the account you want (it clears this cache and pins the next sign-in), or reconnect to clear it and be shown an account picker." : void 0
+    });
+  }
   const envId = opts.currentEnv ?? null;
   if (!envId) {
     checks.push({
@@ -55809,6 +56004,59 @@ async function doctor(auth2, config3, opts = {}) {
   const failed = checks.filter((c) => c.status !== "pass");
   const summary = status === "pass" ? "All checks passed." : `${failed.length} check${failed.length === 1 ? "" : "s"} need attention: ${failed.map((c) => c.name).join(", ")}.`;
   return { status, checks, summary };
+}
+function listAccounts(opts) {
+  const azIdentity = readActiveAzIdentity();
+  const preferredAccount = readPreferredAccount(opts);
+  const cached3 = readCachedMsalIdentities(opts);
+  const accounts = cached3.map((i) => ({
+    username: i.username,
+    tenantId: i.tenantId,
+    cacheFile: i.cacheFile,
+    matchesAzTenant: Boolean(azIdentity?.tenantId && i.tenantId === azIdentity.tenantId),
+    preferred: Boolean(preferredAccount && i.username?.toLowerCase() === preferredAccount.toLowerCase())
+  }));
+  const identityMismatch = accounts.some((a) => a.tenantId && !a.matchesAzTenant);
+  let message;
+  if (accounts.length === 0) {
+    message = preferredAccount ? `No Connectivity sign-in is cached. The next connection command will sign in as ${preferredAccount}.` : "No Connectivity sign-in is cached. The next connection command will show an account picker.";
+  } else if (identityMismatch) {
+    message = `Cached Connectivity account(s) do not all match the Azure CLI tenant (${azIdentity?.tenantId ?? "unknown"}). This is what surfaces as ServiceToServiceEnvironmentNotFound. Call switch_account with the account you want.`;
+  } else {
+    message = `${accounts.length} cached Connectivity account${accounts.length === 1 ? "" : "s"}, matching the Azure CLI tenant.`;
+  }
+  return {
+    accounts,
+    azIdentity,
+    preferredAccount,
+    connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+    identityMismatch,
+    message
+  };
+}
+function switchAccount(username, opts) {
+  const target = username?.trim() ? username.trim() : null;
+  writePreferredAccount(target, opts);
+  const clearedConnectivityEntries = clearMsalDiskCache(opts);
+  const azIdentity = readActiveAzIdentity();
+  let warning;
+  if (target && azIdentity?.user && azIdentity.user.includes("@") && target.includes("@")) {
+    const azDomain = azIdentity.user.split("@")[1]?.toLowerCase();
+    const targetDomain = target.split("@")[1]?.toLowerCase();
+    if (azDomain && targetDomain && azDomain !== targetDomain) {
+      warning = `The Azure CLI is signed in as ${azIdentity.user} but Connectivity will sign in as ${target}. That is supported, but if environment calls start failing, this difference is the first thing to check.`;
+    }
+  }
+  const cleared = `Cleared ${clearedConnectivityEntries} cached Connectivity sign-in${clearedConnectivityEntries === 1 ? "" : "s"}.`;
+  const message = target ? `${cleared} The next connection command will sign in as ${target}.` : `${cleared} The next connection command will show an account picker.`;
+  return {
+    preferredAccount: target,
+    clearedConnectivityEntries,
+    connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+    azIdentity,
+    warning,
+    message
+  };
 }
 
 // packages/core/dist/index.js
@@ -66183,7 +66431,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return origTool(...newArgs);
     };
   }
-  server2.tool("whoami", "Show which identity FlowAgent is authenticated as: the active Azure CLI account, the Azure CLI profile directory (honours AZURE_CONFIG_DIR), the resolved cloud, the token cache location, and the tenant the token actually carries. Use this first when calls fail with EnvironmentAccessDenied, ServiceToServiceEnvironmentNotFound, or an ENOTFOUND on *.environment.api.powerplatform.com.", {}, { readOnlyHint: true, title: "Who Am I" }, async () => {
+  server2.tool("whoami", "Show which identity FlowAgent is authenticated as: the active Azure CLI account, the Azure CLI profile directory (honours AZURE_CONFIG_DIR), the resolved cloud, the token cache location, the tenant the token actually carries, and the separately-cached Connectivity (api.powerplatform.com) identity used by connection commands. Use this first when calls fail with EnvironmentAccessDenied, ServiceToServiceEnvironmentNotFound, or an ENOTFOUND on *.environment.api.powerplatform.com.", {}, { readOnlyHint: true, title: "Who Am I" }, async () => {
     try {
       const cur = getActiveMcpContext().currentEnv.get();
       return safeResult(await whoAmI(getActiveMcpContext().auth, config3, { currentEnv: cur.envId ?? null }));
@@ -66191,7 +66439,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("reconnect", "Clear FlowAgent's cached tokens and re-acquire as the account the Azure CLI is currently signed in as. Use after `az login`/`az account set` switched accounts, or when a stale token is causing 401/403 failures \u2014 this avoids restarting the session.", {}, { title: "Reconnect" }, async () => {
+  server2.tool("reconnect", "Clear FlowAgent's cached tokens \u2014 both the Azure CLI token cache and the separate MSAL cache used for Connectivity (connection) commands \u2014 and re-acquire as the account the Azure CLI is currently signed in as. Use after `az login`/`az account set` switched accounts, or when a stale token is causing 401/403 failures \u2014 this avoids restarting the session. The next connection command will prompt for an account.", {}, { title: "Reconnect" }, async () => {
     try {
       return safeResult(await reconnect(getActiveMcpContext().auth, config3));
     } catch (e) {
@@ -66205,6 +66453,22 @@ async function createMcpServer(authProvider, deps = {}) {
         currentEnv: cur.envId ?? null,
         listEnvironments: () => ctx.getClient().listEnvironments()
       }));
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("list_accounts", "List the accounts FlowAgent has cached for Connectivity (api.powerplatform.com) calls \u2014 the separate sign-in that connection tools use and that does NOT follow `az login`/`az account set`. Shows each cached account's tenant, whether it matches the active Azure CLI tenant, and which one the next sign-in would use. Acquires no token, so it never opens a browser. Use alongside whoami when connection tools fail with ServiceToServiceEnvironmentNotFound.", {}, { readOnlyHint: true, title: "List Accounts" }, async () => {
+    try {
+      return safeResult(listAccounts());
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("switch_account", "Choose which account Connectivity (connection) commands sign in as. Clears the cached Connectivity sign-in and records the account to use next, so the sign-in cannot silently reuse the browser's ambient session. Pass `username` to target an account, or omit it to be shown an account picker at the next sign-in. Does not change the Azure CLI identity \u2014 run `az login`/`az account set` for that.", {
+    username: external_exports.string().optional().describe("UPN to sign in as next (e.g. user@contoso.com). Omit to force an account picker instead.")
+  }, { title: "Switch Account" }, async ({ username }) => {
+    try {
+      return safeResult(switchAccount(username ?? null));
     } catch (e) {
       return safeError(e);
     }
