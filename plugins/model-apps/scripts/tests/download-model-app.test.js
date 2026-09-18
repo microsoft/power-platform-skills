@@ -2542,3 +2542,60 @@ test('readRelationships carries a divergent N:N SchemaName, and omits it when it
   assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
     'and never counted as skipped — it IS in the rebuildable spec');
 });
+// LIVE-REPRODUCED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+// 'utf8' decode keeps that BOM as U+FEFF and JSON.parse REJECTS a leading U+FEFF, so a perfectly
+// valid downloaded config threw and the old catch substituted `{}` — the page's table bindings
+// vanished from the emitted spec, and the rebuilt page queried a table it was no longer bound to.
+//
+// Also separates the two cases the old code conflated: a MISSING config is genuinely optional,
+// while a PRESENT-but-unparseable one means the bindings are UNKNOWN and must not be reported as
+// none.
+test('a BOM-prefixed downloaded config.json keeps its data-source bindings', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlbom-'));
+  const mk = (id, bytes) => {
+    const d = path.join(root, id);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+    if (bytes !== undefined) fs.writeFileSync(path.join(d, 'config.json'), bytes);
+    return d;
+  };
+
+  const CONFIG = JSON.stringify({ dataSources: ['contoso_ticket'] });
+  mk('11111111-1111-1111-1111-111111111111', Buffer.from('\uFEFF' + CONFIG, 'utf8')); // BOM, as pac writes it
+  mk('22222222-2222-2222-2222-222222222222', Buffer.from(CONFIG, 'utf8'));            // plain
+  mk('33333333-3333-3333-3333-333333333333');                                          // no config at all
+  mk('44444444-4444-4444-4444-444444444444', Buffer.from('{ not json', 'utf8'));      // present, broken
+
+  // The fixture really is BOM-prefixed on disk, so this cannot pass by writing a plain file.
+  const first = fs.readFileSync(path.join(root, '11111111-1111-1111-1111-111111111111', 'config.json'));
+  assert.deepStrictEqual([...first.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+
+  const unreadable = [];
+  const pages = parseDownloadedPages(root, root, null, unreadable);
+  const byId = new Map(pages.map((x) => [x.pageId, x]));
+
+  assert.deepStrictEqual(byId.get('11111111-1111-1111-1111-111111111111').dataSources, ['contoso_ticket'],
+    'a BOM must not cost the page its bindings');
+  assert.deepStrictEqual(byId.get('22222222-2222-2222-2222-222222222222').dataSources, ['contoso_ticket'],
+    'and a plain config must still work');
+  assert.deepStrictEqual(byId.get('33333333-3333-3333-3333-333333333333').dataSources, [],
+    'a MISSING config is optional — no bindings, no complaint');
+
+  assert.deepStrictEqual(unreadable.map((u) => u.pageId), ['44444444-4444-4444-4444-444444444444'],
+    'only the present-but-broken config counts as unreadable — not the absent one, not the BOM one');
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// A prompt.txt carries the same BOM, and it becomes the rebuilt page's prompt.
+test('a BOM-prefixed downloaded prompt.txt does not keep the BOM in the prompt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlbom2-'));
+  const d = path.join(root, '55555555-5555-5555-5555-555555555555');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'page.tsx'), 'x', 'utf8');
+  fs.writeFileSync(path.join(d, 'prompt.txt'), Buffer.from('\uFEFFConversation with 1 prompts:', 'utf8'));
+  const pages = parseDownloadedPages(root, root, null, []);
+  assert.strictEqual(pages[0].prompt.charCodeAt(0) !== 0xFEFF, true, 'the prompt must not start with a BOM');
+  assert.strictEqual(pages[0].prompt, 'Conversation with 1 prompts:');
+  fs.rmSync(root, { recursive: true, force: true });
+});

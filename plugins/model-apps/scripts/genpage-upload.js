@@ -96,17 +96,23 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   const agentMessage = resolveText(flags, 'agent-message', 'agent-message-file', readFile);
   if (!agentMessage.ok) return emit(false, { error: agentMessage.error });
 
-  // An EMPTY prompt is refused rather than defaulted. `upload()` substitutes
-  // `Generative page <name>` for a blank prompt, which is reasonable when no prompt was supplied at
-  // all — but a caller who passed `--prompt-file` asked for THAT text, and silently deploying a
-  // generated placeholder instead breaks the provenance this whole path exists to protect. A file
-  // holding only whitespace, only a newline, or only a BOM is the realistic way this happens.
-  const promptGiven = typeof flags.prompt === 'string' || typeof flags['prompt-file'] === 'string';
-  if (promptGiven && !String(prompt.value || '').trim()) {
-    return emit(false, {
-      error: 'the prompt resolved to empty — refusing to deploy a generated placeholder in place of '
-        + 'the prompt you supplied. Check the file is not blank, newline-only, or BOM-only.',
-    });
+  // An EMPTY prompt or agent-message is refused rather than defaulted. `upload()` substitutes
+  // `Generative page <name>` for a blank prompt and `Authored by app-builder` for a blank agent
+  // message, which is reasonable when nothing was supplied at all — but a caller who passed
+  // `--prompt-file` / `--agent-message-file` asked for THAT text, and silently deploying generated
+  // provenance instead is the failure this path exists to prevent. A file holding only whitespace,
+  // only a newline, or only a BOM is the realistic way this happens.
+  for (const [label, inlineFlag, fileFlag, resolved] of [
+    ['prompt', 'prompt', 'prompt-file', prompt],
+    ['agent message', 'agent-message', 'agent-message-file', agentMessage],
+  ]) {
+    const given = typeof flags[inlineFlag] === 'string' || typeof flags[fileFlag] === 'string';
+    if (given && !String(resolved.value || '').trim()) {
+      return emit(false, {
+        error: `the ${label} resolved to empty — refusing to deploy generated text in place of the `
+          + `${label} you supplied. Check the file is not blank, newline-only, or BOM-only.`,
+      });
+    }
   }
 
   const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
@@ -121,6 +127,37 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   const cli = cliFactory(flags.env);
+
+  // An UPDATE must have a target that EXISTS. pac treats an unknown `--page-id` as a CREATE and
+  // returns the NEW page's id, and the wrapper's identity guard compares the returned id to the one
+  // it just used — which matches, so a typo'd or stale id silently produced a brand-new, UNPLACED
+  // page reported as `updated: true`. Live-reproduced: a UUID proven absent beforehand became a page.
+  //
+  // Checked here rather than inside `upload()` because this is where an ARBITRARY id enters: the
+  // standalone CLI takes it straight from the caller. /app-builder's page updates carry ids from its
+  // own manifest and reconcile, so they do not need an extra env-wide listing per page.
+  //
+  // Env-wide and including unpublished pages, because an app-scoped list is derived from the sitemap
+  // and would miss exactly the unplaced page this defect creates. Fail CLOSED on an unreadable
+  // listing: "cannot prove the target exists" must not license a write that might create a duplicate.
+  if (flags['page-id'] && typeof cli.enumerateEnvironment === 'function') {
+    const known = await cli.enumerateEnvironment();
+    if (!known || known.ok !== true) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} exists before updating it `
+          + `(${(known && known.error) || 'unknown reason'}) — refusing to upload, because pac treats an `
+          + 'unknown --page-id as a create and would make a new page.',
+      });
+    }
+    if (!(known.ids || []).includes(String(flags['page-id']).toLowerCase())) {
+      return emit(false, {
+        error: `page ${flags['page-id']} does not exist in this environment — refusing to "update" it. `
+          + 'pac would create a NEW unplaced page and report it as an update. Check the id, or drop '
+          + '--page-id to create a page deliberately.',
+      });
+    }
+  }
+
   try {
     const res = await cli.upload({
       appId: flags['app-id'],

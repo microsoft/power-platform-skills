@@ -225,7 +225,14 @@ function makeGenpageCli(env, deps = {}) {
       // stray newline can't truncate the Windows command line) and silently loses every line break on
       // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
       const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
-      const agentMessageText = agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by app-builder';
+      // The default applies only when NO agent message was supplied. An explicitly EMPTY one (a
+      // zero-byte --agent-message-file) used to be replaced by this fallback, so the deployed page
+      // carried provenance the caller never wrote — the same fabrication the empty-prompt check
+      // already refuses. `undefined` means "not supplied"; a supplied empty string is the caller's
+      // problem to fix, and is rejected by genpage-upload.js before reaching here.
+      const agentMessageText = agentMessage === undefined || agentMessage === null
+        ? 'Authored by app-builder'
+        : String(agentMessage);
       // Write both files ONCE, before the retry loop, into a unique temp dir. mkdtempSync's random
       // suffix keeps concurrent uploads from colliding on a fixed filename. UTF-8 because prompts carry
       // non-ASCII (pac reads these back as UTF-8). The try/finally guarantees the dir is removed on
@@ -342,6 +349,13 @@ function makeGenpageCli(env, deps = {}) {
     },
     list({ appId }) {
       return listPages(appId);
+    },
+    // Env-wide, INCLUDING unpublished pages — the only listing that can answer "does this page id
+    // exist at all", since an app-scoped list is derived from the sitemap and so misses a page that
+    // was created but never placed. Exposed so the standalone CLI can verify an update target
+    // without reimplementing pac listing, retry and output classification.
+    enumerateEnvironment() {
+      return enumerateEnv();
     },
     enumerate({ appId }) {
       return enumeratePages(appId);

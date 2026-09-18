@@ -47,9 +47,76 @@ function capturingCli() {
     calls,
     factory: () => ({
       upload: async (opts) => { calls.push(opts); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+      // Default: the requested page exists. Tests that care override this.
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
     }),
   };
 }
+
+// LIVE-REPRODUCED: pac treats an unknown `--page-id` as a CREATE and returns the NEW page's id, so
+// the wrapper's identity guard (returned id === requested id) matched and a UUID proven absent
+// beforehand became a brand-new, UNPLACED page reported as `updated: true`.
+test('an update of a page that does not exist is refused instead of creating one', async () => {
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push(o); return { pageId: 'NEW' }; },
+    enumerateEnvironment: async () => ({ ok: true, ids: ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'] }),
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /does not exist in this environment/);
+  assert.strictEqual(calls.length, 0, 'nothing may be uploaded against an absent target');
+});
+
+// Fail CLOSED: an unreadable listing is not permission to write.
+test('an unverifiable update target is refused rather than assumed present', async () => {
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push(o); return { pageId: 'NEW' }; },
+    enumerateEnvironment: async () => ({ ok: false, error: 'pac genpage list failed after 3 attempts' }),
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page/);
+  assert.strictEqual(calls.length, 0);
+});
+
+// CONTROL — an update whose target DOES exist still proceeds, and a CREATE is never gated on a
+// listing at all. Without these the rule above could be satisfied by refusing everything.
+test('an update of an existing page, and any create, still proceed', async () => {
+  const cli = capturingCli();
+  const upd = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'], cli);
+  assert.strictEqual(upd.ok, true, `an existing target must update: ${JSON.stringify(upd.payload)}`);
+  assert.strictEqual(upd.payload.updated, true);
+
+  const create = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--name', 'N', '--prompt', 'p'], cli);
+  assert.strictEqual(create.ok, true, 'a create must not be gated on an existence check');
+  assert.strictEqual(create.payload.updated, false);
+});
+
+// An explicitly EMPTY agent message deployed fabricated provenance ('Authored by app-builder'),
+// while an empty PROMPT was already refused — the same fabrication, unguarded on the other field.
+test('an explicitly empty agent-message file is refused rather than silently defaulted', async () => {
+  const d = tmp();
+  const af = path.join(d, 'agent.txt');
+  fs.writeFileSync(af, '', 'utf8');
+  const cli = capturingCli();
+  const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--name', 'N', '--prompt', 'p', '--agent-message-file', af], cli);
+  assert.strictEqual(r.ok, false, 'an empty agent message must not become fabricated provenance');
+  assert.match(r.payload.error, /resolved to empty/);
+  assert.strictEqual(cli.calls.length, 0);
+});
 
 function runMain(argv, cli) {
   return new Promise((resolve) => {
@@ -83,13 +150,13 @@ test('a downloaded conversation transcript survives an update by file', async ()
 
   const cli = capturingCli();
   const r = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx',
-    '--page-id', 'p1', '--prompt-file', pf, '--agent-message', 'Re-upload after edit'], cli);
+    '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt-file', pf, '--agent-message', 'Re-upload after edit'], cli);
 
   assert.strictEqual(r.ok, true);
   // \r\n is normalized by neither side: only a SINGLE trailing newline is stripped, so every
   // interior line break — which is what makes a transcript a transcript — is preserved.
   assert.strictEqual(cli.calls[0].prompt, TRANSCRIPT, 'the transcript must not be flattened');
-  assert.strictEqual(cli.calls[0].pageId, 'p1');
+  assert.strictEqual(cli.calls[0].pageId, '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d');
   assert.strictEqual(r.payload.updated, true, 'an upload carrying --page-id is an update');
 });
 

@@ -725,7 +725,13 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
 
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
 // pages[] entries with codeFile paths relative to `outDir`.
-function parseDownloadedPages(pagesRoot, outDir, nameById) {
+//
+// `unreadable` collects pages whose config.json EXISTS but could not be parsed. That distinction is
+// load-bearing: a MISSING config is genuinely optional, but a present-and-unparseable one means the
+// page's `dataSources` are unknown — and defaulting them to `[]` writes a spec that rebuilds the
+// page with NO table bindings while its source still queries the table. Silent, and only visible
+// once the rebuilt page returns nothing.
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   for (const entry of fs.readdirSync(pagesRoot)) {
@@ -734,9 +740,23 @@ function parseDownloadedPages(pagesRoot, outDir, nameById) {
     const tsx = path.join(dir, 'page.tsx');
     if (!fs.existsSync(tsx)) continue;
     let config = {};
-    try { config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')); } catch { /* optional */ }
+    const configPath = path.join(dir, 'config.json');
+    if (fs.existsSync(configPath)) {
+      try {
+        // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+        // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
+        // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
+        // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
+      } catch (e) {
+        // Present but unreadable — report it rather than inventing empty metadata.
+        if (unreadable) unreadable.push({ pageId: entry, reason: e && e.message ? e.message : String(e) });
+        config = {};
+      }
+    }
     let prompt = '';
-    try { prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').trim(); } catch { /* optional */ }
+    try { prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim(); } catch { /* optional */ }
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
@@ -1809,7 +1829,18 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       const id = String(p.pageId).toLowerCase();
       return [id, envNameById.get(id) || p.title || p.pageId];
     }));
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById);
+    const unreadableConfigs = [];
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs);
+    // A page whose config.json could not be read has UNKNOWN data sources, and the spec would claim
+    // it has none — rebuilding it with no table bindings while its source still queries the table.
+    // That is exactly the class of silent loss `--allow-lossy-download` exists to gate.
+    if (unreadableConfigs.length) {
+      const detail = unreadableConfigs.map((u) => `${u.pageId} (${u.reason})`).join(', ');
+      if (!allowLossy) {
+        return { ok: false, error: `could not read config.json for page(s): ${detail} — their data-source bindings are unknown, so refusing to write a spec that would silently rebuild them unbound. Re-run with --allow-lossy-download to accept the loss.` };
+      }
+      process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
+    }
 
     // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means pac
     // fetched a different set than the sitemap declares — rebuilding from this spec would silently
