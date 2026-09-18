@@ -6,7 +6,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const pluginRoot = path.resolve(__dirname, '../..');
-const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8');
+// Windows checkouts can use CRLF; the prose contracts should not depend on Git's EOL setting.
+const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
 const skill = (name) => read(`skills/${name}/SKILL.md`);
 const routing = read('shared/references/app-edit-routing.md');
 const removal = read('shared/references/data-source-removal.md');
@@ -19,6 +20,21 @@ function section(text, start, end) {
   assert.ok(startIndex >= 0, `Missing section: ${start}`);
   assert.ok(endIndex > startIndex, `Missing section end: ${end}`);
   return text.slice(startIndex, endIndex);
+}
+
+for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  test(`Markdown reader preserves the same contracts with ${name} line endings`, (t) => {
+    const file = 'shared/references/app-edit-routing.md';
+    const content = '# Routing\n\n## Direct requests\nfirst\nsecond\n\n## Orchestrated calls\n';
+    t.mock.method(fs, 'readFileSync', (filePath, encoding) => {
+      assert.equal(filePath, path.join(pluginRoot, file));
+      assert.equal(encoding, 'utf8');
+      return content.replace(/\n/g, ending);
+    });
+    const actual = read(file);
+    assert.equal(actual, content);
+    assert.match(section(actual, '## Direct requests', '## Orchestrated calls'), /first\nsecond/);
+  });
 }
 
 // These are instruction-contract tests, not live native-app or model evaluations.
