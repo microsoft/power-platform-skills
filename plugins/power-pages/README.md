@@ -7,6 +7,8 @@ modeling, authentication, Web API integration, and ALM—through conversational 
 **Supported creation models**: Enhanced data model declarative sites; React, Angular, Vue, and
 Astro static SPAs
 
+For an existing **classic, server-rendered Power Pages site**, `/style-site` provides a separate local Desktop styling workflow; it does not create a SPA or deploy changes.
+
 ## Installation
 
 ### From the marketplace
@@ -41,7 +43,9 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 41 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, classic-site authoring and styling, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+
+The `/practice-site-check` and `/add-button` descriptions below are retained for reference, but these skills are not bundled with the plugin and are excluded from this count.
 
 ### Site scaffolding and deployment
 
@@ -92,6 +96,48 @@ Runtime-tests a deployed, activated site using a real browser (via the bundled P
 - Network request verification for Web API / Server Logic / Cloud Flow endpoints
 - Console and network error capture
 - Screenshots on failure
+
+#### `/practice-site-check`
+
+> "Show me how a simple Power Pages skill works"
+
+Provides a small, read-only example for learning skill development. It recognizes both code sites and PAC-downloaded declarative sites, reports their local identity, and checks framework and compiled output details when they apply.
+
+### Classic site authoring
+
+These skills edit local PAC CLI-downloaded declarative Power Pages sites. They do not
+apply to React, Angular, Vue, or Astro code sites.
+
+#### `/author-webpage`
+
+Creates or modifies root and localized webpage records, routes, parent relationships,
+page-template assignments, localized content shells, and requested navigation links.
+
+#### `/author-webpage-content`
+
+Composes or modifies one localized `.webpage.copy.html` file from a resolved page design,
+using Design Studio-compatible sections, columns, text, images, buttons, videos, and
+spacers.
+
+#### `/author-content-snippet`
+
+Creates or modifies localized and language-neutral content snippets, translations,
+Text/HTML values, Liquid usage, and required caller migrations.
+
+#### `/author-web-file`
+
+Creates or modifies images, CSS, JavaScript, fonts, documents, and other site-served
+assets together with their PAC metadata.
+
+#### `/author-web-template`
+
+Creates or modifies reusable Liquid/HTML templates, inherited layouts, fragments, and
+explicitly requested callers or bindings.
+
+#### `/author-page-template`
+
+Creates or modifies page-template metadata, web-template-backed page layouts, rewrite
+templates, and explicitly requested webpage assignments.
 
 ### Data modeling
 
@@ -386,6 +432,40 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Offers auto-fixes with explicit per-fix user confirmation
 
 ### Polish
+
+#### `/add-button`
+
+> "Add a Register button to the applications page"
+
+Adds a Design Studio-compatible link button to one localized page in a PAC CLI-downloaded declarative site. Discovers the available pages, languages, sections, and columns; previews the exact placement and markup; and changes only the approved local `.webpage.copy.html` file.
+
+- Supports internal pages, external URLs, email, telephone, and explicit placeholders
+- Uses any user-provided button label
+- Does not upload or deploy the site
+
+#### `/style-site`
+
+> "Style the new contact section and existing list on my classic Power Pages site; show me the proposed changes first"
+
+Styles **classic, server-rendered sites only**, from a local download in **VS Code Desktop**. Reviews the exact CSS/source diff, scope and Studio-support warnings, then applies only an explicitly approved local change set. No HTML preview, local server or browser review is required.
+
+- Uses a lean **Inspect/propose → Approve → Apply → Independently verify → Report** workflow for broad declarations on one locale/section: at most 3 components/10 style groups, one existing stylesheet and guarded inline/class edits. Any raw `style.css`, global rules, nonempty `externalResources`/`importantReason`, new/shared files or broader scope uses expanded review
+- Reviews small-change scope together with the exact diff/hash; expanded work confirms scope first. Every revision needs host approval, with no final-completion confirmation or unattended approval
+- Supports styling new/existing native sections, text, buttons, images, navigation, forms/lists, and Liquid/web-template components already present in the local export
+- Optionally inspects a user-provided portal runtime URL, with permission, to discover rendered IDs/classes and compare them with local source; no form actions or automatic sign-in
+- Defaults to local authoring for **both listed and unlisted Studio properties**. The capability map describes Design-panel availability, not exclusive ownership. Unlisted/unknown/conditional support warnings remain visible; local values are not promised to populate native Studio controls
+- Authors general CSS properties/functions, font stacks, shadows, transforms, transitions, tokens and all gradient kinds through a pinned bundled parser, not a fixed skill allowlist. Raw stylesheets support responsive rules, animation/reduced motion, fonts, `@property` and layers; users need no npm installs
+- Edits the actual static inline declaration where appropriate; otherwise uses effective CSS in the locale sidecar or reusable Web File. Web File changes mention custom CSS priority above `theme.css` and below `portalbasictheme.css` as guidance, not a numeric `displayorder` constraint. Preserves inline importance; newly authored priority needs `importantReason` and expanded review, not blind escalation or DOM rewrites
+- Can explicitly remove an existing inline property with `null` and add scoped responsive/state CSS in the same approved plan. Null is inline-only, not a CSS value; other properties/markers/priority remain intact, and shorthand-removal effects require review
+- Keeps selectors in a verified component subtree by default. Explicit raw `global: true` themes need no fictitious source/class hook, but require expanded review of all matching elements and shared names within the placement scope
+- Requires exact external HTTPS CSS URLs in `externalResources`, with CSP/availability/licensing/privacy review; Web File URLs need no external declaration. No automatic resource/import fetching or browser/network prerequisite
+- Distinguishes exact-page, language-specific inline/CSS changes from a CSS Web File's parent-and-descendant scope; shared-template inline edits require explicit site scope, potentially affecting every page
+- Offers Studio instructions-only solely when explicitly requested (`owner: "studio"`, `handoffReason: "user-requested"`, `studioAction`). Native support alone never forces a handoff; ambiguous/unrepresentable local work stays blocked with a specific local next step
+- Preserves existing Bootstrap assets, default stylesheets, native behavior, and unrelated local edits
+- Independently validates local files, retaining source-level readability guidance and optional supplied-color contrast checks; actual desktop/mobile rendering, accessibility and Studio editability remain pending separate live verification
+- Uses exact source/context/hash guards on real rendered tags, including input/textarea/SVG and outer local iframe/embedded elements: only class/style attributes change, never embedded contents. Static tags/CSS values may span lines; whitespace/newline matching remains exact. Entity spelling may normalize only in the style attribute; other source stays intact. Declarations retain authored order and shorthand protection. Unknown parser semantics yield warnings, not blanket Power Pages rejection; malformed/injected/executable CSS fails
+- Leaves inspection/proposal/recovery artifacts outside the uploadable site tree; **no upload, publishing, activation, remote writes, or cache clearing**
+- Not for SPA/code sites, PCF/third-party internals, Bootstrap migration, or VS Code for the Web remote saves
 
 #### `/add-seo`
 

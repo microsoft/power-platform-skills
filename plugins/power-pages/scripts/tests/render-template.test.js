@@ -72,3 +72,43 @@ test('renderTemplate replaces an existing file only when overwrite is enabled', 
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('self-contained previews opt out without touching a neighboring icon', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-template-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const templatePath = path.join(tempDir, 'template.html');
+  const outputPath = path.join(tempDir, 'output.html');
+  const iconPath = path.join(tempDir, 'power-pages-icon.png');
+  fs.writeFileSync(templatePath, '<title>__TITLE__</title>');
+  fs.writeFileSync(iconPath, 'An unrelated existing file');
+  renderTemplate({ templatePath, outputPath, dataObject: { TITLE: 'Preview' }, requiredKeys: ['TITLE'], copyIcon: false });
+  assert.equal(fs.readFileSync(iconPath, 'utf8'), 'An unrelated existing file');
+  assert.equal(fs.readFileSync(outputPath, 'utf8'), '<title>Preview</title>');
+});
+
+test('exclusive output creation refuses a file that appears after the existence check', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-template-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const templatePath = path.join(tempDir, 'template.html');
+  const outputPath = path.join(tempDir, 'output.html');
+  fs.writeFileSync(templatePath, '<title>__TITLE__</title>');
+  fs.writeFileSync(outputPath, 'Concurrent content');
+  const exists = fs.existsSync;
+  t.mock.method(fs, 'existsSync', (file) => file === outputPath ? false : exists(file));
+  assert.throws(() => renderTemplate({
+    templatePath, outputPath, dataObject: { TITLE: 'Preview' }, requiredKeys: ['TITLE'], copyIcon: false,
+  }), { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(outputPath, 'utf8'), 'Concurrent content');
+});
+
+test('quiet rendering leaves result reporting to the coordinating command', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-template-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const templatePath = path.join(tempDir, 'template.html');
+  const outputPath = path.join(tempDir, 'output.html');
+  fs.writeFileSync(templatePath, '<title>__TITLE__</title>');
+  const log = t.mock.method(console, 'log', () => {});
+  renderTemplate({ templatePath, outputPath, dataObject: { TITLE: 'Preview' }, requiredKeys: ['TITLE'], copyIcon: false, quiet: true });
+  assert.equal(log.mock.callCount(), 0);
+  assert.equal(fs.readFileSync(outputPath, 'utf8'), '<title>Preview</title>');
+});

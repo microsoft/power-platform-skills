@@ -22,6 +22,8 @@ const PLACEHOLDER_RE = /__(?:(HTML|ATTR|JSON|RAW)_)?([A-Z][A-Z0-9_]*)__/g;
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
  * @param {boolean} [options.overwrite=false] - Replace an existing output file.
  * @param {boolean} [options.emitStatus=true] - Print the JSON completion line.
+ * @param {boolean} [options.copyIcon=true] - Copy the shared icon; disable for self-contained previews.
+ * @param {boolean} [options.quiet=false] - Let a composing command report its own structured result.
  */
 function renderTemplate({
   templatePath,
@@ -31,6 +33,8 @@ function renderTemplate({
   requiredKeys,
   overwrite = false,
   emitStatus = true,
+  copyIcon = true,
+  quiet = false,
 }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
@@ -95,7 +99,12 @@ function renderTemplate({
     process.exit(1);
   }
 
-  fs.writeFileSync(outputPath, result, 'utf8');
+  // Exclusive creation covers a file appearing between the existence check and
+  // this write. Status pages opt into replacement because they update one stable file.
+  fs.writeFileSync(outputPath, result, {
+    encoding: 'utf8',
+    flag: overwrite ? 'w' : 'wx',
+  });
 
   // Silently copy the shared Power Pages icon next to the rendered HTML so the
   // template's <img src="./power-pages-icon.png"> reference resolves when the
@@ -104,14 +113,14 @@ function renderTemplate({
   const iconSrc = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
   const iconDest = path.join(outputDir, 'power-pages-icon.png');
   try {
-    if (fs.existsSync(iconSrc)) {
+    if (copyIcon && fs.existsSync(iconSrc)) {
       fs.copyFileSync(iconSrc, iconDest);
     }
   } catch {
     // non-fatal
   }
 
-  if (emitStatus) {
+  if (emitStatus && !quiet) {
     console.log(JSON.stringify({ status: 'ok', output: outputPath }));
   }
 }
