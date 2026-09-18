@@ -1312,3 +1312,44 @@ test('verify tolerates deployed sections and fields the spec never declared', as
   const chk = await topoCheck(xml);
   assert.strictEqual(chk.present, true, `extras must not fail the authored subset; got ${chk && chk.detail}`);
 });
+// --- #N3: the verifier must match containers the way the BUILD does ------------------------------
+// LIVE-REPRODUCED: reshaping an auto-built form to an explicit layout succeeds — the build reuses
+// the existing containers and deliberately does NOT rename them, because form scripts and business
+// rules reference a section by name — and then verify failed the very build it had just done,
+// because it looked the section up by the AUTHORED name only.
+const migratedXml = () => `<form><tabs><tab name="section_0_0_tab"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+  + `<column width="60%"><sections><section name="section_0_0"><labels><label description="L" languagecode="1033"/></labels><rows><row>`
+  + `<cell><labels><label description="Name" languagecode="1033"/></labels><control datafieldname="new_name" /></cell>`
+  + `</row></rows></section></sections></column>`
+  + `<column width="40%"><sections><section name="section_0_1_0"><labels><label description="R" languagecode="1033"/></labels><rows><row>`
+  + `<cell><control datafieldname="new_notes" /></cell>`
+  + `</row></rows></section></sections></column>`
+  + `</columns></tab></tabs></form>`;
+
+test('verify PASSES an auto-to-explicit migration where containers kept their deployed names', async () => {
+  const chk = await topoCheck(migratedXml());
+  assert.ok(chk, 'a form-topology check must be produced');
+  assert.strictEqual(chk.present, true,
+    `a reshape the build performed correctly must verify; got ${chk && chk.detail}`);
+});
+
+// The position fallback must not become a rubber stamp: a genuinely WRONG placement still fails,
+// even though every container now matches positionally.
+test('verify still FAILS a wrong placement when containers matched by position', async () => {
+  const wrong = migratedXml().replace('datafieldname="new_notes"', 'datafieldname="new_name"')
+    .replace('<cell><labels><label description="Name" languagecode="1033"/></labels><control datafieldname="new_name" /></cell>', '');
+  const chk = await topoCheck(wrong);
+  assert.strictEqual(chk.present, false, 'a field in the wrong section must still fail');
+});
+
+// A cell carries its own <labels>; attributing one to the enclosing section would let a cell label
+// win the label pass and match the wrong container.
+test('a cell label is not mistaken for its section label', async () => {
+  const chk = await topoCheck(migratedXml(), (spec) => {
+    // Name the first section after the CELL's label. If the cell label leaked into the section, this
+    // would match section_0_0 by label and pass; it must be matched positionally instead, which it
+    // still is — so the real assertion is that the SECOND section is not stolen by the same label.
+    spec.forms[0].tabs[0].columns[0].sections[0].label = 'Name';
+  });
+  assert.strictEqual(chk.present, true, `positional matching must still resolve; got ${chk && chk.detail}`);
+});

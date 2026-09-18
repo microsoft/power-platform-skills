@@ -75,6 +75,7 @@ const {
   cellFitsInRow,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
+const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1841,37 +1842,6 @@ async function runSdkBuild(spec, opts = {}) {
   //
   // `skip` hides containers the weaker passes must not claim. Only NAME may match them, because a
   // name is positive evidence and a label/position is not.
-  const matchContainer = (list, want, wantIndex, opts) => {
-    const items = list || [];
-    const claimed = (opts && opts.claimed) || null;
-    const skip = (opts && opts.skip) || (() => false);
-    const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
-    const free = (i) => !claimed || !claimed.has(i);
-    let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
-    if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
-    if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
-    return idx < 0 ? null : { index: idx, item: items[idx] };
-  };
-
-  // A section the ENGINE owns rather than one the author laid out: a sub-grid host, or the
-  // notes/timeline section. `addSubgrids` appends one such section per authored sub-grid on EVERY
-  // layout (auto included), and `compileFormIntent` appends the notes section — so they sit in the
-  // same `sections[]` array as the author's own, just after them.
-  //
-  // They must be invisible to the LABEL and POSITION passes. Otherwise, as soon as an explicit
-  // layout declares as many sections as the index of the first appended one, the positional fallback
-  // claims the sub-grid: it gets relabelled to the author's section title, bound field controls are
-  // injected into the row holding the grid control, and the author's section is never created. The
-  // build is green and a rebuild converges on the same wrong shape, so nothing downstream reports it.
-  //
-  // Detected structurally (every cell carries a control with no `fieldName`) rather than by name, so
-  // it holds for a sub-grid whose section the author renamed in Maker. An EMPTY section has no cells
-  // and is deliberately NOT engine-owned — it stays matchable so a vacated section can be reused.
-  const isEngineOwnedSection = (s) => {
-    const cells = ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
-    return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
-  };
-
   // Send only the keys that actually differ, so a rebuild that changes nothing issues no writes.
   const diffPatch = (live, want, keys) => {
     const patch = {};

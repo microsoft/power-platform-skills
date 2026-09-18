@@ -5,6 +5,7 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
+const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
@@ -262,7 +263,6 @@ async function verifySpec(spec, read, opts = {}) {
       }
 
       const deployed = parseFormTopology(xml);
-      const byTab = new Map(deployed.map((t) => [String(t.name || '').toLowerCase(), t]));
       // Where the DEPLOYED form actually placed each bound field, keyed by section name.
       const placedIn = new Map();
       for (const t of deployed) for (const c of t.columns || []) for (const sec of c.sections || []) {
@@ -270,34 +270,47 @@ async function verifySpec(spec, read, opts = {}) {
       }
 
       const problems = [];
+      // Match containers the way the BUILD does — name, then label, then position — using the same
+      // function it uses. A label- or position-matched container deliberately KEEPS its deployed
+      // name (form scripts and business rules reference section names), so looking one up by the
+      // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
+      // failed a build that had done exactly what was asked. Live-reproduced.
+      const claimedTabs = new Set();
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
-        const got = byTab.get(tabName);
-        if (!got) { problems.push(`tab '${tabName}' is absent`); return; }
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label }, ti, { claimed: claimedTabs });
+        if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
+        claimedTabs.add(tabHit.index);
+        const got = tabHit.item;
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
         }
         authoredColumns.forEach((col, ci) => {
           const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
-          const deployedSections = new Set(((got.columns || [])[ci] || {}).sections
-            ? ((got.columns || [])[ci].sections || []).map((x) => String(x.name || '').toLowerCase())
-            : []);
+          const deployedSections = ((got.columns || [])[ci] || {}).sections || [];
+          const claimedSections = new Set();
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
-            if (!deployedSections.has(secName)) {
+            const secHit = matchContainer(deployedSections, { name: secName, label: sec.label }, si,
+              { claimed: claimedSections, skip: isEngineOwnedSection });
+            if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;
             }
+            claimedSections.add(secHit.index);
+            // Fields are compared against the section that was MATCHED, not the authored name — the
+            // deployed section legitimately keeps its own name.
+            const deployedSecName = String(secHit.item.name || '').toLowerCase();
             for (const entry of (sec.fields || [])) {
               const fieldName = typeof entry === 'string' ? entry : (entry && entry.name);
               if (!fieldName) continue;
               const fl = String(fieldName).toLowerCase();
               const where = placedIn.get(fl);
               if (where === undefined) problems.push(`field '${fl}' is not placed on the deployed form`);
-              else if (where !== secName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
+              else if (where !== deployedSecName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
             }
           });
         });
@@ -1172,7 +1185,9 @@ function parseFormTopology(xml) {
   const s = String(xml || '');
   const tabs = [];
   let tab = null, column = null, section = null;
-  const re = /<(\/?)(tab|column|section|cell|control)\b([^>]*?)(\/?)>/gi;
+  // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
+  let inCell = false;
+  const re = /<(\/?)(tab|column|section|cell|control|label)\b([^>]*?)(\/?)>/gi;
   const attr = (raw, name) => {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
@@ -1187,11 +1202,23 @@ function parseFormTopology(xml) {
       if (tag === 'tab') { tab = null; column = null; section = null; }
       else if (tag === 'column') { column = null; section = null; }
       else if (tag === 'section') section = null;
+      else if (tag === 'cell') inCell = false;
       continue;
     }
     if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
-    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
+    else if (tag === 'section' && column) { section = { name: attr(raw, 'name'), label: undefined, fields: [] }; column.sections.push(section); if (selfClosing) section = null; }
+    else if (tag === 'cell') { inCell = !selfClosing; }
+    // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
+    // not an attribute. The BUILD matches containers name -> label -> position, so without this the
+    // verifier can never make the label pass and would disagree with a label-matched reshape.
+    else if (tag === 'label' && !inCell) {
+      const d = attr(raw, 'description');
+      if (d !== undefined) {
+        if (section && section.label === undefined) section.label = d;
+        else if (!section && tab && tab.label === undefined) tab.label = d;
+      }
+    }
     else if (tag === 'control' && section) {
       // Only BOUND fields. A control with no `datafieldname` is a sub-grid, the notes timeline or a
       // web resource — engine-owned, never something the spec's field list claims to place.
