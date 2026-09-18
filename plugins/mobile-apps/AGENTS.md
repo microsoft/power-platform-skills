@@ -98,6 +98,11 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     [`shared/references/data-source-removal.md`](shared/references/data-source-removal.md)
     for shared-reference safety, inventory/offline reconciliation, and no-op
     detection; successful exit alone is insufficient.
+18. **Seed scope is not the schema inventory** — Orchestrated `/add-sample-data`
+    calls pass an approved `--tables` allowlist and the retiring-table exclusions.
+    Lookup fanout, prototype seeds, media uploads, and retries cannot widen that
+    scope. Preserve transitional manifest entries until verified removal; never
+    prune the inventory merely to steer seeding.
 
 ## Telemetry
 

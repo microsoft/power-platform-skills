@@ -1173,6 +1173,10 @@ record-count checks and standard-system-table exclusions still apply.
 During an edit with pending removals, preserve retiring entries until the
 removal branch verifies that their app bindings/services are gone. The owner
 then reconciles the final inventory; a shortened plan alone is not cleanup.
+Return the actual created/extended/reused table sets for this invocation to the
+owner; historical manifest status is not `createdThisEdit`. Seeding must use an
+explicit approved allowlist excluding retirements, never this transitional
+inventory as its insertion scope.
 
 ### Step 7 — Inspect generated files
 
@@ -1321,11 +1325,17 @@ After printing the summary, **offer one-click sample-data seeding** — but only
 
 - **For a valid scoped orchestrator handoff with `--skip-planning`**: skip the
   prompt. The orchestrator invokes `/add-sample-data` separately.
-- **Otherwise (manual invocation)**, if the manifest contains any tables, ask:
+- **Otherwise (manual invocation)**, propose exact verified, non-retiring seed
+  targets from this operation and a count policy; do not select every table
+  just because it appears in the manifest. Ask:
 
-  > "Seed <N> tables with sample records so the app shows real-looking data on first launch? (yes / no — default: yes)"
+  > "Seed these <N> tables with sample records using the proposed counts? (yes / no)"
 
-  Default to "yes" so empty input auto-proceeds. On "yes", invoke `/add-sample-data`. On "no", print "→ Skipped sample data. Run `/add-sample-data` later to populate." and stop.
+  Only an explicit yes approves seeding. On no/cancel/dismissal, stop without
+  inserts; empty input is not consent. On yes, invoke `/add-sample-data` with the
+  same absolute `--working-dir`, `--tables "<approved-logical-names>"`, and
+  `--exclude-tables "<retiring-logical-names-or-empty>"`. Carry the specific
+  approval forward; do not broaden it if lookups need additional parents.
 
 ## Key Rules
 

@@ -27,20 +27,52 @@ Combined orchestrator for standalone data source planning. Designs the Dataverse
 
 ## Workflow
 
-1. Verify project & auth → 2. Design data model → 3. Plan connectors → 4. Combined approval → 5. Execute data model → 6. Execute connectors → 7. Summary
+1. Resolve project root & verify auth → 2. Design data model → 3. Plan connectors → 4. Combined approval → 5. Execute additions/refreshes → 6. Execute connectors → 6.25 Retire approved bindings → 6.5 Reconcile offline profile → 7. Reconcile inventory & summarize
 
 ---
 
 ### Phase 1 — Verify Project & Auth
 
-Confirm we're inside a Power Apps mobile app:
+Resolve one absolute `working_dir` before reading project files or discovering
+the environment:
+
+- For a nested call, inherit the owner's absolute `working_dir`. If
+  `--working-dir` is also supplied, both must resolve to the same directory;
+  a mismatch returns `NEEDS_CONTEXT` before any project or cloud work.
+- For a direct call, resolve an explicit `--working-dir` against the invocation
+  directory. Only a direct call without an override may use that invocation
+  directory as its project root.
+- Require the selected directory to exist, normalize it to one absolute path,
+  and retain it for this invocation. A missing nested owner path is an error:
+  never fall back to the shell's current directory or search neighboring apps.
+
+All relative app paths below, including diagram inputs, `native-app-plan.md`,
+`_dm_section.md`, `.datamodel-manifest.json`, `offline-profile.json`, and
+`memory-bank.md`, are relative to this resolved root, not a later tool's cwd.
+Use absolute paths with file tools. Begin every shell invocation that reads or
+writes app-local files with `cd "<working_dir>" || exit 1`; shell state does not
+carry across tool calls.
+
+Confirm the selected root is a Power Apps mobile app:
 
 ```bash
-test -f power.config.json && echo "OK" || echo "ERROR: not a mobile app — run /create-mobile-app first"
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd "<working_dir>" || exit 1
+if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
+  printf '%s\n' 'ERROR: selected working directory is not an initialized mobile app' >&2
+  exit 1
+fi
+environment_id="$(node -p "require('./power.config.json').environmentId || ''")" || exit 1
+if [ -z "$environment_id" ]; then
+  printf '%s\n' 'ERROR: selected app has no environmentId' >&2
+  exit 1
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id"
 ```
 
-Capture the **environment URL**, **environment ID**, **tenant ID**, and **organization ID** for Phase 5.
+Stop on failure; do not switch directories or re-scaffold. Capture the
+**environment URL**, **environment ID**, **tenant ID**, and **organization ID**
+for this root for Phase 5. Pass this same absolute root in every planner/skill
+handoff and on retries.
 
 ### Phase 2 — Design Data Model
 
@@ -92,7 +124,8 @@ Task: mobile-app:data-model-architect
 Prompt:
   You are the data-model-architect agent for a Power Apps mobile app.
   Requirements: <$ARGUMENTS or ask the user what the app does>
-  Working directory: <cwd>
+  Working directory: <working_dir>
+  Output proposal: <working_dir>/_dm_section.md
   Plugin root: ${PLUGIN_ROOT}
 
   Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
@@ -160,6 +193,11 @@ Approve both to proceed with execution?
 - **Change connectors** → loop back to Phase 3, then re-present Phase 4
 - **Cancel** → stop without applying the proposed plan or data-source mutations.
 
+Save the accepted proposal into `<working_dir>/native-app-plan.md`; scratch
+`_dm_section.md` is not a second source of truth. Do not reuse operation manifests
+or approval receipts bound to the previous plan. The verified materialized
+manifest is updated after execution/verification, not by copying proposed rows.
+
 ### Phase 5 — Execute Data Model
 
 **Telemetry checkpoint: `apply_dataverse_schema`**
@@ -175,12 +213,13 @@ Invoke skill: /add-dataverse
 Context:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: setup-datamodel
+  working_dir: <working_dir>
   phase: implementation
   approved_scope: <approved Data Model operations and answers>
 
 Arguments:
-  --working-dir <cwd>
-  --plan-section native-app-plan.md#data-model
+  --working-dir "<working_dir>"
+  --plan-section "<working_dir>/native-app-plan.md#data-model"
   --skip-planning
 ```
 
@@ -208,11 +247,12 @@ Invoke skill: /add-connector
 Context:
   MOBILE_APP_ORCHESTRATING=1
   orchestrator: setup-datamodel
+  working_dir: <working_dir>
   phase: implementation
   approved_scope: <approved connector row and answers>
 
 Arguments:
-  --working-dir <cwd>
+  --working-dir "<working_dir>"
   --connector <api-name>
 ```
 
@@ -222,7 +262,8 @@ Run sequentially. Skip if `## Connectors` is "None".
 
 For each explicitly approved retirement, invoke the matching leaf with
 `--remove`, `MOBILE_APP_ORCHESTRATING=1`, `orchestrator: setup-datamodel`,
-`phase: implementation`, the absolute `working_dir`, and its `approved_scope`.
+`phase: implementation`, `working_dir: <working_dir>`, the argument
+`--working-dir "<working_dir>"`, and its `approved_scope`.
 Follow [data-source-removal.md](../../shared/references/data-source-removal.md).
 This standalone data-only flow does not edit consumers: if any remain, stop and
 return their integration work to `/edit-app` instead of breaking them.
@@ -238,12 +279,23 @@ If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Prof
 Run the local, no-network delta check:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd "<working_dir>" || exit 1
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
 Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
 
+These offline helpers also inherit the same absolute `working_dir`; no new root
+discovery is permitted during reconciliation.
+
 ### Phase 7 — Summary
+
+Before success, reconcile each affected plan section with this project's verified
+output and refresh the Generated Services snapshot. For Dataverse changes, also
+reconcile `.datamodel-manifest.json`, retaining a valid empty inventory after
+removing the last Dataverse binding. Connector-only work without Dataverse does
+not require or create a Dataverse manifest. Record partial execution or unresolved
+removals in memory-bank and return a non-success status rather than claiming the plan is fully applied.
 
 ```
 ✅ Data sources set up

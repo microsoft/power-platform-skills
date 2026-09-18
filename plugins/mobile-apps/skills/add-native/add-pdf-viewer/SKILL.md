@@ -33,9 +33,23 @@ node -e "const p=require('./package.json'); const m='@microsoft/power-apps-nativ
 
 If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Version 0.2.9+ must already be part of the app's native build.
 
+### 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the PDF viewer row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/pdfViewer.ts` for `openHttpsPdf`, `PdfViewerResult`, requested
+options/actions, and the actual HTTPS/local-file behavior against installed
+version 0.2.9+. An HTTPS-only implementation cannot satisfy a requested local
+`file://` preview. Check invalid URI and missing-native-module paths, not just
+exports; an incompatible artifact outside approval returns `NEEDS_CONTEXT` to
+the owner, or asks standalone.
+
 ### 3. Write or verify `src/native/pdfViewer.ts`
 
-Create `src/native/pdfViewer.ts` if it does not exist. If it already exists, inspect it and patch only if it violates the supported URI rules or throws instead of returning a result.
+Apply Step 2a's decision for `src/native/pdfViewer.ts`: create when requested and
+missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom code, exports, and callers; do not overwrite from the example.
 
 The wrapper MUST:
 
@@ -95,6 +109,8 @@ export async function openHttpsPdf(
 
 ### 4. Use the wrapper
 
+Integration guidance for the owner; do not edit screens in this helper.
+
 Screens import the wrapper, not the native package directly:
 
 ```ts
@@ -136,7 +152,10 @@ Notes:
 npx tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix only in-scope helper errors, then execute the shared compatibility contract's
+Step 4. Recheck requested inputs/options/actions, invalid URI rejection, missing
+native module, and viewer failures. Type-check success alone is insufficient;
+do not fix screen/generated files.
 
 ### 6. Native rebuild note
 
@@ -153,6 +172,10 @@ import NativePdfViewerExtension from "@microsoft/power-apps-native-pdf-viewer";
 Do not wire Companion PCF or `NativePdfViewerExtension`. In Power Apps native code apps, use the native React Native API above.
 
 ### 8. Summary
+
+Return the shared compatibility result and actual created/updated/reused paths
+before this summary. Update memory-bank only after success, and leave final
+updates to the owner when orchestrated.
 
 Tell the user:
 

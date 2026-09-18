@@ -1634,7 +1634,7 @@ npx tsc --noEmit
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
-### Step 8.5 — Seed sample data (auto)
+### Step 8.5 — Seed sample data (approved scope)
 
 Before sample data or offline setup, require the materialized table inventory
 from `/add-dataverse` Step 6d, including verified reused tables. Compare its
@@ -1652,18 +1652,38 @@ produce a usable .datamodel-manifest.json` with the remaining verification
 failure. Do not seed or offer offline setup from unverified table names.
 
 **Print before starting:**
-> "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
+> "→ [Step 8.5/13] Confirming seed scope, then checking record counts for approved tables."
 
-Invoke `/add-sample-data` after Step 8. This step is **not optional** — every fresh-scaffolded app must have data to render on first launch:
+Run this phase after Step 8 for Dataverse apps. Derive the seed candidate list
+from the approved service requirements and verified materialized inventory,
+excluding standard system tables by default. Include reused custom tables when
+the approved app needs sample data from them. Do not infer insertion permission
+from `status: new`, record counts, or manifest presence. If the initial approval
+did not cover the exact seed set and count/media policy, obtain that approval
+before invoking; an empty or declined scope skips seeding without cloud writes.
 
 ```
 Invoke skill: /add-sample-data
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: create-mobile-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved seed tables and count/media policy>
+  retiring_tables: <empty for fresh creation>
+
 Arguments:
-  --working-dir <working_dir>
+  --working-dir "<working_dir>"
+  --tables "<approved-seed-table-logical-names>"
 ```
 
-`/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
+`/add-sample-data` validates this explicit allowlist against
+`.datamodel-manifest.json` before per-table discovery, then checks row counts
+only for approved targets. It skips tables with enough rows and seeds the
+eligible targets in dependency order. Inserted GUIDs are tracked in
+`memory-bank.md` for idempotent re-runs. Missing parents cannot widen the seed
+scope without returning to the owner for approval.
 
 If the seeding step fails (network drop, permission error, etc.), surface the
 failure but continue to the offline-profile phase — the app is still usable,

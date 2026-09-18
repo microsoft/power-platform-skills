@@ -147,6 +147,13 @@ the existing history; this inventory update is not server schema deletion.
 Do not reuse old plan-bound operation manifests or approval receipts to recreate
 retired sources.
 
+During a mixed add/remove edit, the transitional manifest can still contain a
+retiring table. Do not seed it: the owner passes `/add-sample-data` an explicit
+approved seed-table allowlist plus retirement exclusions. Dependency fanout,
+prototype rows, media uploads, and retries cannot widen that set. Reconcile the
+final inventory only after verifying the CLI removal, not by pruning entries to
+control seed selection.
+
 Check `offline-profile.json` before retiring an offline dependency. The existing
 `offline-profile-delta.js` detects additions, not excess profile tables; `in-sync`
 does not prove removal reconciliation. Profile items/associations can be shared
