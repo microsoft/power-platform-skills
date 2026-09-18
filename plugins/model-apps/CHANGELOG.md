@@ -41,6 +41,13 @@ downloads that round-trip Choice columns.
   survives. `rowspan` is rejected unless it is the last field in its section ([#581]).
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
+- **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
+  row was not re-packed, leaving three columns of content in a two-column section. Displaced fields
+  move down rather than to the bottom of the section; a span that still fits writes nothing.
+- **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
+  containers and deliberately does not rename them (form scripts and business rules reference
+  section names), but verify looked them up by the authored name — so a section it had just reused
+  read as "absent". Both sides now share one matcher.
 - **The form wireframe shows authored `hidden` and `readOnly` state** ([#591]), so the approval gate
   no longer draws every field as visible and editable.
 - **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). A
@@ -53,6 +60,10 @@ downloads that round-trip Choice columns.
   reported it as an update.
 - **An explicitly empty prompt or agent message is refused, not replaced** with generated text.
   Omitting the value still gets the default, on both `/genpage` and `/app-builder`.
+- **A `/genpage` update no longer silently unbinds the page.** `pac` rewrites the binding list from
+  the flags it is given, so omitting `--data-sources` persisted `[]` while the source went on
+  querying the table. An update now preserves the page's existing bindings; `--clear-data-sources`
+  unbinds deliberately.
 - **`/genpage` Phase 1 is reachable again** ([#541]) — its interactive flow no longer runs inside a
   headless subagent.
 - **A downloaded page keeps its table bindings.** `pac` writes `config.json` with a BOM, which
