@@ -46,8 +46,16 @@ Create these tasks:
 
 6. Inspect Git status and
    `<PROJECT_ROOT>/docs/customize-declarative-site/current-plan.json` when present. Do not require
-   the plan for a targeted manual edit, but use only this canonical approved plan to explain
-   planned versus actual local changes.
+   the plan for a targeted manual edit. Before using it, validate the current plan, execution
+   receipt, website identity, and project-relative site root:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/update-customize-declarative-site-execution.js" \
+     --projectRoot "<PROJECT_ROOT>" --action status \
+     --websiteRecordId "<WEBSITE_RECORD_ID>" --siteRoot "<PROJECT_RELATIVE_SITE_ROOT>"
+   ```
+
+   Ignore no mismatch: a stale or copied plan must not describe the selected site.
 
 ## Phase 2: Verify PAC and authentication
 
@@ -71,11 +79,13 @@ Show:
 Project type: Declarative Power Pages site
 Site name: <site name>
 Website record ID: <website record id>
-Data model: <Enhanced|Standard>
+Data model: Pending verification
 Local site root: <site root>
 Environment URL: <environment URL>
 Environment ID: <environment ID>
 ```
+
+The selected environment has not been queried yet, so do not show Enhanced or Standard here.
 
 Reuse the parent deployment environment consent semantics:
 
@@ -88,9 +98,12 @@ Use `AskUserQuestion`: **Deploy to this environment / Choose another environment
 After a switch, rerun `pac auth who` and show the resolved values again.
 
 Run `pac pages list -v` and match the exact website record ID. Use that exact row to establish the
-authoritative data model, which must be `Enhanced` or `Standard`. Verify its site name and model
-agree with any local/invocation evidence. Stop on no match, duplicate/conflicting identity,
-unsupported model, or mismatch. Upload is not a conversion mechanism.
+authoritative data model, which must be `Enhanced` or `Standard`. Verify its site name agrees with
+the downloaded identity. Stop on no match, duplicate/conflicting identity, unsupported model, or
+mismatch. Upload is not a conversion mechanism.
+
+After this lookup, show the resolved deployment summary again with the authoritative model. Use
+that resolved summary for change review and final upload approval.
 
 ## Phase 4: Review the upload
 
@@ -103,6 +116,9 @@ Summarize the local diff by declarative component category:
 - navigation and language records;
 - styling/CSS;
 - other metadata.
+
+Review `docs/customize-declarative-site/**` separately as orchestration evidence. It is not a PAC
+component category, must not be presented as uploadable metadata, and does not expand upload scope.
 
 Include uncommitted files, validation warnings, the explicit model argument, and the statement
 that upload changes the already-live site. Unexpected component categories or unrelated dirty

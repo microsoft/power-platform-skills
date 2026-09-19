@@ -6,57 +6,68 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const scriptPath = path.join(__dirname, '..', 'promote-customize-declarative-site-plan.js');
+const fixturePath = path.join(
+  __dirname,
+  'fixtures',
+  'customize-declarative-site-plan.json'
+);
 
-function writeReview(root, name, summary) {
+function writeReview(root, name, mutate = (plan) => plan) {
   const reviewRoot = path.join(root, name);
   fs.mkdirSync(reviewRoot, { recursive: true });
+  const plan = mutate(JSON.parse(fs.readFileSync(fixturePath, 'utf8')));
   const data = path.join(reviewRoot, 'plan.json');
-  const html = path.join(reviewRoot, 'plan.html');
-  fs.writeFileSync(data, JSON.stringify({ schemaVersion: 1, summary }), 'utf8');
-  fs.writeFileSync(html, `<html><body>${summary}</body></html>`, 'utf8');
-  fs.writeFileSync(path.join(reviewRoot, 'power-pages-icon.png'), `icon-${summary}`, 'utf8');
-  return { data, html };
+  fs.writeFileSync(data, JSON.stringify(plan, null, 2), 'utf8');
+  return { data, plan };
 }
 
 function promote(projectRoot, review) {
   return spawnSync(
     process.execPath,
-    [
-      scriptPath,
-      '--projectRoot',
-      projectRoot,
-      '--data',
-      review.data,
-      '--html',
-      review.html,
-    ],
+    [scriptPath, '--projectRoot', projectRoot, '--data', review.data],
     { encoding: 'utf8' }
   );
 }
 
-test('promotes the first approved plan to canonical current paths', () => {
+test('publishes validated JSON, rendered HTML, hashes, and an execution receipt', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
-  const review = writeReview(root, 'review-one', 'First approved plan');
+  const review = writeReview(root, 'review-one');
   const result = promote(root, review);
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
   const planRoot = path.join(root, 'docs', 'customize-declarative-site');
   assert.deepEqual(
     JSON.parse(fs.readFileSync(path.join(planRoot, 'current-plan.json'), 'utf8')),
-    { schemaVersion: 1, summary: 'First approved plan' }
+    review.plan
   );
-  assert.match(fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8'), /First approved/);
-  assert.equal(
-    fs.readFileSync(path.join(planRoot, 'power-pages-icon.png'), 'utf8'),
-    'icon-First approved plan'
+  assert.match(
+    fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8'),
+    /Contoso Event Portal/
   );
-  assert.equal(fs.existsSync(path.join(planRoot, 'history')), false);
+  const execution = JSON.parse(
+    fs.readFileSync(path.join(planRoot, 'current-execution.json'), 'utf8')
+  );
+  assert.equal(execution.runId, output.runId);
+  assert.equal(execution.planHash, output.planHash);
+  assert.match(execution.artifactHashes.planSha256, /^[a-f0-9]{64}$/);
+  assert.match(execution.artifactHashes.htmlSha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(
+    execution.operations.map(({ id, status }) => ({ id, status })),
+    [
+      { id: 'add-speaker-images', status: 'pending' },
+      { id: 'create-speakers-page', status: 'pending' },
+    ]
+  );
 });
 
-test('archives the previous approved plan before replacing current paths', () => {
+test('archives the previous plan, rendered HTML, execution receipt, and icon', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
-  const first = writeReview(root, 'review-one', 'First approved plan');
-  const second = writeReview(root, 'review-two', 'Second approved plan');
+  const first = writeReview(root, 'review-one');
+  const second = writeReview(root, 'review-two', (plan) => {
+    plan.summary = 'Second approved plan';
+    return plan;
+  });
 
   assert.equal(promote(root, first).status, 0);
   const result = promote(root, second);
@@ -66,27 +77,59 @@ test('archives the previous approved plan before replacing current paths', () =>
   const historyEntries = fs.readdirSync(path.join(planRoot, 'history'));
   assert.equal(historyEntries.length, 1);
   const archived = path.join(planRoot, 'history', historyEntries[0]);
-  assert.deepEqual(
-    JSON.parse(fs.readFileSync(path.join(archived, 'plan.json'), 'utf8')),
-    { schemaVersion: 1, summary: 'First approved plan' }
-  );
-  assert.match(fs.readFileSync(path.join(archived, 'plan.html'), 'utf8'), /First approved/);
-  assert.equal(
-    fs.readFileSync(path.join(archived, 'power-pages-icon.png'), 'utf8'),
-    'icon-First approved plan'
-  );
+  for (const file of ['plan.json', 'plan.html', 'execution.json', 'power-pages-icon.png']) {
+    assert.equal(fs.existsSync(path.join(archived, file)), true, file);
+  }
   assert.match(fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8'), /Second approved/);
 });
 
-test('refuses to replace an incomplete canonical plan pair', () => {
+test('rejects a syntactically valid but schema-invalid plan before replacing current state', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
-  const review = writeReview(root, 'review-one', 'Approved plan');
-  const planRoot = path.join(root, 'docs', 'customize-declarative-site');
-  fs.mkdirSync(planRoot, { recursive: true });
-  fs.writeFileSync(path.join(planRoot, 'current-plan.json'), '{}', 'utf8');
+  const valid = writeReview(root, 'review-one');
+  assert.equal(promote(root, valid).status, 0);
+  const before = fs.readFileSync(
+    path.join(root, 'docs', 'customize-declarative-site', 'current-plan.json'),
+    'utf8'
+  );
 
-  const result = promote(root, review);
+  const invalid = writeReview(root, 'review-two', () => ({ schemaVersion: 1, summary: 'Invalid' }));
+  const result = promote(root, invalid);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Canonical plan is incomplete/);
-  assert.equal(fs.existsSync(path.join(planRoot, 'current-plan.html')), false);
+  assert.match(result.stderr, /Missing required plan keys/);
+  assert.equal(
+    fs.readFileSync(
+      path.join(root, 'docs', 'customize-declarative-site', 'current-plan.json'),
+      'utf8'
+    ),
+    before
+  );
+});
+
+test('does not accept an independently supplied HTML document', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
+  const review = writeReview(root, 'review-one');
+  const unrelatedHtml = path.join(root, 'unrelated.html');
+  fs.writeFileSync(unrelatedHtml, '<html>unrelated</html>', 'utf8');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      scriptPath,
+      '--projectRoot',
+      root,
+      '--data',
+      review.data,
+      '--html',
+      unrelatedHtml,
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.doesNotMatch(
+    fs.readFileSync(
+      path.join(root, 'docs', 'customize-declarative-site', 'current-plan.html'),
+      'utf8'
+    ),
+    /unrelated/
+  );
 });

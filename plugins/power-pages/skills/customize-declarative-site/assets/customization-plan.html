@@ -54,6 +54,11 @@ h2{font-size:27px;letter-spacing:-.025em;margin:0 0 6px}
 .operation:not(:last-child):after{content:"";position:absolute;left:28px;top:46px;bottom:-16px;width:1px;background:var(--line)}
 .op-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
 .chip{font:600 11px var(--mono);padding:4px 8px;border-radius:7px;background:#f3f0f5;color:#514957}
+.op-details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.op-details summary{cursor:pointer;color:var(--plum);font-weight:650}
+.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.detail{min-width:0;background:#fbfafc;border:1px solid var(--line);border-radius:10px;padding:12px}
+pre{margin:7px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 var(--mono);color:#3f3744}
 .warning{background:var(--amber-soft);border-color:#e6c47f;color:#663d00}
 .check{display:flex;gap:11px;align-items:flex-start}
 .check-mark{width:20px;height:20px;border:2px solid var(--cyan);border-radius:6px;flex:0 0 auto;margin-top:1px}
@@ -61,7 +66,7 @@ h2{font-size:27px;letter-spacing:-.025em;margin:0 0 6px}
 .deploy strong{font-size:16px}
 .empty{color:var(--muted);font-style:italic}
 code{font-family:var(--mono);font-size:12px;background:#f1edf3;padding:2px 5px;border-radius:5px;overflow-wrap:anywhere}
-@media(max-width:780px){.shell{grid-template-columns:1fr}.nav{position:static;display:flex;overflow:auto}.nav button{white-space:nowrap;width:auto}.facts{grid-template-columns:1fr}.masthead{padding-bottom:28px}}
+@media(max-width:780px){.shell{grid-template-columns:1fr}.nav{position:static;display:flex;overflow:auto}.nav button{white-space:nowrap;width:auto}.facts,.detail-grid{grid-template-columns:1fr}.masthead{padding-bottom:28px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.view.active{animation:none}}
 </style>
 </head>
@@ -143,7 +148,8 @@ document.getElementById("warnings").innerHTML=warnings.length?warnings.map(item=
 const capabilities=read("capabilitiesData");
 document.getElementById("capabilities").innerHTML=capabilities.length?capabilities.map(item=>`<div class="card capability"><span class="dot ${item.status==="blocked"?"blocked":""}"></span><div><h3>${esc(item.name)}</h3><p>${esc(item.note||"")}</p>${(item.evidence||[]).map(value=>`<code>${esc(value)}</code>`).join(" ")}</div><span class="owner">${esc(item.ownerSkill||item.status)}</span></div>`).join(""):`<div class="card empty">No capabilities recorded.</div>`;
 const operations=read("operationsData");
-document.getElementById("operationList").innerHTML=operations.length?operations.map((item,index)=>`<article class="card operation" data-step="${index+1}"><h3>${esc(item.id)}</h3><p>${esc(item.summary||item.action||"Planned operation")}</p><div class="op-meta"><span class="chip">${esc(item.skill)}</span><span class="chip">${esc(item.action)}</span>${(item.locales||[]).map(value=>`<span class="chip">${esc(value)}</span>`).join("")}${(item.dependsOn||[]).map(value=>`<span class="chip">after ${esc(value)}</span>`).join("")}</div></article>`).join(""):`<div class="card empty">No local changes are planned.</div>`;
+const detail=(label,value)=>`<div class="detail"><div class="label">${esc(label)}</div><pre>${esc(JSON.stringify(value,null,2))}</pre></div>`;
+document.getElementById("operationList").innerHTML=operations.length?operations.map((item,index)=>`<article class="card operation" data-step="${index+1}"><h3>${esc(item.id)}</h3><p>${esc(item.summary||item.action||"Planned operation")}</p><div class="op-meta"><span class="chip">${esc(item.skill)}</span><span class="chip">${esc(item.action)}</span>${(item.locales||[]).map(value=>`<span class="chip">${esc(value)}</span>`).join("")}${(item.dependsOn||[]).map(value=>`<span class="chip">after ${esc(value)}</span>`).join("")}</div><details class="op-details"><summary>Review operation details</summary><div class="detail-grid">${detail("Target",item.target)}${detail("Inputs",item.inputs)}${detail("Output bindings",item.outputBindings)}${detail("Preserve",item.preserve)}${detail("Expected outputs",item.expectedOutputs)}</div></details></article>`).join(""):`<div class="card empty">No local changes are planned.</div>`;
 const checks=read("verificationData");
 document.getElementById("checks").innerHTML=checks.length?checks.map(item=>`<div class="card check"><span class="check-mark"></span><div><strong>${esc(typeof item==="string"?item:item.label)}</strong>${typeof item==="object"&&item.description?`<div>${esc(item.description)}</div>`:""}</div></div>`).join(""):`<div class="card empty">No verification checks recorded.</div>`;
 const deployments=read("deploymentData");

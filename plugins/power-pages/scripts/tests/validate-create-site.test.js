@@ -105,6 +105,36 @@ test('validates a manually downloaded declarative site opened at its site root',
     assert.deepEqual(result.errors, []);
   }));
 
+test('does not count customization documentation as a declarative site asset', () =>
+  withTempDir((root) => {
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.mkdirSync(path.join(root, '.portalconfig'), { recursive: true });
+    writeFile(root, 'website.yml', `id: ${WEBSITE_ID}\nname: Documentation Only\n`);
+    writeFile(
+      root,
+      path.join('docs', 'customize-declarative-site', 'current-plan.html'),
+      '<html><body>Plan</body></html>',
+    );
+
+    const result = validateProject(root, { expectedWebsiteRecordId: WEBSITE_ID });
+    assert.match(result.errors.join('\n'), /no site assets/);
+  }));
+
+test('uses the direct-root website path in identity mismatch errors', () =>
+  withTempDir((root) => {
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.mkdirSync(path.join(root, '.portalconfig'), { recursive: true });
+    writeFile(
+      root,
+      'website.yml',
+      'id: 55555555-5555-5555-5555-555555555555\nname: Wrong Site\n',
+    );
+    writeFile(root, path.join('web-pages', 'home.webpage.yml'), 'name: Home\n');
+
+    const result = validateProject(root, { expectedWebsiteRecordId: WEBSITE_ID });
+    assert.match(result.errors.join('\n'), /^website\.yml id /);
+  }));
+
 test('readWebsiteIdentity strips quotes and inline comments', () =>
   withTempDir((root) => {
     const filePath = path.join(root, 'website.yml');

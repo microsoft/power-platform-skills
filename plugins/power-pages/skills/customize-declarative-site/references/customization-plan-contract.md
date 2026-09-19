@@ -12,20 +12,26 @@ directory:
 ```text
 <project-root>/docs/customize-declarative-site/current-plan.json
 <project-root>/docs/customize-declarative-site/current-plan.html
+<project-root>/docs/customize-declarative-site/current-execution.json
 <project-root>/docs/customize-declarative-site/power-pages-icon.png
 <project-root>/docs/customize-declarative-site/history/<UTC-timestamp>/
 ├── plan.json
 ├── plan.html
+├── execution.json
 └── power-pages-icon.png
 ```
 
-`current-plan.json` is the authoritative latest approved plan. `current-plan.html` is its
-browser-viewable rendering. Before replacing them, archive the complete previous approved plan in
-one timestamped history directory. Never treat an unapproved review draft as current.
+`current-plan.json` is the immutable latest approved plan. `current-plan.html` is rendered from
+that exact validated JSON during publication. `current-execution.json` records resumable
+operation status and actual outputs without mutating the approved plan. Before replacing current
+state, archive the complete previous approved run in one timestamped history directory. Never
+treat an unapproved review draft as current.
 
 Render each proposed plan in a fresh external review directory outside the declarative site root.
-After approval, promote it with
-`scripts/promote-customize-declarative-site-plan.js`. For the normal `.powerpages-site/` layout,
+After approval, publish the JSON with
+`scripts/promote-customize-declarative-site-plan.js`; the publisher validates it and renders the
+canonical HTML itself. It does not accept an independently supplied HTML file. For the normal
+`.powerpages-site/` layout,
 `docs/` is its sibling under the project root. When a manually downloaded site root is also the
 project root, `docs/` remains outside the known PAC component directories; `pac pages upload` must
 still receive the exact declarative root rather than the documentation directory.
@@ -89,7 +95,7 @@ prerequisite and a local remediation; it is not a permanent template limitation.
   "locales": ["en-US"],
   "inputs": {},
   "dependsOn": [],
-  "resolvedDependencies": {},
+  "outputBindings": {},
   "preserve": [],
   "expectedOutputs": []
 }
@@ -105,9 +111,28 @@ Rules:
 - `locales` lists only affected languages.
 - `inputs` contains final visitor-facing values, files, URLs, and behavior.
 - `dependsOn` references operation IDs.
-- `resolvedDependencies` is empty at approval time unless the dependency already exists.
+- `outputBindings` maps consumer input names to typed outputs of operations in `dependsOn`.
 - `preserve` accounts for existing content or behavior that must survive.
-- `expectedOutputs` names component kinds and paths without inventing generated IDs.
+- `expectedOutputs` names stable output keys without inventing their values.
+
+Example dependency binding:
+
+```json
+{
+  "dependsOn": ["add-faq-image"],
+  "outputBindings": {
+    "heroImageUrl": {
+      "sourceOperation": "add-faq-image",
+      "output": "publicUrl"
+    }
+  }
+}
+```
+
+Every `sourceOperation` must appear earlier and be listed in `dependsOn`. The execution receipt
+stores the actual `publicUrl`; the approved plan remains unchanged. The named output must also
+appear in the source operation's `expectedOutputs`, and a consumer input cannot be both static in
+`inputs` and dynamic in `outputBindings`.
 
 Do not put authentication tokens, environment secrets, or binary file contents in the plan.
 
@@ -115,35 +140,62 @@ Do not put authentication tokens, environment secrets, or binary file contents i
 
 Use the canonical nested section structure expected by `author-webpage-content`:
 
-```yaml
-targetFile: web-pages/contact/content-pages/Contact.en-US.webpage.copy.html
-locale: en-US
-mode: create
-sections:
-  - layout: two-equal-columns
-    attributes: {}
-    columns:
-      - elements:
-          - type: text
-            content: Contact our team
-      - elements:
-          - type: image
-            source: /contact-hero.jpg
-            alt: Customer support team
-resolvedDependencies:
-  webFiles:
-    contact-hero.jpg: /contact-hero.jpg
-  snippets: {}
-preserve: []
+```json
+{
+  "id": "compose-contact-page",
+  "skill": "author-webpage-content",
+  "action": "create",
+  "target": {
+    "targetFile": "web-pages/contact/content-pages/Contact.en-US.webpage.copy.html"
+  },
+  "locales": ["en-US"],
+  "inputs": {
+    "mode": "create",
+    "sections": [
+      {
+        "layout": "two-equal-columns",
+        "attributes": {},
+        "columns": [
+          {
+            "elements": [
+              {
+                "type": "text",
+                "content": "Contact our team"
+              }
+            ]
+          },
+          {
+            "elements": [
+              {
+                "type": "image",
+                "sourceInput": "heroImageUrl",
+                "alt": "Customer support team"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "dependsOn": ["add-contact-hero"],
+  "outputBindings": {
+    "heroImageUrl": {
+      "sourceOperation": "add-contact-hero",
+      "output": "publicUrl"
+    }
+  },
+  "preserve": [],
+  "expectedOutputs": ["localizedTargetFile"]
+}
 ```
 
 Use the exact existing target path and casing. The target file must already exist before content
 composition. Preserve explicit empty columns by retaining them in `columns`; do not flatten
 elements into numeric column indexes.
 
-Reject unresolved design tokens such as `heroImage`, `primaryCtaUrl`, `TBD`, or `appropriate
-snippet`. Upstream operations must return final public URLs, routes, snippet names, and template
-identities before a dependent operation runs.
+Reject free-form unresolved tokens such as `heroImage`, `primaryCtaUrl`, `TBD`, or `appropriate
+snippet`. A dependency that will only exist during execution must use an `outputBindings` entry,
+not a guessed value.
 
 ## Dependency execution
 
@@ -158,6 +210,28 @@ author-web-file creates /speaker-hero.jpg
 
 Never predict UUIDs for new records. The owning skill generates them, and the orchestrator
 re-reads the result before invoking a dependent operation.
+
+## Execution receipt
+
+Publication creates `current-execution.json` with the plan hash, run ID, site identity, and one
+`pending` entry per operation. Before invoking an operation, resolve its bindings and mark it
+`running`. After independent verification, record stable outputs and mark it `completed`.
+
+Use:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/update-customize-declarative-site-execution.js" \
+  --projectRoot "<PROJECT_ROOT>" --action resolve --operationId "<OPERATION_ID>"
+```
+
+The `resolve` result includes effective `resolvedInputs`, combining the approved static inputs
+with verified dependency outputs. Then use `start`, followed by
+`complete --outputs "<OUTPUTS_JSON>"`, or `fail --error "<MESSAGE>"`.
+Completion requires every key named in the approved operation's `expectedOutputs`. After every
+operation is complete, use `--action finish`. A later session reads this receipt, verifies its
+plan hash and site identity, and resumes at the first ready pending operation. For an interrupted
+`running` or `failed` operation, inspect partial files before retrying it; `start` may restart a
+failed operation and increments its attempt count.
 
 ## Styling
 

@@ -87,8 +87,10 @@ Routes by project type and deploys either a code site or a PAC-downloaded declar
 Plans and coordinates broad local customization of an existing PAC-downloaded declarative site,
 whether it was provisioned by `/create-site` or created manually in Design Studio.
 
-- Keeps one current approved JSON/HTML plan under `docs/customize-declarative-site/` and archives
-  earlier approved plans in timestamped history
+- Keeps one current approved JSON/HTML plan plus a resumable execution receipt under
+  `docs/customize-declarative-site/`, and archives earlier approved runs in timestamped history
+- Derives a safe content outline and supported section/column/element composition before asking
+  one compact set of questions for genuinely missing business facts
 - Coordinates assets, snippets, Liquid/web templates, page layouts, webpages, localized content,
   and styling through their owning skills
 - Preserves the downloaded template intentionally and resolves dependencies before consumers run

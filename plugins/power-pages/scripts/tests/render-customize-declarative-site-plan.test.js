@@ -6,69 +6,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const scriptPath = path.join(__dirname, '..', 'render-customize-declarative-site-plan.js');
-
-const SAMPLE_PLAN = {
-  schemaVersion: 1,
-  site: {
-    name: 'Contoso Event Portal',
-    websiteRecordId: '00000000-0000-0000-0000-000000000001',
-    templateName: 'EventPortal',
-    siteRoot: '.powerpages-site',
-    languages: ['en-US'],
-  },
-  summary: 'Adapt the Event Portal for a developer conference.',
-  preservation: 'Retain the template structure while adding pages and sections.',
-  aesthetic: 'Bold & Vibrant',
-  mood: 'Technical & Precise',
-  capabilities: [
-    {
-      name: 'Webpage authoring',
-      status: 'ready',
-      evidence: ['web-pages/'],
-      ownerSkill: 'author-webpage',
-      note: 'Page records are available.',
-    },
-  ],
-  operations: [
-    {
-      id: 'add-speaker-images',
-      skill: 'author-web-file',
-      action: 'import',
-      summary: 'Add the approved speaker images.',
-      target: { parentPage: 'Home' },
-      locales: [],
-      inputs: { sourcePaths: ['assets/speaker-1.jpg'] },
-      dependsOn: [],
-      resolvedDependencies: {},
-      preserve: [],
-      expectedOutputs: ['web-file metadata', 'public asset URL'],
-    },
-    {
-      id: 'create-speakers-page',
-      skill: 'author-webpage',
-      action: 'create',
-      summary: 'Create the Speakers page and navigation link.',
-      target: { name: 'Speakers', route: '/speakers' },
-      locales: ['en-US'],
-      inputs: { navigation: 'Primary Navigation' },
-      dependsOn: ['add-speaker-images'],
-      resolvedDependencies: {},
-      preserve: [],
-      expectedOutputs: ['root webpage', 'localized webpage shell'],
-    },
-  ],
-  warnings: ['The local changes are not live until deployment succeeds.'],
-  verification: [
-    { label: 'Page relationships', description: 'Verify parent, template, and navigation.' },
-  ],
-  deployment: [
-    {
-      title: 'Deploy after verification',
-      description: 'Invoke deploy-site after local validation.',
-      recommended: true,
-    },
-  ],
-};
+const fixturePath = path.join(
+  __dirname,
+  'fixtures',
+  'customize-declarative-site-plan.json'
+);
+const SAMPLE_PLAN = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 
 function writePlan(tempDir, plan = SAMPLE_PLAN) {
   const dataPath = path.join(tempDir, 'plan.json');
@@ -91,6 +34,8 @@ test('renders a declarative customization plan and copies the shared icon', () =
   assert.match(html, /create-speakers-page/);
   assert.match(html, /author-webpage/);
   assert.match(html, /Page relationships/);
+  assert.match(html, /Review operation details/);
+  assert.match(html, /heroImageUrl/);
 
   const iconPath = path.join(tempDir, 'power-pages-icon.png');
   const sourceIcon = path.join(
@@ -171,6 +116,46 @@ test('rejects unsupported skills and dependencies that are not ordered', () => {
   );
   assert.equal(unorderedResult.status, 1);
   assert.match(unorderedResult.stderr, /depends on add-speaker-images, which must appear earlier/);
+});
+
+test('rejects output bindings that do not reference declared dependencies', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-plan-'));
+  const invalid = structuredClone(SAMPLE_PLAN);
+  invalid.operations[1].dependsOn = [];
+  const dataPath = writePlan(tempDir, invalid);
+  const outputPath = path.join(tempDir, 'invalid-binding.html');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /output binding heroImageUrl must reference an operation in dependsOn/);
+});
+
+test('rejects deployment model fields and undeclared bound outputs', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-plan-'));
+  const withModel = structuredClone(SAMPLE_PLAN);
+  withModel.site.modelVersion = 'Enhanced';
+  let dataPath = writePlan(tempDir, withModel);
+  let result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', path.join(tempDir, 'invalid-model.html'), '--data', dataPath],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /deployment-only/);
+
+  const withUndeclaredOutput = structuredClone(SAMPLE_PLAN);
+  withUndeclaredOutput.operations[1].outputBindings.heroImageUrl.output = 'missingUrl';
+  dataPath = path.join(tempDir, 'undeclared-output.json');
+  fs.writeFileSync(dataPath, JSON.stringify(withUndeclaredOutput), 'utf8');
+  result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', path.join(tempDir, 'invalid-output.html'), '--data', dataPath],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /references undeclared output missingUrl/);
 });
 
 test('escapes embedded JSON and text placeholders', () => {

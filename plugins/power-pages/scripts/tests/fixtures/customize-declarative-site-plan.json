@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "site": {
+    "name": "Contoso Event Portal",
+    "websiteRecordId": "00000000-0000-0000-0000-000000000001",
+    "templateName": "EventPortal",
+    "siteRoot": ".powerpages-site",
+    "languages": [
+      "en-US"
+    ]
+  },
+  "summary": "Adapt the Event Portal for a developer conference.",
+  "preservation": "Retain the template structure while adding pages and sections.",
+  "aesthetic": "Bold & Vibrant",
+  "mood": "Technical & Precise",
+  "capabilities": [
+    {
+      "name": "Webpage authoring",
+      "status": "ready",
+      "evidence": [
+        "web-pages/"
+      ],
+      "ownerSkill": "author-webpage",
+      "note": "Page records are available."
+    }
+  ],
+  "operations": [
+    {
+      "id": "add-speaker-images",
+      "skill": "author-web-file",
+      "action": "import",
+      "summary": "Add the approved speaker images.",
+      "target": {
+        "parentPage": "Home"
+      },
+      "locales": [],
+      "inputs": {
+        "sourcePaths": [
+          "assets/speaker-1.jpg"
+        ]
+      },
+      "dependsOn": [],
+      "outputBindings": {},
+      "preserve": [],
+      "expectedOutputs": [
+        "metadataPath",
+        "publicUrl"
+      ]
+    },
+    {
+      "id": "create-speakers-page",
+      "skill": "author-webpage",
+      "action": "create",
+      "summary": "Create the Speakers page and navigation link.",
+      "target": {
+        "name": "Speakers",
+        "route": "/speakers"
+      },
+      "locales": [
+        "en-US"
+      ],
+      "inputs": {
+        "navigation": "Primary Navigation"
+      },
+      "dependsOn": [
+        "add-speaker-images"
+      ],
+      "outputBindings": {
+        "heroImageUrl": {
+          "sourceOperation": "add-speaker-images",
+          "output": "publicUrl"
+        }
+      },
+      "preserve": [],
+      "expectedOutputs": [
+        "websitePageId",
+        "localizedTargetFile",
+        "route"
+      ]
+    }
+  ],
+  "warnings": [
+    "The local changes are not live until deployment succeeds."
+  ],
+  "verification": [
+    {
+      "label": "Page relationships",
+      "description": "Verify parent, template, and navigation."
+    }
+  ],
+  "deployment": [
+    {
+      "title": "Deploy after verification",
+      "description": "Invoke deploy-site after local validation.",
+      "recommended": true
+    }
+  ]
+}

@@ -15,6 +15,25 @@ const {
 } = require('../../../scripts/lib/validation-helpers');
 
 const PLACEHOLDER_RE = /__[A-Z][A-Z_]{2,}__/;
+const DECLARATIVE_COMPONENT_DIRS = new Set([
+  'ad-placements',
+  'advanced-forms',
+  'basic-forms',
+  'bot-consumers',
+  'cloud-flow-definitions',
+  'content-snippets',
+  'lists',
+  'page-templates',
+  'poll-placements',
+  'publishing-state-transition-rules',
+  'site-settings',
+  'table-permissions',
+  'web-files',
+  'web-link-sets',
+  'web-pages',
+  'web-roles',
+  'web-templates',
+]);
 
 function findPlaceholdersInFile(filePath) {
   const results = [];
@@ -112,13 +131,19 @@ function listDeclarativeAssetFiles(siteDir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== '.portalconfig') walk(fullPath);
+        walk(fullPath);
       } else if (entry.isFile() && /\.(?:ya?ml|html?|css|js|liquid)$/i.test(entry.name)) {
-        if (fullPath !== path.join(siteDir, 'website.yml')) files.push(fullPath);
+        files.push(fullPath);
       }
     }
   };
-  walk(siteDir);
+  // A direct-root download can also contain project documentation. Count only known
+  // PAC component directories so docs/current-plan.html cannot make an empty site valid.
+  for (const entry of fs.readdirSync(siteDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && DECLARATIVE_COMPONENT_DIRS.has(entry.name)) {
+      walk(path.join(siteDir, entry.name));
+    }
+  }
   return files;
 }
 
@@ -150,7 +175,7 @@ function validateDeclarativeProject(
       identity.id.toLowerCase() !== expectedWebsiteRecordId.toLowerCase()
     ) {
       errors.push(
-        `.powerpages-site/website.yml id ${identity.id} does not match created website ` +
+        `${displayPrefix}website.yml id ${identity.id} does not match created website ` +
           `${expectedWebsiteRecordId}`,
       );
     }

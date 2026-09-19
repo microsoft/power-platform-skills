@@ -193,8 +193,11 @@ User-invocable via `/power-pages:<skill-name>`:
   off to `customize-declarative-site`.
 - `customize-declarative-site`: Declarative-only orchestrator for broad customization of PAC
   downloads created by `create-site` or manually in Design Studio. Keeps one canonical approved
-  JSON/HTML plan under `docs/customize-declarative-site/`, archives its predecessor in timestamped
-  history, resolves cross-skill dependencies, invokes the owning classic authoring skills, runs
+  JSON/HTML plan plus `current-execution.json` under `docs/customize-declarative-site/`, archives
+  its predecessor in timestamped history, resolves typed cross-skill output bindings, and resumes
+  pending work without mutating the approved plan. It derives safe content and supported
+  `section -> columns -> elements` structures, represents card-like layouts with columns rather
+  than an unsupported native card type, invokes the owning classic authoring skills, runs
   `style-site` last when requested, verifies the combined local diff, commits coherent changes,
   and optionally hands off to `deploy-site`.
 - `deploy-site`: Routes by project type. Code sites retain the 6-step build,

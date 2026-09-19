@@ -28,6 +28,7 @@ Read:
 
 - `${PLUGIN_ROOT}/references/design-studio-site-discovery.md`
 - `${PLUGIN_ROOT}/skills/customize-declarative-site/references/customization-plan-contract.md`
+- `${PLUGIN_ROOT}/skills/customize-declarative-site/references/content-and-page-compositions.md`
 
 For requested styling, also read:
 
@@ -81,6 +82,25 @@ Create these tasks before starting:
      `Initial declarative site baseline`;
    - when Git exists, record the starting commit and pre-existing dirty paths;
    - never absorb unrelated or pre-existing dirty files into customization commits.
+7. Define `<PROJECT_ROOT>` as the repository root that owns the selected site. For the normal
+   nested layout it is the parent of `.powerpages-site/`; for a direct-root download it is that
+   site root itself.
+8. If `docs/customize-declarative-site/current-plan.json` or
+   `docs/customize-declarative-site/current-execution.json` exists, validate the pair against the
+   selected website identity. Offer to resume the first ready pending operation when its request
+   still matches the user's intent; otherwise prepare a new plan.
+
+## Request routing
+
+Use the smallest route that fully satisfies the request:
+
+- one narrow component change: invoke the owning authoring skill directly;
+- one straightforward page: use the lightweight path, normally `author-webpage` with one resolved
+  page-content composition;
+- multiple pages or cross-component dependencies: use the complete orchestration below;
+- SPA/code site: stop and explain that this skill is declarative-only.
+
+Do not generate a broad plan or invoke every owner merely because they are available.
 
 ## Phase 2: Gather customization intent
 
@@ -96,6 +116,16 @@ For a broad or underspecified request, collect:
 - template preservation level: preserve layout and update content/branding, retain structure but
   add pages/sections, or substantially redesign;
 - aesthetic and mood only when visual customization is requested.
+
+Apply the content reasoning and example page-compositions reference. Inspect similar pages first,
+derive a content outline and supported `section -> columns -> elements` structure, draft safe
+explanatory copy, and identify only organization-specific facts that require confirmation.
+
+<!-- not-a-gate: compact clarification gathers missing content and layout inputs; Phase 4 approves the plan -->
+
+When material inputs remain, ask once with the unresolved business facts plus compact choices for
+content source, navigation placement, locales, layout reuse versus proposal, and whether styling
+changes are in scope. Prefer site-derived defaults and do not repeat known information.
 
 Generate context-aware feature choices from the selected template and current site. Do not offer
 a capability whose required local structure is absent without presenting the missing prerequisite
@@ -119,10 +149,11 @@ owning skill supports the requested operation.
    <REVIEW_DIR>/plan.json
    ```
 
-   `<PROJECT_ROOT>` is the parent of a nested `.powerpages-site/`. Use a new review directory for
-   every revision so the renderer never overwrites reviewed bytes.
-5. Never write unresolved values such as `TBD`, `heroImage`, `appropriate page`, or `choose a
-   snippet`. Resolve them or stop with the exact missing input.
+   Use the `<PROJECT_ROOT>` resolved in Phase 1. Use a new review directory for every revision so
+   the renderer never overwrites reviewed bytes.
+5. Never write free-form unresolved values such as `TBD`, `heroImage`, `appropriate page`, or
+   `choose a snippet`. Use typed `outputBindings` for values produced by earlier operations;
+   otherwise resolve the value or stop with the exact missing input.
 6. Render the browser plan:
 
    ```bash
@@ -159,33 +190,38 @@ Use `AskUserQuestion`:
 On revision, create a fresh review directory, render and open it, and repeat approval. Never edit
 the rendered HTML as the source of truth.
 
-After approval, promote the exact reviewed pair:
+After approval, publish the approved JSON:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/promote-customize-declarative-site-plan.js" \
   --projectRoot "<PROJECT_ROOT>" \
-  --data "<APPROVED_REVIEW_DIR>/plan.json" \
-  --html "<APPROVED_REVIEW_DIR>/plan.html"
+  --data "<APPROVED_REVIEW_DIR>/plan.json"
 ```
 
-This writes `docs/customize-declarative-site/current-plan.json` and `current-plan.html`. When a
-current approved plan already exists, the promotion command archives its JSON, HTML, and icon
-together under `docs/customize-declarative-site/history/<UTC-timestamp>/` before replacement.
-Use only the promoted `current-plan.json` for child-skill coordination.
+The publisher validates the approved JSON, renders canonical HTML from that exact data, creates
+`current-execution.json`, and records hashes plus a run ID. When a current approved run exists, it
+archives the plan, HTML, execution receipt, and icon together before replacement. Use only the
+published current plan and execution receipt for child-skill coordination.
 
 ## Phase 5: Execute through owning skills
 
 For each ready operation:
 
-1. Pass only that operation plus verified dependency outputs to its owning skill.
-2. Include the exact selected site root, action, target identity, locales, final values, callers,
+1. Run the execution helper with `--action resolve`; it blocks until dependencies are complete and
+   returns the operation plus effective `resolvedInputs` combining approved static inputs with
+   actual bound outputs.
+2. Mark the operation `start`, then pass only that resolved operation to its owning skill.
+3. Include the exact selected site root, action, target identity, locales, final values, callers,
    and preservation requirements. The operation may be expressed as structured YAML/JSON or
    unambiguous natural language; it must resolve the same decisions as the plan contract.
-3. Tell the child skill to revalidate every supplied path and existing ID before writing.
-4. After completion, re-read the changed files and record actual generated IDs, paths, routes,
-   and public URLs for downstream operations.
-5. Stop if reported output conflicts with the approved operation. Do not silently adapt dependent
-   operations to an unapproved structural change.
+4. Tell the child skill to revalidate every supplied path and existing ID before writing.
+5. After completion, re-read the changed files, write actual stable outputs to a temporary JSON
+   object, and mark the operation `complete --outputs <path>`. Remove that temporary file after the
+   receipt is updated.
+6. On failure, mark the operation `fail` with the concise error and stop. Do not silently adapt
+   dependent operations to an unapproved structural change. On a later session, inspect any
+   partial files before restarting that failed operation; never blindly replay it.
+7. After all operations complete, run the execution helper with `--action finish`.
 
 Use `author-webpage` for page records, routes, parents, template assignment, localized shells, and
 requested navigation. Let it invoke `author-webpage-content` when it owns the resolved page
@@ -206,7 +242,8 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
 3. Verify planned files and records exist, generated identities are unique, locale scope matches
    the plan, dependencies resolve, and unrequested callers/content remain unchanged.
 4. Review the complete Git diff against the approved plan. Unexpected component categories or
-   unrelated changes block completion.
+   unrelated changes block completion. Classify `docs/customize-declarative-site/**` separately as
+   orchestration evidence; it is not a PAC component category and is not uploaded.
 5. Run the create-site declarative validator when a website record ID is available:
 
    ```bash
@@ -223,7 +260,7 @@ new work. Do not commit unrelated pre-existing changes.
 Report:
 
 - site identity and local root;
-- current approved plan JSON and HTML paths, plus any archived predecessor;
+- current approved plan, HTML, and execution paths, plus any archived predecessor;
 - created and modified components grouped by owning skill;
 - languages and routes affected;
 - validation and commit results;
