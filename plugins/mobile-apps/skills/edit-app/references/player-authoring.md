@@ -80,6 +80,99 @@ questions under `.devplayer-builder/logs/authoring-input/` until preparation
 is approved. Do not restamp canonical contracts or edit TSX yet. Those are
 candidate mutations, not part of asking permission.
 
+### Strict copy-only fast path
+
+Use `screen-copy` before the normal planner/builder path only when all of these
+are true:
+
+- exactly one existing registered screen is selected;
+- every change is user-facing text in that screen or the same text in its
+  canonical phone/human plan;
+- no import, handler, route, query, data, style, dependency, native capability,
+  screen inventory, or executable structure changes;
+- every old string and occurrence count is exact at proposal time;
+- the candidate still matches Player's captured base revision.
+
+Any uncertainty, unsupported text location, missing projection, or source drift
+immediately falls back to the normal proposal below. Do not broaden the fast
+path or manually edit after it rejects a proposal.
+
+Write exact replacements rather than dispatching the planner or screen builder:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "screen-copy",
+  "summary": "Rename the Welcome action from Continue to Explore classes.",
+  "screenIds": ["welcome"],
+  "allowedFiles": [
+    "app/(app)/welcome.tsx",
+    ".tmp/phone-app-plan.json",
+    ".tmp/compiled-screen-build-pack.json",
+    ".tmp/navigation-manifest.json",
+    "native-app-plan.md",
+    "memory-bank.md"
+  ],
+  "copyEdits": [
+    {
+      "path": "app/(app)/welcome.tsx",
+      "from": "Continue",
+      "to": "Explore classes",
+      "expectedCount": 4
+    },
+    {
+      "path": ".tmp/phone-app-plan.json",
+      "from": "Continue",
+      "to": "Explore classes",
+      "expectedCount": 1
+    }
+  ]
+}
+```
+
+If the app has the installed authoring runtime, also include its complete owned
+projection set so the helper can verify or refresh semantic labels:
+
+```text
+.tmp/authoring-registry.json
+.tmp/mobile-authoring-runtime.json
+src/authoring/registry.ts
+src/authoring/index.tsx
+src/authoring/controller.ts
+src/authoring/README.md
+scripts/authoring-attach.js
+```
+
+Then run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/authoring-edit.js" prepare \
+  --input .devplayer-builder/logs/authoring-input/proposal.json
+
+node "${PLUGIN_ROOT}/scripts/authoring-edit.js" apply-copy \
+  --plan <returned-plan-id>
+
+node "${PLUGIN_ROOT}/scripts/authoring-edit.js" candidate \
+  --plan <returned-plan-id> --ready-screen <affected-screen-id> --final
+node "${PLUGIN_ROOT}/scripts/mobile-authoring.js" complete
+```
+
+`prepare` returns `approvalRequired:false` for this kind. It seals the complete
+base, exact files, old/new text, occurrence counts, and expected output hashes,
+but performs no source writes. `apply-copy` alone performs the deterministic
+replacement, regenerates the phone-plan and authoring projections through
+their owners, and verifies the scoped delta. The final Player **Apply update**
+decision is the single approval and the only operation that can write back to
+the developer-owned project. Previewing the update is optional.
+
+The helper rejects executable strings, text outside recognized user-facing
+AST locations, multiple screens, new/deleted files, stale source, mismatched
+occurrence counts, altered navigation/data contracts, or non-owned
+projections. On rejection, use the normal flow; never work around the
+classifier.
+
+### Normal scoped edit path
+
 Write one bounded proposal JSON:
 
 ```json
@@ -106,8 +199,9 @@ node "${PLUGIN_ROOT}/scripts/authoring-edit.js" prepare \
 node "${PLUGIN_ROOT}/scripts/authoring-edit.js" authorize --plan <returned-plan-id>
 ```
 
-Kinds are `global-style`, `target-layout`, `screen`, `business-rule`, and
-`integration`. The last kind requires the descriptor's exact catalogue
+Kinds are `screen-copy`, `global-style`, `target-layout`, `screen`,
+`business-rule`, and `integration`. `screen-copy` is restricted to the fast
+path above. The last kind requires the descriptor's exact catalogue
 selection and is described below; do not copy a selection into proposal JSON.
 Allowed files are exact project-relative files, never directory grants,
 globs, live preview roots, or generated-service escape hatches. Global styling
@@ -115,13 +209,17 @@ uses app-owned brand/theme/tokens plus its plan projections. A selected
 collection grants only its registered source file plus affected canonical
 planning projections. Broader file needs require a revised proposal.
 
-`prepare` creates a sealed proposal, source baseline, and bounded backups; it
-does **not** edit app code. `authorize` asks the maker through the blocking
-shared adapter. Its signed decision binds the immutable proposal and complete
-base source manifest. A revise/reject answer does not enable mutation.
+For normal edit kinds, `prepare` creates a sealed proposal, source baseline,
+and bounded backups; it does **not** edit app code. `authorize` asks the maker
+through the blocking shared adapter. Its signed decision binds the immutable
+proposal and complete base source manifest. A revise/reject answer does not
+enable mutation.
 
-The question is **“Prepare this edit?”**, not “Apply it.” There is no schema,
-data-import, or deployment consent hidden inside this question.
+For those normal kinds, the question is **“Prepare this edit?”**, not “Apply
+it.” There is no schema, data-import, or deployment consent hidden inside this
+question. The strict `screen-copy` path intentionally skips this preliminary
+question because its isolated mutation is fully deterministic and still cannot
+reach the active project before final Apply.
 
 ## 3. Prepare using the existing foreground delta workflow
 
@@ -501,12 +599,14 @@ candidate's after revision. It never restores active business records,
 photos, remote writes, or schema. Unrelated later changes make that local Undo
 ineligible.
 
-The bridge alone publishes. Its candidate preview uses an isolated data/media
-namespace. The maker then chooses Apply or Discard in Player; do not issue a
-second Apply question or run the standalone in-place edit path. Submission is
-not Apply, and Apply is not evidence that the native screen mounted. Report
-each real state accurately and keep the last-good active preview on failure,
-stop, stale context, or discard.
+The bridge alone publishes. Its update preview uses an isolated data/media
+namespace. Preview is optional. The maker chooses Apply or Discard in Player;
+do not issue a second Apply question or run the standalone in-place edit path.
+After transactional writeback, Player reloads the active app and waits for its
+matching native revision acknowledgement. Submission is not Apply, and Apply
+alone is not evidence that the native screen mounted. Report each real state
+accurately and keep the last-good active preview on failure, stop, stale
+context, or discard.
 
 When the descriptor identifies an explicitly attached external project, this
 same workflow remains mandatory. The bridge copied the registered baseline
@@ -527,7 +627,8 @@ preview authority is retired. Never describe filesystem Apply alone as a
 successful device mount.
 
 `authoring-edit.js` commands: `inspect --intent`, `prepare --input`,
-`authorize --plan [--wait-ms]`, `integration --plan --gate-receipt`,
-`capture --plan`, `teach --plan`, `check --plan`, and
+`authorize --plan [--wait-ms]`, `apply-copy --plan`,
+`integration --plan --gate-receipt`, `capture --plan`, `teach --plan`,
+`check --plan`, and
 `candidate --plan --ready-screen … [--final]`. No command publishes active
 source, accepts arbitrary shell commands, or performs remote mutation.

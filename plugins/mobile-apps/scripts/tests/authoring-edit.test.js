@@ -15,13 +15,16 @@ const { prepareWrite } = require('../lib/prototype-repository-core');
 const protocol = require('../lib/authoring-protocol');
 const integrations = require('../lib/authoring-edit-integration');
 const { refreshPrototypeRules } = require('../lib/prototype-rules');
-const { RUNTIME_INSTALL_FILES } = require('../lib/mobile-authoring-registration');
+const { configurePrototypeAuthoring } = require('../lib/prototype-authoring');
+const { DERIVED_FILES, RUNTIME_HELPERS, RUNTIME_INSTALL_FILES } = require('../lib/mobile-authoring-registration');
+const phone = require('../lib/phone-app-plan');
 
 process.env.POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT = '1';
 const HAS_SOURCE = fs.existsSync(path.resolve(__dirname, '../lib/authoring-source.js'));
 const SOURCE_REASON = 'Requires the pinned authoring-source bundle supplied by the integration owner';
 const MODULES = process.env.MOBILE_PROTOTYPE_TEMPLATE_MODULES;
 const HAS_TYPESCRIPT = !!MODULES && fs.existsSync(path.join(MODULES, 'typescript', 'package.json'));
+const COPY_SKIP = !HAS_SOURCE ? SOURCE_REASON : !HAS_TYPESCRIPT ? 'Requires the app TypeScript dependency' : false;
 
 function write(root, relative, value) {
   const file = path.join(root, relative);
@@ -142,11 +145,13 @@ function fixture(t) {
   };
   let active = true;
   let action = 'approve';
+  let questions = 0;
   const client = {
     descriptor,
     assertSafe: (value) => assert.ok(!JSON.stringify(value).includes('fixture-callback-secret')),
     verify: async () => { if (!active) throw new Error('cancelled'); return { active: true }; },
     requestQuestion: async (input, options) => {
+      questions += 1;
       const binding = questionBinding(root, options);
       const question = prepareQuestion(input, binding, descriptor);
       const receipt = {
@@ -179,6 +184,7 @@ function fixture(t) {
   return {
     root, domain, rules, descriptor, client,
     setActive: (value) => { active = value; }, setAction: (value) => { action = value; },
+    questionCount: () => questions,
     proposal: { schemaVersion: 1, kind: 'business-rule', summary: 'Require a ready photo for all failed inspection saves.', entityId: 'inspections', screenIds: [], allowedFiles: edit.RULE_OUTPUTS, rules },
   };
 }
@@ -257,6 +263,161 @@ test('app background defaults global; selected layout cannot widen files, record
   }
   assert.throws(() => edit.normalizePlan(f.root, f.descriptor, { ...selected, screenIds: ['other-screen'] }));
   assert.throws(() => edit.normalizePlan(f.root, f.descriptor, { ...f.proposal, allowedFiles: [...edit.RULE_OUTPUTS, '.tmp/authoring-registry.json'] }));
+});
+
+test('copy-only edits defer consent to final Apply and mutate only sealed user-facing text', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  const proposal = {
+    schemaVersion: 1,
+    kind: 'screen-copy',
+    summary: 'Rename the visible Rows label to Inspections.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile],
+    copyEdits: [{ path: sourceFile, from: 'Rows', to: 'Inspections', expectedCount: 1 }],
+  };
+  const prepared = await edit.prepare(f.client, proposal);
+  assert.equal(prepared.status, 'authorized');
+  assert.equal(prepared.approvalRequired, false);
+  assert.equal(f.questionCount(), 0);
+  assert.deepEqual(await edit.authorize(f.client, prepared.planId), {
+    planId: prepared.planId,
+    status: 'authorized',
+    action: 'deferred-to-apply',
+    receipt: null,
+    approvalRequired: false,
+    applied: false,
+  });
+  assert.equal(f.questionCount(), 0);
+  const applied = await edit.applyCopy(f.client, prepared.planId);
+  assert.equal(applied.status, 'prepared');
+  assert.match(fs.readFileSync(path.join(f.root, sourceFile), 'utf8'), /<Text>Inspections<\/Text>/);
+  assert.equal((await edit.check(f.client, prepared.planId)).status, 'scope-checked');
+  assert.equal(f.questionCount(), 0);
+});
+
+test('copy-only eligibility rejects wider scope, executable strings, occurrence drift, and source drift', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  const proposal = {
+    schemaVersion: 1,
+    kind: 'screen-copy',
+    summary: 'Rename the visible Rows label to Inspections.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile],
+    copyEdits: [{ path: sourceFile, from: 'Rows', to: 'Inspections', expectedCount: 1 }],
+  };
+  assert.throws(() => edit.normalizePlan(f.root, f.descriptor, {
+    ...proposal, screenIds: ['inspection-list', 'inspection-list'],
+  }), /one existing selected screen|unique/);
+  assert.throws(() => edit.normalizePlan(f.root, f.descriptor, {
+    ...proposal, allowedFiles: [sourceFile, 'brand/tokens.ts'],
+  }), /contextual scope|copy-only edit may change only/);
+  assert.throws(() => edit.normalizePlan(f.root, f.descriptor, {
+    ...proposal, copyEdits: [{ path: sourceFile, from: 'inspections', to: 'other-table', expectedCount: 1 }],
+  }), /user-facing text nodes/);
+  assert.throws(() => edit.normalizePlan(f.root, f.descriptor, {
+    ...proposal, copyEdits: [{ ...proposal.copyEdits[0], expectedCount: 2 }],
+  }), /occurrence count|user-facing text nodes/);
+
+  const prepared = await edit.prepare(f.client, proposal);
+  write(f.root, sourceFile, fs.readFileSync(path.join(f.root, sourceFile), 'utf8').replace('Rows', 'Manual change'));
+  await assert.rejects(edit.applyCopy(f.client, prepared.planId), /source changed after classification/);
+});
+
+test('copy-only edits regenerate phone-plan projections without changing navigation or data contracts', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  write(f.root, 'app.json', { expo: { extra: { telemetry: { appInstanceId: f.domain.appInstanceId } } } });
+  write(f.root, phone.INPUT, {
+    schemaVersion: 1,
+    entryRoute: '/inspections',
+    screens: [{
+      screenId: 'inspection-list',
+      title: 'Inspections',
+      route: '/inspections',
+      sourceFile: 'app/(app)/inspections/index.tsx',
+      dependencies: [],
+      entityIds: ['inspections'],
+      navigation: { detail: '/inspections/[id]' },
+      primaryActions: ['Rows'],
+      secondaryActions: [],
+      dataAssumptions: ['Preserve inspection paging.'],
+    }],
+    deferredScreens: [],
+    navigation: { pattern: 'stack', destinations: [] },
+    nativeCapabilities: [],
+    deferredConnectors: [],
+  });
+  phone.compilePhoneScreens(f.root);
+  rebaseFixture(f);
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  const prepared = await edit.prepare(f.client, {
+    schemaVersion: 1,
+    kind: 'screen-copy',
+    summary: 'Rename Rows to Inspections in the screen and its phone plan.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile, phone.INPUT, phone.COMPILED, phone.NAVIGATION],
+    copyEdits: [
+      { path: sourceFile, from: 'Rows', to: 'Inspections', expectedCount: 1 },
+      { path: phone.INPUT, from: 'Rows', to: 'Inspections', expectedCount: 1 },
+    ],
+  });
+  await edit.applyCopy(f.client, prepared.planId);
+  const compiled = readJson(f.root, phone.COMPILED);
+  assert.deepEqual(compiled.screens[0].primaryActions, ['Inspections']);
+  assert.equal(compiled.screens[0].route, '/inspections');
+  assert.deepEqual(compiled.screens[0].entityIds, ['inspections']);
+  assert.equal((await edit.check(f.client, prepared.planId)).status, 'scope-checked');
+});
+
+test('copy-only edits refresh owned authoring projections from changed semantic labels', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  const appInstanceId = crypto.randomUUID();
+  f.domain.appInstanceId = appInstanceId;
+  f.descriptor.appInstanceId = appInstanceId;
+  f.descriptor.context.appInstanceId = appInstanceId;
+  write(f.root, '.tmp/prototype-domain.json', f.domain);
+  write(f.root, '.tmp/authoring-registry.json', {
+    ...readJson(f.root, '.tmp/authoring-registry.json'),
+    appInstanceId,
+  });
+  write(f.root, 'package.json', {
+    name: 'authoring-fixture',
+    private: true,
+    dependencies: { expo: '55.0.29', 'expo-router': '55.0.14', react: '19.2.0', 'react-native': '0.83.6' },
+  });
+  write(f.root, 'app.json', { expo: { extra: { telemetry: { appInstanceId } } } });
+  write(f.root, 'tsconfig.json', { compilerOptions: { paths: {} } });
+  write(f.root, 'app/_layout.tsx', 'export default function RootLayout() { return null; }\n');
+  write(f.root, '.tmp/prototype-profile.json', { schemaVersion: 1, profile: 'prototype' });
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  write(f.root, sourceFile, [
+    "export const authoringTargets = [{ id: 'inspection-list.collection', label: 'Rows', role: 'collection' }] as const;",
+    "export default function Screen() { const rows = useEntityList('inspections', { pageSize: 20 }); return <Text>Rows</Text>; }",
+    '',
+  ].join('\n'));
+  configurePrototypeAuthoring(f.root, {
+    readyScreenIds: ['inspection-list'],
+    screenSources: [{ screenId: 'inspection-list', sourceFile }],
+  });
+  rebaseFixture(f);
+  const prepared = await edit.prepare(f.client, {
+    schemaVersion: 1,
+    kind: 'screen-copy',
+    summary: 'Rename the visible collection label.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile, ...DERIVED_FILES, ...RUNTIME_HELPERS],
+    copyEdits: [{ path: sourceFile, from: 'Rows', to: 'Inspections', expectedCount: 2 }],
+  });
+  await edit.applyCopy(f.client, prepared.planId);
+  const registry = readJson(f.root, '.tmp/authoring-registry.json');
+  assert.equal(registry.screens[0].targets[0].label, 'Inspections');
+  assert.match(fs.readFileSync(path.join(f.root, 'src/authoring/registry.ts'), 'utf8'), /Inspections/);
+  assert.equal((await edit.check(f.client, prepared.planId)).status, 'scope-checked');
 });
 
 test('new screens are bounded, unique, nonexistent targets with only their own explicit ancestor layouts', (t) => {

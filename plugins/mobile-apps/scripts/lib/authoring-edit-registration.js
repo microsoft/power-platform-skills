@@ -43,10 +43,10 @@ function planAuthoring(root, input, { kind, compiled, registry, newScreens }) {
   const helper = RUNTIME_HELPERS.some((file) => allowedFiles.has(file));
   const intent = input.authoringRuntime === undefined ? undefined
     : protocol.enumeration(input.authoringRuntime, ['install', 'upgrade'], 'authoring runtime change');
-  if ((derived || helper || intent || input.authoringSources !== undefined) && !['screen', 'integration'].includes(kind)) {
+  if ((derived || helper || intent || input.authoringSources !== undefined) && !['screen', 'screen-copy', 'integration'].includes(kind)) {
     throw new Error('Derived authoring outputs belong only to an explicit screen or integration scope');
   }
-  if (helper && !intent) throw new Error('Compiler-owned authoring helpers require an intentional runtime installation or upgrade');
+  if (helper && !intent && kind !== 'screen-copy') throw new Error('Compiler-owned authoring helpers require an intentional runtime installation or upgrade');
   if ((derived || newScreens.length || intent) && DERIVED_FILES.some((file) => !allowedFiles.has(file))) {
     throw new Error('Explicitly include all three derived authoring outputs when changing screen registration');
   }
@@ -83,7 +83,11 @@ function planAuthoring(root, input, { kind, compiled, registry, newScreens }) {
     sources = assignments(root, input.authoringSources, screens, newScreens);
   }
   return {
-    allowed: new Set([...(derived ? DERIVED_FILES : []), ...(intent ? RUNTIME_INSTALL_FILES : [])]),
+    allowed: new Set([
+      ...(derived ? DERIVED_FILES : []),
+      ...(kind === 'screen-copy' && helper ? RUNTIME_HELPERS : []),
+      ...(intent ? RUNTIME_INSTALL_FILES : []),
+    ]),
     authoringSources: sources, ...(intent ? { authoringRuntime: intent } : {}),
   };
 }
@@ -94,7 +98,7 @@ function assertAuthoringDelta(root, plan, changes, originalJson) {
   if (derived && DERIVED_FILES.some((file) => !plan.allowedFiles.includes(file))) {
     throw new Error('Derived authoring changes require the complete explicitly approved output set');
   }
-  if (helper && !plan.authoringRuntime) {
+  if (helper && !plan.authoringRuntime && plan.kind !== 'screen-copy') {
     throw new Error('Compiler-owned authoring helpers cannot change without an approved runtime installation or upgrade');
   }
   if (plan.authoringRuntime && changes.some((entry) => entry.path === 'tsconfig.json')) {

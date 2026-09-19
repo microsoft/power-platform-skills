@@ -37,6 +37,7 @@ async function run(args, options = {}) {
     inspect: ['projectRoot', 'intent'],
     prepare: ['projectRoot', 'input'],
     authorize: ['projectRoot', 'planId', 'waitMs'],
+    'apply-copy': ['projectRoot', 'planId'],
     check: ['projectRoot', 'planId'],
     teach: ['projectRoot', 'planId'],
     capture: ['projectRoot', 'planId'],
@@ -55,12 +56,13 @@ async function run(args, options = {}) {
   }
   if (!args.planId) throw new Error('The edit command requires the sealed --plan ID');
   if (args.command === 'authorize') return edit.authorize(client, args.planId, { waitMs: args.waitMs });
+  if (args.command === 'apply-copy') return edit.applyCopy(client, args.planId);
   if (args.command === 'check') return edit.check(client, args.planId);
   if (args.command === 'teach') return edit.teach(client, args.planId);
   if (args.command === 'capture') return edit.capture(client, args.planId);
   if (args.command === 'integration') return edit.integration(client, args.planId, args.gateReceipt);
   if (args.command === 'candidate') return edit.submit(client, args.planId, { readyScreenIds: args.readyScreenIds, final: args.final });
-  throw new Error('Expected inspect, prepare, authorize, integration, capture, check, teach, or candidate');
+  throw new Error('Expected inspect, prepare, authorize, apply-copy, integration, capture, check, teach, or candidate');
 }
 
 async function main(argv = process.argv) {

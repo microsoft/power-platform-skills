@@ -16,6 +16,9 @@ or questions and apply it as this skill's phone profile. It keeps the same
 main-based UX/implementation guidance, but routes decisions to Player and
 does not restart client-registration or HTML-preview flows. `Build more screens`
 is a bounded `screen` edit of this app, not a new app or a new operation type.
+Classify the Player request for the strict `screen-copy` path before invoking a
+planner or screen builder; eligible one-screen copy changes use deterministic
+replacement and reserve the sole approval for final Apply.
 
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 

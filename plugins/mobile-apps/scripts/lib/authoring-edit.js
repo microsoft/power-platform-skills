@@ -11,7 +11,13 @@ const { validateRules, generateRulesRuntime } = require('./authoring-rules');
 const { refreshPrototypeRules } = require('./prototype-rules');
 const { registeredContext, inspectEdit, DOMAIN_PATH } = require('./authoring-edit-context');
 const { planAuthoring, assertAuthoringDelta } = require('./authoring-edit-registration');
-const { requiresAuthoringCheck } = require('./mobile-authoring-registration');
+const {
+  DERIVED_FILES, RUNTIME_HELPERS, requiresAuthoringCheck,
+} = require('./mobile-authoring-registration');
+const { configurePrototypeAuthoring } = require('./prototype-authoring');
+const {
+  INPUT: PHONE_PLAN, COMPILED: PHONE_COMPILED, NAVIGATION: PHONE_NAVIGATION, compilePhoneScreens,
+} = require('./phone-app-plan');
 const {
   integrationRoute, allowedIntegrationFile, validateIntegrationPlan, sameIntegration,
   assertArchitectureSelection, assertIntegrationPreserved, assertIntegrationPrepared, integrationReviewItems,
@@ -34,6 +40,8 @@ const PLAN_FILES = new Set([
   '.tmp/phone-app-plan.json', '.tmp/navigation-manifest.json',
 ]);
 const PROTECTED_PACK_KEYS = ['screenId', 'route', 'primaryActions', 'secondaryActions', 'navigation', 'dataAssumptions', 'entityIds'];
+const COPY_GENERATED_FILES = new Set([PHONE_COMPILED, PHONE_NAVIGATION, ...DERIVED_FILES, ...RUNTIME_HELPERS]);
+const COPY_LABEL_NAME = /(?:label|title|text|message|description|placeholder|hint|caption|empty|error|retry|notice|status)/i;
 
 function source(root) {
   return require('./authoring-source').captureSource(root);
@@ -107,6 +115,7 @@ function allowedFile(kind, file, selected, screenFiles, integration, ruleFiles) 
   if (kind === 'integration') return allowedIntegrationFile(file, integration, screenFiles);
   if (kind === 'global-style') return /^(?:brand\/|src\/(?:tokens|theme)\/)/.test(file) || file === 'tamagui.config.ts';
   if (kind === 'target-layout') return file === selected.screen?.sourceFile;
+  if (kind === 'screen-copy') return screenFiles.includes(file);
   return screenFiles.includes(file) || /^(?:src\/components\/|brand\/)/.test(file);
 }
 
@@ -134,13 +143,175 @@ function proposedScreens(root, input, compiled, kind) {
   });
 }
 
+function copyOccurrences(content, value) {
+  const positions = [];
+  for (let offset = 0; offset <= content.length - value.length;) {
+    const found = content.indexOf(value, offset);
+    if (found < 0) break;
+    positions.push(found);
+    offset = found + value.length;
+  }
+  return positions;
+}
+
+function copyNodeName(ts, node) {
+  if (!node) return '';
+  if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNumericLiteral(node)) return node.text;
+  return '';
+}
+
+function userFacingCopyNode(ts, node) {
+  if (ts.isJsxText(node)) return true;
+  if (!ts.isStringLiteral(node) && !ts.isNoSubstitutionTemplateLiteral(node)) return false;
+  for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+    if (ts.isJsxAttribute(parent)) return COPY_LABEL_NAME.test(copyNodeName(ts, parent.name));
+    if (ts.isJsxExpression(parent)) return true;
+    if (ts.isVariableDeclaration(parent)) return COPY_LABEL_NAME.test(copyNodeName(ts, parent.name));
+    if (ts.isPropertyAssignment(parent)) return COPY_LABEL_NAME.test(copyNodeName(ts, parent.name));
+    if (ts.isCallExpression(parent)) {
+      const name = parent.expression.getText();
+      return /(?:^|\.)(?:set(?:Error|Message|Status|Notice|Toast|Label|Title|Text)|alert|showToast)$/i.test(name);
+    }
+    if (ts.isFunctionLike(parent) || ts.isStatement(parent)) break;
+  }
+  return false;
+}
+
+function sourceCopyContract(root, content, file) {
+  let ts;
+  try { ts = createRequire(path.join(root, 'package.json'))('typescript'); }
+  catch { throw new Error('Copy-only edit classification needs the app existing TypeScript dependency'); }
+  const parsed = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  if (parsed.parseDiagnostics.length) throw new Error('A copy-only screen must parse before exact text classification');
+  const ranges = [];
+  function signature(node) {
+    if (userFacingCopyNode(ts, node)) {
+      ranges.push({ start: node.getStart(parsed), end: node.end });
+      return [node.kind, '<copy>'];
+    }
+    const children = node.getChildren(parsed);
+    return children.length ? [node.kind, children.map(signature)] : [node.kind, node.getText(parsed)];
+  }
+  return { signature: canonicalJson(signature(parsed)), ranges };
+}
+
+function phonePlanCopyContract(value, screenId) {
+  const copy = structuredClone(value);
+  if (!Array.isArray(copy.screens) || !copy.screens.some((screen) => screen?.screenId === screenId)) {
+    throw new Error('Copy-only plan text must target one existing phone screen');
+  }
+  for (const screen of copy.screens) {
+    if (screen?.screenId !== screenId) continue;
+    screen.title = '<copy>';
+    if (Array.isArray(screen.primaryActions)) screen.primaryActions = screen.primaryActions.map(() => '<copy>');
+    if (Array.isArray(screen.secondaryActions)) screen.secondaryActions = screen.secondaryActions.map(() => '<copy>');
+  }
+  if (Array.isArray(copy.navigation?.destinations)) {
+    for (const destination of copy.navigation.destinations) {
+      if (destination?.screenId === screenId) destination.label = '<copy>';
+    }
+  }
+  return canonicalJson(copy);
+}
+
+function replaceCopyText(content, from, to, expectedCount) {
+  const positions = copyOccurrences(content, from);
+  if (positions.length !== expectedCount) throw new Error('Copy-only edit text no longer has the sealed exact occurrence count');
+  return positions.reduceRight((value, offset) => (
+    value.slice(0, offset) + to + value.slice(offset + from.length)
+  ), content);
+}
+
+function normalizeCopyEdits(root, input, screenId, screenFiles, allowedFiles) {
+  if (!Array.isArray(input.copyEdits) || !input.copyEdits.length || input.copyEdits.length > 40) {
+    throw new Error('A copy-only edit requires 1-40 exact text replacements');
+  }
+  if (screenFiles.length !== 1 || !screenFiles[0]) throw new Error('A copy-only edit requires one registered existing screen source');
+  const screenFile = screenFiles[0];
+  const directFiles = new Set([screenFile, PHONE_PLAN, 'native-app-plan.md', 'memory-bank.md']);
+  if (allowedFiles.some((file) => !directFiles.has(file) && !COPY_GENERATED_FILES.has(file))) {
+    throw new Error('A copy-only edit may change only its screen copy, canonical plan text, and owned projections');
+  }
+  if (allowedFiles.some((file) => !exists(root, file))) {
+    throw new Error('A copy-only edit cannot create or delete files');
+  }
+  const current = new Map();
+  const original = new Map();
+  const seen = new Set();
+  const copyEdits = input.copyEdits.map((entry) => {
+    protocol.object(entry, 'copy edit');
+    if (Object.keys(entry).some((key) => !['path', 'from', 'to', 'expectedCount'].includes(key))) {
+      throw new Error('Copy edits accept only path, from, to, and expectedCount');
+    }
+    const file = relativePath(entry.path);
+    if (!allowedFiles.includes(file) || !directFiles.has(file) || !exists(root, file)) {
+      throw new Error('Copy edit text must stay in its existing screen or canonical plan files');
+    }
+    if (typeof entry.from !== 'string' || typeof entry.to !== 'string'
+      || !entry.from.length || !entry.to.length || entry.from === entry.to
+      || entry.from.length > 1000 || entry.to.length > 1000
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\r\n]/.test(entry.from + entry.to)) {
+      throw new Error('Copy edit text must be bounded, nonempty, single-line display copy');
+    }
+    if (!Number.isInteger(entry.expectedCount) || entry.expectedCount < 1 || entry.expectedCount > 100) {
+      throw new Error('Copy edit expectedCount must be an integer from 1 to 100');
+    }
+    const key = `${file}\u0000${entry.from}`;
+    if (seen.has(key)) throw new Error('Copy edit replacements must be unique per file and source text');
+    seen.add(key);
+    const before = current.has(file) ? current.get(file) : readFile(inside(root, file), 2 * 1024 * 1024).toString('utf8');
+    if (!original.has(file)) original.set(file, before);
+    if (file === screenFile) {
+      const contract = sourceCopyContract(root, before, file);
+      const positions = copyOccurrences(before, entry.from);
+      if (positions.length !== entry.expectedCount
+        || positions.some((offset) => !contract.ranges.some((range) => offset >= range.start && offset + entry.from.length <= range.end))) {
+        throw new Error('Copy-only source replacements must match exact user-facing text nodes');
+      }
+    }
+    current.set(file, replaceCopyText(before, entry.from, entry.to, entry.expectedCount));
+    return { path: file, from: entry.from, to: entry.to, expectedCount: entry.expectedCount };
+  });
+  if (!current.has(screenFile)) throw new Error('A copy-only edit must change user-facing text in its registered screen source');
+  if (sourceCopyContract(root, original.get(screenFile), screenFile).signature
+    !== sourceCopyContract(root, current.get(screenFile), screenFile).signature) {
+    throw new Error('Copy-only source edits cannot change imports, handlers, routes, data, styling, or executable structure');
+  }
+  if (current.has(PHONE_PLAN)) {
+    let before;
+    let after;
+    try {
+      before = JSON.parse(original.get(PHONE_PLAN));
+      after = JSON.parse(current.get(PHONE_PLAN));
+    } catch {
+      throw new Error('Copy-only phone plan edits must preserve valid JSON');
+    }
+    if (phonePlanCopyContract(before, screenId) !== phonePlanCopyContract(after, screenId)) {
+      throw new Error('Copy-only phone plan edits may change only visible labels for the affected screen');
+    }
+    for (const file of [PHONE_COMPILED, PHONE_NAVIGATION]) {
+      if (!allowedFiles.includes(file)) throw new Error('Copy-only phone plan edits require their exact compiler-owned projections');
+    }
+  }
+  if (requiresAuthoringCheck(root)) {
+    for (const file of [...DERIVED_FILES, ...RUNTIME_HELPERS]) {
+      if (!allowedFiles.includes(file)) throw new Error('Copy-only screen edits require the complete authoring projection output set');
+    }
+  }
+  const copyWrites = [...current].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([file, content]) => ({
+      path: file, before: digest(Buffer.from(original.get(file))), after: digest(Buffer.from(content)),
+    }));
+  return { copyEdits, copyWrites };
+}
+
 function normalizePlan(root, descriptor, input) {
   protocol.object(input, 'edit proposal');
   if (input.schemaVersion !== 1 || Object.keys(input).some((key) => ![
     'schemaVersion', 'summary', 'kind', 'screenIds', 'newScreens', 'allowedFiles', 'entityId', 'rules', 'connectorName',
-    'authoringRuntime', 'authoringSources',
+    'authoringRuntime', 'authoringSources', 'copyEdits',
   ].includes(key))) throw new Error('Edit proposal has an unsupported shape');
-  const kind = protocol.enumeration(input.kind, ['global-style', 'target-layout', 'screen', 'business-rule', 'integration'], 'edit kind');
+  const kind = protocol.enumeration(input.kind, ['global-style', 'target-layout', 'screen', 'screen-copy', 'business-rule', 'integration'], 'edit kind');
   if (!!descriptor.integration !== (kind === 'integration')) {
     throw new Error('A catalogue-selected edit must use its bound integration proposal, not an unrelated edit kind');
   }
@@ -155,6 +326,11 @@ function normalizePlan(root, descriptor, input) {
   if (new Set(screenIds).size !== screenIds.length) throw new Error('Edit screen IDs must be unique');
   if (kind === 'target-layout' && (screenIds.length !== 1 || screenIds[0] !== selected.screen.screenId)) {
     throw new Error('A selected collection edit cannot widen to other screens');
+  }
+  if (kind === 'screen-copy' && (descriptor.operation !== 'edit' || !selected.screen
+    || screenIds.length !== 1 || screenIds[0] !== selected.screen.screenId
+    || input.newScreens !== undefined || input.authoringRuntime !== undefined || input.authoringSources !== undefined)) {
+    throw new Error('A copy-only edit requires one existing selected screen and cannot install or redirect authoring');
   }
   if (kind === 'global-style' && screenIds.length) throw new Error('App-background edits default to global styling, not the selected screen');
   const compiled = readJson(root, '.tmp/compiled-screen-build-pack.json');
@@ -197,6 +373,10 @@ function normalizePlan(root, descriptor, input) {
     if (!layouts.has(file) && !authoring.allowed.has(file)
       && !allowedFile(kind, file, selected, screenFiles, integration, ruleFiles)) throw new Error('An edit file exceeds the proposed contextual scope');
   }
+  const copy = kind === 'screen-copy'
+    ? normalizeCopyEdits(root, input, screenIds[0], screenFiles, allowedFiles)
+    : null;
+  if (kind !== 'screen-copy' && input.copyEdits !== undefined) throw new Error('Only a copy-only edit may declare exact text replacements');
   let rules;
   let entityId;
   if (kind === 'business-rule') {
@@ -213,6 +393,7 @@ function normalizePlan(root, descriptor, input) {
     ...(authoring.authoringRuntime ? { authoringRuntime: authoring.authoringRuntime } : {}),
     ...(newScreens.length ? { newScreens } : {}),
     ...(kind === 'target-layout' ? { targetId: selected.target.id, targetFile: selected.screen.sourceFile } : {}),
+    ...(copy ? { ...copy, approvalMode: 'final-apply-only' } : {}),
     ...(rules ? { rules, entityId } : {}),
     ...(integration ? { integration: integration.selection, integrationRoute: integration } : {}),
     preservedBehavior: ['navigation', 'queries', 'actions', 'paging'],
@@ -253,7 +434,11 @@ async function prepare(client, input) {
   const planPath = planLocation(descriptor, plan.id);
   if (exists(root, planPath)) {
     if (canonicalJson(readJson(root, planPath)) !== canonicalJson(plan)) throw new Error('Sealed edit proposal was modified');
-    return { planId: plan.id, planPath, scope: plan.scope, status: 'proposed' };
+    const state = readJson(root, stateLocation(descriptor, plan.id));
+    return {
+      planId: plan.id, planPath, scope: plan.scope, status: state.state,
+      approvalRequired: plan.kind !== 'screen-copy',
+    };
   }
   // Backups are limited to the explicitly proposed code/contracts. Runtime
   // records, media stores, remote journals, and unrelated files are not copied.
@@ -274,8 +459,14 @@ async function prepare(client, input) {
     throw new Error('The candidate source changed while sealing the edit proposal');
   }
   atomicWrite(root, planPath, plan, { exclusive: true });
-  atomicWrite(root, stateLocation(descriptor, plan.id), { schemaVersion: 1, planId: plan.id, state: 'proposed' }, { exclusive: true });
-  return { planId: plan.id, planPath, scope: plan.scope, status: 'proposed' };
+  const state = plan.kind === 'screen-copy'
+    ? { schemaVersion: 1, planId: plan.id, state: 'authorized', authorization: 'final-apply-only' }
+    : { schemaVersion: 1, planId: plan.id, state: 'proposed' };
+  atomicWrite(root, stateLocation(descriptor, plan.id), state, { exclusive: true });
+  return {
+    planId: plan.id, planPath, scope: plan.scope, status: state.state,
+    approvalRequired: plan.kind !== 'screen-copy',
+  };
 }
 
 function loadPlan(client, planId) {
@@ -292,6 +483,16 @@ function loadPlan(client, planId) {
 
 async function authorize(client, planId, { waitMs } = {}) {
   const plan = loadPlan(client, planId);
+  if (plan.kind === 'screen-copy') {
+    const state = readJson(client.descriptor.workspaceDir, stateLocation(client.descriptor, planId));
+    if (state.state !== 'authorized' || state.authorization !== 'final-apply-only') {
+      throw new Error('Copy-only preparation authorization is invalid; reopen the edit');
+    }
+    return {
+      planId, status: state.state, action: 'deferred-to-apply', receipt: null,
+      approvalRequired: false, applied: false,
+    };
+  }
   if (source(client.descriptor.workspaceDir).revision !== plan.baseRevision) throw new Error('Approve preparation before changing candidate source');
   const entity = plan.entityId ? readJson(client.descriptor.workspaceDir, DOMAIN_PATH).entities.find((entry) => entry.id === plan.entityId) : null;
   const items = [
@@ -329,6 +530,12 @@ async function authorizedPlan(client, planId) {
   const state = readJson(client.descriptor.workspaceDir, stateLocation(client.descriptor, planId));
   if (!['authorized', 'preparing-integration', 'writing', 'prepared', 'checked', 'submitted'].includes(state.state)) {
     throw new Error('The maker has not approved preparing this edit');
+  }
+  if (plan.kind === 'screen-copy') {
+    if (plan.approvalMode !== 'final-apply-only' || state.authorization !== 'final-apply-only' || state.receiptPath !== undefined) {
+      throw new Error('Copy-only preparation must remain bound to the final Apply decision');
+    }
+    return { plan, state };
   }
   // The approval binds the immutable proposal, not the candidate's changing
   // source. The proposal itself embeds the complete base source manifest.
@@ -439,6 +646,40 @@ function semanticContract(value) {
   return copy;
 }
 
+function replayCopyOutputs(root, descriptor, plan) {
+  const outputs = new Map();
+  for (const edit of plan.copyEdits || []) {
+    const before = outputs.has(edit.path)
+      ? outputs.get(edit.path)
+      : originalBytes(root, descriptor, plan, edit.path).toString('utf8');
+    outputs.set(edit.path, replaceCopyText(before, edit.from, edit.to, edit.expectedCount));
+  }
+  for (const write of plan.copyWrites || []) {
+    const content = outputs.get(write.path);
+    if (content === undefined || digest(Buffer.from(content)) !== write.after) {
+      throw new Error('Copy-only edit no longer reproduces its sealed exact output');
+    }
+  }
+  return outputs;
+}
+
+function assertCopyDelta(root, descriptor, plan, changes) {
+  const direct = new Set((plan.copyWrites || []).map((entry) => entry.path));
+  if (!direct.size || [...direct].some((file) => !changes.some((entry) => entry.path === file))) {
+    throw new Error('Copy-only candidate must contain every sealed text replacement');
+  }
+  if (changes.some((entry) => !direct.has(entry.path) && !COPY_GENERATED_FILES.has(entry.path))) {
+    throw new Error('Copy-only candidate contains a change outside its deterministic text and projection outputs');
+  }
+  for (const write of plan.copyWrites) {
+    if (!exists(root, write.path) || digest(readFile(inside(root, write.path), 2 * 1024 * 1024)) !== write.after) {
+      throw new Error('Copy-only candidate does not match its sealed text output');
+    }
+  }
+  if (exists(root, PHONE_PLAN)) compilePhoneScreens(root, { check: true });
+  replayCopyOutputs(root, descriptor, plan);
+}
+
 function assertScopedDelta(root, descriptor, plan) {
   const current = source(root);
   const beforeFiles = new Map(plan.baseline.files.map((entry) => [entry.path, entry]));
@@ -452,6 +693,7 @@ function assertScopedDelta(root, descriptor, plan) {
   if (changes.some((change) => !plan.allowedFiles.includes(change.path))) {
     throw new Error('Candidate contains out-of-scope source changes; preserve them and reopen the proposal');
   }
+  if (plan.kind === 'screen-copy') assertCopyDelta(root, descriptor, plan, changes);
   assertAuthoringDelta(root, plan, changes, (file) => JSON.parse(originalBytes(root, descriptor, plan, file).toString('utf8')));
   if (plan.kind === 'integration') {
     if (!sameIntegration(plan.integration, descriptor.integration)) throw new Error('The integration selection changed after preparation approval');
@@ -482,6 +724,68 @@ function assertScopedDelta(root, descriptor, plan) {
     }
   }
   return { sourceRevision: current.revision, changes };
+}
+
+function restoreCopyBaseline(root, descriptor, plan) {
+  for (const file of [...plan.allowedFiles].reverse()) {
+    atomicWrite(root, file, originalBytes(root, descriptor, plan, file), { bytes: true });
+  }
+}
+
+async function applyCopy(client, planId) {
+  let { plan, state } = await authorizedPlan(client, planId);
+  if (plan.kind !== 'screen-copy') throw new Error('Exact copy mutation requires a copy-only edit plan');
+  const root = client.descriptor.workspaceDir;
+  if (state.state === 'prepared' || state.state === 'checked') {
+    const result = assertScopedDelta(root, client.descriptor, plan);
+    return { planId, status: 'prepared', files: plan.copyWrites.map((entry) => entry.path), ...result, applied: false };
+  }
+  if (state.state === 'writing') {
+    restoreCopyBaseline(root, client.descriptor, plan);
+    state = { schemaVersion: 1, planId, state: 'authorized', authorization: 'final-apply-only' };
+    atomicWrite(root, stateLocation(client.descriptor, planId), state);
+  }
+  if (state.state !== 'authorized' || source(root).revision !== plan.baseRevision
+    || canonicalJson(approvedFileBaselines(root, plan.allowedFiles)) !== canonicalJson(plan.approvedFileBaselines)) {
+    throw new Error('Copy-only source changed after classification; reopen the normal edit workflow');
+  }
+  const outputs = replayCopyOutputs(root, client.descriptor, plan);
+  const compiled = readJson(root, PHONE_COMPILED);
+  const readyScreenIds = compiled.screens.map((screen) => screen.screenId);
+  if (exists(root, PHONE_PLAN)) compilePhoneScreens(root, { check: true });
+  if (requiresAuthoringCheck(root)) {
+    configurePrototypeAuthoring(root, {
+      check: true, readyScreenIds, screenSources: plan.authoringSources,
+    });
+  }
+  atomicWrite(root, stateLocation(client.descriptor, planId), {
+    ...state, state: 'writing', writes: plan.copyWrites,
+  });
+  try {
+    for (const [file, content] of outputs) atomicWrite(root, file, Buffer.from(content), { bytes: true });
+    if (outputs.has(PHONE_PLAN)) compilePhoneScreens(root);
+    if (outputs.has(plan.authoringSources?.find((entry) => entry.screenId === plan.screenIds[0])?.sourceFile)
+      && requiresAuthoringCheck(root)) {
+      configurePrototypeAuthoring(root, {
+        readyScreenIds: readJson(root, PHONE_COMPILED).screens.map((screen) => screen.screenId),
+        screenSources: plan.authoringSources,
+      });
+    }
+    const result = assertScopedDelta(root, client.descriptor, plan);
+    atomicWrite(root, stateLocation(client.descriptor, planId), {
+      ...state, state: 'prepared', sourceRevision: result.sourceRevision, changes: result.changes,
+    });
+    return {
+      planId, status: 'prepared', files: plan.copyWrites.map((entry) => entry.path),
+      ...result, applied: false, remoteEffects: false,
+    };
+  } catch (error) {
+    restoreCopyBaseline(root, client.descriptor, plan);
+    atomicWrite(root, stateLocation(client.descriptor, planId), {
+      schemaVersion: 1, planId, state: 'authorized', authorization: 'final-apply-only',
+    });
+    throw error;
+  }
 }
 
 async function check(client, planId) {
@@ -676,5 +980,5 @@ function undoEligible(root, receipt) {
 module.exports = {
   RULES_PATH, RULE_OUTPUTS, TEST_WRITE_PERMISSION, planLocation, stateLocation, sourceDelta, normalizePlan,
   inspect, prepare, loadPlan, authorize, authorizedPlan, assertScopedDelta,
-  behaviorSignature, originalBytes, protectedPacks, check, teach, integration, capture, ruleOutputs, submit, undoEligible,
+  behaviorSignature, originalBytes, protectedPacks, applyCopy, check, teach, integration, capture, ruleOutputs, submit, undoEligible,
 };
