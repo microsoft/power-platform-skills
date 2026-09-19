@@ -496,7 +496,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.14 `deploy-site` (10 calls)
+### 6.14 `deploy-site` (11 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -508,7 +508,8 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `deploy-site:5.5.1.activate` | gate | plan | 5.5.1 | Site not yet activated — *"Activate now / Skip"* | nothing |
 | `deploy-site:5.6.restart-cache` | gate | plan | 5.6 | Site activated — *"Restart site to flush cache? (brief downtime) / Skip"* | nothing |
 | `deploy-site:6.2.unblock-js` | gate | consent | 6.2 | Upload failed because `.js` is blocked — *"Remove .js block from `blockedattachments`? / No"*. Modifies tenant-wide env setting — destructive shared state. | `attachment-block-modified` |
-| `deploy-site:declarative-5.upload` | gate | final | Declarative 5 | Exact root/environment/website/model/diff confirmed — *"Upload changes / Review again / Cancel"* | local-customization |
+| Declarative Phase 3 model selection | not-a-gate | — | Declarative 3 | Exact website ID is absent in the target environment — select Enhanced or Standard for the first upload, with no default; Phase 5 separately approves creation | — |
+| `deploy-site:declarative-5.upload` | gate | final | Declarative 5 | Exact root/environment/deployment mode/website/model/diff confirmed — *"Upload changes" or "Create and upload" / Review again / Cancel* | local-customization |
 
 ---
 

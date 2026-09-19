@@ -202,9 +202,10 @@ User-invocable via `/power-pages:<skill-name>`:
   and optionally hands off to `deploy-site`.
 - `deploy-site`: Routes by project type. Code sites retain the 6-step build,
   `pac pages upload-code-site`, blocked-JavaScript, verification, and activation workflow.
-  Declarative sites use an isolated no-build workflow that validates local identity/model, confirms
-  an exact environment and website match, reviews component changes, obtains final upload consent,
-  and runs `pac pages upload` with an explicit model.
+  Declarative sites use an isolated no-build workflow that validates local identity, confirms an
+  exact environment and website match when one exists, or asks for an explicit Standard/Enhanced
+  model with no default on first upload. It reviews component changes, obtains final upload
+  consent, and runs `pac pages upload` with an explicit model.
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 5-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution + activation status check via shared script), gather parameters (site name, subdomain, website record ID), confirm with user, activate & poll via `skills/activate-site/scripts/activate-site.js`, present summary with site URL.

@@ -2,7 +2,8 @@
 
 Follow this workflow only after `deploy-site` routes the request to a PAC CLI-downloaded
 declarative site. It supports Enhanced and Standard sites when their model can be verified, but it
-never guesses a model or uses PAC's default implicitly.
+never guesses a model or uses PAC's default implicitly. When the website does not yet exist in the
+selected environment, it requires the user to choose the first-upload model explicitly.
 
 ## Invariants
 
@@ -10,8 +11,9 @@ never guesses a model or uses PAC's default implicitly.
 - Pass `--modelVersion` explicitly on every upload.
 - Do not run an npm build.
 - Do not modify blocked JavaScript attachment settings.
-- Do not invoke `activate-site`; a downloaded declarative site already has a website record.
-- Confirm the local website identity exists in the selected environment before upload.
+- Do not invoke `activate-site` from this workflow.
+- Match existing sites only by the exact local website record ID; never substitute a name match.
+- For a first upload, require an explicit Standard or Enhanced selection with no default.
 - A customization-plan approval is not deployment consent.
 
 ## Progress tracking
@@ -22,7 +24,7 @@ Create these tasks:
 |---|---|---|
 | Verify declarative project | Verifying declarative project | Resolve one site root, model, identity, and local validity |
 | Verify PAC authentication | Verifying PAC authentication | Confirm PAC CLI and the active environment |
-| Confirm deployment target | Confirming deployment target | Match the local website identity to the selected environment |
+| Confirm deployment target | Confirming deployment target | Match the local website identity or establish an explicit first-upload model |
 | Review declarative upload | Reviewing declarative upload | Summarize changed component categories and warnings |
 | Upload declarative site | Uploading declarative site | Obtain final approval and run the explicit-model PAC upload |
 | Verify declarative deployment | Verifying declarative deployment | Confirm upload success, identity, model, and next checks |
@@ -35,7 +37,8 @@ Create these tasks:
 3. Read the exact website record ID and site name from the downloaded metadata. Stop if identity
    is absent or conflicting.
 4. Do not infer the data model from the customization plan or downloaded directory shape. Leave it
-   unresolved until the exact PAC site-list match in Phase 3.
+   unresolved until Phase 3 obtains it from an exact PAC site-list match or an explicit first-upload
+   selection.
 5. Run the declarative validator when the website ID is available:
 
    ```bash
@@ -97,13 +100,44 @@ Reuse the parent deployment environment consent semantics:
 Use `AskUserQuestion`: **Deploy to this environment / Choose another environment / Cancel**.
 After a switch, rerun `pac auth who` and show the resolved values again.
 
-Run `pac pages list -v` and match the exact website record ID. Use that exact row to establish the
-authoritative data model, which must be `Enhanced` or `Standard`. Verify its site name agrees with
-the downloaded identity. Stop on no match, duplicate/conflicting identity, unsupported model, or
-mismatch. Upload is not a conversion mechanism.
+Run `pac pages list -v` and match the exact website record ID.
 
-After this lookup, show the resolved deployment summary again with the authoritative model. Use
-that resolved summary for change review and final upload approval.
+If exactly one row matches:
+
+1. Set deployment mode to **Update existing site**.
+2. Use that row to establish the authoritative data model, which must be `Enhanced` or `Standard`.
+3. Verify its site name agrees with the downloaded identity.
+4. Stop on duplicate/conflicting identity, unsupported model, or name mismatch. Upload is not a
+   conversion mechanism.
+
+If no row matches:
+
+1. Check whether the environment contains a different website record with the same site name. If
+   so, stop and report both identities; never overwrite or adopt it by name.
+2. Set deployment mode to **First upload — create site records**.
+3. Explain that the target environment has no website with the local record ID and that the local
+   files do not reliably reveal Standard versus Enhanced.
+
+   <!-- not-a-gate: first-upload model selection is required data gathering; the Phase 5 final gate approves the cloud mutation -->
+
+4. Use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |---|---|---|
+   | This website does not exist in the selected environment. Which data model should be used for the first upload? | Site data model | Enhanced, Standard, Cancel |
+
+   Do not recommend, preselect, or silently default either model. On **Cancel**, stop without
+   uploading. Record the answer as **user-selected**, not environment-authoritative.
+
+After this lookup or selection, show the resolved deployment summary again with:
+
+```text
+Deployment mode: <Update existing site|First upload — create site records>
+Data model: <Enhanced|Standard>
+Model source: <Existing website record|Explicit first-upload selection>
+```
+
+Use that resolved summary for change review and final upload approval.
 
 ## Phase 4: Review the upload
 
@@ -120,23 +154,31 @@ Summarize the local diff by declarative component category:
 Review `docs/customize-declarative-site/**` separately as orchestration evidence. It is not a PAC
 component category, must not be presented as uploadable metadata, and does not expand upload scope.
 
-Include uncommitted files, validation warnings, the explicit model argument, and the statement
-that upload changes the already-live site. Unexpected component categories or unrelated dirty
-files must be resolved or explicitly excluded before approval.
+Include uncommitted files, validation warnings, deployment mode, model source, and the explicit
+model argument. For an update, state that upload changes the existing live site. For a first
+upload, state that it creates the declarative website records in the selected environment.
+Unexpected component categories or unrelated dirty files must be resolved or explicitly excluded
+before approval.
 
 ## Phase 5: Approve and upload
 
 <!-- gate: deploy-site:declarative-5.upload | category=final | cancel-leaves=local-customization -->
 
 > 🚦 **Gate (final · deploy-site:declarative-5.upload):** Approve the exact declarative root,
-> environment, website identity, model, and summarized local changes immediately before upload.
+> environment, deployment mode, website identity, model, and summarized local changes immediately
+> before upload.
 >
-> **Trigger:** Local validation and target identity/model verification succeeded.
-> **Why:** The next command changes the existing live Power Pages site.
-> **Cancel leaves:** All verified local files and commits; the live site is unchanged.
+> **Trigger:** Local validation and target identity/model resolution succeeded.
+> **Why:** The next command changes an existing site or creates the declarative site records in the
+> selected environment.
+> **Cancel leaves:** All verified local files and commits; the target environment is unchanged.
 
-Ask: **Upload these declarative changes to this site?** Options: **Upload changes**, **Review
-again**, **Cancel**.
+For **Update existing site**, ask: **Upload these declarative changes to this site?** Options:
+**Upload changes**, **Review again**, **Cancel**.
+
+For **First upload — create site records**, ask: **Create this declarative site in the selected
+environment using the chosen data model?** Options: **Create and upload**, **Review again**,
+**Cancel**.
 
 Before executing, verify the installed `pac pages upload --help` output supports the arguments below.
 Use the installed CLI's equivalent spelling only when needed; never omit the explicit model:
@@ -153,10 +195,12 @@ environment, model, or site without returning through identity verification and 
 ## Phase 6: Verify and report
 
 1. Require a successful PAC exit and success output.
-2. Rerun `pac pages list -v`; confirm the same website record ID still reports the expected model.
+2. Rerun `pac pages list -v`; confirm exactly one row now matches the website record ID, site name,
+   and expected model. For a first upload, this is the required proof that the new site records
+   were created with the user-selected model.
 3. Rerun the local declarative validator.
 4. Record successful usage as `DeploySite`.
-5. Report the environment, website ID, model, uploaded root, component categories, and any pending
-   runtime/cache validation.
+5. Report the environment, deployment mode, website ID, model and model source, uploaded root,
+   component categories, and any pending runtime/cache validation.
 6. Recommend `/test-site` when a runtime URL is available. Do not offer activation for a
    declarative site.

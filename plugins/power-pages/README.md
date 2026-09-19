@@ -77,8 +77,9 @@ Routes by project type and deploys either a code site or a PAC-downloaded declar
 - Confirms target environment before deploying
 - Code sites retain the existing build, `pac pages upload-code-site`, blocked-JavaScript, and
   activation workflow
-- Declarative sites validate website identity and model, summarize local component changes, obtain
-  final upload approval, and use `pac pages upload` with an explicit model
+- Declarative sites validate website identity and model, or require an explicit Standard/Enhanced
+  choice when the website is absent for a first upload; they summarize local component changes,
+  obtain final upload approval, and use `pac pages upload` with an explicit model
 
 #### `/customize-declarative-site`
 

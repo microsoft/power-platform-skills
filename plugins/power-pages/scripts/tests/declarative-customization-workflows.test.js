@@ -62,6 +62,11 @@ test('deploy-site keeps code and declarative upload commands isolated', () => {
   assert.match(declarative, /Use `pac pages upload`, never `pac pages upload-code-site`/);
   assert.match(declarative, /--modelVersion "<Enhanced\|Standard>"/);
   assert.match(declarative, /Data model: Pending verification/);
+  assert.match(declarative, /First upload — create site records/);
+  assert.match(declarative, /Which data model should be used for the first upload\?/);
+  assert.match(declarative, /Do not recommend, preselect, or silently default either model/);
+  assert.match(declarative, /different website record with the same site name/);
+  assert.match(declarative, /Create this declarative site in the selected\s+environment using the chosen data model\?/);
   assert.match(declarative, /--websiteRecordId "<WEBSITE_RECORD_ID>"/);
   assert.match(declarative, /--siteRoot "<PROJECT_RELATIVE_SITE_ROOT>"/);
   assert.match(declarative, /Do not invoke `activate-site`/);
