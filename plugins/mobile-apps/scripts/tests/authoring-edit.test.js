@@ -246,6 +246,18 @@ test('context is registered, source-mapped, minimal, and tied to the base previe
   assert.equal(generic.defaultScope, 'app');
 });
 
+test('registered UI actions do not need to duplicate data-domain operation IDs', (t) => {
+  const f = fixture(t);
+  const registry = readJson(f.root, '.tmp/authoring-registry.json');
+  registry.screens[0].targets[0].actionId = 'open-inspection';
+  write(f.root, '.tmp/authoring-registry.json', registry);
+  f.descriptor.context.actionId = 'open-inspection';
+
+  const selected = registeredContext(f.root, f.descriptor);
+  assert.equal(selected.target.actionId, 'open-inspection');
+  assert.equal(f.domain.actions.some((action) => action.id === selected.target.actionId), false);
+});
+
 test('app background defaults global; selected layout cannot widen files, records, generated services, or screens', (t) => {
   const f = fixture(t);
   assert.equal(inspectEdit(f.root, f.descriptor, 'background').defaultScope, 'app');

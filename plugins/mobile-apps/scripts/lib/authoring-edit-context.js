@@ -46,19 +46,14 @@ function registeredContext(root, descriptor) {
     protocol.enumeration(target.role, protocol.TARGET_ROLES, 'registered target role');
     if (context.actionId && target.actionId !== context.actionId) throw new Error('The selected action does not belong to this target');
   }
-  if (context.actionId || context.recordRef) {
+  if (context.recordRef) {
     if (!exists(root, DOMAIN_PATH)) throw new Error('Selected data context requires the declared app domain, not inferred pixels');
     const domain = validateDomain(readJson(root, DOMAIN_PATH));
     if (domain.appInstanceId !== descriptor.appInstanceId) throw new Error('Selected data context belongs to another app');
-    if (context.actionId && !domain.actions.some((action) => action.id === context.actionId)) {
-      throw new Error('The selected action is not a declared domain action');
-    }
-    if (context.recordRef) {
-      const bindings = readJson(root, '.tmp/prototype-bindings.json');
-      if (!bindings.entities?.some((binding) => binding.conceptId === context.recordRef.conceptId
-        && domain.entities.some((entity) => entity.id === binding.entityId))) {
-        throw new Error('The selected record reference is not a declared app concept');
-      }
+    const bindings = readJson(root, '.tmp/prototype-bindings.json');
+    if (!bindings.entities?.some((binding) => binding.conceptId === context.recordRef.conceptId
+      && domain.entities.some((entity) => entity.id === binding.entityId))) {
+      throw new Error('The selected record reference is not a declared app concept');
     }
   }
   return { context, target, screen, targeted: !!target };
