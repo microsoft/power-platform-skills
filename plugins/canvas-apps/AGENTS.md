@@ -28,6 +28,13 @@ hooks.json                     ← Copilot-format hooks: userPromptTransformed
 hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
+scripts/
+  validate-canvas-acceptance.cs ← Blocks completion when final evidence does not cover the plan
+  run-tests.js                   ← Regression gate: runs scripts/tests/*.test.js (needs .NET 10 SDK)
+  tests/
+    validate-canvas-acceptance.test.js ← Drives the validator against the receive-issue fixtures
+    fixtures/receive-issue/      ← Directional-mutation (Receive/Issue) workspace + templates + README
+    fixtures/receive-issue-compound/ ← Same-record compound-sequence (Qty 10→Receive 3→13→Issue 2→11) fixture + README
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions
@@ -41,7 +48,7 @@ references/
   EditWorkflow.md              ← Simple vs complex edit routing and planning
   ValidationWorkflow.md        ← Wave compile gates and bounded diagnostic convergence
 agents/
-  canvas-app-planner.md        ← Discovers resources and writes plan document; invoked by canvas-app
+  canvas-app-planner.md        ← Uses orchestrator discovery to write the plan; invoked by canvas-app
   canvas-screen-builder.md     ← Builds or modifies one screen; invoked by canvas-app (parallel)
 skills/
   canvas-app/
@@ -66,8 +73,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
-| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports every named self-QA outcome. Builders run in waves of at most three; `canvas-app` owns compilation. |
+| `canvas-app-planner` | `canvas-app` | Receives the approved plan and orchestrator-owned discovery packet, then writes CREATE-mode `App.pa.yaml`, a compact dispatch index, shared conventions, and one self-sufficient brief per screen. The top-level skill owns MCP discovery and compilation because delegated agents do not reliably inherit its live connection. |
+| `canvas-screen-builder` | `canvas-app` | Defines the one-screen implementation and self-QA contract. External-plugin general-purpose workers follow this file in waves of at most three; `canvas-app` owns compilation. |
 
 ## MCP Tools
 

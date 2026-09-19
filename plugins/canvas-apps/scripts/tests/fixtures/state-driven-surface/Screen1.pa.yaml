@@ -1,0 +1,51 @@
+Screens:
+    Screen1:
+        Properties:
+            OnVisible: =Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())
+        Children:
+            - conItemEditor:
+                Control: GroupContainer
+                Properties:
+                    Visible: =(varEditorMode = "Edit") = true
+                Children:
+                    - lblEditorTitle:
+                        Control: Classic/Label
+                        Properties:
+                            Text: ="Editor"
+                    - lblEditorValue:
+                        Control: Classic/Label
+                        Properties:
+                            Text: ="Item name"
+                    - inpEditorValue:
+                        Control: Classic/TextInput
+                        Properties:
+                            HintText: ="Enter a value"
+            - btnCreate:
+                Control: Classic/Button
+                Properties:
+                    Text: ="Create"
+                    OnSelect: =Set(varCreated, Patch(colItems, Defaults(colItems), {Name: inpEditorValue.Text})); Set(varContinuationId, varCreated.ID); Set(varContinuationMode, "Delete")
+            - btnDelete:
+                Control: Classic/Button
+                Properties:
+                    Text: ="Delete"
+                    OnSelect: =Set(varDeleteSnapshot, LookUp(colItems, ID = varContinuationId)); Remove(colItems, varDeleteSnapshot); Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())
+            - btnCancel:
+                Control: Classic/Button
+                Properties:
+                    Text: ="Cancel"
+                    OnSelect: =Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())
+            - lblDeleteReceipt:
+                Control: Classic/Label
+                Properties:
+                    Text: =varDeleteSnapshot.ID
+            - lblCanonicalAbsent:
+                Control: Classic/Label
+                Properties:
+                    Visible: =IsBlank(LookUp(colItems, ID = varDeleteSnapshot.ID))
+                    Text: ="Removed from source"
+            - lblDestinationAbsent:
+                Control: Classic/Label
+                Properties:
+                    Visible: =IsBlank(LookUp(colItems, ID = varDeleteSnapshot.ID))
+                    Text: ="Removed from destination"

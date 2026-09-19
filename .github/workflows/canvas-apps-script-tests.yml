@@ -1,0 +1,69 @@
+# Functional unit tests for the canvas-apps plugin.
+#
+# What this actually gates: scripts/validate-canvas-acceptance.cs is the plugin's
+# static acceptance gate — it blocks completion when the final evidence artifact does
+# not cover the plan, and (the reason this workflow exists) it enforces the directional
+# mutation contract so a reversed-sign Receive/Issue formula cannot pass. That validator
+# is a pure static analyzer over committed files; it needs NO live coauthoring session,
+# so it runs unchanged in CI. scripts/run-tests.js drives it against the committed
+# Receive/Issue fixture (a correctly-signed workspace must PASS; a reversed-sign one must
+# FAIL on the directional check).
+#
+# Honest scope: this is a compile-plus-static-contract gate, NOT full runtime validation.
+# The validator itself only ever reports "runtime evaluation NOT RUN"; a real browser
+# evaluation against a live Power Apps Studio session remains the authority for the
+# functional grade and is intentionally out of CI reach. A green run here means the
+# validator compiles and its static contracts (including directionality) hold — a real
+# improvement over the prior state, where nothing ran this validator automatically.
+#
+# Deliberately mirrors the other per-plugin script-test workflows and keeps its own path
+# filter, so a change to another plugin never spends CI time here and vice versa. This
+# plugin has not adopted telemetry, so no opt-out env var is needed (add one here if it
+# ever does — see the root AGENTS.md "CI must opt out of telemetry transmission").
+name: canvas-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/canvas-apps/**"
+            - ".github/workflows/canvas-apps-script-tests.yml"
+    push:
+        paths:
+            - "plugins/canvas-apps/**"
+            - ".github/workflows/canvas-apps-script-tests.yml"
+
+jobs:
+    test-canvas-apps-scripts:
+        name: test-canvas-apps-scripts (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            # The validator builds filesystem paths and parses YAML/Markdown; path-separator
+            # and shell differences are a real regression class, so cover Linux and Windows.
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            # run-tests.js shells out to `dotnet run --file`, so both toolchains are required:
+            # Node to run the test harness and the .NET 10 SDK the plugin's MCP server and this
+            # file-based validator target (see AGENTS.md "Prerequisites").
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 20
+
+            - name: setup-dotnet
+              uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+              with:
+                  dotnet-version: "10.0.x"
+
+            - name: run-canvas-apps-script-tests
+              shell: bash
+              working-directory: plugins/canvas-apps
+              run: node scripts/run-tests.js
