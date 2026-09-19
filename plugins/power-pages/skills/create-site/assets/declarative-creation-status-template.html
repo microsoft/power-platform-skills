@@ -454,7 +454,7 @@
             <button class="active" data-view="desktop">Desktop</button>
             <button data-view="mobile">Mobile</button>
           </div>
-          <div class="template-meta"><span id="templateName"></span><br>Language · <span id="language"></span></div>
+          <div class="template-meta"><span id="templateName"></span><br><span id="modelVersion"></span> model · Language <span id="language"></span></div>
         </div>
         <section class="template-info" aria-labelledby="templateInfoTitle">
           <h2 id="templateInfoTitle">About this template</h2>
@@ -478,7 +478,7 @@
 
         <div class="result-card" id="resultCard">
           <h4 id="resultTitle">Your site is ready</h4>
-          <p id="resultMessage">The Enhanced site was verified, downloaded, and validated locally.</p>
+          <p id="resultMessage">The selected data model was verified, downloaded, and validated locally.</p>
         </div>
 
         <footer class="footer">
@@ -529,6 +529,7 @@
     setText("templateDescription", model.template.description);
     setText("aboutDescription", model.template.description);
     setText("templateName", model.template.name);
+    setText("modelVersion", model.site.modelVersion);
     setText("language", model.site.language);
     setText("siteName", model.site.name);
     setText("siteUrl", model.site.url);

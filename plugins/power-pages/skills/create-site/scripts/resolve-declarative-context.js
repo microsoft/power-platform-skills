@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Resolves the non-secret environment context required by EDM site creation.
+// Resolves the non-secret environment context required by declarative site creation.
 // Tokens remain inside this process and are never included in stdout.
 
 const {
@@ -11,7 +11,7 @@ const {
   validateDataverseEnvironmentUrl,
 } = require('../../../scripts/lib/validation-helpers');
 
-async function resolveEdmContext(dependencies = {}) {
+async function resolveDeclarativeContext(dependencies = {}) {
   const readEnvironmentUrl = dependencies.getEnvironmentUrl || getEnvironmentUrl;
   const readPacAuthInfo = dependencies.getPacAuthInfo || getPacAuthInfo;
   const acquireToken = dependencies.getAuthToken || getAuthToken;
@@ -67,7 +67,7 @@ async function resolveEdmContext(dependencies = {}) {
 
 async function main() {
   try {
-    const context = await resolveEdmContext();
+    const context = await resolveDeclarativeContext();
     process.stdout.write(`${JSON.stringify(context, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
@@ -79,4 +79,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { resolveEdmContext };
+module.exports = { resolveDeclarativeContext };

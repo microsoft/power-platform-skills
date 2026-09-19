@@ -166,14 +166,14 @@ test('URL validation rejects malicious hosts, credentials, ports, fragments, and
   );
 });
 
-// --- findProjectRoot: EDM / data-model site awareness ------------------------
+// --- findProjectRoot: declarative data-model site awareness ------------------
 
-test('findProjectRoot: recognizes a .powerpages-site/ directory as a project root (data-model/EDM sites)', (t) => {
+test('findProjectRoot recognizes a declarative .powerpages-site directory as a project root', (t) => {
   const fs = require('fs');
   const os = require('os');
   const { findProjectRoot } = require(helpersPath);
 
-  // EDM/data-model site: .powerpages-site/ present, NO powerpages.config.json.
+  // Declarative data-model site: .powerpages-site/ present, NO powerpages.config.json.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-edm-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.powerpages-site'), { recursive: true });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates either a generated code site or a PAC-downloaded declarative site.
-// The PostToolUse hook uses structural checks; the EDM workflow also passes the
+// The PostToolUse hook uses structural checks; the declarative workflow also passes the
 // expected website record ID for an identity match before creating the Git baseline.
 
 const fs = require('fs');

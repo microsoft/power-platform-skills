@@ -42,6 +42,11 @@ test('normalizeOptions accepts the Event Portal template identifier', () => {
   assert.equal(result.templateName, 'EventPortal');
 });
 
+test('normalizeOptions accepts the Blank page template identifier', () => {
+  const result = normalizeOptions(validOptions({ templateName: 'BlankPage' }));
+  assert.equal(result.templateName, 'BlankPage');
+});
+
 test('normalizeOptions keeps the legacy documented default for code-site activation', () => {
   const result = normalizeOptions(validOptions({ templateName: undefined }));
   assert.equal(result.templateName, 'DefaultPortalTemplate');

@@ -168,8 +168,12 @@ owning skill supports the requested operation.
 
 ## Phase 4: Approve the plan
 
-Present a short terminal summary and direct the user to the HTML for the complete pages, operations,
-dependencies, preservation decisions, styling direction, warnings, and local/live boundary.
+Present a short terminal summary and direct the user to the HTML for the complete user-facing
+proposal: pages and navigation, content and page compositions, assets and reusable components,
+styling, preservation decisions, warnings, verification, and the local/live boundary. The default
+HTML view describes visible outcomes rather than authoring-skill mechanics. A collapsed technical
+implementation trace may expose operation IDs, owning skills, dependencies, bindings, and exact
+targets for maintainers; the validated JSON remains the execution source of truth.
 
 <!-- gate: customize-declarative-site:4.approve | category=plan | cancel-leaves=plan-artifacts -->
 

@@ -28,7 +28,8 @@ function output(obj) {
 // Resolution order:
 //   1. powerpages.config.json (code/SPA sites) — siteName + (optional) websiteRecordId.
 //   2. .powerpages-site/website.yml (declarative sites — standard or
-//      enhanced data model — which have no powerpages.config.json) — `name` -> siteName,
+//      standard or enhanced declarative data model — which have no powerpages.config.json) —
+//      `name` -> siteName,
 //      `id` -> websiteRecordId.
 //   3. `pac pages list` — ONLY when the GUID is still unknown (e.g. a code site whose
 //      config omitted websiteRecordId). Declarative sites already have it from

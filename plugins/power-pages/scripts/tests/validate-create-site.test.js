@@ -26,7 +26,7 @@ function writeFile(root, relativePath, content = '') {
   fs.writeFileSync(filePath, content);
 }
 
-test('validates an EDM declarative project with matching identity and assets', () =>
+test('validates a declarative project with matching identity and assets', () =>
   withTempDir((root) => {
     fs.mkdirSync(path.join(root, '.git'));
     fs.mkdirSync(path.join(root, '.powerpages-site', '.portalconfig'), { recursive: true });

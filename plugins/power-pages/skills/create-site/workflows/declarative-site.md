@@ -1,21 +1,24 @@
-# Create an Enhanced Data Model Site
+# Create a Declarative Power Pages Site
 
-Follow this workflow only after `create-site` routes the request to an Enhanced data model (EDM)
-declarative site. The platform creates the baseline from a documented first-party template; the
-skill downloads that baseline rather than generating Power Pages metadata.
+Follow this workflow only after `create-site` routes the request to a Standard or Enhanced data
+model declarative site. The platform creates the baseline from a documented first-party template;
+the skill downloads that baseline rather than generating Power Pages metadata.
 
 ## Invariants
 
-- This workflow creates Enhanced sites only. It does not create Standard data model sites.
+- Require an explicit `MODEL_VERSION` of `Enhanced` or `Standard`; never choose a default.
 - The environment EDM toggle has no documented public read or write API.
-- An environment administrator must verify **Switch to enhanced data model** in Power Platform
-  admin center. The skill never automates that shared environment change.
-- The template list is a plugin-owned EDM allowlist. It is not presented as an
+- An environment administrator must verify **Switch to enhanced data model** is enabled for
+  Enhanced creation or disabled for Standard creation. The skill never automates that shared
+  environment change.
+- The template list is a plugin-owned declarative allowlist. It is not presented as an
   environment-specific catalog because no public template-catalog API is available.
-- Do not submit `websiteRecordId` for a new EDM site. The platform creates the Dataverse website
+- Do not submit `websiteRecordId` for a new declarative site. The platform creates the Dataverse website
   record and returns or exposes its ID after provisioning.
 - Never retry a Create Website POST after `202 Accepted`. Poll or resume the accepted operation.
-- Download with `--modelVersion Enhanced` explicitly.
+- Verify PAC reports `MODEL_VERSION`, then download with `--modelVersion "<MODEL_VERSION>"`
+  explicitly.
+- Pass `--modelVersion "<MODEL_VERSION>"` to every status-page render.
 - Do not invoke `activate-site` or show a deploy-now prompt after creation. The Create Website API
   already provisions the cloud site.
 
@@ -25,19 +28,38 @@ Create all eight tasks before starting:
 
 | Task subject | Active form | Description |
 |---|---|---|
-| Verify EDM prerequisites | Verifying EDM prerequisites | Verify tools, authentication, environment identity, and administrator confirmation |
-| Select an EDM template | Selecting an EDM template | Load the supported EDM templates and select one |
-| Configure the EDM site | Configuring the EDM site | Gather name, language, subdomain, and destination |
-| Approve EDM provisioning | Reviewing EDM provisioning | Present the complete cloud and local plan for final consent |
-| Provision the EDM site | Provisioning the EDM site | Create the website and poll the accepted operation |
-| Download the EDM site | Downloading the EDM site | Verify the created model and download explicitly as Enhanced |
-| Validate the EDM baseline | Validating the EDM baseline | Validate declarative artifacts and initialize Git |
-| Complete EDM setup | Completing EDM setup | Present cloud/local results and optionally customize the downloaded template |
+| Verify declarative prerequisites | Verifying declarative prerequisites | Select the model and verify tools, authentication, environment identity, and administrator confirmation |
+| Select a declarative template | Selecting a declarative template | Load the supported templates and select one |
+| Configure the declarative site | Configuring the declarative site | Gather name, language, subdomain, and destination |
+| Approve declarative provisioning | Reviewing declarative provisioning | Present the complete cloud and local plan for final consent |
+| Provision the declarative site | Provisioning the declarative site | Create the website and poll the accepted operation |
+| Download the declarative site | Downloading the declarative site | Verify and download explicitly with the selected model |
+| Validate the declarative baseline | Validating the declarative baseline | Validate declarative artifacts and initialize Git |
+| Complete declarative setup | Completing declarative setup | Present cloud/local results and optionally customize the downloaded template |
 
-## Phase 1: Verify Prerequisites and EDM Availability
+## Phase 1: Select the Model and Verify Prerequisites
 
-1. Run the plugin version check from the parent skill.
-2. Verify:
+1. If the initial request explicitly says Standard/SDM or Enhanced/EDM, set `MODEL_VERSION` to
+   `Standard` or `Enhanced` respectively. Otherwise ask:
+
+   <!-- gate: create-site:declarative-1-select-model | category=plan | cancel-leaves=nothing -->
+
+   > 🚦 **Gate (plan · create-site:declarative-1-select-model):** Select the data model that the
+   > environment toggle and post-provision verification must enforce.
+   >
+   > **Trigger:** The request selected declarative creation without specifying Standard or Enhanced.
+   > **Why we ask:** The Create Website request relies on an environment-level toggle, and the
+   > resulting model controls the explicit PAC download mode.
+   > **Cancel leaves:** Nothing — no cloud resource or local project exists.
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Which data model should the new declarative site use? | Data model | Enhanced, Standard, Cancel |
+
+   Do not recommend or preselect either model.
+
+2. Run the plugin version check from the parent skill.
+3. Verify:
 
    ```bash
    pac help
@@ -45,66 +67,76 @@ Create all eight tasks before starting:
    az account show
    ```
 
-3. Resolve the current environment:
+4. Resolve the current environment:
 
    ```bash
-   node "${PLUGIN_ROOT}/skills/create-site/scripts/resolve-edm-context.js"
+   node "${PLUGIN_ROOT}/skills/create-site/scripts/resolve-declarative-context.js"
    ```
 
    The helper returns only non-secret context: environment URL, environment ID, Dataverse
    organization ID, and cloud. If authentication is missing, guide the user through `pac auth
    create` or `az login`, then retry.
 
-> 🚦 **Gate (consent · create-site:edm-1-confirm-environment):** Confirm the exact environment
+> 🚦 **Gate (consent · create-site:declarative-1-confirm-environment):** Confirm the exact environment
 > before template selection and provisioning.
 >
-> **Trigger:** EDM context resolved.
+> **Trigger:** Declarative creation context resolved.
 > **Why we ask:** Creating in the wrong environment leaves a real shared cloud resource.
 > **Cancel leaves:** Nothing — no site or local project exists.
 
-4. Show the environment URL and ID, then ask whether to use this environment. If the user chooses
+5. Show the environment URL and ID, then ask whether to use this environment. If the user chooses
    another environment, select/authenticate it and rerun the context helper before asking again.
 
-5. Run:
+6. Run:
 
    ```bash
-   node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js"
+   node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" \
+     --modelVersion "<MODEL_VERSION>"
    ```
 
    The expected capability status is `indeterminate` because no documented API reads the toggle.
 
-> 🚦 **Gate (progress · create-site:edm-1-confirm-capability):** Require administrator
-> confirmation that **Switch to enhanced data model** is enabled.
+> 🚦 **Gate (progress · create-site:declarative-1-confirm-capability):** Require administrator
+> confirmation that **Switch to enhanced data model** matches the selected model.
 >
 > **Trigger:** Public API capability result is `indeterminate`.
-> **Why we ask:** Existing sites and Dataverse tables do not prove which model a newly created site
-> will use.
+> **Why we ask:** Existing sites and Dataverse tables do not prove the environment toggle state
+> that controls which model a newly created site will use.
 > **Cancel leaves:** Nothing — no site or local project exists.
 
-6. Explain how to verify the toggle in Power Platform admin center and use `AskUserQuestion`:
+7. Explain how to verify the toggle in Power Platform admin center.
+
+   For `MODEL_VERSION=Enhanced`, use `AskUserQuestion`:
 
    | Question | Header | Options |
    |---|---|---|
    | Has an environment administrator verified that **Switch to enhanced data model** is enabled for this environment? | EDM availability | Yes, it is enabled, Open Power Platform admin center, Choose another environment, Cancel |
 
-7. On **Open Power Platform admin center**, open `https://aka.ms/ppac`, wait for the user to
+   For `MODEL_VERSION=Standard`, use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Has an environment administrator verified that **Switch to enhanced data model** is disabled for this environment? | SDM availability | Yes, it is disabled, Open Power Platform admin center, Choose another environment, Cancel |
+
+8. On **Open Power Platform admin center**, open `https://aka.ms/ppac`, wait for the user to
    verify or change the setting, and ask again. On **Choose another environment**, return to step
-   4. Never toggle the setting through browser automation.
-8. After confirmation, rerun:
+   5. Never toggle the setting through browser automation.
+9. After confirmation, rerun:
 
    ```bash
-   node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" --administratorConfirmed
+   node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" \
+     --modelVersion "<MODEL_VERSION>" --administratorConfirmed
    ```
 
 ## Phase 2: Select a Documented Template
 
 Present the returned templates with the disclosure:
 
-> These are the EDM template identifiers supported by this plugin. Microsoft does not publish an
+> These are the declarative template identifiers supported by this plugin. Microsoft does not publish an
 > environment-specific template-catalog API, so this may not include every template shown in
 > Power Pages design studio.
 
-> 🚦 **Gate (plan · create-site:edm-2-select-template):** Select the exact supported template
+> 🚦 **Gate (plan · create-site:declarative-2-select-template):** Select the exact supported template
 > identifier submitted to Create Website.
 >
 > **Trigger:** Documented template list loaded.
@@ -114,6 +146,7 @@ Present the returned templates with the disclosure:
 Use `AskUserQuestion` with:
 
 - Starter Layout 1
+- Blank page
 - Program Registration
 - Event Portal
 - Schedule and Manage Meetings
@@ -148,7 +181,9 @@ Validate before any cloud mutation:
 Show:
 
 ```text
-Site type: Enhanced data model (declarative)
+Site type: Declarative Power Pages site
+Data model: <MODEL_VERSION>
+Toggle confirmation: Switch to enhanced data model is <enabled for Enhanced|disabled for Standard>
 Environment URL: <environmentUrl>
 Environment ID: <environmentId>
 Template: <template display name> (<templateName>)
@@ -160,7 +195,7 @@ Website record ID: Assigned by Power Pages during provisioning
 Download destination: <resolved path>
 ```
 
-> 🚦 **Gate (final · create-site:edm-4-provision):** Final consent immediately before the Create
+> 🚦 **Gate (final · create-site:declarative-4-provision):** Final consent immediately before the Create
 > Website API call.
 >
 > **Trigger:** All cloud and local parameters have been validated.
@@ -174,7 +209,7 @@ Ask: **Create this site and download it?** Options: **Create site**, **Change se
 Before submitting the request, generate the browser status page:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/render-edm-status.js" --templateName "<templateName>" --status "provisioning" --siteName "<siteName>" --subdomain "<subdomain>" --language "<lcid>"
+node "${PLUGIN_ROOT}/skills/create-site/scripts/render-declarative-status.js" --templateName "<templateName>" --modelVersion "<MODEL_VERSION>" --status "provisioning" --siteName "<siteName>" --subdomain "<subdomain>" --language "<lcid>"
 ```
 
 Store the returned `output` as `STATUS_PAGE_PATH` and `url` as `STATUS_PAGE_URL`. The renderer
@@ -191,6 +226,11 @@ Run the shared provisioner:
 ```bash
 node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --templateName "<templateName>" --selectedBaseLanguage "<lcid>"
 ```
+
+The documented Create Website request has no model field. `MODEL_VERSION` is enforced by the
+administrator-confirmed environment toggle and the mandatory PAC verification before download,
+not by adding an undocumented request property. See:
+https://learn.microsoft.com/rest/api/power-platform/powerpages/websites/create-website
 
 Use a command timeout of at least six minutes.
 
@@ -215,7 +255,7 @@ operation; a presentation failure must never cause a second creation POST.
 Update the status page before website identity lookup:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/render-edm-status.js" --output "<statusPagePath>" --templateName "<templateName>" --status "registration" --siteName "<siteName>" --subdomain "<subdomain>" --siteUrl "<siteUrl>" --language "<lcid>"
+node "${PLUGIN_ROOT}/skills/create-site/scripts/render-declarative-status.js" --output "<statusPagePath>" --templateName "<templateName>" --modelVersion "<MODEL_VERSION>" --status "registration" --siteName "<siteName>" --subdomain "<subdomain>" --siteUrl "<siteUrl>" --language "<lcid>"
 ```
 
 1. If the terminal operation result did not include `websiteRecordId`, run this read-only lookup
@@ -231,14 +271,15 @@ node "${PLUGIN_ROOT}/skills/create-site/scripts/render-edm-status.js" --output "
    from that row. Never submit another creation request.
 3. Before checking PAC, update the same status page with `--status "verification"` and include
    `--websiteRecordId "<websiteRecordId>"` when available. In the same `pac pages list -v` row,
-   verify the site reports the **Enhanced** data model.
-4. If it reports Standard or cannot be matched, stop before download. Do not use the Enhanced
-   download flag as a conversion mechanism. Render the terminal status `model-mismatch` so the
-   browser explains why the workflow stopped and confirms that no duplicate site will be created.
+   verify the site reports `MODEL_VERSION`.
+4. If it reports the other model or cannot be matched, stop before download. Do not use the
+   download flag as a conversion mechanism. Render the terminal status `model-mismatch`, passing
+   the PAC-reported model as `--actualModelVersion`, so the browser explains why the workflow
+   stopped and confirms that no duplicate site will be created.
 5. Update the status page with `--status "download"`, then run:
 
    ```bash
-   pac pages download --path "<destination>" --webSiteId "<websiteRecordId>" --environment "<environmentUrl>" --modelVersion Enhanced
+   pac pages download --path "<destination>" --webSiteId "<websiteRecordId>" --environment "<environmentUrl>" --modelVersion "<MODEL_VERSION>"
    ```
 
 6. Locate the downloaded directory containing `.powerpages-site/.portalconfig/` and use its parent
@@ -270,7 +311,7 @@ Update the status page with `--status "git"` immediately before Git initializati
 ```bash
 git init
 git add -A
-git commit -m "Initial EDM site from <template display name> template"
+git commit -m "Initial <MODEL_VERSION> declarative site from <template display name> template"
 ```
 
 Run the validator again after Git initialization.
@@ -295,19 +336,19 @@ Present:
 - Website record ID
 - Site URL
 - Local project path
-- Confirmed data model: Enhanced
+- Confirmed data model: `<MODEL_VERSION>`
 - Validation and Git baseline result
 - Creation status page URL
 
 Explain that the local files are the validated, committed baseline of the site already created in
 the environment. Do not ask to deploy the unchanged baseline.
 
-<!-- gate: create-site:edm-8-customize | category=plan | cancel-leaves=edm-baseline -->
+<!-- gate: create-site:declarative-8-customize | category=plan | cancel-leaves=declarative-baseline -->
 
-> 🚦 **Gate (plan · create-site:edm-8-customize):** Choose whether to continue into coordinated
+> 🚦 **Gate (plan · create-site:declarative-8-customize):** Choose whether to continue into coordinated
 > local declarative customization.
 >
-> **Trigger:** Enhanced download, identity validation, and the untouched-template Git baseline
+> **Trigger:** Explicit-model download, identity validation, and the untouched-template Git baseline
 > succeeded.
 > **Why:** Customization can create or modify several local declarative records, while declining
 > should leave the verified Microsoft template unchanged.

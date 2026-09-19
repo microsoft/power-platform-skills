@@ -1,11 +1,11 @@
 # Power Pages Plugin
 
-Create and deploy Power Pages sites using modern frontend frameworks or first-party Enhanced data
-model templates. This plugin provides a complete workflow—from site creation to deployment, data
+Create and deploy Power Pages sites using modern frontend frameworks or first-party declarative
+templates. This plugin provides a complete workflow—from site creation to deployment, data
 modeling, authentication, Web API integration, and ALM—through conversational AI skills.
 
-**Supported creation models**: Enhanced data model declarative sites; React, Angular, Vue, and
-Astro static SPAs
+**Supported creation models**: Standard and Enhanced data model declarative sites; React, Angular,
+Vue, and Astro static SPAs
 
 For an existing **classic, server-rendered Power Pages site**, `/style-site` provides a separate local Desktop styling workflow; it does not create a SPA or deploy changes.
 
@@ -53,19 +53,18 @@ The `/practice-site-check` and `/add-button` descriptions below are retained for
 
 > "Create a Power Pages site with React for a job board"
 
-Creates either a code site from a framework template or an Enhanced data model declarative site
-from a template accepted by the documented Power Platform Create Website API.
+Creates either a code site from a framework template or a Standard/Enhanced data model declarative
+site from a template accepted by the documented Power Platform Create Website API.
 
 - **Code sites:** choose React, Vue, Angular, or Astro; scaffold the complete SPA; apply a custom
   design with real imagery; build pages, components, and routing; preview live throughout
   development; validate the result; and commit implementation milestones.
-- **Enhanced declarative sites:** confirm the environment EDM setting with an administrator,
-  choose a supported first-party template, follow template previews and live creation status in a
-  generated browser page, provision through the Power Platform API, download explicitly with
-  `--modelVersion Enhanced`, validate identity, create a Git baseline, and optionally continue
-  into `/customize-declarative-site`.
-- Standard data model site creation is not supported. Existing Standard sites can be handled by
-  downstream skills only where their declarative support is explicitly documented.
+- **Declarative sites:** select Standard or Enhanced, confirm with an environment administrator
+  that **Switch to enhanced data model** is disabled for Standard or enabled for Enhanced, choose
+  a supported first-party template, follow template previews and live creation status in a
+  generated browser page, provision through the Power Platform API, verify the resulting model,
+  download with the explicit model, create a Git baseline, and optionally continue into
+  `/customize-declarative-site`.
 
 #### `/deploy-site`
 
@@ -593,7 +592,7 @@ Code site:
 13. /test-site              →  Runtime smoke test
 
 Declarative site:
-1.  /create-site                    →  Provision and download an Enhanced template
+1.  /create-site                    →  Provision and download a Standard or Enhanced template
 2.  /customize-declarative-site     →  Plan and coordinate local declarative changes
 3.  /deploy-site                    →  Verify identity/model and upload the declarative site
 

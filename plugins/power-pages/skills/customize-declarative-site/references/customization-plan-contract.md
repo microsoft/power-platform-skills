@@ -27,6 +27,17 @@ operation status and actual outputs without mutating the approved plan. Before r
 state, archive the complete previous approved run in one timestamped history directory. Never
 treat an unapproved review draft as current.
 
+The JSON and HTML serve different audiences without becoming separate sources of truth:
+
+- `current-plan.json` is the complete technical execution contract. It retains operation IDs,
+  owning skills, dependencies, typed output bindings, exact targets, and expected outputs.
+- `current-plan.html` is the user approval experience derived from that same validated JSON. Its
+  default sections describe visible site outcomes: pages and navigation, content and page
+  compositions, assets and reusable components, styling, preservation, verification, and the
+  local/live boundary.
+- The HTML may include a collapsed maintainer-only implementation trace, but it must not make
+  operation mechanics the primary plan narrative or introduce data absent from the canonical JSON.
+
 Render each proposed plan in a fresh external review directory outside the declarative site root.
 After approval, publish the JSON with
 `scripts/promote-customize-declarative-site-plan.js`; the publisher validates it and renders the

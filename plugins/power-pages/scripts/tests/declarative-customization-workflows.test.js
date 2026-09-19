@@ -9,12 +9,18 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
-test('create-site can hand an Enhanced baseline to declarative customization', () => {
+test('create-site can hand a Standard or Enhanced baseline to declarative customization', () => {
   const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'edm-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
 
   assert.match(skill, /allowed-tools: [^\n]*\bSkill\b/);
-  assert.match(skill, /create-site:edm-8-customize/);
+  assert.match(skill, /create-site:declarative-1-select-model/);
+  assert.match(skill, /create-site:declarative-8-customize/);
+  assert.match(workflow, /Which data model should the new declarative site use\?/);
+  assert.match(workflow, /enabled for this environment\?/);
+  assert.match(workflow, /disabled for this environment\?/);
+  assert.match(workflow, /--modelVersion "<MODEL_VERSION>"/);
+  assert.match(workflow, /verify the site reports `MODEL_VERSION`/);
   assert.match(workflow, /Would you like to customize the downloaded declarative template now\?/);
   assert.match(workflow, /invoke `\/customize-declarative-site` through the `Skill` tool/);
   assert.match(workflow, /validated, committed baseline/);

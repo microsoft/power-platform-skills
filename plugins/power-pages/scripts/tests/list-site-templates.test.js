@@ -2,16 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  EDM_SITE_TEMPLATES,
+  DECLARATIVE_SITE_TEMPLATES,
   parseArgs,
   buildResult,
 } = require('../../skills/create-site/scripts/list-site-templates');
 
-test('returns the curated EDM template identifiers', () => {
+test('returns the curated declarative template identifiers', () => {
   assert.deepEqual(
-    EDM_SITE_TEMPLATES.map((template) => template.name),
+    DECLARATIVE_SITE_TEMPLATES.map((template) => template.name),
     [
       'StarterLayout1',
+      'BlankPage',
       'ProgramRegistration',
       'EventPortal',
       'BookMeetings',
@@ -20,15 +21,24 @@ test('returns the curated EDM template identifiers', () => {
 });
 
 test('reports capability as indeterminate without administrator confirmation', () => {
-  const result = buildResult();
+  const result = buildResult({ modelVersion: 'Enhanced' });
   assert.equal(result.capability.status, 'indeterminate');
   assert.equal(result.capability.source, 'public-api-unavailable');
+  assert.equal(result.capability.requiredToggleState, 'enabled');
+  assert.equal(result.modelVersion, 'Enhanced');
   assert.equal(result.catalog.environmentSpecific, false);
-  assert.equal(result.catalog.templates.length, 4);
+  assert.equal(result.catalog.templates.length, 5);
+});
+
+test('requires the EDM toggle to be disabled for Standard creation', () => {
+  const result = buildResult({ modelVersion: 'Standard' });
+  assert.equal(result.capability.status, 'indeterminate');
+  assert.equal(result.capability.requiredToggleState, 'disabled');
+  assert.match(result.capability.reason, /disabled for Standard site creation/);
 });
 
 test('returns Event Portal presentation metadata and responsive previews', () => {
-  const eventPortal = buildResult().catalog.templates.find(
+  const eventPortal = buildResult({ modelVersion: 'Enhanced' }).catalog.templates.find(
     (template) => template.name === 'EventPortal',
   );
 
@@ -51,7 +61,7 @@ test('returns Event Portal presentation metadata and responsive previews', () =>
 });
 
 test('returns Starter Layout 1 capabilities and responsive previews', () => {
-  const starter = buildResult().catalog.templates.find(
+  const starter = buildResult({ modelVersion: 'Standard' }).catalog.templates.find(
     (template) => template.name === 'StarterLayout1',
   );
 
@@ -70,15 +80,44 @@ test('returns Starter Layout 1 capabilities and responsive previews', () => {
   );
 });
 
-test('records administrator confirmation without claiming API verification', () => {
-  const result = buildResult({ administratorConfirmed: true });
-  assert.equal(result.capability.status, 'enabled');
-  assert.equal(result.capability.source, 'administrator-confirmation');
-  assert.equal(result.catalog.source, 'plugin-edm-template-allowlist');
+test('returns Blank page metadata and supplied responsive previews', () => {
+  const blank = buildResult({ modelVersion: 'Standard' }).catalog.templates.find(
+    (template) => template.name === 'BlankPage',
+  );
+
+  assert.equal(blank.displayName, 'Blank page');
+  assert.match(blank.description, /1-page blank template/);
+  assert.deepEqual(blank.capabilities, ['Home page']);
+  assert.deepEqual(
+    blank.previews.map((preview) => preview.name),
+    ['home'],
+  );
+  for (const preview of blank.previews) {
+    assert.match(preview.desktop, /BlankPage\/desktop-home\.png$/);
+    assert.match(preview.mobile, /BlankPage\/mobile-home\.png$/);
+  }
 });
 
-test('parseArgs accepts both administrator confirmation spellings', () => {
-  assert.equal(parseArgs(['--administratorConfirmed']).administratorConfirmed, true);
-  assert.equal(parseArgs(['--administrator-confirmed']).administratorConfirmed, true);
-  assert.equal(parseArgs([]).administratorConfirmed, false);
+test('records administrator confirmation without claiming API verification', () => {
+  const result = buildResult({ administratorConfirmed: true, modelVersion: 'Standard' });
+  assert.equal(result.capability.status, 'confirmed');
+  assert.equal(result.capability.source, 'administrator-confirmation');
+  assert.equal(result.capability.requiredToggleState, 'disabled');
+  assert.equal(result.catalog.source, 'plugin-declarative-template-allowlist');
+});
+
+test('parseArgs accepts model and administrator confirmation spellings', () => {
+  assert.deepEqual(parseArgs(['--modelVersion', 'Enhanced', '--administratorConfirmed']), {
+    administratorConfirmed: true,
+    modelVersion: 'Enhanced',
+  });
+  assert.deepEqual(parseArgs(['--model-version', 'Standard', '--administrator-confirmed']), {
+    administratorConfirmed: true,
+    modelVersion: 'Standard',
+  });
+});
+
+test('rejects a missing or unsupported model version', () => {
+  assert.throws(() => buildResult(), /must be Enhanced or Standard/);
+  assert.throws(() => buildResult({ modelVersion: 'automatic' }), /must be Enhanced or Standard/);
 });

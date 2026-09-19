@@ -9,7 +9,8 @@ const {
   parseArgs,
 } = require('../../../scripts/lib/render-template');
 const {
-  EDM_SITE_TEMPLATES,
+  DECLARATIVE_SITE_TEMPLATES,
+  normalizeDeclarativeModelVersion,
 } = require('../../../scripts/lib/site-templates');
 
 const STATUSES = Object.freeze({
@@ -35,7 +36,7 @@ const STATUSES = Object.freeze({
   verification: {
     step: 3,
     chip: 'Verifying',
-    title: 'Verifying the Enhanced data model',
+    title: 'Verifying the selected data model',
     message: 'The website record is available. PAC is confirming that the expected model was created.',
   },
   download: {
@@ -64,15 +65,14 @@ const STATUSES = Object.freeze({
     terminal: true,
     result: {
       title: 'Creation complete',
-      message: 'Enhanced model verified · Site downloaded · Validation passed · Git baseline created',
+      message: 'Data model verified · Site downloaded · Validation passed · Git baseline created',
     },
   },
   'model-mismatch': {
     step: 3,
     chip: 'Action required',
     title: 'The site was created with a different data model',
-    message:
-      'PAC reports Standard instead of Enhanced. The cloud site is preserved, but download stopped to prevent using the wrong model.',
+    message: 'PAC reports a different model than selected. The cloud site is preserved, but download stopped to prevent using the wrong model.',
     terminal: true,
     error: true,
     result: {
@@ -99,7 +99,13 @@ function toDataUrl(filePath) {
 }
 
 function buildModel(options) {
-  const template = EDM_SITE_TEMPLATES.find((candidate) => candidate.name === options.templateName);
+  const modelVersion = normalizeDeclarativeModelVersion(options.modelVersion);
+  const actualModelVersion = options.actualModelVersion
+    ? normalizeDeclarativeModelVersion(options.actualModelVersion)
+    : null;
+  const template = DECLARATIVE_SITE_TEMPLATES.find(
+    (candidate) => candidate.name === options.templateName
+  );
   if (!template) {
     throw new Error(`Unsupported --templateName: ${options.templateName}`);
   }
@@ -108,6 +114,25 @@ function buildModel(options) {
   if (!status) {
     throw new Error(`Unsupported --status: ${options.status}`);
   }
+  const resolvedStatus = {
+    ...status,
+    message:
+      options.status === 'model-mismatch'
+        ? `PAC reports ${actualModelVersion || 'a different model'} instead of ` +
+          `${modelVersion}. The cloud site is preserved, but download stopped to prevent using ` +
+          'the wrong model.'
+        : status.message,
+    result: status.result
+      ? {
+          ...status.result,
+          message:
+            options.status === 'ready'
+              ? `${modelVersion} model verified · Site downloaded · Validation passed · ` +
+                'Git baseline created'
+              : status.result.message,
+        }
+      : undefined,
+  };
 
   const pluginRoot = path.resolve(__dirname, '..', '..', '..');
   const brandIcon = toDataUrl(
@@ -136,10 +161,11 @@ function buildModel(options) {
       url: options.siteUrl || `https://${options.subdomain}.powerappsportals.com`,
       language: options.language || '1033',
       websiteRecordId: options.websiteRecordId || '',
+      modelVersion,
     },
     status: {
       key: options.status,
-      ...status,
+      ...resolvedStatus,
     },
     timeline: TIMELINE,
     refresh: !status.terminal,
@@ -147,11 +173,18 @@ function buildModel(options) {
 }
 
 function renderStatusPage(options) {
-  if (!options.templateName || !options.status || !options.siteName || !options.subdomain) {
+  if (
+    !options.templateName ||
+    !options.modelVersion ||
+    !options.status ||
+    !options.siteName ||
+    !options.subdomain
+  ) {
     throw new Error(
-      'Usage: render-edm-status.js [--output <path>] --templateName <name> --status <status> ' +
+      'Usage: render-declarative-status.js [--output <path>] --templateName <name> ' +
+      '--modelVersion <Enhanced|Standard> --status <status> ' +
       '--siteName <name> --subdomain <subdomain> [--siteUrl <url>] [--language <lcid>] ' +
-      '[--websiteRecordId <guid>]',
+      '[--websiteRecordId <guid>] [--actualModelVersion <Enhanced|Standard>]',
     );
   }
 
@@ -166,7 +199,7 @@ function renderStatusPage(options) {
       );
   const model = buildModel(options);
   renderTemplate({
-    templatePath: path.join(__dirname, '..', 'assets', 'edm-creation-status-template.html'),
+    templatePath: path.join(__dirname, '..', 'assets', 'declarative-creation-status-template.html'),
     outputPath,
     dataObject: { MODEL: model },
     requiredKeys: ['MODEL'],

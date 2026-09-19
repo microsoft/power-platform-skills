@@ -3,10 +3,10 @@ name: create-site
 description: >-
   Creates a new Power Pages site. For code sites (SPAs) using React, Angular, Vue, or Astro, guides
   the full process from requirements discovery through scaffolding, component planning, design,
-  implementation, validation, and deployment. For enhanced-data-model declarative sites, provisions
-  a documented Microsoft template, verifies the model, downloads the site, and validates its
-  identity and assets. Use when the user wants to create, build, or scaffold a new Power Pages
-  website or portal.
+  implementation, validation, and deployment. For Standard or Enhanced data model declarative
+  sites, provisions a documented Microsoft template, verifies the selected model, downloads the
+  site, and validates its identity and assets. Use when the user wants to create, build, or
+  scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
@@ -44,8 +44,8 @@ Determine the site type before creating the phase task list.
 Classify the signals in `$ARGUMENTS`:
 
 - React, Vue, Angular, Astro, SPA, or code site → **Code site**
-- EDM, enhanced data model, Program Registration, Event Portal, Schedule Meetings, or Power Pages template
-  → **Enhanced data model site**
+- EDM, enhanced data model, SDM, standard data model, Program Registration, Event Portal,
+  Schedule Meetings, or Power Pages template → **Declarative site**
 
 Infer the route only when exactly one site type is indicated. If both types are indicated, treat the
 request as ambiguous and ask the site-type question below.
@@ -53,7 +53,7 @@ request as ambiguous and ask the site-type question below.
 <!-- gate: create-site:0.site-type | category=plan | cancel-leaves=nothing -->
 
 > 🚦 **Gate (plan · create-site:0.site-type):** Ambiguous creation request — choose between a
-> generated SPA code site and a platform-provisioned Enhanced declarative site.
+> generated SPA code site and a platform-provisioned declarative site.
 >
 > **Trigger:** `$ARGUMENTS` does not establish the site type.
 > **Why we ask:** The two routes create different artifacts and use different provisioning models.
@@ -63,47 +63,49 @@ If the request is ambiguous, use `AskUserQuestion`:
 
 | Question | Header | Options |
 |---|---|---|
-| Which type of Power Pages site should I create? | Site type | Enhanced data model site from a Microsoft template, Code site using React/Vue/Angular/Astro |
+| Which type of Power Pages site should I create? | Site type | Declarative site from a Microsoft template, Code site using React/Vue/Angular/Astro |
 
 After the route is known:
 
-- **Enhanced data model site:** Read and follow
-  `${PLUGIN_ROOT}/skills/create-site/workflows/edm-site.md`. Do not continue into the code-site
+- **Declarative site:** Read and follow
+  `${PLUGIN_ROOT}/skills/create-site/workflows/declarative-site.md`. Do not continue into the code-site
   phases below.
 - **Code site:** Continue with the existing workflow below.
 
-`create-site` does not create Standard data model declarative sites. Existing Standard sites may
-be supported by separate model-aware modification and deployment workflows.
+### Declarative Approval Gates
 
-### EDM Approval Gates
+The declarative workflow file contains the detailed call sites. These markers keep every
+load-bearing declarative question paired with the repository gate catalog.
 
-The EDM workflow file contains the detailed call sites. These markers keep every load-bearing EDM
-question paired with the repository gate catalog.
+<!-- gate: create-site:declarative-1-select-model | category=plan | cancel-leaves=nothing -->
 
-<!-- gate: create-site:edm-1-confirm-environment | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · create-site:declarative-1-select-model):** Select Standard or Enhanced when
+> the request did not already specify the declarative model.
 
-> 🚦 **Gate (consent · create-site:edm-1-confirm-environment):** Confirm the exact target
-> environment before any EDM planning or provisioning.
+<!-- gate: create-site:declarative-1-confirm-environment | category=consent | cancel-leaves=nothing -->
 
-<!-- gate: create-site:edm-1-confirm-capability | category=progress | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · create-site:declarative-1-confirm-environment):** Confirm the exact target
+> environment before any declarative planning or provisioning.
 
-> 🚦 **Gate (progress · create-site:edm-1-confirm-capability):** Require administrator
-> confirmation because no documented public API reads the environment EDM creation toggle.
+<!-- gate: create-site:declarative-1-confirm-capability | category=progress | cancel-leaves=nothing -->
 
-<!-- gate: create-site:edm-2-select-template | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (progress · create-site:declarative-1-confirm-capability):** Require administrator
+> confirmation that the environment EDM toggle is enabled for Enhanced or disabled for Standard.
 
-> 🚦 **Gate (plan · create-site:edm-2-select-template):** Select one exact identifier from the
-> supported EDM template allowlist.
+<!-- gate: create-site:declarative-2-select-template | category=plan | cancel-leaves=nothing -->
 
-<!-- gate: create-site:edm-4-provision | category=final | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · create-site:declarative-2-select-template):** Select one exact identifier from
+> the supported declarative template allowlist.
 
-> 🚦 **Gate (final · create-site:edm-4-provision):** Final consent immediately before the Create
-> Website API call.
+<!-- gate: create-site:declarative-4-provision | category=final | cancel-leaves=nothing -->
 
-<!-- gate: create-site:edm-8-customize | category=plan | cancel-leaves=edm-baseline -->
+> 🚦 **Gate (final · create-site:declarative-4-provision):** Final consent immediately before the
+> Create Website API call.
 
-> 🚦 **Gate (plan · create-site:edm-8-customize):** Choose whether to customize the verified
-> downloaded template through `/customize-declarative-site`.
+<!-- gate: create-site:declarative-8-customize | category=plan | cancel-leaves=declarative-baseline -->
+
+> 🚦 **Gate (plan · create-site:declarative-8-customize):** Choose whether to customize the
+> verified downloaded template through `/customize-declarative-site`.
 
 ---
 

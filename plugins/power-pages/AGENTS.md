@@ -88,13 +88,13 @@ references/                    ← Shared reference docs used by multiple skills
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
 skills/
   create-site/
-    SKILL.md                   ← Routes code-site and Enhanced declarative creation
-    workflows/edm-site.md      ← Environment-backed EDM provisioning and download workflow
+    SKILL.md                   ← Routes code-site and Standard/Enhanced declarative creation
+    workflows/declarative-site.md ← Environment-backed declarative provisioning and download workflow
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
-    scripts/list-site-templates.js ← Curated Create Website template metadata and EDM capability disclosure
-    scripts/render-edm-status.js ← Generates the live-refreshing EDM creation page with template previews and current status
-    scripts/resolve-edm-context.js ← Non-secret environment and Dataverse organization resolver
+    scripts/list-site-templates.js ← Curated Create Website template metadata and model-toggle disclosure
+    scripts/render-declarative-status.js ← Generates the live-refreshing declarative creation page with template previews and current status
+    scripts/resolve-declarative-context.js ← Non-secret environment and Dataverse organization resolver
     scripts/validate-site.js   ← Node script validating code sites or downloaded declarative sites
   deploy-site/
     SKILL.md                   ← Deployment skill definition
@@ -186,11 +186,11 @@ User-invocable via `/power-pages:<skill-name>`:
 - `create-site`: Routes between two eight-phase workflows. The existing SPA path retains requirements
   discovery, early React/Vue/Angular/Astro scaffolding, component and design planning, implementation
   with live Playwright preview, validation, review, Git checkpoints, and deployment handoff. The
-  Enhanced declarative path confirms the environment and administrator-verified EDM toggle, selects
-  a supported template identifier, provisions through the Power Platform API, downloads with
-  `--modelVersion Enhanced`, validates identity/assets, and creates a Git baseline. It does not
-  create Standard data model sites. After a successful Enhanced baseline it can optionally hand
-  off to `customize-declarative-site`.
+  declarative path selects Standard or Enhanced, confirms the environment and administrator-verified
+  EDM toggle state (disabled for Standard, enabled for Enhanced), selects a supported template
+  identifier, provisions through the Power Platform API, verifies the resulting model, downloads
+  with the explicit `--modelVersion`, validates identity/assets, and creates a Git baseline. After
+  a successful declarative baseline it can optionally hand off to `customize-declarative-site`.
 - `customize-declarative-site`: Declarative-only orchestrator for broad customization of PAC
   downloads created by `create-site` or manually in Design Studio. Keeps one canonical approved
   JSON/HTML plan plus `current-execution.json` under `docs/customize-declarative-site/`, archives

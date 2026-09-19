@@ -7,12 +7,13 @@ const path = require('node:path');
 const {
   buildModel,
   renderStatusPage,
-} = require('../../skills/create-site/scripts/render-edm-status');
+} = require('../../skills/create-site/scripts/render-declarative-status');
 
 function options(overrides = {}) {
   return {
-    output: path.join(os.tmpdir(), 'unused-edm-status.html'),
+    output: path.join(os.tmpdir(), 'unused-declarative-status.html'),
     templateName: 'EventPortal',
+    modelVersion: 'Enhanced',
     status: 'accepted',
     siteName: 'Contoso Events',
     subdomain: 'contoso-events',
@@ -31,7 +32,22 @@ test('buildModel combines Event Portal metadata, embedded previews, and current 
   assert.deepEqual(model.template.requirements, ['Customer Insights - Journeys license']);
   assert.equal(model.status.key, 'accepted');
   assert.equal(model.status.step, 0);
+  assert.equal(model.site.modelVersion, 'Enhanced');
   assert.equal(model.refresh, true);
+});
+
+test('buildModel renders Standard completion and model-mismatch details', () => {
+  const ready = buildModel(options({ modelVersion: 'Standard', status: 'ready' }));
+  assert.match(ready.status.result.message, /Standard model verified/);
+
+  const mismatch = buildModel(
+    options({
+      modelVersion: 'Standard',
+      actualModelVersion: 'Enhanced',
+      status: 'model-mismatch',
+    })
+  );
+  assert.match(mismatch.status.message, /Enhanced instead of Standard/);
 });
 
 test('buildModel embeds Starter Layout 1 previews and capabilities', () => {
@@ -49,8 +65,18 @@ test('buildModel embeds Starter Layout 1 previews and capabilities', () => {
   }
 });
 
+test('buildModel embeds the Blank page desktop and mobile previews', () => {
+  const model = buildModel(options({ templateName: 'BlankPage', modelVersion: 'Standard' }));
+
+  assert.equal(model.template.displayName, 'Blank page');
+  assert.deepEqual(model.template.capabilities, ['Home page']);
+  assert.equal(model.template.previews.length, 1);
+  assert.match(model.template.previews[0].desktop, /^data:image\/png;base64,/);
+  assert.match(model.template.previews[0].mobile, /^data:image\/png;base64,/);
+});
+
 test('renderStatusPage creates a standalone page and overwrites it as status advances', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-edm-status-'));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-declarative-status-'));
   const output = path.join(tempDir, 'status.html');
 
   try {
@@ -62,6 +88,7 @@ test('renderStatusPage creates a standalone page and overwrites it as status adv
     assert.match(acceptedHtml, /Customer Insights - Journeys license/);
     assert.match(acceptedHtml, /data:image\/png;base64,/);
     assert.match(acceptedHtml, /id="brandIcon"/);
+    assert.match(acceptedHtml, /"modelVersion":"Enhanced"/);
     assert.match(acceptedHtml, /active-status/);
     assert.doesNotMatch(acceptedHtml, /id="statusKicker"/);
     assert.doesNotMatch(acceptedHtml, /__JSON_MODEL__/);
@@ -97,5 +124,9 @@ test('buildModel rejects unknown templates and statuses', () => {
   assert.throws(
     () => buildModel(options({ status: 'invented' })),
     /Unsupported --status/,
+  );
+  assert.throws(
+    () => buildModel(options({ modelVersion: 'Automatic' })),
+    /must be Enhanced or Standard/,
   );
 });

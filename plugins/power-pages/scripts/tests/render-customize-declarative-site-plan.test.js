@@ -31,11 +31,18 @@ test('renders a declarative customization plan and copies the shared icon', () =
   const html = fs.readFileSync(outputPath, 'utf8');
   assert.match(html, /Contoso Event Portal/);
   assert.match(html, /EventPortal/);
-  assert.match(html, /create-speakers-page/);
-  assert.match(html, /author-webpage/);
+  assert.match(html, /Pages &amp; navigation/);
+  assert.match(html, /Content &amp; components/);
+  assert.match(html, /Create the Speakers page and navigation link/);
+  assert.match(html, /\/speakers/);
+  assert.match(html, /Primary Navigation/);
+  assert.match(html, /speaker-1\.jpg/);
+  assert.match(html, /Retain the template structure while adding pages and sections/);
   assert.match(html, /Page relationships/);
-  assert.match(html, /Review operation details/);
-  assert.match(html, /heroImageUrl/);
+  assert.match(html, /Approval authorizes local customization only/);
+  assert.match(html, /<details class="technical" id="technicalDetails">/);
+  assert.doesNotMatch(html, /<details class="technical" id="technicalDetails" open>/);
+  assert.match(html, /Technical implementation trace/);
 
   const iconPath = path.join(tempDir, 'power-pages-icon.png');
   const sourceIcon = path.join(

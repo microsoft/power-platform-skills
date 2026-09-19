@@ -15,7 +15,7 @@ const GUID = '11111111-2222-3333-4444-555555555555';
 // Fails the test if invoked — used to assert pac pages list is NOT shelled out.
 const throwExec = () => { throw new Error('pac pages list must NOT be called'); };
 
-test('EDM site: resolves identity from .powerpages-site/website.yml and SKIPS pac pages list', (t) => {
+test('declarative site resolves identity from .powerpages-site/website.yml and skips PAC list', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'), { recursive: true });
@@ -26,10 +26,10 @@ test('EDM site: resolves identity from .powerpages-site/website.yml and SKIPS pa
   assert.equal(r.siteName, 'ContosoEDM');
   assert.equal(r.websiteRecordId, GUID);
   assert.equal(r.source, 'website.yml');
-  assert.equal(r.usedPacList, false, 'EDM site must NOT shell out to pac pages list');
+  assert.equal(r.usedPacList, false, 'declarative site must NOT shell out to pac pages list');
 });
 
-test('EDM website.yml with an inline comment is parsed cleanly (comment stripped)', (t) => {
+test('declarative website.yml with an inline comment is parsed cleanly', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'), { recursive: true });

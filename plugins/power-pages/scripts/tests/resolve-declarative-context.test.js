@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  resolveEdmContext,
-} = require('../../skills/create-site/scripts/resolve-edm-context');
+  resolveDeclarativeContext,
+} = require('../../skills/create-site/scripts/resolve-declarative-context');
 
 const ENVIRONMENT_URL = 'https://contoso.crm.dynamics.com';
 const ENVIRONMENT_ID = '11111111-1111-1111-1111-111111111111';
@@ -22,8 +22,8 @@ function dependencies(overrides = {}) {
   };
 }
 
-test('returns non-secret EDM creation context', async () => {
-  const result = await resolveEdmContext(dependencies());
+test('returns non-secret declarative creation context', async () => {
+  const result = await resolveDeclarativeContext(dependencies());
   assert.deepEqual(result, {
     environmentUrl: ENVIRONMENT_URL,
     environmentId: ENVIRONMENT_ID,
@@ -35,14 +35,14 @@ test('returns non-secret EDM creation context', async () => {
 
 test('fails when PAC does not resolve an environment', async () => {
   await assert.rejects(
-    () => resolveEdmContext(dependencies({ getPacAuthInfo: () => null })),
+    () => resolveDeclarativeContext(dependencies({ getPacAuthInfo: () => null })),
     /Power Platform CLI is not signed in/,
   );
 });
 
 test('fails when Azure CLI cannot acquire a token', async () => {
   await assert.rejects(
-    () => resolveEdmContext(dependencies({ getAuthToken: () => null })),
+    () => resolveDeclarativeContext(dependencies({ getAuthToken: () => null })),
     /Azure CLI token is unavailable/,
   );
 });
@@ -50,7 +50,7 @@ test('fails when Azure CLI cannot acquire a token', async () => {
 test('fails closed on WhoAmI authorization errors', async () => {
   await assert.rejects(
     () =>
-      resolveEdmContext(
+      resolveDeclarativeContext(
         dependencies({
           makeRequest: async () => ({ statusCode: 403, body: '{}' }),
         }),
@@ -62,7 +62,7 @@ test('fails closed on WhoAmI authorization errors', async () => {
 test('fails when WhoAmI omits OrganizationId', async () => {
   await assert.rejects(
     () =>
-      resolveEdmContext(
+      resolveDeclarativeContext(
         dependencies({
           makeRequest: async () => ({ statusCode: 200, body: JSON.stringify({ UserId: 'u' }) }),
         }),
