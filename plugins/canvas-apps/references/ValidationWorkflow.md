@@ -211,6 +211,7 @@ Runtime evaluation: NOT RUN
 
 
 Plugin root: [exact plugin root]
+Skill contract version: [version from `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md`]
 Source revision: [git revision, package version, or "unavailable"]
 
 
@@ -255,6 +256,30 @@ Contract `Observer and evidence` cell declares an exact
 | Surface key | Surface visibility binding | Result |
 | ----------- | -------------------------- | ------ |
 | [plan key] | [exact final-YAML `Surface.Visible: =state predicate`] | PASS |
+
+## Temporal Ordering Evidence
+
+[Include when the plan contains `## Temporal Ordering Contracts`.]
+
+| Ordering key | Input validation / normalization binding | Sort binding | Observer binding | Result |
+| ------------ | ---------------------------------------- | ------------ | ---------------- | ------ |
+| [plan key] | [exact final-YAML typed input or parse/normalize binding] | [exact `SortByColumns` binding over the declared typed/canonical field] | [exact visible observer binding] | PASS |
+
+For canonical text, static PASS is intentionally bounded to a direct
+`If(IsBlank(input), ..., IfError(Patch(declaredSource, ..., {declaredField:
+Text(TimeValue(input), "HH:mm")}), ...))` shape. The blank guard, conversion, and write must
+use the same input. Wrappers or suffixes around the normalized value and staged-variable
+dataflow are unverified; do not replace missing structural evidence with token-presence claims.
+Typed-time evidence likewise requires the assigned field value itself, rather than a nested
+argument, to return `Time`, `TimeValue`, `DateTime`, or `DateTimeValue`.
+
+## Viewport Containment Evidence
+
+[Include when the plan contains `## Viewport Containment Contracts`.]
+
+| Screen | Root control | Top-level containment | Conditional surfaces | Result |
+| ------ | ------------ | --------------------- | -------------------- | ------ |
+| [screen] | [declared sole AutoLayout root] | [all visible screen content nested under root] | [state-driven surfaces use whole-surface `Visible`, or N/A] | PASS |
 
 ## Data Entry Label Evidence
 

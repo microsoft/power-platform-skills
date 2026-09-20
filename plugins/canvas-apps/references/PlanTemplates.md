@@ -6,6 +6,11 @@ The planner writes three artifact types:
 2. `[working directory]/canvas-app-shared.md` — cross-screen conventions
 3. `[working directory]/[target-base].screen-plan.md` — one implementation brief per screen
 
+Before the planner runs, the top-level orchestrator writes one immutable planning input:
+
+4. `[working directory]/canvas-app-requirements.md` — original request and stable
+   capability mappings captured before planner reduction
+
 ## Contents
 
 - Plan Index — CREATE
@@ -13,6 +18,31 @@ The planner writes three artifact types:
 - Shared Plan
 - Screen Brief — CREATE
 - Screen Brief — MODIFY
+
+## Original Requirements Contract
+
+```markdown
+# Canvas App Original Request Contract
+
+Contract version: 1
+Target device: [Phone / Tablet / Responsive / Unknown / Fixed desktop]
+
+## Original Request
+
+[Original user request and approved clarifications, without planner summarization]
+
+## Capability Inventory
+
+| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Scenario(s) | Specialized contract mappings |
+| --------------- | ----------------------- | ----------------- | ------------------------ | ------------------ | ----------- | ----------------------------- |
+| [stable key] | [One independently testable original clause] | [BehaviorGuide family] | [Fields, relationships, lifecycle, alert rule, aggregation scope, or visible outcome] | [Stable Action Contract keys] | [Stable Functional Test Matrix keys] | [e.g. `Temporal ordering=meeting-start`, or N/A] |
+```
+
+The orchestrator writes this file before planner delegation. The planner may consume it
+but must not modify it. Every mapping uses stable exact keys rather than prose matching.
+Use `Fixed desktop` only for an explicitly fixed desktop-only request; `Unknown` is
+responsive and requires viewport containment. Do not use placeholders or create rows for
+unrequested universal CRUD.
 
 ## Plan Index — CREATE
 
@@ -26,6 +56,17 @@ CREATE
 ## Requirements
 
 [Original requirements]
+
+## Original Request Capability Inventory
+
+| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |
+| --------------- | ----------------------- | ----------------- | ------------------------ | ------------------ | ----------- | ----------- |
+| [stable key] | [One independently testable clause preserved before planner reduction] | [BehaviorGuide family] | [Fields, relationship, state transition, aggregation scope, or visible outcome] | [Exact Action Contract keys] | [Named visible/canonical observers] | [Exact Functional Test Matrix keys] |
+
+[Write this table before consolidating screens or capabilities. Every row maps to the
+same stable key in Requirement Coverage, at least one existing Action Contract, a named
+observer, and at least one existing scenario. Use comma-separated exact keys. Do not add
+unrequested universal CRUD and do not drop a clause because the proposed plan omitted it.]
 
 ## Requirement Coverage
 
@@ -234,6 +275,25 @@ canvas/root width may remain at design width in a scale-to-fit host, so the wide
 field and action composition must fit a static bound, wrap, deliberately scroll, or stack
 without relying on narrow-branch activation.]
 
+## Viewport Containment Contracts
+
+| Screen | Root control | Layout variant | Width binding | Height binding | Overflow policy |
+| ------ | ------------ | -------------- | ------------- | -------------- | --------------- |
+| [Screen] | [sole top-level root] | AutoLayout | `[root].Width: =Parent.Width` | `[root].Height: =Parent.Height` | [vertical scroll or proven bounded content] |
+
+[Include every responsive or unknown-device screen. The root is the only top-level child;
+all visible, conditional, and overlay-like app content is nested below it. Fixed
+desktop-only ManualLayout screens are exempt only when that choice is explicit.]
+
+## Temporal Ordering Contracts
+
+[Include when a requested list, schedule, queue, timeline, report, or alert orders or
+compares time-of-day values.]
+
+| Ordering key | Source | Sort field | Storage semantics | Input validation / normalization | Canonical sort binding | Accepted formats | Invalid / blank behavior |
+| ------------ | ------ | ---------- | ----------------- | -------------------------------- | ---------------------- | ---------------- | ------------------------ |
+| [stable key] | [collection/data source] | [typed field or canonical sort-key field] | Typed time / Canonical 24-hour text | [exact input rule and planned binding] | [exact source and sort key] | [allowed input forms] | [visible reject/blank handling] |
+
 ## Working Directory
 
 [absolute working directory]
@@ -268,6 +328,16 @@ EDIT
 ## Requirements
 
 [Original edit requirements]
+
+## Original Request Capability Inventory
+
+| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |
+| --------------- | ----------------------- | ----------------- | ------------------------ | ------------------ | ----------- | ----------- |
+| [stable key] | [One changed or regression-sensitive clause preserved before planner reduction] | [BehaviorGuide family] | [Fields, relationship, state transition, aggregation scope, or visible outcome] | [Exact Action Contract keys] | [Named visible/canonical observers] | [Exact Functional Test Matrix keys] |
+
+[Include every requested edit clause and every existing behavior whose source, fields,
+controls, observer, or layout is touched. Map exact keys; do not silently narrow the edit
+to the planner's proposed screens.]
 
 ## Requirement Coverage
 
@@ -364,6 +434,20 @@ returned-ID-bound downstream completion and non-mutating cancellation/clear scen
 | Screen / container | Branch / screen-width source | Horizontal total-width arithmetic | Vertical height arithmetic | Protected controls |
 | ------------------ | ---------------------------- | ----------------------------------- | -------------------------- | ------------------ |
 | [changed container] | [local/root source and narrowest supported rendered width, or all cross-branch pairs] | [total available local width versus padding + children + gaps, or N/A] | [available Height versus children + gaps + padding, or N/A] | [amount, Save/Apply, complete receipt, or N/A] |
+
+## Viewport Containment Contracts
+
+| Screen | Root control | Layout variant | Width binding | Height binding | Overflow policy |
+| ------ | ------------ | -------------- | ------------- | -------------- | --------------- |
+| [changed responsive screen] | [sole top-level root] | AutoLayout | `[root].Width: =Parent.Width` | `[root].Height: =Parent.Height` | [vertical scroll or proven bounded content] |
+
+## Temporal Ordering Contracts
+
+[Include when the edit adds, changes, or can invalidate time-of-day ordering.]
+
+| Ordering key | Source | Sort field | Storage semantics | Input validation / normalization | Canonical sort binding | Accepted formats | Invalid / blank behavior |
+| ------------ | ------ | ---------- | ----------------- | -------------------------------- | ---------------------- | ---------------- | ------------------------ |
+| [stable key] | [collection/data source] | [typed field or canonical sort-key field] | Typed time / Canonical 24-hour text | [exact input rule and planned binding] | [exact source and sort key] | [allowed input forms] | [visible reject/blank handling] |
 
 ## Working Directory
 

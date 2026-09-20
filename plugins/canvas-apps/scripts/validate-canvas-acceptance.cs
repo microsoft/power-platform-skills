@@ -15,6 +15,7 @@ var workspace = Path.GetFullPath(args[0]);
 var pluginRoot = Path.GetFullPath(args[1]);
 var planPath = Path.Combine(workspace, "canvas-app-plan.md");
 var acceptancePath = Path.Combine(workspace, "canvas-app-acceptance.md");
+var requirementsPath = Path.Combine(workspace, "canvas-app-requirements.md");
 var skillPath = Path.Combine(pluginRoot, "skills", "canvas-app", "SKILL.md");
 var errors = new List<string>();
 
@@ -31,6 +32,14 @@ if (errors.Count > 0)
 var planLines = File.ReadAllLines(planPath);
 var acceptanceLines = File.ReadAllLines(acceptancePath);
 var skillVersion = ReadSkillVersion(skillPath, errors);
+var requiresUpstreamRequirements = IsVersionAtLeast(skillVersion, 3, 1, 0);
+if (requiresUpstreamRequirements)
+{
+    RequireFile(requirementsPath, "orchestrator-authored original requirements contract");
+}
+var requirementsLines = File.Exists(requirementsPath)
+    ? File.ReadAllLines(requirementsPath)
+    : [];
 var yamlLines = Directory
     .EnumerateFiles(workspace, "*.pa.yaml", SearchOption.AllDirectories)
     .SelectMany(File.ReadLines)
@@ -52,6 +61,25 @@ RequireMetadata("Source revision", expected: null);
 var plannedActionRows = ReadRows(planLines, "## Action Contracts", errors);
 var plannedActions = plannedActionRows.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 var plannedScenarios = ReadColumn(planLines, "## Functional Test Matrix", 0, errors);
+var plannedRequirementCoverage = ReadOptionalRows(
+    planLines,
+    "## Requirement Coverage",
+    errors);
+var plannedCapabilityInventory = ReadOptionalRows(
+    planLines,
+    "## Original Request Capability Inventory",
+    errors);
+var upstreamCapabilityInventory = requirementsLines.Length == 0
+    ? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+    : ReadRows(requirementsLines, "## Capability Inventory", errors);
+var plannedTemporalOrdering = ReadOptionalRows(
+    planLines,
+    "## Temporal Ordering Contracts",
+    errors);
+var plannedViewportContainment = ReadOptionalRows(
+    planLines,
+    "## Viewport Containment Contracts",
+    errors);
 var plannedScreens = ReadColumn(planLines, "## Dispatch", 1, errors, keyColumn: 1);
 var plannedTargets = ReadColumn(planLines, "## Dispatch", 2, errors, keyColumn: 1);
 var plannedRecordFields = ReadOptionalRows(planLines, "## Required Record Fields", errors);
@@ -96,6 +124,12 @@ var acceptedContinuations = plannedContinuations.Count == 0
 var acceptedStateDrivenSurfaces = plannedStateDrivenSurfaces.Count == 0
     ? ReadOptionalRows(acceptanceLines, "## State-Driven Surface Visibility Evidence", errors)
     : ReadRows(acceptanceLines, "## State-Driven Surface Visibility Evidence", errors);
+var acceptedTemporalOrdering = plannedTemporalOrdering.Count == 0
+    ? ReadOptionalRows(acceptanceLines, "## Temporal Ordering Evidence", errors)
+    : ReadRows(acceptanceLines, "## Temporal Ordering Evidence", errors);
+var acceptedViewportContainment = plannedViewportContainment.Count == 0
+    ? ReadOptionalRows(acceptanceLines, "## Viewport Containment Evidence", errors)
+    : ReadRows(acceptanceLines, "## Viewport Containment Evidence", errors);
 var compoundEvidence = ReadOptionalRows(
     acceptanceLines,
     "## Compound Sequence Evidence",
@@ -150,6 +184,16 @@ CompareCoverage(
     "directional mutation pair",
     directionalPairs,
     directionalEvidence,
+    errors);
+CompareCoverage(
+    "temporal ordering",
+    plannedTemporalOrdering.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedTemporalOrdering,
+    errors);
+CompareCoverage(
+    "viewport containment",
+    plannedViewportContainment.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedViewportContainment,
     errors);
 
 foreach (var row in plannedRecordFields.Values)
@@ -299,12 +343,33 @@ ValidateContinuations(
 ValidateStateDrivenSurfaceVisibility(
     plannedStateDrivenSurfaces,
     acceptedStateDrivenSurfaces);
+ValidateOriginalRequestCapabilityInventory(
+    requirementsLines,
+    upstreamCapabilityInventory,
+    plannedRequirementCoverage,
+    plannedCapabilityInventory,
+    plannedActionRows,
+    plannedScenarios,
+    requiresUpstreamRequirements);
+ValidateTemporalOrdering(
+    upstreamCapabilityInventory,
+    plannedTemporalOrdering,
+    acceptedTemporalOrdering,
+    requiresUpstreamRequirements);
+ValidateViewportContainment(
+    requirementsLines,
+    plannedScreens,
+    plannedViewportContainment,
+    acceptedViewportContainment,
+    requiresUpstreamRequirements);
 ValidateDataEntryLabels(dataEntryLabelEvidence, plannedStateDrivenSurfaces);
 ValidateGalleryRenderingContracts();
-ValidateLayoutReachability(CollectLayoutRequiredControls(
+var layoutRequiredControls = CollectLayoutRequiredControls(
     acceptedActions,
     acceptedRecordFields,
-    directionalEvidence));
+    directionalEvidence);
+ValidateLayoutReachability(layoutRequiredControls);
+ValidateRequiredTextFit(layoutRequiredControls);
 
 if (errors.Count > 0)
 {
@@ -317,6 +382,1003 @@ Console.WriteLine(
     $"{plannedStateDrivenSurfaces.Count} state-driven surfaces, {plannedScreens.Count} screens; " +
     "runtime evaluation NOT RUN.");
 return 0;
+
+void ValidateOriginalRequestCapabilityInventory(
+    string[] upstreamLines,
+    Dictionary<string, List<string>> upstream,
+    Dictionary<string, List<string>> coverage,
+    Dictionary<string, List<string>> inventory,
+    Dictionary<string, List<string>> actions,
+    HashSet<string> scenarios,
+    bool required)
+{
+    if (!required && upstream.Count == 0)
+    {
+        return;
+    }
+
+    if (!HasMeaningfulSection(upstreamLines, "## Original Request"))
+    {
+        errors.Add(
+            "The orchestrator-authored requirements contract must preserve a non-placeholder '## Original Request' before planner delegation.");
+    }
+    if (!string.Equals(
+            ReadMetadataValue(upstreamLines, "Contract version"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        errors.Add("The orchestrator-authored requirements contract must declare 'Contract version: 1'.");
+    }
+    if (string.IsNullOrWhiteSpace(ReadMetadataValue(upstreamLines, "Target device")))
+    {
+        errors.Add("The orchestrator-authored requirements contract must declare Target device.");
+    }
+    if (upstream.Count == 0)
+    {
+        errors.Add(
+            "The orchestrator-authored requirements contract must include a nonempty '## Capability Inventory'.");
+        return;
+    }
+    if (inventory.Count == 0)
+    {
+        errors.Add(
+            "The planner output must include '## Original Request Capability Inventory' reconciled from the orchestrator-authored requirements contract.");
+        return;
+    }
+
+    var knownFamilies = new HashSet<string>(
+        [
+            "App shell and navigation",
+            "Data lifecycle",
+            "Data exploration",
+            "Workflow and review",
+            "Relationships and hierarchy",
+            "Time and scheduling",
+            "Analytics and visualization",
+            "Files, media, and device input",
+            "Integration and automation",
+            "Security, persistence, and resilience",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+    var originalRequest = NormalizeWhitespace(
+        ReadSectionText(upstreamLines, "## Original Request"));
+
+    CompareCoverage(
+        "upstream requirement capability",
+        upstream.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+        inventory,
+        errors);
+
+    foreach (var (key, upstreamRow) in upstream)
+    {
+        if (upstreamRow.Count != 7)
+        {
+            errors.Add(
+                $"Upstream requirement capability '{key}' must have seven columns.");
+            continue;
+        }
+        if (upstreamRow.Skip(1).Take(3).Any(IsPlaceholderValue))
+        {
+            errors.Add(
+                $"Upstream requirement capability '{key}' contains placeholder request or outcome text.");
+        }
+        if (!originalRequest.Contains(
+                NormalizeWhitespace(Clean(upstreamRow[1])),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Upstream requirement capability '{key}' clause is not preserved verbatim in the Original Request section.");
+        }
+        if (!knownFamilies.Contains(Clean(upstreamRow[2])))
+        {
+            errors.Add(
+                $"Upstream requirement capability '{key}' must use a known capability family.");
+        }
+        ValidateMappedKeys(key, "action", upstreamRow[4], actions.Keys);
+        ValidateMappedKeys(key, "scenario", upstreamRow[5], scenarios);
+
+        if (!inventory.TryGetValue(key, out var row))
+        {
+            continue;
+        }
+        if (row.Count != 7)
+        {
+            errors.Add(
+                $"Original request capability '{key}' must have seven planning columns.");
+            continue;
+        }
+
+        foreach (var (upstreamIndex, planIndex, label) in new[]
+        {
+            (1, 1, "original request clause"),
+            (2, 2, "capability family"),
+            (3, 3, "required outcome / scope"),
+            (4, 4, "required action mapping"),
+            (5, 6, "required scenario mapping"),
+        })
+        {
+            if (!string.Equals(
+                    NormalizeWhitespace(Clean(upstreamRow[upstreamIndex])),
+                    NormalizeWhitespace(Clean(row[planIndex])),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(
+                    $"Original request capability '{key}' plan {label} does not match the orchestrator-authored contract.");
+            }
+        }
+        if (!coverage.ContainsKey(key))
+        {
+            errors.Add(
+                $"Original request capability '{key}' is missing from Requirement Coverage.");
+        }
+        if (string.IsNullOrWhiteSpace(Clean(row[1])) ||
+            !knownFamilies.Contains(Clean(row[2])) ||
+            string.IsNullOrWhiteSpace(Clean(row[3])) ||
+            string.IsNullOrWhiteSpace(Clean(row[5])))
+        {
+            errors.Add(
+                $"Original request capability '{key}' must preserve its request clause, known capability family, required outcome, and observer.");
+        }
+
+        ValidateMappedKeys(key, "action", row[4], actions.Keys);
+        ValidateMappedKeys(key, "scenario", row[6], scenarios);
+        ValidateObserverBindings(key, row[5]);
+    }
+}
+
+void ValidateObserverBindings(string capability, string cell)
+{
+    var observers = SplitKeyList(cell);
+    if (observers.Count == 0)
+    {
+        errors.Add(
+            $"Original request capability '{capability}' must map at least one observer binding.");
+        return;
+    }
+
+    foreach (var observer in observers)
+    {
+        var match = Regex.Match(
+            observer,
+            @"^(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?<property>[A-Za-z_][A-Za-z0-9_]*)$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success ||
+            !yamlFormulas.Any(formula =>
+                string.Equals(
+                    formula.Control,
+                    match.Groups["control"].Value,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    formula.Property,
+                    match.Groups["property"].Value,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            errors.Add(
+                $"Original request capability '{capability}' observer '{observer}' does not resolve to an actual final-YAML control property.");
+        }
+    }
+}
+
+void ValidateMappedKeys(
+    string capability,
+    string label,
+    string cell,
+    IEnumerable<string> knownKeys)
+{
+    var known = knownKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var mapped = SplitKeyList(cell);
+    if (mapped.Count == 0)
+    {
+        errors.Add(
+            $"Original request capability '{capability}' must map at least one {label}.");
+        return;
+    }
+
+    foreach (var key in mapped.Where(key => !known.Contains(key)))
+    {
+        errors.Add(
+            $"Original request capability '{capability}' maps unknown {label} '{key}'.");
+    }
+}
+
+void ValidateTemporalOrdering(
+    Dictionary<string, List<string>> upstream,
+    Dictionary<string, List<string>> planned,
+    Dictionary<string, List<string>> accepted,
+    bool required)
+{
+    var requiredKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var row in upstream.Values.Where(row => row.Count == 7))
+    {
+        foreach (var contract in SplitKeyList(row[6]))
+        {
+            var match = Regex.Match(
+                contract,
+                @"^Temporal ordering\s*=\s*(?<key>[A-Za-z0-9_.-]+)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (match.Success)
+            {
+                requiredKeys.Add(match.Groups["key"].Value);
+            }
+            else if (contract.Contains(
+                "Temporal ordering",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(
+                    $"Upstream specialized contract '{contract}' must map an exact temporal key as 'Temporal ordering=<key>'.");
+            }
+        }
+    }
+    if (required && requiredKeys.Count > 0)
+    {
+        CompareCoverage("upstream temporal ordering", requiredKeys, planned, errors);
+    }
+
+    foreach (var (key, row) in planned)
+    {
+        if (row.Count != 8)
+        {
+            errors.Add($"Temporal ordering '{key}' must have eight planning columns.");
+            continue;
+        }
+
+        var source = Clean(row[1]);
+        var sourceField = Clean(row[2]);
+        var semantics = Clean(row[3]);
+        if (!string.Equals(semantics, "Typed time", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                semantics,
+                "Canonical 24-hour text",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Temporal ordering '{key}' storage semantics must be 'Typed time' or 'Canonical 24-hour text'.");
+        }
+        if (string.IsNullOrWhiteSpace(source) ||
+            string.IsNullOrWhiteSpace(sourceField) ||
+            string.IsNullOrWhiteSpace(Clean(row[4])) ||
+            string.IsNullOrWhiteSpace(Clean(row[5])) ||
+            string.IsNullOrWhiteSpace(Clean(row[6])) ||
+            string.IsNullOrWhiteSpace(Clean(row[7])))
+        {
+            errors.Add(
+                $"Temporal ordering '{key}' must declare source field, input contract, sort key, accepted formats, and invalid/blank behavior.");
+        }
+
+        if (!accepted.TryGetValue(key, out var evidence) || evidence.Count != 5)
+        {
+            if (accepted.ContainsKey(key))
+            {
+                errors.Add($"Temporal ordering '{key}' must have five acceptance columns.");
+            }
+            continue;
+        }
+        if (!string.Equals(Clean(evidence[4]), "PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Temporal ordering '{key}' does not pass.");
+        }
+
+        var inputBinding = ParseYamlBinding(
+            evidence[1],
+            $"Temporal ordering '{key}' input binding");
+        var sortBinding = ParseYamlBinding(
+            evidence[2],
+            $"Temporal ordering '{key}' sort binding");
+        var observerBinding = ParseYamlBinding(
+            evidence[3],
+            $"Temporal ordering '{key}' observer binding");
+        foreach (var binding in new[] { inputBinding, sortBinding, observerBinding })
+        {
+            if (binding is not null)
+            {
+                ValidateYamlBinding(binding, $"Temporal ordering '{key}'");
+            }
+        }
+        if (inputBinding is null || sortBinding is null || observerBinding is null)
+        {
+            continue;
+        }
+
+        if (!TryExtractSortSourceAndField(
+                sortBinding.Value.Formula,
+                out var actualSource,
+                out var actualField) ||
+            !string.Equals(actualSource, source, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(actualField, sourceField, StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Temporal ordering '{key}' sort binding must sort declared source '{source}' by exact field '{sourceField}' using Sort or SortByColumns.");
+        }
+
+        if (string.Equals(
+                semantics,
+                "Canonical 24-hour text",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (!IsSupportedDirectCanonicalTimeWrite(
+                    inputBinding.Value.Formula,
+                    source,
+                    sourceField))
+            {
+                errors.Add(
+                    $"Temporal ordering '{key}' canonical text input is unverified: use a direct If(blank guard, invalid response, IfError(Patch(... {{ {sourceField}: Text(TimeValue(same input), \"HH:mm\") }}), invalid response)) write to source '{source}'.");
+            }
+            if (!SourceFieldUsesOnlyCanonicalTimeText(source, sourceField))
+            {
+                errors.Add(
+                    $"Temporal ordering '{key}' source '{source}' field '{sourceField}' contains or is seeded with noncanonical time text.");
+            }
+        }
+        else
+        {
+            if (!SourceFieldHasTypedTime(source, sourceField))
+            {
+                errors.Add(
+                    $"Temporal ordering '{key}' declares typed time, but source '{source}' field '{sourceField}' is not established from typed time values.");
+            }
+            if (!FormulaProducesSupportedTypedTime(
+                    inputBinding.Value.Formula,
+                    sourceField))
+            {
+                errors.Add(
+                    $"Temporal ordering '{key}' typed-time input binding is unverified because its returned or assigned value is not a supported top-level Time, TimeValue, DateTime, or DateTimeValue expression.");
+            }
+        }
+    }
+}
+
+void ValidateViewportContainment(
+    string[] upstreamLines,
+    HashSet<string> plannedScreens,
+    Dictionary<string, List<string>> planned,
+    Dictionary<string, List<string>> accepted,
+    bool required)
+{
+    var target = ReadMetadataValue(upstreamLines, "Target device");
+    var fixedDesktop = Regex.IsMatch(
+        target ?? "",
+        @"\bfixed\s+desktop\b|\bdesktop-only\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (required && !fixedDesktop)
+    {
+        foreach (var screen in plannedScreens.Where(screen => !planned.ContainsKey(screen)))
+        {
+            errors.Add(
+                $"Viewport containment: responsive or unknown target requires a contract for screen '{screen}'.");
+        }
+    }
+    if (planned.Count == 0)
+    {
+        return;
+    }
+
+    var nodes = BuildYamlNodes(yamlLines);
+    var byName = nodes.ToDictionary(node => node.Name, StringComparer.OrdinalIgnoreCase);
+    foreach (var (screen, row) in planned)
+    {
+        if (row.Count != 6)
+        {
+            errors.Add($"Viewport containment '{screen}' must have six planning columns.");
+            continue;
+        }
+
+        var root = Clean(row[1]);
+        if (!byName.TryGetValue(screen, out var screenNode) || !screenNode.IsScreen)
+        {
+            errors.Add($"Viewport containment screen '{screen}' does not exist in final app YAML.");
+            continue;
+        }
+        if (!byName.TryGetValue(root, out var rootNode) ||
+            !string.Equals(rootNode.Parent, screen, StringComparison.OrdinalIgnoreCase) ||
+            !TryGetControlBlock(yamlLines, root, out var rootBlock))
+        {
+            errors.Add(
+                $"Viewport containment '{screen}' root '{root}' must be a direct child of the screen.");
+            continue;
+        }
+
+        var topLevel = nodes
+            .Where(node => string.Equals(node.Parent, screen, StringComparison.OrdinalIgnoreCase))
+            .Select(node => node.Name)
+            .ToList();
+        if (topLevel.Count != 1)
+        {
+            errors.Add(
+                $"Viewport containment '{screen}' must have exactly one top-level root; found {string.Join(", ", topLevel)}.");
+        }
+        if (!Regex.IsMatch(
+                rootBlock,
+                @"\bVariant:\s*AutoLayout\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            !string.Equals(
+                NormalizeWhitespace(GetOwnPropertyFormula(root, rootBlock, "Width") ?? ""),
+                "=Parent.Width",
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                NormalizeWhitespace(GetOwnPropertyFormula(root, rootBlock, "Height") ?? ""),
+                "=Parent.Height",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Viewport containment '{screen}' root '{root}' must be AutoLayout with exact Width =Parent.Width and Height =Parent.Height.");
+        }
+
+        if (!accepted.TryGetValue(screen, out var evidence) || evidence.Count != 5)
+        {
+            if (accepted.ContainsKey(screen))
+            {
+                errors.Add($"Viewport containment '{screen}' must have five acceptance columns.");
+            }
+            continue;
+        }
+        if (!string.Equals(Clean(evidence[4]), "PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Viewport containment '{screen}' does not pass.");
+        }
+        if (!string.Equals(Clean(evidence[1]), root, StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Viewport containment '{screen}' acceptance must name planned root '{root}'.");
+        }
+    }
+}
+
+void ValidateRequiredTextFit(HashSet<string> requiredControls)
+{
+    foreach (var control in requiredControls)
+    {
+        if (!TryGetControlBlock(yamlLines, control, out var block))
+        {
+            continue;
+        }
+
+        var textFormula =
+            GetOwnPropertyFormula(control, block, "Text") ??
+            GetOwnPropertyFormula(control, block, "Content");
+        var heightFormula = GetOwnPropertyFormula(control, block, "Height");
+        if (textFormula is null ||
+            !TryParseNumber(heightFormula, out var height))
+        {
+            continue;
+        }
+
+        var lines = GetExplicitRenderedLineCount(textFormula);
+        if (lines < 2)
+        {
+            continue;
+        }
+
+        var size = TryParseNumber(GetOwnPropertyFormula(control, block, "Size"), out var parsedSize)
+            ? parsedSize
+            : TryParseNumber(GetOwnPropertyFormula(control, block, "FontSize"), out parsedSize)
+                ? parsedSize
+                : 14;
+        var verticalPadding =
+            ReadNumericProperty(control, block, "PaddingTop") +
+            ReadNumericProperty(control, block, "PaddingBottom");
+        var hasExplicitVerticalPadding =
+            GetOwnPropertyFormula(control, block, "PaddingTop") is not null &&
+            GetOwnPropertyFormula(control, block, "PaddingBottom") is not null;
+        if (!hasExplicitVerticalPadding)
+        {
+            continue;
+        }
+
+        // Font metrics and wrapping differ by control/runtime, so static validation must not
+        // invent a line-height multiplier. An explicit line break does establish the weaker
+        // structural minimum that each line needs at least its declared font size plus padding.
+        var requiredHeight = lines * size + verticalPadding;
+        if (height + 0.01 < requiredHeight)
+        {
+            errors.Add(
+                $"Text fit: required control '{control}' has an explicit multiline result with a structural minimum of {requiredHeight:0.##}px but Height is {height:0.##}px.");
+        }
+    }
+}
+
+static List<string> SplitKeyList(string cell) =>
+    Clean(cell)
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(value =>
+            !string.Equals(value, "N/A", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(value, "None", StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+static bool IsVersionAtLeast(string version, int major, int minor, int patch)
+{
+    var match = Regex.Match(
+        version,
+        @"^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)",
+        RegexOptions.CultureInvariant);
+    if (!match.Success)
+    {
+        return false;
+    }
+
+    var actual = (
+        int.Parse(match.Groups["major"].Value),
+        int.Parse(match.Groups["minor"].Value),
+        int.Parse(match.Groups["patch"].Value));
+    return actual.CompareTo((major, minor, patch)) >= 0;
+}
+
+static bool IsPlaceholderValue(string value)
+{
+    var cleaned = Clean(value);
+    return string.IsNullOrWhiteSpace(cleaned) ||
+        cleaned.StartsWith('[') ||
+        Regex.IsMatch(
+            cleaned,
+            @"\b(?:TBD|TODO|placeholder|example requirement)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+static bool HasMeaningfulSection(string[] lines, string heading)
+{
+    var headingIndex = Array.FindIndex(lines, line => line.Trim() == heading);
+    if (headingIndex < 0)
+    {
+        return false;
+    }
+
+    for (var index = headingIndex + 1; index < lines.Length; index++)
+    {
+        var line = lines[index].Trim();
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+        {
+            break;
+        }
+        if (!string.IsNullOrWhiteSpace(line) &&
+            !line.StartsWith('[') &&
+            !line.StartsWith('|'))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static string? ReadMetadataValue(string[] lines, string name)
+{
+    var prefix = name + ":";
+    var line = lines.FirstOrDefault(candidate =>
+        candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    return line?[prefix.Length..].Trim();
+}
+
+static string ReadSectionText(string[] lines, string heading)
+{
+    var headingIndex = Array.FindIndex(lines, line => line.Trim() == heading);
+    if (headingIndex < 0)
+    {
+        return "";
+    }
+
+    var body = new List<string>();
+    for (var index = headingIndex + 1; index < lines.Length; index++)
+    {
+        if (lines[index].TrimStart().StartsWith("## ", StringComparison.Ordinal))
+        {
+            break;
+        }
+        if (!string.IsNullOrWhiteSpace(lines[index]))
+        {
+            body.Add(lines[index].Trim());
+        }
+    }
+    return string.Join(" ", body);
+}
+
+static bool TryExtractSortSourceAndField(
+    string formula,
+    out string source,
+    out string field)
+{
+    source = "";
+    field = "";
+    foreach (var function in new[] { "SortByColumns", "Sort" })
+    {
+        var arguments = ExtractFunctionArguments(formula, function).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(arguments))
+        {
+            continue;
+        }
+
+        var parts = SplitPowerFxArguments(arguments);
+        if (parts.Count < 2)
+        {
+            continue;
+        }
+
+        source = ExtractRootSource(parts[0]);
+        if (string.Equals(function, "SortByColumns", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParsePowerFxStringLiteral(parts[1].Trim(), out field))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            field = parts[1].Trim().Trim('\'');
+            var dotted = Regex.Match(
+                field,
+                @"(?:^|\.)(?<field>[A-Za-z_][A-Za-z0-9_]*)$",
+                RegexOptions.CultureInvariant);
+            if (dotted.Success)
+            {
+                field = dotted.Groups["field"].Value;
+            }
+        }
+        return !string.IsNullOrWhiteSpace(source) &&
+            !string.IsNullOrWhiteSpace(field);
+    }
+    return false;
+}
+
+static string ExtractRootSource(string expression)
+{
+    var normalized = expression.Trim().TrimStart('=');
+    foreach (var wrapper in new[] { "Filter", "Search", "FirstN", "LastN" })
+    {
+        var arguments = ExtractFunctionArguments(normalized, wrapper).FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            var parts = SplitPowerFxArguments(arguments);
+            return parts.Count == 0 ? "" : ExtractRootSource(parts[0]);
+        }
+    }
+
+    var identifier = Regex.Match(
+        normalized,
+        @"^(?<source>[A-Za-z_][A-Za-z0-9_]*)\b",
+        RegexOptions.CultureInvariant);
+    return identifier.Success ? identifier.Groups["source"].Value : "";
+}
+
+static string? ExtractRecordFieldAssignment(string formula, string field)
+{
+    return ExtractRecordFieldAssignments(formula, field).FirstOrDefault();
+}
+
+static IEnumerable<string> ExtractRecordFieldAssignments(string formula, string field)
+{
+    var offset = 0;
+    while (offset < formula.Length)
+    {
+        var match = Regex.Match(
+            formula[offset..],
+            $@"(?<![A-Za-z0-9_]){Regex.Escape(field)}\s*:\s*",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            yield break;
+        }
+
+        var start = offset + match.Index + match.Length;
+        var remainder = formula[start..].TrimStart();
+        var expression = ExtractRecordValueExpression(remainder);
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            yield break;
+        }
+
+        yield return expression;
+        offset = start + expression.Length;
+    }
+}
+
+static string ExtractRecordValueExpression(string remainder)
+{
+    var round = 0;
+    var square = 0;
+    var curly = 0;
+    for (var index = 0; index < remainder.Length; index++)
+    {
+        var character = remainder[index];
+        if (character == '"')
+        {
+            while (++index < remainder.Length)
+            {
+                if (remainder[index] != '"')
+                {
+                    continue;
+                }
+                if (index + 1 < remainder.Length && remainder[index + 1] == '"')
+                {
+                    index++;
+                    continue;
+                }
+                break;
+            }
+            continue;
+        }
+
+        switch (character)
+        {
+            case '(':
+                round++;
+                break;
+            case ')':
+                round--;
+                break;
+            case '[':
+                square++;
+                break;
+            case ']':
+                square--;
+                break;
+            case '{':
+                curly++;
+                break;
+            case '}' when round == 0 && square == 0 && curly == 0:
+                return remainder[..index].Trim();
+            case '}':
+                curly--;
+                break;
+            case ',' when round == 0 && square == 0 && curly == 0:
+                return remainder[..index].Trim();
+        }
+    }
+
+    return remainder.Trim();
+}
+
+static bool TryParseCompleteFunctionCall(
+    string expression,
+    string function,
+    out List<string> arguments)
+{
+    arguments = [];
+    var normalized = expression.Trim().TrimStart('=').Trim();
+    var call = Regex.Match(
+        normalized,
+        $@"^{Regex.Escape(function)}\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!call.Success)
+    {
+        return false;
+    }
+
+    var argumentsText = ExtractBalancedGroup(
+        normalized,
+        call.Index + call.Length,
+        '(',
+        ')');
+    if (argumentsText is null)
+    {
+        return false;
+    }
+
+    var closingIndex = call.Index + call.Length + argumentsText.Length;
+    if (closingIndex >= normalized.Length ||
+        normalized[closingIndex] != ')' ||
+        !string.IsNullOrWhiteSpace(normalized[(closingIndex + 1)..]))
+    {
+        return false;
+    }
+
+    arguments = SplitPowerFxArguments(argumentsText);
+    return true;
+}
+
+static bool IsSupportedTypedTimeValue(string expression)
+{
+    foreach (var function in new[] { "Time", "TimeValue", "DateTime", "DateTimeValue" })
+    {
+        if (TryParseCompleteFunctionCall(expression, function, out var arguments) &&
+            arguments.Count > 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool FormulaProducesSupportedTypedTime(string formula, string field)
+{
+    if (IsSupportedTypedTimeValue(formula))
+    {
+        return true;
+    }
+
+    if (TryParseCompleteFunctionCall(formula, "Set", out var setArguments) &&
+        setArguments.Count == 2)
+    {
+        return IsSupportedTypedTimeValue(setArguments[1]);
+    }
+
+    if (TryParseCompleteFunctionCall(formula, "IfError", out var errorArguments) &&
+        errorArguments.Count >= 2)
+    {
+        return FormulaProducesSupportedTypedTime(errorArguments[0], field);
+    }
+
+    if (TryParseCompleteFunctionCall(formula, "If", out var ifArguments) &&
+        ifArguments.Count >= 3)
+    {
+        var resultBranches = ifArguments.Skip(1)
+            .Where(branch => !TryParseCompleteFunctionCall(branch, "Blank", out _))
+            .ToList();
+        return resultBranches.Count > 0 &&
+            resultBranches.All(branch => FormulaProducesSupportedTypedTime(branch, field));
+    }
+
+    var assignments = ExtractRecordFieldAssignments(formula, field).ToList();
+    return assignments.Count > 0 && assignments.All(IsSupportedTypedTimeValue);
+}
+
+static bool IsCanonicalTimeLiteral(string expression) =>
+    TryParsePowerFxStringLiteral(expression, out var literal) &&
+    Regex.IsMatch(
+        literal,
+        @"^(?:[01]\d|2[0-3]):[0-5]\d$",
+        RegexOptions.CultureInvariant);
+
+static bool TryParseCanonicalTimeTextValue(
+    string expression,
+    out string inputExpression)
+{
+    inputExpression = "";
+    if (!TryParseCompleteFunctionCall(expression, "Text", out var textArguments) ||
+        textArguments.Count != 2 ||
+        !TryParsePowerFxStringLiteral(textArguments[1], out var format) ||
+        !Regex.IsMatch(
+            format,
+            @"^(?:\[\$-[^\]]+\])?HH:mm$",
+            RegexOptions.CultureInvariant))
+    {
+        return false;
+    }
+
+    foreach (var parser in new[] { "TimeValue", "DateTimeValue" })
+    {
+        if (TryParseCompleteFunctionCall(textArguments[0], parser, out var parseArguments) &&
+            parseArguments.Count is 1 or 2 &&
+            !string.IsNullOrWhiteSpace(parseArguments[0]))
+        {
+            inputExpression = parseArguments[0].Trim();
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool TryExtractBlankGuardInput(
+    string condition,
+    out string inputExpression)
+{
+    inputExpression = "";
+    if (!TryParseCompleteFunctionCall(condition, "IsBlank", out var blankArguments) ||
+        blankArguments.Count != 1)
+    {
+        return false;
+    }
+
+    var guarded = blankArguments[0].Trim();
+    if (TryParseCompleteFunctionCall(guarded, "Trim", out var trimArguments) &&
+        trimArguments.Count == 1)
+    {
+        guarded = trimArguments[0].Trim();
+    }
+
+    inputExpression = guarded;
+    return !string.IsNullOrWhiteSpace(inputExpression);
+}
+
+static bool IsSupportedDirectCanonicalTimeWrite(
+    string formula,
+    string source,
+    string field)
+{
+    if (!TryParseCompleteFunctionCall(formula, "If", out var ifArguments) ||
+        ifArguments.Count != 3 ||
+        !TryExtractBlankGuardInput(ifArguments[0], out var guardedInput) ||
+        !TryParseCompleteFunctionCall(ifArguments[2], "IfError", out var errorArguments) ||
+        errorArguments.Count < 2 ||
+        !TryParseCompleteFunctionCall(errorArguments[0], "Patch", out var patchArguments) ||
+        patchArguments.Count < 3 ||
+        !string.Equals(
+            patchArguments[0].Trim(),
+            source,
+            StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    var assignments = ExtractRecordFieldAssignments(errorArguments[0], field).ToList();
+    return assignments.Count == 1 &&
+        TryParseCanonicalTimeTextValue(assignments[0], out var parsedInput) &&
+        string.Equals(
+            NormalizeWhitespace(parsedInput),
+            NormalizeWhitespace(guardedInput),
+            StringComparison.OrdinalIgnoreCase);
+}
+
+bool SourceFieldHasTypedTime(string source, string field)
+{
+    var assignments = new List<string>();
+    foreach (var formula in yamlFormulas.Where(formula =>
+        Regex.IsMatch(
+            formula.Formula,
+            $@"\b(?:ClearCollect|Collect|Patch|UpdateIf)\s*\(\s*{Regex.Escape(source)}\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+    {
+        foreach (var assignment in ExtractRecordFieldAssignments(formula.Formula, field))
+        {
+            assignments.Add(assignment);
+        }
+    }
+    return assignments.Count > 0 && assignments.All(IsSupportedTypedTimeValue);
+}
+
+bool SourceFieldUsesOnlyCanonicalTimeText(string source, string field)
+{
+    var values = new List<string>();
+    foreach (var formula in yamlFormulas.Where(formula =>
+        Regex.IsMatch(
+            formula.Formula,
+            $@"\b(?:ClearCollect|Collect|Patch|UpdateIf)\s*\(\s*{Regex.Escape(source)}\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+    {
+        foreach (var assignment in ExtractRecordFieldAssignments(formula.Formula, field))
+        {
+            values.Add(assignment.Trim());
+        }
+    }
+
+    return values.Count > 0 && values.All(value =>
+        IsCanonicalTimeLiteral(value) ||
+        TryParseCanonicalTimeTextValue(value, out _));
+}
+
+static int GetExplicitRenderedLineCount(string formula)
+{
+    var normalized = formula.Trim().TrimStart('=').Trim();
+    foreach (var function in new[] { "If", "IfError" })
+    {
+        if (!TryParseCompleteFunctionCall(normalized, function, out var parts))
+        {
+            continue;
+        }
+
+        var branches = function == "If"
+            ? parts.Skip(1)
+            : parts;
+        return branches.Select(GetExplicitRenderedLineCount).DefaultIfEmpty(1).Max();
+    }
+
+    var concatenated = SplitTopLevelOperator(normalized, '&');
+    if (concatenated.Count > 1)
+    {
+        var lineBreaks = 0;
+        foreach (var part in concatenated)
+        {
+            if (TryParsePowerFxStringLiteral(part, out var segment))
+            {
+                lineBreaks += segment.Count(character => character == '\n');
+                continue;
+            }
+            if (TryParseCompleteFunctionCall(part, "Char", out var charArguments) &&
+                charArguments.Count == 1 &&
+                string.Equals(charArguments[0].Trim(), "10", StringComparison.Ordinal))
+            {
+                lineBreaks++;
+                continue;
+            }
+
+            return 1;
+        }
+        return lineBreaks + 1;
+    }
+
+    if (TryParsePowerFxStringLiteral(normalized, out var literal))
+    {
+        return literal.Count(character => character == '\n') + 1;
+    }
+
+    return 1;
+}
 
 void ValidateStateDrivenSurfaceVisibility(
     Dictionary<string, List<string>> planned,

@@ -21,6 +21,9 @@ const path = require('node:path');
 const testsDir = __dirname;
 const pluginRoot = path.resolve(testsDir, '..', '..');
 const validator = path.join(pluginRoot, 'scripts', 'validate-canvas-acceptance.cs');
+const currentSkillVersion = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'canvas-app', 'SKILL.md'),
+    'utf8').match(/^version:\s*(\S+)/m)[1];
 const fixtureDir = path.join(testsDir, 'fixtures', 'receive-issue');
 const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compound');
 // Negative-space fixture embedding two runtime-fatal defects the "directionally correct"
@@ -104,6 +107,74 @@ function writeFixture(file, fixture) {
         ? fixture.text
         : fixture.text.replace(/\n/g, fixture.eol);
     fs.writeFileSync(file, output);
+}
+
+function readTableKeys(text, heading) {
+    const lines = text.split(/\r?\n/);
+    const headingIndex = lines.findIndex((line) => line.trim() === heading);
+    if (headingIndex < 0) return [];
+    const tableStart = lines.findIndex(
+        (line, index) => index > headingIndex && line.trimStart().startsWith('|'));
+    if (tableStart < 0) return [];
+    const keys = [];
+    for (let index = tableStart + 2; index < lines.length; index++) {
+        if (!lines[index].trimStart().startsWith('|')) break;
+        const key = lines[index].trim().slice(1, -1).split('|')[0].trim();
+        if (key && !key.startsWith('[')) keys.push(key);
+    }
+    return keys;
+}
+
+function installCurrentRequirementsContract(workspace, { targetDevice = 'Fixed desktop' } = {}) {
+    const planPath = path.join(workspace, 'canvas-app-plan.md');
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const actions = readTableKeys(plan, '## Action Contracts');
+    const scenarios = readTableKeys(plan, '## Functional Test Matrix');
+    assert.ok(actions.length > 0, 'current contract requires action rows');
+    assert.ok(scenarios.length > 0, 'current contract requires scenario rows');
+
+    const rows = actions.map((action, index) => {
+        const key = `req-${index + 1}`;
+        const scenario = scenarios[Math.min(index, scenarios.length - 1)];
+        return {
+            key,
+            clause: `Exercise ${action}`,
+            outcome: `${action} completes with visible evidence`,
+            action,
+            scenario,
+        };
+    });
+    plan = `${plan.trimEnd()}\n\n## Requirement Coverage\n\n` +
+        '| Requirement | Planned affordance | Fidelity |\n' +
+        '| --- | --- | --- |\n' +
+        rows.map((row) => `| ${row.key} | ${row.outcome} | Exact |`).join('\n') +
+        '\n\n## Original Request Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row.key} | ${row.clause} | Data lifecycle | ${row.outcome} | ${row.action} | Screen1.OnVisible | ${row.scenario} |`
+        ).join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+
+    let acceptance = fs.readFileSync(acceptancePath, 'utf8');
+    acceptance = acceptance.replace(
+        /^Skill contract version:\s*\S+/m,
+        `Skill contract version: ${currentSkillVersion}`);
+    fs.writeFileSync(acceptancePath, acceptance);
+
+    fs.writeFileSync(
+        path.join(workspace, 'canvas-app-requirements.md'),
+        '# Canvas App Original Request Contract\n\n' +
+        `Contract version: 1\nTarget device: ${targetDevice}\n\n` +
+        '## Original Request\n\n' +
+        rows.map((row) => row.clause).join('. ') + '.\n\n' +
+        '## Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Scenario(s) | Specialized contract mappings |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row.key} | ${row.clause} | Data lifecycle | ${row.outcome} | ${row.action} | ${row.scenario} | N/A |`
+        ).join('\n') + '\n');
 }
 
 function materialize(
@@ -1097,6 +1168,7 @@ function materialize(
     writeFixture(
         path.join(workspace, 'canvas-app-acceptance.md'),
         { ...acceptanceFixture, text: acceptance });
+    installCurrentRequirementsContract(workspace);
     return workspace;
 }
 
@@ -1270,10 +1342,10 @@ function materializeLayout(caseName, { responsive = false } = {}) {
     return workspace;
 }
 
-function runValidator(workspace) {
+function runValidator(workspace, root = pluginRoot) {
     const result = spawnSync(
         'dotnet',
-        ['run', '--file', validator, '--', workspace, pluginRoot],
+        ['run', '--file', validator, '--', workspace, root],
         { encoding: 'utf8' });
     if (result.error) {
         throw result.error;
@@ -1322,6 +1394,7 @@ function materializeFocusedFixture(caseName, sourceDir) {
             .replaceAll('{{PLUGIN_ROOT}}', pluginRoot);
         fs.writeFileSync(path.join(workspace, output), content);
     }
+    installCurrentRequirementsContract(workspace);
     return workspace;
 }
 
@@ -1387,11 +1460,581 @@ function removeDataEntryLabelEvidence(acceptance, control) {
         '');
 }
 
+function appendArtifactSection(workspace, file, section) {
+    rewriteArtifact(workspace, file, (text) => `${text.trimEnd()}\n\n${section.trim()}\n`);
+}
+
+function stripMarkdownSection(workspace, file, title) {
+    rewriteArtifact(workspace, file, (text) => text.replace(
+        new RegExp(`^## ${title}\\r?\\n[\\s\\S]*?(?=^## |$(?![\\s\\S]))`, 'm'),
+        ''));
+}
+
+function setRequirementsContract(
+    workspace,
+    {
+        targetDevice = 'Fixed desktop',
+        request,
+        rows,
+    }) {
+    fs.writeFileSync(
+        path.join(workspace, 'canvas-app-requirements.md'),
+        '# Canvas App Original Request Contract\n\n' +
+        `Contract version: 1\nTarget device: ${targetDevice}\n\n` +
+        `## Original Request\n\n${request}\n\n` +
+        '## Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Scenario(s) | Specialized contract mappings |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) => `| ${row.join(' | ')} |`).join('\n') + '\n');
+}
+
+function replacePlanRequirementContracts(workspace, rows) {
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Requirement Coverage');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        '## Requirement Coverage\n\n' +
+        '| Requirement | Planned affordance | Fidelity |\n' +
+        '| --- | --- | --- |\n' +
+        rows.map((row) => `| ${row[0]} | ${row[3]} | Exact |`).join('\n') +
+        '\n\n## Original Request Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row[0]} | ${row[1]} | ${row[2]} | ${row[3]} | ${row[4]} | ${row[7]} | ${row[5]} |`
+        ).join('\n'));
+}
+
+function configureTemporalContract(
+    workspace,
+    {
+        seed,
+        input,
+        sort,
+        semantics,
+        field = 'StartTime',
+        includeContract = true,
+    }) {
+    rewriteArtifact(workspace, 'App.pa.yaml', (yaml) => yaml.replace(
+        'App:\n',
+        'App:\n    Properties:\n' +
+        `        OnStart: =ClearCollect(colMeetings, ${seed})\n`));
+    rewriteScreen(workspace, (yaml) => `${yaml.trimEnd()}\n` +
+        '            - txtStart:\n' +
+        '                Control: Classic/TextInput\n' +
+        '                Properties:\n' +
+        `                    OnChange: ${input}\n` +
+        '            - galMeetings:\n' +
+        '                Control: Gallery\n' +
+        '                Properties:\n' +
+        `                    Items: ${sort}\n` +
+        '            - lblFirstMeeting:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        `                    Text: =First(${sort.slice(1)}).${field}\n`);
+    const rows = [[
+        'meeting-order',
+        'Order meetings by start time',
+        'Time and scheduling',
+        'Meetings appear in chronological start-time order',
+        'Receive',
+        'ReceiveAdds',
+        'Temporal ordering=meeting-start',
+        'lblFirstMeeting.Text',
+    ]];
+    setRequirementsContract(workspace, {
+        targetDevice: 'Fixed desktop',
+        request: 'Order meetings by start time.',
+        rows: rows.map((row) => row.slice(0, 7)),
+    });
+    replacePlanRequirementContracts(workspace, rows);
+    if (includeContract) {
+        appendArtifactSection(
+            workspace,
+            'canvas-app-plan.md',
+            `## Temporal Ordering Contracts
+
+| Ordering key | Source | Sort field | Storage semantics | Input validation / normalization | Canonical sort binding | Accepted formats | Invalid / blank behavior |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| meeting-start | colMeetings | ${field} | ${semantics} | txtStart.OnChange validates input | galMeetings.Items sorts ${field} | en-US 12-hour and 24-hour | reject invalid; blank remains blank |`);
+        appendArtifactSection(
+            workspace,
+            'canvas-app-acceptance.md',
+            `## Temporal Ordering Evidence
+
+| Ordering key | Input validation / normalization binding | Sort binding | Observer binding | Result |
+| --- | --- | --- | --- | --- |
+| meeting-start | txtStart.OnChange: ${input} | galMeetings.Items: ${sort} | lblFirstMeeting.Text: =First(${sort.slice(1)}).${field} | PASS |`);
+    }
+}
+
+function wrapScreenInViewportRoot(workspace, { sibling = false } = {}) {
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '        Children:\n';
+        const start = yaml.indexOf(marker);
+        assert.notStrictEqual(start, -1, 'expected Screen1 Children');
+        const prefix = yaml.slice(0, start + marker.length);
+        const children = yaml.slice(start + marker.length)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        const overlay = sibling
+            ? '            - conOverlay:\n' +
+              '                Control: GroupContainer\n' +
+              '                Variant: ManualLayout\n' +
+              '                Properties:\n' +
+              '                    Visible: =true\n'
+            : '';
+        return prefix +
+            '            - conRoot:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Width: =Parent.Width\n' +
+            '                    Height: =Parent.Height\n' +
+            '                    LayoutMinWidth: =0\n' +
+            '                    LayoutMinHeight: =0\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+            '                Children:\n' +
+            children +
+            overlay;
+    });
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (acceptance) => acceptance
+        .replace('| cmbAdjustItem | lblAdjustItem.Text | Screen1 |',
+            '| cmbAdjustItem | lblAdjustItem.Text | conRoot |')
+        .replace('| drpOperation | lblOperation.Text | Screen1 |',
+            '| drpOperation | lblOperation.Text | conRoot |')
+        .replace('| txtAmount | lblAmount.Text | Screen1 |',
+            '| txtAmount | lblAmount.Text | conRoot |'));
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        `## Viewport Containment Contracts
+
+| Screen | Root control | Layout variant | Width binding | Height binding | Overflow policy |
+| --- | --- | --- | --- | --- | --- |
+| Screen1 | conRoot | AutoLayout | conRoot.Width: =Parent.Width | conRoot.Height: =Parent.Height | vertical scroll |`);
+    appendArtifactSection(
+        workspace,
+        'canvas-app-acceptance.md',
+        `## Viewport Containment Evidence
+
+| Screen | Root control | Top-level containment | Conditional surfaces | Result |
+| --- | --- | --- | --- | --- |
+| Screen1 | conRoot | sole top-level root | state-driven visibility checked separately | PASS |`);
+}
+
 // Keep cleanup out of the node:test hook lifecycle. The full file drives many synchronous
 // `dotnet run --file` validators; on newer Node test runners, a top-level `test.after`
 // cleanup can remove `.work` while late tests are still starting, causing misleading
 // "Missing App.pa.yaml" validator failures instead of exercising the intended rule.
 process.on('exit', () => fs.rmSync(workRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+
+test('rejects upstream-required temporal ordering when the plan omits its contract', () => {
+    const workspace = materialize('time-contract-omitted');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "9:00 AM"}, {StartTime: "2:00 PM"}',
+        input: '=Set(varStart, txtStart.Text)',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+        includeContract: false,
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted required temporal contract to fail');
+    assert.match(stderr, /Missing upstream temporal ordering evidence for 'meeting-start'/);
+});
+
+test('accepts validated canonical 24-hour normalization and sorting', () => {
+    const workspace = materialize('time-canonical-sort');
+    configureTemporalContract(workspace, {
+        seed: '{StartSortKey: "09:00"}, {StartSortKey: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartSortKey: Text(TimeValue(txtStart.Text, "en-US"), "[$-en-US]HH:mm")}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartSortKey")',
+        semantics: 'Canonical 24-hour text',
+        field: 'StartSortKey',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected canonical time ordering to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a typed-time contract when the actual source field is seeded with text', () => {
+    const workspace = materialize('time-false-typed');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "9:00 AM"}, {StartTime: "2:00 PM"}',
+        input: '=IfError(Set(varStart, TimeValue(txtStart.Text, "en-US")), Set(varStart, Blank()))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected string-backed typed-time claim to fail');
+    assert.match(stderr, /declares typed time.*field 'StartTime' is not established from typed time values/);
+});
+
+test('accepts typed time sorted with SortByColumns', () => {
+    const workspace = materialize('time-typed-sortbycolumns');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0)}, {StartTime: Time(14, 0, 0)}',
+        input: '=IfError(Set(varStart, TimeValue(txtStart.Text, "en-US")), Set(varStart, Blank()))',
+        sort: '=SortByColumns(colMeetings, "StartTime", SortOrder.Ascending)',
+        semantics: 'Typed time',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected typed SortByColumns to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts typed time sorted with Sort', () => {
+    const workspace = materialize('time-typed-sort');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0)}, {StartTime: Time(14, 0, 0)}',
+        input: '=Set(varStart, TimeValue(txtStart.Text, "en-US"))',
+        sort: '=Sort(colMeetings, StartTime, SortOrder.Ascending)',
+        semantics: 'Typed time',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected typed Sort to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a temporal contract that sorts a different field', () => {
+    const workspace = materialize('time-wrong-sort-field');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0), Title: "Zulu"}, {StartTime: Time(14, 0, 0), Title: "Alpha"}',
+        input: '=Set(varStart, TimeValue(txtStart.Text, "en-US"))',
+        sort: '=SortByColumns(Filter(colMeetings, !IsBlank(StartTime)), "Title")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong time sort field to fail');
+    assert.match(stderr, /must sort declared source 'colMeetings' by exact field 'StartTime'/);
+});
+
+test('rejects canonical normalization that parses unrelated data then persists raw input', () => {
+    const workspace = materialize('time-unrelated-normalization');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Set(varPreview, Text(TimeValue("00:00"), "HH:mm")); Patch(colMeetings, First(colMeetings), {StartTime: txtStart.Text}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated parse plus raw persisted input to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects canonical time writes without invalid and blank guards', () => {
+    const workspace = materialize('time-missing-invalid-blank-guards');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unguarded canonical input to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects a non-zero-padded canonical time key', () => {
+    const workspace = materialize('time-not-zero-padded');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text, "en-US"), "H:mm")}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-padded canonical key to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects a typed-time claim whose field expression returns formatted text', () => {
+    const workspace = materialize('time-typed-claim-formatted-text');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Text(Time(9, 0, 0), "h:mm AM/PM")}, {StartTime: Text(Time(14, 0, 0), "h:mm AM/PM")}',
+        input: '=Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "h:mm AM/PM")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected outer Text return semantics not to count as typed time');
+    assert.match(stderr, /field 'StartTime' is not established from typed time values/);
+    assert.match(stderr, /typed-time input binding is unverified/);
+});
+
+test('rejects a canonical field expression that keeps only the minute suffix', () => {
+    const workspace = materialize('time-canonical-minute-only');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Right(Text(TimeValue(txtStart.Text, "en-US"), "[$-en-US]HH:mm"), 2)}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a minute-only wrapper not to count as a canonical time value');
+    assert.match(stderr, /canonical text input is unverified/);
+    assert.match(stderr, /contains or is seeded with noncanonical time text/);
+});
+
+test('rejects a canonical field expression with a suffix after normalization', () => {
+    const workspace = materialize('time-canonical-suffixed-value');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm") & " AM"}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected trailing operators to invalidate the canonical value claim');
+    assert.match(stderr, /canonical text input is unverified/);
+    assert.match(stderr, /contains or is seeded with noncanonical time text/);
+});
+
+test('rejects canonical guards that validate an unrelated input outside the write', () => {
+    const workspace = materialize('time-canonical-unrelated-guards');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(txtAmount.Text), Notify("Amount required")); IfError(Set(varAmount, Value(txtAmount.Text)), Notify("Invalid amount")); Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated guards not to validate the time write');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('does not associate an unrelated hours label with VendorID sorting', () => {
+    const workspace = materialize('vendor-id-unrelated-time-label');
+    rewriteArtifact(workspace, 'App.pa.yaml', (yaml) => yaml.replace(
+        'App:\n',
+        'App:\n    Properties:\n' +
+        '        OnStart: =ClearCollect(colVendors, {VendorID: "V002"}, {VendorID: "V001"})\n'));
+    rewriteScreen(workspace, (yaml) => `${yaml.trimEnd()}\n` +
+        '            - galVendors:\n' +
+        '                Control: Gallery\n' +
+        '                Properties:\n' +
+        '                    Items: =SortByColumns(colVendors, "VendorID")\n' +
+        '            - lblOpeningHours:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="9:00 AM"\n');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected unrelated VendorID sort to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a plan that reduces original requirements without a capability inventory', () => {
+    const workspace = materialize('requirements-without-inventory');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing original capability inventory to fail');
+    assert.match(stderr, /Original Request Capability Inventory/);
+});
+
+test('requires the orchestrator-authored requirements artifact regardless of plan heading names', () => {
+    const workspace = materialize('requirements-upstream-artifact-missing');
+    fs.rmSync(path.join(workspace, 'canvas-app-requirements.md'));
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        '## Original user request\n\nReceive and issue inventory.');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing upstream requirements artifact to fail');
+    assert.match(stderr, /Missing orchestrator-authored original requirements contract/);
+});
+
+test('keeps pre-3.1 acceptance artifacts compatible when validated against a legacy skill root', () => {
+    const workspace = materialize('requirements-legacy-compatible');
+    fs.rmSync(path.join(workspace, 'canvas-app-requirements.md'));
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Requirement Coverage');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) =>
+        text.replace(
+            `Skill contract version: ${currentSkillVersion}`,
+            'Skill contract version: 3.0.9'));
+    const legacyRoot = path.join(workRoot, 'legacy-plugin-root');
+    fs.mkdirSync(path.join(legacyRoot, 'skills', 'canvas-app'), { recursive: true });
+    fs.writeFileSync(
+        path.join(legacyRoot, 'skills', 'canvas-app', 'SKILL.md'),
+        '---\nname: canvas-app\nversion: 3.0.9\n---\n');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) =>
+        text.replace(`Plugin root: ${pluginRoot}`, `Plugin root: ${legacyRoot}`));
+    const { code, stdout, stderr } = runValidator(workspace, legacyRoot);
+    assert.strictEqual(
+        code,
+        0,
+        `expected legacy contract compatibility.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a planner inventory that omits an upstream dependency and alert requirement', () => {
+    const workspace = materialize('requirements-dependency-omitted');
+    setRequirementsContract(workspace, {
+        request: 'Receive inventory, create product dependencies, and show blocked-product alerts.',
+        rows: [
+            ['receive-stock', 'Receive inventory', 'Data lifecycle', 'quantity increases', 'Receive', 'ReceiveAdds', 'N/A'],
+            ['product-dependency', 'Create product dependencies', 'Relationships and hierarchy', 'selected products are linked by stable IDs', 'Issue', 'IssueSubtracts', 'N/A'],
+            ['blocked-alert', 'Show blocked-product alerts', 'Workflow and review', 'blocked products expose a visible alert', 'Issue', 'IssueSubtracts', 'N/A'],
+        ],
+    });
+    replacePlanRequirementContracts(workspace, [
+        ['receive-stock', 'Receive inventory', 'Data lifecycle', 'quantity increases', 'Receive', 'ReceiveAdds', 'N/A', 'galInventory.Items'],
+    ]);
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted upstream capabilities to fail');
+    assert.match(stderr, /Missing upstream requirement capability evidence for 'product-dependency'/);
+    assert.match(stderr, /Missing upstream requirement capability evidence for 'blocked-alert'/);
+});
+
+test('rejects a requirement observer that does not resolve to final YAML', () => {
+    const workspace = materialize('requirements-missing-observer');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (plan) =>
+        plan.replace('Screen1.OnVisible | ReceiveAdds', 'lblDoesNotExist.Text | ReceiveAdds'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected nonexistent observer binding to fail');
+    assert.match(stderr, /observer 'lblDoesNotExist.Text' does not resolve/);
+});
+
+test('accepts stable original-request mappings to known actions, observers, and scenarios', () => {
+    const workspace = materialize('requirements-mapped-inventory');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected mapped requirement inventory to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects responsive viewport containment with a screen-level sibling outside the root', () => {
+    const workspace = materialize('viewport-root-sibling');
+    wrapScreenInViewportRoot(workspace, { sibling: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected root sibling to fail containment');
+    assert.match(stderr, /must have exactly one top-level root.*conRoot, conOverlay/);
+});
+
+test('accepts one explicit AutoLayout viewport root containing all screen content', () => {
+    const workspace = materialize('viewport-root-contained');
+    wrapScreenInViewportRoot(workspace);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected contained viewport root to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('requires viewport containment for an upstream responsive target even when plan tables are omitted', () => {
+    const workspace = materialize('viewport-responsive-contract-omitted');
+    wrapScreenInViewportRoot(workspace, { sibling: true });
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Viewport Containment Contracts');
+    stripMarkdownSection(workspace, 'canvas-app-acceptance.md', 'Viewport Containment Evidence');
+    rewriteArtifact(workspace, 'canvas-app-requirements.md', (text) =>
+        text.replace('Target device: Fixed desktop', 'Target device: Phone and tablet'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing responsive viewport contract to fail');
+    assert.match(stderr, /responsive or unknown target requires a contract for screen 'Screen1'/);
+});
+
+test('keeps explicitly fixed desktop multi-root layouts exempt from viewport contracts', () => {
+    const workspace = materialize('viewport-fixed-desktop-exempt');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected explicit fixed desktop target to remain compatible.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not reject uncertain proportional-font width from character-count estimation', () => {
+    const workspace = materialize('required-action-text-estimate');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Manage Inventory"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected uncertain font-width estimate not to hard fail.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not treat a predicate-only string literal as rendered button text', () => {
+    const workspace = materialize('text-nonrendered-predicate-literal');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: =If(IsBlank(LookUp(colInventory, Description = "Long internal lookup description that is never rendered in this button")), "Receive", "Receive")\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected predicate-only literal not to affect text fit.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not reject narrow glyphs with explicit zero padding from a font-width guess', () => {
+    const workspace = materialize('text-narrow-glyphs');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="iiiiiiiiiiiiiiiiiiii"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    Size: =14\n' +
+        '                    Wrap: =false\n' +
+        '                    PaddingLeft: =0\n' +
+        '                    PaddingRight: =0\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected explicit zero-padding narrow glyphs to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not decode a literal backslash-n sequence as a rendered line break', () => {
+    const workspace = materialize('text-literal-backslash-n');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Line\\nOne"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    Size: =14\n' +
+        '                    PaddingTop: =4\n' +
+        '                    PaddingBottom: =4\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected a literal backslash-n to remain one rendered line.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a structurally undersized action with an explicit Char(10) line break', () => {
+    const workspace = materialize('text-explicit-char-linebreak-clips');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Manage" & Char(10) & "Inventory"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =30\n' +
+        '                    Size: =14\n' +
+        '                    PaddingTop: =4\n' +
+        '                    PaddingBottom: =4\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected explicit multiline height deficit to fail');
+    assert.match(stderr, /explicit multiline result with a structural minimum of 36px.*Height is 30px/);
+});
 
 test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
     const workspace = materialize('receive-issue-pass');
@@ -2877,8 +3520,13 @@ test('derives field-ledger entries from a balanced UpdateIf change record', () =
         rewriteArtifact(workspace, file, (text) => text
             .replace(patch, updateIf)
             .replace(/^\| Receive\s*\|/gm, '| Save up |')
-            .replace(/^\| Issue\s*\|/gm, '| Save down |'));
+            .replace(/^\| Issue\s*\|/gm, '| Save down |')
+            .replaceAll('| Receive |', '| Save up |')
+            .replaceAll('| Issue |', '| Save down |'));
     }
+    rewriteArtifact(workspace, 'canvas-app-requirements.md', (text) => text
+        .replaceAll('| Receive |', '| Save up |')
+        .replaceAll('| Issue |', '| Save down |'));
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(
         code,

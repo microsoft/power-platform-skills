@@ -26,6 +26,8 @@ Your invocation includes:
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
 - User requirements and approved plan
+- Orchestrator-authored `[working directory]/canvas-app-requirements.md`; read it before
+  planning and never modify, replace, or regenerate it
 - Discovery packet produced by the orchestrator in the MCP-owning top-level context
 - CREATE context: target users and device
 - EDIT context: current app state and synced files
@@ -151,16 +153,24 @@ Before writing plans:
    requested visible column in YAML. If it exposes no Fields/Columns contract and there is
    no existing configured grid to preserve, plan a sortable Gallery table with explicit
    headers instead.
-10. Classify the approved requirements with the capability inventory in
+10. Before reducing the approved request into screens, copy every independently testable
+    original clause from `canvas-app-requirements.md` into
+    `## Original Request Capability Inventory`. Preserve its stable key, clause,
+    capability family, required outcome/scope, Action Contract key(s), and Functional Test
+    Matrix scenario key(s) exactly, then add the exact final-YAML observer binding(s).
+    Keep field, relationship, lifecycle, alert, aggregation scope, and specialized
+    contract mappings explicit. Reject dropped or unknown mappings. Do not infer universal
+    CRUD that the request does not require.
+11. Classify the approved requirements with the capability inventory in
     `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Use it to find missing behaviors, not to invent
     unrequested features.
-11. Write `## Required Record Fields` when the app has a repeated record card, row, or
+12. Write `## Required Record Fields` when the app has a repeated record card, row, or
     immediately reachable detail. Add one stable field key for the canonical identity and
     every field the requirements say users must see, including named title, person, time
     range, description, status, and similar values. Name the owner screen, record surface,
     source field, and presentation requirement. Do not accept a time-only or identity-only
     surface when additional fields are requested.
-12. Build one Action Contract row for each requested or approved action. Do not infer
+13. Build one Action Contract row for each requested or approved action. Do not infer
     universal CRUD for supporting entities, but treat role-scoped management of primary
     records as requiring reachable list/detail, correction/update, and remove/cancel
     flows. A named role that must "manage all" primary records therefore requires separate
@@ -173,7 +183,7 @@ Before writing plans:
     Receive/Issue, Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out,
     Enable/Disable, and other opposing transitions as separate contracts even when they use
     one shared form.
-13. For every Action Contract, name its eligible precondition, source of truth, immutable
+14. For every Action Contract, name its eligible precondition, source of truth, immutable
     record identity, exact event, source transition, postcondition, observer formula, and
     visible evidence. Verify the observer reads the same source and field the event writes.
     A control label and an `OnSelect` formula are not a complete contract. For opposing
@@ -185,7 +195,7 @@ Before writing plans:
     Apply the exact selector, empty-state, numeric-input, reset, and guard contracts from
     `${PLUGIN_ROOT}/references/BehaviorGuide.md` and copy the resulting compile-ready formulas and
     properties into the owning screen brief.
-14. For every mutation, name the target source, exact data operation, refresh or collection
+15. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
     its Action Contract. The write set lists every field or status the handler changes. The
@@ -204,10 +214,10 @@ Before writing plans:
     or lifecycle-significant Preserved field. Changed rows must match the write and proof
     sets one-for-one; Preserved rows name canonical pre-state, exact omission/carry-forward,
     and post-state evidence.
-15. Verify every Action Contract has a reachable entry point and owner screen. Include
+16. Verify every Action Contract has a reachable entry point and owner screen. Include
     supporting setup actions when they are necessary to exercise an explicitly requested
     lifecycle, comparison, relationship, or ranking with local/mock data.
-16. For create and edit contracts, specify every required input, requiredness, finite-choice
+17. For create and edit contracts, specify every required input, requiredness, finite-choice
     source, concrete option values, default/placeholder, stable record ID, and post-save
     destination. For short static choices, prefer visible radio or button choices, then a
     dropdown that commits by click or tap; do not plan a searchable combobox unless the set
@@ -221,7 +231,7 @@ Before writing plans:
     later action directly to the returned create ID and specify clearing of continuation
     ID/mode after successful downstream completion and cancellation. Omit the section for
     create-only flows; do not invent continuation for ordinary navigation.
-17. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
+18. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
     success scenario per Action Contract and one scenario for each required boundary or
     negative path. Use concrete seeded IDs and values for local/mock data. Each `Then`
     names the source postcondition and the exact observer/evidence surface that proves it.
@@ -237,7 +247,7 @@ Before writing plans:
     When a continuation contract exists, add one scenario for returned-ID-bound downstream
     completion and one for cancellation. Both clear continuation ID/mode; cancellation
     leaves the canonical source unchanged.
-18. When Action Contracts contain an opposing directional pair, write the
+19. When Action Contracts contain an opposing directional pair, write the
     `## Directional Mutation Evidence` table from `PlanTemplates.md`. Declare exact
     compile-ready planned bindings for selected ID, resettable operation state, invalid
     amount and submit gates, both directional formulas, the canonical observer, and all
@@ -248,7 +258,7 @@ Before writing plans:
     state. Copy these planned formulas into the owning screen brief; final acceptance
     compares the implemented YAML to this contract. Require a literal guard for each
     direction; an `else`, default `Switch` arm, or unguarded fallback does not prove it.
-19. For every selector or filter, couple the concrete option source, readable option
+20. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form
     inputs. Seed at least two matching records and one non-matching record for every
@@ -288,6 +298,10 @@ observed defect in finished apps, and no compile diagnostic reports it.
 
 For every screen brief, state explicitly:
 
+- A `## Viewport Containment Contracts` row for every responsive or unknown-device
+  screen. The declared AutoLayout root is the only top-level child and uses exact
+  `Width: =Parent.Width` and `Height: =Parent.Height`; nest alerts, receipts,
+  confirmations, forms, and navigation beneath it.
 - Which horizontal rows wrap (`LayoutWrap: =true`) and which stack below a width
   breakpoint. Logical canvas sources such as `App.Width`, a root container's `Width`, and
   root-level `Parent.Width` can remain at design width when an embedded or scale-to-fit
@@ -327,6 +341,9 @@ For every screen brief, state explicitly:
   not fit. Protect required inputs, primary actions, and complete mutation receipts.
   Apply the exact arithmetic, `FillPortions`, nested-width, overflow, and fixed-height
   rules from `${PLUGIN_ROOT}/references/LayoutGuide.md` and `${PLUGIN_ROOT}/references/QAChecks.md`.
+- For every fixed-height text-bearing action, badge, label, receipt, or navigation item,
+  budget the longest reachable value. Include wrapped line count plus vertical padding;
+  parent `LayoutWrap` does not make a 44px child tall enough for two lines.
 - Group each visible label with its corresponding input in one field container before
   the row stacks.
 - Give every required classic or modern TextInput, NumberInput, Radio, DropDown, or
@@ -347,6 +364,10 @@ For every screen brief, state explicitly:
   that shape despite populated collections. A required selected ID must also have either
   a non-gallery event that assigns it or a row-selection event inside this render-safe
   Gallery contract.
+- When any list, schedule, queue, timeline, report, or alert orders time-of-day values,
+  write `## Temporal Ordering Contracts`. Prefer a typed time field. If text storage is
+  necessary, parse accepted input and persist a zero-padded `HH:mm` sort key, define
+  invalid/blank behavior, and sort that key rather than the display string.
 
 
 ## 6. Assign the Control Name Space

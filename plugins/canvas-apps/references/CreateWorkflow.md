@@ -16,6 +16,8 @@ Read:
 
 Determine:
 
+- An original-request capability inventory, captured clause-by-clause before screen or
+  feature consolidation, with stable mappings to actions, observers, and scenarios
 - Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
 - Every user action, precondition, source-of-truth transition, and visible postcondition
 - Stable IDs, mutable fields, status values, relationships, and persistence semantics
@@ -24,6 +26,9 @@ Determine:
 - Data sources, connectors, collections, or mock data
 - Aesthetic direction with exact RGBA values
 - Target device and users
+
+For any requested time ordering, choose typed Date/Time storage or a validated canonical
+24-hour sort key before presenting the plan. Never sort 12-hour display strings directly.
 
 Use AutoLayout for phone, tablet, multi-device, or unknown targets. ManualLayout is
 acceptable for desktop-only, fixed dashboards.
@@ -66,6 +71,11 @@ Otherwise, wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
+Before delegation, write `[working directory]/canvas-app-requirements.md` from the
+approved plan and original request using the `Original Requirements Contract` template in
+`${PLUGIN_ROOT}/references/PlanTemplates.md`. This is an orchestrator-owned input: preserve
+the original request clauses before planner reduction, assign stable action/scenario and
+specialized-contract keys, and record the target device. The planner must not edit it.
 
 Before delegation, use the top-level skill's MCP connection to call `list_controls`,
 `list_apis`, and `list_data_sources`; call `describe_control` for every control type in
@@ -86,6 +96,7 @@ Shared plan: `[working directory]/canvas-app-shared.md`
 Plugin root: `${PLUGIN_ROOT}`
 Requirements: [user requirements]
 Approved plan: [full approved plan]
+Original requirements contract: `[working directory]/canvas-app-requirements.md`
 Target users and device: [stated or inferred]
 Discovery packet: [complete results gathered above]
 ```

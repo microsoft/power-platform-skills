@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.9
+version: 3.1.0
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -59,16 +59,26 @@ Do not load both workflow documents.
 
 CREATE and complex EDIT workflows return here after the planner finishes.
 
-1. Read `[working directory]/canvas-app-plan.md` returned by the planner.
-2. Verify its `## Requirement Coverage` table maps every concrete requested noun and
+1. Read the orchestrator-authored `[working directory]/canvas-app-requirements.md` and
+   `[working directory]/canvas-app-plan.md` returned by the planner. The requirements
+   artifact must already exist before planner delegation, use contract version 1, preserve
+   the original request, identify the target device, and assign stable requirement,
+   action, scenario, and specialized-contract mappings. Do not let the planner create,
+   rewrite, or replace this upstream artifact.
+2. Verify `## Original Request Capability Inventory` was captured from the original
+   request before planner reduction. Every stable key must appear in `## Requirement
+   Coverage` and map to existing Action Contract key(s), named observer(s), and Functional
+   Test Matrix scenario key(s). Reject dropped clauses and unknown mappings; do not add
+   universal CRUD absent from the request.
+3. Verify its `## Requirement Coverage` table maps every concrete requested noun and
    interaction to a visible affordance. Any approximation must be explicit and must not
    use UI copy that claims the unavailable interaction is exact.
-3. When the app contains record cards, rows, lists, or details, verify its
+4. When the app contains record cards, rows, lists, or details, verify its
    `## Required Record Fields` table has one stable key for the canonical identity and
    every field the requirements say users must see. Reject a time-only, identity-only, or
    action-only surface when additional title, person, time, description, status, or other
    values are requested.
-4. Verify its `## Action Contracts` table:
+5. Verify its `## Action Contracts` table:
     - Every requested or approved action has its own row and reachable entry point.
     - Create, edit, delete, search, filter, approve, reject, period, and export behaviors
       are not collapsed into vague combined rows.
@@ -111,7 +121,7 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       stable identity, edit prepopulation, cancel/reset behavior, and post-save evidence.
     - Every row names a precondition, source and stable identity, exact transition and
       postcondition, observer reading that source, and visible evidence.
-5. Verify its `## Functional Test Matrix`:
+6. Verify its `## Functional Test Matrix`:
     - Every Action Contract has at least one deterministic Given/When/Then success row.
     - Every required invalid, blocked, empty, clear/reset, or boundary path has a row.
     - Every direction of an opposing pair has its own concrete scenario with explicit old
@@ -124,7 +134,7 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - When a continuation contract is present, scenarios cover the returned-ID-bound
       downstream completion and non-mutating cancellation paths, including
       continuation-state clear.
-6. When the plan contains an opposing directional pair, require `## Directional Mutation
+7. When the plan contains an opposing directional pair, require `## Directional Mutation
    Evidence` before dispatch. It must state a nullable selected-ID state with blank reset
    and row assignment, the actual operation state with an entry/success `Blank()` reset
    event, representable blank/non-positive amount bindings, a disabled invalid submission
@@ -132,7 +142,16 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    bindings for operation, old value, amount, expected value, and actual persisted value.
    For a shared-operation flow, the plan must also identify each selection-only binding,
    the common guarded mutation event, and their common operation state.
-7. Verify its `## Dispatch` table:
+8. Verify every responsive or unknown-device screen has a `## Viewport Containment
+   Contracts` row naming one sole top-level AutoLayout root with exact
+   `Width: =Parent.Width` and `Height: =Parent.Height`. All visible and conditional
+   surfaces must be nested below it.
+9. When requested behavior orders or compares time-of-day values, require
+   `## Temporal Ordering Contracts`. Sort typed Date/Time fields directly, or require
+   validated input normalization to a zero-padded 24-hour `HH:mm` sort key with explicit
+   invalid/blank behavior. Reject direct sorting of 12-hour, non-padded, or mixed display
+   strings.
+10. Verify its `## Dispatch` table:
     - Every row has `Action`, `Screen`, `Target File`, `YAML Key`, `Name Prefix`, and
       `Screen Brief`.
     - CREATE rows use `Create`; EDIT rows use `Modify` or `Create`.
@@ -141,13 +160,13 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - No two rows share a `Name Prefix`.
     - In CREATE mode the first row targets `[working directory]/Screen1.pa.yaml` with YAML key `Screen1`.
     - `## Editor State Changes` exists and contains exact final order lists or `None`.
-8. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
+11. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
    Verify each brief's assignment matches its dispatch row and includes every Action
    Contract owned by that screen under `## Required Actions` and every scenario it
    exercises under `## Functional Test Scenarios`. It also includes every
    `## Required Record Fields` row owned by that screen with an exact bound control,
    formula, hierarchy, visibility rule, and layout budget.
-9. Before dispatch, read every brief and reject it when:
+12. Before dispatch, read every brief and reject it when:
     - a used control lacks its exact creation keywords, supported input-property names, or
       the full `Enum name:` and compile-ready enum literal required by discovery;
     - a Required Action is only an identifier or summary instead of its complete
@@ -155,14 +174,14 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - a Functional Test Scenario is only an identifier instead of complete
       Given/When/Then text, boundary conditions, and expected evidence; or
     - it contains an unresolved placeholder or delegates discovery to the builder.
-10. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
+13. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
    `[working directory]/App.pa.yaml` now. Screens bind to those collections, formulas and variables, and
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
-11. Call `compile_canvas` now and resolve every `App`-level diagnostic before dispatching.
+14. Call `compile_canvas` now and resolve every `App`-level diagnostic before dispatching.
     The planner cannot validate through the top-level MCP connection. For EDIT mode,
     compile after applying the before-builder app changes and resolve App-level
     diagnostics before dispatching.
-12. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
+15. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
 and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
 assignment. Run these workers in waves of **at most three**. Fire each wave together,
 wait for it to return, then dispatch the next.
@@ -308,6 +327,14 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   phone layouts. Static budgets do not replace post-export runtime proof for list rows and
   row actions. Apply the exact containment, sizing, breakpoint, and scrolling rules from
   `${PLUGIN_ROOT}/references/QAChecks.md` and `${PLUGIN_ROOT}/references/ValidationWorkflow.md`.
+- Verify every Viewport Containment Contract against final YAML. The declared AutoLayout
+  root must be the sole top-level child with exact viewport width/height; do not accept
+  `QACHK-ROOT-CONTAINMENT` N/A on these screens.
+- Verify fixed-height text-bearing controls against their longest reachable values.
+  Include wrapped lines and padding; parent wrapping cannot prevent child-height clipping.
+- Verify every Temporal Ordering Contract against final YAML. Test representative morning
+  and afternoon values, zero-padded and non-padded 24-hour input, 12-hour input when
+  accepted, and invalid/blank input. Direct lexicographic sorting of display strings fails.
 - Require persistent human-readable visible labels for accepted data-entry controls,
   including controls on state-driven surfaces, and record the corresponding Data Entry
   Label Evidence from `${PLUGIN_ROOT}/references/ValidationWorkflow.md`.
