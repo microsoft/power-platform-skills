@@ -42,6 +42,7 @@ const PLAN_FILES = new Set([
 const PROTECTED_PACK_KEYS = ['screenId', 'route', 'primaryActions', 'secondaryActions', 'navigation', 'dataAssumptions', 'entityIds'];
 const COPY_GENERATED_FILES = new Set([PHONE_COMPILED, PHONE_NAVIGATION, ...DERIVED_FILES, ...RUNTIME_HELPERS]);
 const COPY_LABEL_NAME = /(?:label|title|text|message|description|placeholder|hint|caption|empty|error|retry|notice|status)/i;
+const FINAL_APPLY_ONLY_KINDS = new Set(['screen-copy', 'focused-screen']);
 
 function source(root) {
   return require('./authoring-source').captureSource(root);
@@ -111,6 +112,7 @@ function ruleContract(root, input, entityId) {
 function allowedFile(kind, file, selected, screenFiles, integration, ruleFiles) {
   relativePath(file);
   if (kind === 'business-rule') return ruleFiles.includes(file) || ['native-app-plan.md', 'memory-bank.md'].includes(file);
+  if (kind === 'focused-screen') return screenFiles.includes(file);
   if (PLAN_FILES.has(file)) return true;
   if (kind === 'integration') return allowedIntegrationFile(file, integration, screenFiles);
   if (kind === 'global-style') return /^(?:brand\/|src\/(?:tokens|theme)\/)/.test(file) || file === 'tamagui.config.ts';
@@ -169,8 +171,8 @@ function userFacingCopyNode(ts, node) {
     if (ts.isVariableDeclaration(parent)) return COPY_LABEL_NAME.test(copyNodeName(ts, parent.name));
     if (ts.isPropertyAssignment(parent)) return COPY_LABEL_NAME.test(copyNodeName(ts, parent.name));
     if (ts.isCallExpression(parent)) {
-      const name = parent.expression.getText();
-      return /(?:^|\.)(?:set(?:Error|Message|Status|Notice|Toast|Label|Title|Text)|alert|showToast)$/i.test(name);
+      const name = parent.expression.getText().split('.').at(-1);
+      return /^(?:set.*(?:Error|Message|Status|Notice|Toast|Label|Title|Text)|alert|showToast)$/i.test(name);
     }
     if (ts.isFunctionLike(parent) || ts.isStatement(parent)) break;
   }
@@ -311,7 +313,9 @@ function normalizePlan(root, descriptor, input) {
     'schemaVersion', 'summary', 'kind', 'screenIds', 'newScreens', 'allowedFiles', 'entityId', 'rules', 'connectorName',
     'authoringRuntime', 'authoringSources', 'copyEdits',
   ].includes(key))) throw new Error('Edit proposal has an unsupported shape');
-  const kind = protocol.enumeration(input.kind, ['global-style', 'target-layout', 'screen', 'screen-copy', 'business-rule', 'integration'], 'edit kind');
+  const kind = protocol.enumeration(input.kind, [
+    'global-style', 'target-layout', 'screen', 'screen-copy', 'focused-screen', 'business-rule', 'integration',
+  ], 'edit kind');
   if (!!descriptor.integration !== (kind === 'integration')) {
     throw new Error('A catalogue-selected edit must use its bound integration proposal, not an unrelated edit kind');
   }
@@ -331,6 +335,11 @@ function normalizePlan(root, descriptor, input) {
     || screenIds.length !== 1 || screenIds[0] !== selected.screen.screenId
     || input.newScreens !== undefined || input.authoringRuntime !== undefined || input.authoringSources !== undefined)) {
     throw new Error('A copy-only edit requires one existing selected screen and cannot install or redirect authoring');
+  }
+  if (kind === 'focused-screen' && (descriptor.operation !== 'edit' || !selected.screen
+    || screenIds.length !== 1 || screenIds[0] !== selected.screen.screenId
+    || input.newScreens !== undefined || input.authoringRuntime !== undefined || input.authoringSources !== undefined)) {
+    throw new Error('A focused edit requires one existing selected screen and cannot install or redirect authoring');
   }
   if (kind === 'global-style' && screenIds.length) throw new Error('App-background edits default to global styling, not the selected screen');
   const compiled = readJson(root, '.tmp/compiled-screen-build-pack.json');
@@ -365,6 +374,10 @@ function normalizePlan(root, descriptor, input) {
     throw new Error('An edit requires 1-40 exact approved files, not globs or directory access');
   }
   const allowedFiles = [...input.allowedFiles].sort();
+  if (kind === 'focused-screen' && (!allowedFiles.includes(selected.screen.sourceFile)
+    || allowedFiles.some((file) => !exists(root, file)))) {
+    throw new Error('A focused edit must change one existing selected screen and cannot add files');
+  }
   if (newScreens.some((screen) => !allowedFiles.includes(screen.sourceFile))) throw new Error('A new screen must have its exact source file in the approved scope');
   const authoring = planAuthoring(root, input, { kind, compiled, registry, newScreens });
   const integration = kind === 'integration' ? validateIntegrationPlan(root, descriptor, input) : null;
@@ -393,7 +406,12 @@ function normalizePlan(root, descriptor, input) {
     ...(authoring.authoringRuntime ? { authoringRuntime: authoring.authoringRuntime } : {}),
     ...(newScreens.length ? { newScreens } : {}),
     ...(kind === 'target-layout' ? { targetId: selected.target.id, targetFile: selected.screen.sourceFile } : {}),
-    ...(copy ? { ...copy, approvalMode: 'final-apply-only' } : {}),
+    ...(kind === 'focused-screen' ? {
+      targetFile: selected.screen.sourceFile,
+      ...(selected.target ? { targetId: selected.target.id } : {}),
+    } : {}),
+    ...(FINAL_APPLY_ONLY_KINDS.has(kind) ? { approvalMode: 'final-apply-only' } : {}),
+    ...(copy || {}),
     ...(rules ? { rules, entityId } : {}),
     ...(integration ? { integration: integration.selection, integrationRoute: integration } : {}),
     preservedBehavior: ['navigation', 'queries', 'actions', 'paging'],
@@ -437,7 +455,7 @@ async function prepare(client, input) {
     const state = readJson(root, stateLocation(descriptor, plan.id));
     return {
       planId: plan.id, planPath, scope: plan.scope, status: state.state,
-      approvalRequired: plan.kind !== 'screen-copy',
+      approvalRequired: !FINAL_APPLY_ONLY_KINDS.has(plan.kind),
     };
   }
   // Backups are limited to the explicitly proposed code/contracts. Runtime
@@ -459,13 +477,13 @@ async function prepare(client, input) {
     throw new Error('The candidate source changed while sealing the edit proposal');
   }
   atomicWrite(root, planPath, plan, { exclusive: true });
-  const state = plan.kind === 'screen-copy'
+  const state = FINAL_APPLY_ONLY_KINDS.has(plan.kind)
     ? { schemaVersion: 1, planId: plan.id, state: 'authorized', authorization: 'final-apply-only' }
     : { schemaVersion: 1, planId: plan.id, state: 'proposed' };
   atomicWrite(root, stateLocation(descriptor, plan.id), state, { exclusive: true });
   return {
     planId: plan.id, planPath, scope: plan.scope, status: state.state,
-    approvalRequired: plan.kind !== 'screen-copy',
+    approvalRequired: !FINAL_APPLY_ONLY_KINDS.has(plan.kind),
   };
 }
 
@@ -483,10 +501,10 @@ function loadPlan(client, planId) {
 
 async function authorize(client, planId, { waitMs } = {}) {
   const plan = loadPlan(client, planId);
-  if (plan.kind === 'screen-copy') {
+  if (FINAL_APPLY_ONLY_KINDS.has(plan.kind)) {
     const state = readJson(client.descriptor.workspaceDir, stateLocation(client.descriptor, planId));
     if (state.state !== 'authorized' || state.authorization !== 'final-apply-only') {
-      throw new Error('Copy-only preparation authorization is invalid; reopen the edit');
+      throw new Error('Focused preparation authorization is invalid; reopen the edit');
     }
     return {
       planId, status: state.state, action: 'deferred-to-apply', receipt: null,
@@ -531,9 +549,9 @@ async function authorizedPlan(client, planId) {
   if (!['authorized', 'preparing-integration', 'writing', 'prepared', 'checked', 'submitted'].includes(state.state)) {
     throw new Error('The maker has not approved preparing this edit');
   }
-  if (plan.kind === 'screen-copy') {
+  if (FINAL_APPLY_ONLY_KINDS.has(plan.kind)) {
     if (plan.approvalMode !== 'final-apply-only' || state.authorization !== 'final-apply-only' || state.receiptPath !== undefined) {
-      throw new Error('Copy-only preparation must remain bound to the final Apply decision');
+      throw new Error('Focused preparation must remain bound to the final Apply decision');
     }
     return { plan, state };
   }
@@ -546,7 +564,7 @@ async function authorizedPlan(client, planId) {
   return { plan, state };
 }
 
-function behaviorSignature(root, content) {
+function behaviorSignature(root, content, { externalOnly = false } = {}) {
   let ts;
   try { ts = createRequire(path.join(root, 'package.json'))('typescript'); }
   catch { throw new Error('Scoped screen behavior validation needs the app existing TypeScript dependency'); }
@@ -554,6 +572,7 @@ function behaviorSignature(root, content) {
   if (file.parseDiagnostics.length) throw new Error('A screen must parse before scoped behavior comparison');
   const printer = ts.createPrinter({ removeComments: true });
   const expressions = [];
+  const modules = [];
   const declarations = new Map();
   const references = new Set();
   const identifiers = (node) => {
@@ -579,16 +598,22 @@ function behaviorSignature(root, content) {
     if (ts.isFunctionDeclaration(node) && node.name) {
       declare(node.name.text, printer.printNode(ts.EmitHint.Unspecified, node, file), identifiers(node));
     }
-    if (ts.isImportDeclaration(node) && node.importClause) {
-      const module = node.moduleSpecifier.getText(file);
-      if (node.importClause.name) declare(node.importClause.name.text, `default:${module}`);
-      const bindings = node.importClause.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) declare(bindings.name.text, `namespace:${module}`);
-      else for (const item of bindings?.elements || []) declare(item.name.text, `${item.propertyName?.text || item.name.text}:${module}`);
+    if (ts.isImportDeclaration(node)) {
+      const moduleName = node.moduleSpecifier.text;
+      modules.push(moduleName);
+      if (node.importClause) {
+        if (node.importClause.name) declare(node.importClause.name.text, `default:${moduleName}`);
+        const bindings = node.importClause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) declare(bindings.name.text, `namespace:${moduleName}`);
+        else for (const item of bindings?.elements || []) declare(item.name.text, `${item.propertyName?.text || item.name.text}:${moduleName}`);
+      }
     }
     if (ts.isCallExpression(node)) {
       const name = node.expression.getText(file);
-      if (/\b(?:router|navigation)\b|\buse[A-Z]\w*|getRepository|\b\w*Service\b|\.(?:list|get|query|create|update|delete|save|submit|mutate|mutateAsync|filter|sort|slice|fetchNextPage|refetch)\b/.test(name)) {
+      const protectedCall = externalOnly
+        ? /\b(?:router|navigation)\b|\buse(?:Entity|Query|Mutation|InfiniteQuery|Data|Repository|Connector|Dataverse)\w*|\bgetRepository\b|\b\w*(?:Service|Client|Api)\b|(?:^|\.)(?:fetch|request|execute|list|get|query|create|update|delete|save|submit|mutate|mutateAsync|fetchNextPage|refetch)\b/.test(name)
+        : /\b(?:router|navigation)\b|\buse[A-Z]\w*|getRepository|\b\w*Service\b|\.(?:list|get|query|create|update|delete|save|submit|mutate|mutateAsync|filter|sort|slice|fetchNextPage|refetch)\b/.test(name);
+      if (protectedCall) {
         expressions.push(printer.printNode(ts.EmitHint.Expression, node, file));
         identifiers(node).forEach((reference) => references.add(reference));
       }
@@ -615,7 +640,10 @@ function behaviorSignature(root, content) {
     const b = canonicalJson(right);
     return a < b ? -1 : a > b ? 1 : 0;
   });
-  return canonicalJson({ expressions, dependencies });
+  return canonicalJson({
+    expressions, dependencies,
+    ...(externalOnly ? { modules: modules.sort() } : {}),
+  });
 }
 
 function protectedPacks(value) {
@@ -680,6 +708,18 @@ function assertCopyDelta(root, descriptor, plan, changes) {
   replayCopyOutputs(root, descriptor, plan);
 }
 
+function assertFocusedScreenDelta(root, descriptor, plan, changes) {
+  const direct = changes.filter((entry) => !DERIVED_FILES.includes(entry.path));
+  if (direct.length !== 1 || direct[0].path !== plan.targetFile || !direct[0].before || !direct[0].after) {
+    throw new Error('A focused edit may change only its existing selected screen and owned authoring projections');
+  }
+  const before = originalBytes(root, descriptor, plan, plan.targetFile).toString('utf8');
+  const after = readFile(inside(root, plan.targetFile), 2 * 1024 * 1024).toString('utf8');
+  if (behaviorSignature(root, before, { externalOnly: true }) !== behaviorSignature(root, after, { externalOnly: true })) {
+    throw new Error('A focused edit changed protected navigation, data, remote action, or dependency behavior');
+  }
+}
+
 function assertScopedDelta(root, descriptor, plan) {
   const current = source(root);
   const beforeFiles = new Map(plan.baseline.files.map((entry) => [entry.path, entry]));
@@ -694,6 +734,7 @@ function assertScopedDelta(root, descriptor, plan) {
     throw new Error('Candidate contains out-of-scope source changes; preserve them and reopen the proposal');
   }
   if (plan.kind === 'screen-copy') assertCopyDelta(root, descriptor, plan, changes);
+  if (plan.kind === 'focused-screen') assertFocusedScreenDelta(root, descriptor, plan, changes);
   assertAuthoringDelta(root, plan, changes, (file) => JSON.parse(originalBytes(root, descriptor, plan, file).toString('utf8')));
   if (plan.kind === 'integration') {
     if (!sameIntegration(plan.integration, descriptor.integration)) throw new Error('The integration selection changed after preparation approval');
@@ -980,5 +1021,6 @@ function undoEligible(root, receipt) {
 module.exports = {
   RULES_PATH, RULE_OUTPUTS, TEST_WRITE_PERMISSION, planLocation, stateLocation, sourceDelta, normalizePlan,
   inspect, prepare, loadPlan, authorize, authorizedPlan, assertScopedDelta,
-  behaviorSignature, originalBytes, protectedPacks, applyCopy, check, teach, integration, capture, ruleOutputs, submit, undoEligible,
+  behaviorSignature, originalBytes, protectedPacks,
+  applyCopy, check, teach, integration, capture, ruleOutputs, submit, undoEligible,
 };

@@ -309,6 +309,75 @@ test('copy-only edits defer consent to final Apply and mutate only sealed user-f
   assert.equal(f.questionCount(), 0);
 });
 
+test('focused AI edits can change one screen presentation and local handlers with only final Apply consent', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  write(f.root, sourceFile, [
+    "export default function Screen() {",
+    "  const rows = useEntityList('inspections', { pageSize: 20 });",
+    "  const [expanded, setExpanded] = useState(false);",
+    "  return <Button color='$blue' onPress={() => setExpanded(!expanded)}><Text>Rows</Text></Button>;",
+    "}",
+    '',
+  ].join('\n'));
+  rebaseFixture(f);
+  const proposal = {
+    schemaVersion: 1,
+    kind: 'focused-screen',
+    summary: 'Make the selected button green and expand it with one tap.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile],
+  };
+  const prepared = await edit.prepare(f.client, proposal);
+  assert.equal(prepared.status, 'authorized');
+  assert.equal(prepared.approvalRequired, false);
+  assert.deepEqual(await edit.authorize(f.client, prepared.planId), {
+    planId: prepared.planId,
+    status: 'authorized',
+    action: 'deferred-to-apply',
+    receipt: null,
+    approvalRequired: false,
+    applied: false,
+  });
+  write(f.root, sourceFile, [
+    "export default function Screen() {",
+    "  const rows = useEntityList('inspections', { pageSize: 20 });",
+    "  const [expanded, setExpanded] = useState(false);",
+    "  return <Button color='$green' onPress={() => setExpanded(true)}><Text>Rows</Text></Button>;",
+    "}",
+    '',
+  ].join('\n'));
+  const checked = await edit.check(f.client, prepared.planId);
+  assert.equal(checked.status, 'scope-checked');
+  assert.deepEqual(checked.changes.map((entry) => entry.path), [sourceFile]);
+  assert.equal(f.questionCount(), 0);
+});
+
+test('focused AI edits reject broader files and protected data behavior', { skip: COPY_SKIP }, async (t) => {
+  const f = fixture(t);
+  f.descriptor.operation = 'edit';
+  const sourceFile = 'app/(app)/inspections/index.tsx';
+  assert.throws(() => edit.normalizePlan(f.root, f.descriptor, {
+    schemaVersion: 1,
+    kind: 'focused-screen',
+    summary: 'Change the selected screen and a shared component.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile, 'src/components/Card.tsx'],
+  }), /focused edit must change one existing selected screen/);
+  const prepared = await edit.prepare(f.client, {
+    schemaVersion: 1,
+    kind: 'focused-screen',
+    summary: 'Adjust the selected screen presentation.',
+    screenIds: ['inspection-list'],
+    allowedFiles: [sourceFile],
+  });
+  write(f.root, sourceFile, "export default function Screen() { const rows = useEntityList('inspections', { pageSize: 40 }); return <Text>Rows</Text>; }\n");
+  await assert.rejects(edit.check(f.client, prepared.planId), /protected navigation, data, remote action, or dependency behavior/);
+  write(f.root, sourceFile, "import { CameraView } from 'expo-camera';\nexport default function Screen() { const rows = useEntityList('inspections', { pageSize: 20 }); return <Text>Rows</Text>; }\n");
+  await assert.rejects(edit.check(f.client, prepared.planId), /protected navigation, data, remote action, or dependency behavior/);
+});
+
 test('copy-only eligibility rejects wider scope, executable strings, occurrence drift, and source drift', { skip: COPY_SKIP }, async (t) => {
   const f = fixture(t);
   f.descriptor.operation = 'edit';

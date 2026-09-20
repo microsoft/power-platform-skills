@@ -43,7 +43,8 @@ function planAuthoring(root, input, { kind, compiled, registry, newScreens }) {
   const helper = RUNTIME_HELPERS.some((file) => allowedFiles.has(file));
   const intent = input.authoringRuntime === undefined ? undefined
     : protocol.enumeration(input.authoringRuntime, ['install', 'upgrade'], 'authoring runtime change');
-  if ((derived || helper || intent || input.authoringSources !== undefined) && !['screen', 'screen-copy', 'integration'].includes(kind)) {
+  if ((derived || helper || intent || input.authoringSources !== undefined)
+    && !['screen', 'screen-copy', 'focused-screen', 'integration'].includes(kind)) {
     throw new Error('Derived authoring outputs belong only to an explicit screen or integration scope');
   }
   if (helper && !intent && kind !== 'screen-copy') throw new Error('Compiler-owned authoring helpers require an intentional runtime installation or upgrade');

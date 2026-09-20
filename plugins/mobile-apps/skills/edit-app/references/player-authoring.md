@@ -80,24 +80,47 @@ questions under `.devplayer-builder/logs/authoring-input/` until preparation
 is approved. Do not restamp canonical contracts or edit TSX yet. Those are
 candidate mutations, not part of asking permission.
 
-### Strict copy-only fast path
+### Focused AI screen path
 
-Use `screen-copy` before the normal planner/builder path only when all of these
-are true:
+When the Player launches `--authoring-focused-ai`, use the model to understand
+the request in natural language against the verified selected screen and
+target. Do not parse the prompt with regular expressions, require an exact
+sentence shape, or maintain a list of accepted phrases.
+
+Choose one focused transaction before the normal planner/builder path:
+
+- `screen-copy` for text-only changes with exact old/new strings;
+- `focused-screen` for a small change confined to the existing screen source,
+  such as color, spacing, typography, button appearance, or limited local
+  state/handler behavior.
+
+Use either focused transaction only when the AI's inspection proves all of
+these are true:
 
 - exactly one existing registered screen is selected;
-- every change is user-facing text in that screen or the same text in its
-  canonical phone/human plan;
-- no import, handler, route, query, data, style, dependency, native capability,
-  screen inventory, or executable structure changes;
-- every old string and occurrence count is exact at proposal time;
+- no new files or shared-component, route, navigation, query, data, remote
+  action, dependency, native-capability, or screen-inventory changes;
+- `focused-screen` does not change the screen's imported module set or its
+  protected navigation/data/remote-action calls;
+- `screen-copy` additionally proves every old string and occurrence count at
+  proposal time and changes only recognized user-facing text;
 - the candidate still matches Player's captured base revision.
 
-Any uncertainty, unsupported text location, missing projection, or source drift
-immediately falls back to the normal proposal below. Do not broaden the fast
-path or manually edit after it rejects a proposal.
+Any uncertainty, missing projection, protected behavior change, or source
+drift continues in the same AI session through the normal proposal below,
+retaining the exact original request. Do not broaden the focused path or
+manually bypass a failed proof.
 
-Write exact replacements rather than dispatching the planner or screen builder:
+For an attached workspace, the desktop bridge opens the focused AI edit
+directly in the existing VS Code window. An eligible small request skips
+planners and screen builders, produces an isolated checked candidate, and asks
+only for the final **Ready to apply** decision. The candidate Metro starts only
+when the maker chooses **Preview**; **Apply update** writes the reviewed source
+delta into the attached project and lets its existing Metro session reload it.
+A broader request continues through the full `/edit-app` workflow without
+opening another AI session.
+
+For a text-only edit, write exact replacements:
 
 ```json
 {
@@ -130,8 +153,21 @@ Write exact replacements rather than dispatching the planner or screen builder:
 }
 ```
 
-If the app has the installed authoring runtime, also include its complete owned
-projection set so the helper can verify or refresh semantic labels:
+For another small one-screen edit, seal only the existing selected source file:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "focused-screen",
+  "summary": "Use the accent color and a larger hit target for the selected action.",
+  "screenIds": ["welcome"],
+  "allowedFiles": ["app/(app)/welcome.tsx"]
+}
+```
+
+For `screen-copy`, if the text change affects registered authoring labels, also
+include the complete compiler-owned projection and helper set required by the
+copy transaction:
 
 ```text
 .tmp/authoring-registry.json
@@ -143,33 +179,53 @@ src/authoring/README.md
 scripts/authoring-attach.js
 ```
 
+For `focused-screen`, never include or edit those runtime helper sources. If
+the focused source edit changes registered target labels, it may include only
+the owned derived projections below and must refresh them through the existing
+authoring registration generator:
+
+```text
+.tmp/authoring-registry.json
+.tmp/mobile-authoring-runtime.json
+src/authoring/registry.ts
+```
+
 Then run:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/authoring-edit.js" prepare \
   --input .devplayer-builder/logs/authoring-input/proposal.json
+```
 
+For `screen-copy`, run:
+
+```bash
 node "${PLUGIN_ROOT}/scripts/authoring-edit.js" apply-copy \
   --plan <returned-plan-id>
+```
 
+For `focused-screen`, instead edit only the sealed existing screen file with
+the ordinary file-edit tool. Then both kinds finish with:
+
+```bash
 node "${PLUGIN_ROOT}/scripts/authoring-edit.js" candidate \
   --plan <returned-plan-id> --ready-screen <affected-screen-id> --final
 node "${PLUGIN_ROOT}/scripts/mobile-authoring.js" complete
 ```
 
-`prepare` returns `approvalRequired:false` for this kind. It seals the complete
-base, exact files, old/new text, occurrence counts, and expected output hashes,
-but performs no source writes. `apply-copy` alone performs the deterministic
-replacement, regenerates the phone-plan and authoring projections through
-their owners, and verifies the scoped delta. The final Player **Apply update**
-decision is the single approval and the only operation that can write back to
-the developer-owned project. Previewing the update is optional.
+`prepare` returns `approvalRequired:false` for both focused kinds and seals the
+complete base plus exact allowed files before any source mutation.
+`apply-copy` performs the exact text replacement and owned projection refresh
+for `screen-copy`. For `focused-screen`, AI edits only the sealed existing
+screen source; validation rejects changed imports, protected navigation/data
+or remote-action behavior, new files, and any out-of-scope delta. The final
+Player **Apply update** decision is the single approval and the only operation
+that can write back to the developer-owned project. Previewing is optional.
 
-The helper rejects executable strings, text outside recognized user-facing
-AST locations, multiple screens, new/deleted files, stale source, mismatched
-occurrence counts, altered navigation/data contracts, or non-owned
-projections. On rejection, use the normal flow; never work around the
-classifier.
+The copy transaction additionally rejects executable strings, text outside
+recognized user-facing AST locations, mismatched occurrence counts, and
+non-owned projections. On any rejection, use the normal flow; never work
+around the validator.
 
 ### Normal scoped edit path
 
@@ -199,9 +255,9 @@ node "${PLUGIN_ROOT}/scripts/authoring-edit.js" prepare \
 node "${PLUGIN_ROOT}/scripts/authoring-edit.js" authorize --plan <returned-plan-id>
 ```
 
-Kinds are `screen-copy`, `global-style`, `target-layout`, `screen`,
-`business-rule`, and `integration`. `screen-copy` is restricted to the fast
-path above. The last kind requires the descriptor's exact catalogue
+Kinds are `screen-copy`, `focused-screen`, `global-style`, `target-layout`,
+`screen`, `business-rule`, and `integration`. Both focused kinds are restricted
+to the fast path above. The last kind requires the descriptor's exact catalogue
 selection and is described below; do not copy a selection into proposal JSON.
 Allowed files are exact project-relative files, never directory grants,
 globs, live preview roots, or generated-service escape hatches. Global styling
@@ -217,9 +273,10 @@ enable mutation.
 
 For those normal kinds, the question is **“Prepare this edit?”**, not “Apply
 it.” There is no schema, data-import, or deployment consent hidden inside this
-question. The strict `screen-copy` path intentionally skips this preliminary
-question because its isolated mutation is fully deterministic and still cannot
-reach the active project before final Apply.
+question. The focused paths intentionally skip this preliminary question
+because AI has already bounded the requested one-screen delta and the
+transaction deterministically validates its exact scope before it can reach
+the active project at final Apply.
 
 ## 3. Prepare using the existing foreground delta workflow
 

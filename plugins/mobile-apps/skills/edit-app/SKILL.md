@@ -16,9 +16,22 @@ or questions and apply it as this skill's phone profile. It keeps the same
 main-based UX/implementation guidance, but routes decisions to Player and
 does not restart client-registration or HTML-preview flows. `Build more screens`
 is a bounded `screen` edit of this app, not a new app or a new operation type.
-Classify the Player request for the strict `screen-copy` path before invoking a
-planner or screen builder; eligible one-screen copy changes use deterministic
-replacement and reserve the sole approval for final Apply.
+When the Player supplies `--authoring-focused-ai`, interpret the request
+semantically against its verified selected screen before invoking a planner or
+screen builder. Do not parse the request with regular expressions or require
+fixed wording. A text-only change uses `screen-copy`; another small edit limited
+to that existing screen's presentation or local handler behavior uses
+`focused-screen`. Both reserve the sole approval for final Apply. If the
+request changes protected navigation, data or remote actions, imported
+dependencies, native capabilities, files beyond the selected screen, or
+broader app scope, continue in the same AI session through the normal Player
+edit workflow with the exact original request.
+
+This focused branch runs before Step 0. Verify the Player context, inspect only
+the selected screen and its registered targets, and follow the focused copy
+path in `player-authoring.md`. Do not read unrelated plan sections, dispatch
+agents, or run the general impact/planning gates unless semantic inspection
+shows that the requested result exceeds the focused one-screen boundary.
 
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 
