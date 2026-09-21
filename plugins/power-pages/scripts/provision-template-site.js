@@ -142,25 +142,51 @@ function inspectCompiledOutput(clonedPath, fsImpl = fs) {
     throw new Error(`powerpages.config.json has an invalid compiledPath: ${compiledPath || '<empty>'}`);
   }
   const outputPath = path.resolve(clonedPath, compiledPath);
-  if (outputPath === path.resolve(clonedPath)) {
+  const resolvedClonedPath = path.resolve(clonedPath);
+  if (outputPath === resolvedClonedPath) {
     throw new Error(`powerpages.config.json has an invalid compiledPath: ${compiledPath}`);
   }
-  if (
-    !fsImpl.existsSync(outputPath) ||
-    fsImpl.lstatSync(outputPath).isSymbolicLink() ||
-    !fsImpl.statSync(outputPath).isDirectory()
-  ) {
-    throw new Error(`Build output path is not a regular directory: ${outputPath}`);
+
+  const clonedStat = fsImpl.lstatSync(resolvedClonedPath);
+  if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
+    throw new Error(`Cloned project path is not a regular directory: ${resolvedClonedPath}`);
+  }
+  const canonicalClonedPath = fsImpl.realpathSync(resolvedClonedPath);
+  let currentPath = resolvedClonedPath;
+  for (const segment of compiledPath.split(/[\\/]+/)) {
+    currentPath = path.join(currentPath, segment);
+    if (!fsImpl.existsSync(currentPath)) {
+      throw new Error(`Build output path is not a regular directory: ${outputPath}`);
+    }
+    const currentStat = fsImpl.lstatSync(currentPath);
+    if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
+      throw new Error(`Build output path must contain only real directories: ${currentPath}`);
+    }
+  }
+  const canonicalOutputPath = fsImpl.realpathSync(outputPath);
+  if (!pathContains(canonicalClonedPath, canonicalOutputPath)) {
+    throw new Error(`Build output path resolves outside the cloned project: ${outputPath}`);
   }
 
   const queue = [outputPath];
+  let containsFile = false;
   while (queue.length > 0) {
     const current = queue.shift();
     for (const entry of fsImpl.readdirSync(current, { withFileTypes: true })) {
-      if (entry.isFile()) return { compiledPath, outputPath };
-      if (entry.isDirectory()) queue.push(path.join(current, entry.name));
+      const entryPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Build output must not contain symbolic links: ${entryPath}`);
+      }
+      if (entry.isFile()) {
+        containsFile = true;
+      } else if (entry.isDirectory()) {
+        queue.push(entryPath);
+      } else {
+        throw new Error(`Build output contains an unsupported entry: ${entryPath}`);
+      }
     }
   }
+  if (containsFile) return { compiledPath, outputPath };
   throw new Error(`Build output directory is empty: ${outputPath}`);
 }
 

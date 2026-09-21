@@ -475,10 +475,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
         --outcome failure \
-        --errorClass "ImportSolutionAsync" \
-        --errorDescription "<short non-PII failure category or poll status>"
+        --errorClass "ImportSolutionAsync"
       ```
-      `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, component names, or any other user-identifying value in `errorDescription`.
+      `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not add free-form error text to telemetry; it can contain paths, URLs, stack traces, or user data.
 
       <!-- gate: create-site:1.5.import-failed | category=progress | cancel-leaves=partial-unmanaged-template-import -->
 
@@ -531,7 +530,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/provision-template-site.js" \
         --sourcePath "<SELECTED_TEMPLATE_WEBSITE_CODE>" \
         --outputDirectory "<TEMPLATE_CLONE_OUTPUT_DIRECTORY>" \
-        --siteName "<SELECTED_TEMPLATE.displayName>"
+        --siteName "<__SITE_NAME__>"
       ```
       Treat the wrapper as the sole template-site provisioning entry point. Do not rerun its underlying `pac`, `npm`, or build commands directly for diagnosis. Never pipe a mutating command such as `pac pages clone` or `pac pages upload-code-site` through `head`, `tail`, or another consumer that can close the output stream before the command finishes. The wrapper safely captures a bounded diagnostic tail without interrupting the command. On success, save the returned `clonedPath` as both `CLONED_TEMPLATE_SITE_PATH` and `PROJECT_ROOT`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
    10. In the seed-data background task, run:
@@ -544,7 +543,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Return the JSON summary (`inserted`, `failed`, `skipped`, `errors`) to the main conversation. Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`.
    11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
-   12. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
+   12. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_failure \
@@ -553,8 +552,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
          --audience "<internal|external from Phase 1 discovery>" \
          --outcome failure \
-         --errorClass "<PacPagesClone|NpmInstall|NpmBuild|CompiledOutput|PacPagesUploadCodeSite>" \
-         --errorDescription "<short non-PII failure category>"
+         --errorClass "<PacPagesClone|NpmInstall|NpmBuild|CompiledOutput|PacPagesUploadCodeSite>"
        ```
        Update the status page before firing the recovery gate:
        ```json

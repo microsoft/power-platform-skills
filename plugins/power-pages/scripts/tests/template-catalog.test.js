@@ -614,10 +614,12 @@ test('requestJson uses an injected https boundary and parses response JSON', asy
 test('downloadFile streams through injected https and fs boundaries', async () => {
   const writes = [];
   let renamed = null;
+  const suffix = '0011223344556677';
+  const temporaryPath = `/cache/template.zip.partial-${process.pid}-${suffix}`;
   const fakeFs = {
     mkdirSync(dir) { writes.push(['mkdir', dir]); },
-    createWriteStream(dest) {
-      writes.push(['stream', dest]);
+    createWriteStream(dest, options) {
+      writes.push(['stream', dest, options]);
       const stream = new PassThrough();
       stream.close = (callback) => callback();
       return stream;
@@ -644,11 +646,50 @@ test('downloadFile streams through injected https and fs boundaries', async () =
   const output = await downloadFile('https://example.test/template.zip', '/cache/template.zip', {
     fs: fakeFs,
     https: fakeHttps,
+    randomBytes: () => Buffer.from(suffix, 'hex'),
   });
 
   assert.equal(output, '/cache/template.zip');
-  assert.deepEqual(writes, [['mkdir', '/cache'], ['stream', '/cache/template.zip.partial']]);
-  assert.deepEqual(renamed, ['/cache/template.zip.partial', '/cache/template.zip']);
+  assert.deepEqual(writes, [
+    ['mkdir', '/cache'],
+    ['stream', temporaryPath, { flags: 'wx', mode: 0o600 }],
+  ]);
+  assert.deepEqual(renamed, [temporaryPath, '/cache/template.zip']);
+});
+
+test('downloadFile does not follow a pre-existing temporary-file symlink', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'template.zip');
+  const outsidePath = path.join(dir, 'outside.zip');
+  const suffix = '0011223344556677';
+  const temporaryPath = `${outputPath}.partial-${process.pid}-${suffix}`;
+  fs.writeFileSync(outsidePath, 'outside');
+  try {
+    fs.symlinkSync(outsidePath, temporaryPath);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+  const fakeHttps = {
+    get() {
+      const req = new EventEmitter();
+      req.destroy = (err) => req.emit('error', err);
+      return req;
+    },
+  };
+
+  await assert.rejects(
+    () => downloadFile('https://example.test/template.zip', outputPath, {
+      https: fakeHttps,
+      randomBytes: () => Buffer.from(suffix, 'hex'),
+    }),
+    /EEXIST|file already exists/i
+  );
+  assert.equal(fs.readFileSync(outsidePath, 'utf8'), 'outside');
 });
 
 test('downloadArtifact caches artifacts under the pinned sha and skips download when already cached', async (t) => {

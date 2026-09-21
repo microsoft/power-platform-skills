@@ -91,6 +91,63 @@ test('inspectCompiledOutput rejects a project root or parent path as compiled ou
   assert.throws(() => inspectCompiledOutput(dir), /invalid compiledPath/);
 });
 
+test('inspectCompiledOutput rejects symlinked compiled-path components', (t) => {
+  const dir = tempDir();
+  const outside = tempDir();
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  createSource(dir);
+  fs.mkdirSync(path.join(outside, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(outside, 'assets', 'index.js'), 'outside');
+  try {
+    fs.symlinkSync(outside, path.join(dir, 'dist'), process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () => inspectCompiledOutput(dir),
+    /Build output path must contain only real directories/
+  );
+});
+
+test('inspectCompiledOutput rejects symlinks nested inside compiled output', (t) => {
+  const dir = tempDir();
+  const outside = tempDir();
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  createSource(dir);
+  fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'dist', 'index.html'), 'built');
+  fs.writeFileSync(path.join(outside, 'secret.js'), 'outside');
+  try {
+    fs.symlinkSync(
+      path.join(outside, 'secret.js'),
+      path.join(dir, 'dist', 'secret.js'),
+      'file'
+    );
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`file symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () => inspectCompiledOutput(dir),
+    /Build output must not contain symbolic links/
+  );
+});
+
 test('provisionTemplateSite clones, installs, builds, validates output, then uploads', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

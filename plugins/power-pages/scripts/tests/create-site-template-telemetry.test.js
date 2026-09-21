@@ -73,7 +73,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
     audience: 'internal',
     outcome: 'failure',
     errorClass: 'ImportSolutionAsync',
-    errorDescription: 'Async operation failed',
+    errorDescription: 'https://example.crm.dynamics.com/private/path',
     correlationId: 'corr',
   }, {
     readPacAuth: () => null,
@@ -83,7 +83,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
   assert.equal(failure.data.eventName, 'template_import_failure');
   assert.equal(failure.data.outcome, 'failure');
   assert.equal(failure.data.errorClass, 'ImportSolutionAsync');
-  assert.equal(failure.data.errorDescription, 'Async operation failed');
+  assert.equal('errorDescription' in failure.data, false);
   assert.equal(failure.data.severity, 'Error');
 });
 
@@ -117,7 +117,7 @@ test('buildTemplateOutcomeEvent emits clone result events separately from import
     audience: 'external',
     outcome: 'failure',
     errorClass: 'PacPagesClone',
-    errorDescription: 'clone failed',
+    errorDescription: '/Users/example/private/template',
     correlationId: 'corr',
   }, {
     readPacAuth: () => null,
@@ -128,8 +128,23 @@ test('buildTemplateOutcomeEvent emits clone result events separately from import
   assert.equal(failure.data.eventName, 'template_clone_failure');
   assert.equal(failure.data.outcome, 'failure');
   assert.equal(failure.data.errorClass, 'PacPagesClone');
-  assert.equal(failure.data.errorDescription, 'clone failed');
+  assert.equal('errorDescription' in failure.data, false);
   assert.equal(failure.data.severity, 'Error');
+});
+
+test('buildTemplateOutcomeEvent drops unapproved error classes', () => {
+  const failure = buildTemplateOutcomeEvent({
+    eventName: 'template_clone_failure',
+    outcome: 'failure',
+    errorClass: 'Error at /private/path',
+    correlationId: 'corr',
+  }, {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+  });
+
+  assert.equal('errorClass' in failure.data, false);
 });
 
 test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {

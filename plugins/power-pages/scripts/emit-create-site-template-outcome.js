@@ -7,13 +7,13 @@ const { formatJsonResult } = require('./lib/template-cli-args');
 // Accepted argv shape:
 //   --eventName template_used --templateId company-portal --templateKind spa --framework react --audience internal
 //   --eventName template_import_success --templateId company-portal --templateKind spa --framework react --audience internal --seedApplied true
-//   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass ImportSolutionAsync --errorDescription failed
+//   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass ImportSolutionAsync
 //   --eventName template_clone_success --templateId company-portal --templateKind spa --framework react --audience internal
-//   --eventName template_clone_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass PacPagesClone --errorDescription failed
+//   --eventName template_clone_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass PacPagesClone
 // Scratch branch sends:
 //   --eventName create_site_from_scratch --framework react --audience internal
-// Values are fixed catalog/outcome enums; do not pass site name, URL, subdomain,
-// user-entered free text, or any other potentially identifying value.
+// Values are fixed catalog/outcome enums. Free-form error text is intentionally
+// unsupported because it can contain paths, URLs, stack traces, or user data.
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {

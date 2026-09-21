@@ -15,6 +15,14 @@ const TEMPLATE_EVENT_NAMES = new Set(['template_used', 'template_import_success'
 const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);
+const ERROR_CLASSES = new Set([
+  'ImportSolutionAsync',
+  'PacPagesClone',
+  'NpmInstall',
+  'NpmBuild',
+  'CompiledOutput',
+  'PacPagesUploadCodeSite',
+]);
 const COMMON_FIELDS = [
   'pluginName',
   'pluginVersion',
@@ -31,7 +39,7 @@ const COMMON_FIELDS = [
   'eventInfo',
 ];
 const SKILL_FIELDS = ['skillName'];
-const COMPLETED_FIELDS = ['outcome', 'durationMs', 'errorClass', 'errorDescription'];
+const COMPLETED_FIELDS = ['outcome', 'durationMs', 'errorClass'];
 
 function normalizeBool(value) {
   return value === true || value === 'true' || value === '1';
@@ -108,8 +116,7 @@ function buildTemplateOutcomeEvent(fields = {}, deps = {}) {
   if (agentInfo.aiAgentVersion) payload.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) payload.pacCliVersion = agentInfo.pacCliVersion;
   if (fields.durationMs) payload.durationMs = Number(fields.durationMs);
-  if (fields.errorClass) payload.errorClass = fields.errorClass;
-  if (fields.errorDescription) payload.errorDescription = fields.errorDescription;
+  if (ERROR_CLASSES.has(fields.errorClass)) payload.errorClass = fields.errorClass;
 
   const severity = payload.outcome === 'failure' ? 'Error' : 'Info';
   const eventName = templateEventName(fields);

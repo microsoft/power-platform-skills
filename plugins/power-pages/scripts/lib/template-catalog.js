@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
 const os = require('os');
@@ -383,8 +384,11 @@ function downloadFile(url, outputPath, deps = {}) {
   const fsImpl = deps.fs || fs;
   return new Promise((resolve, reject) => {
     fsImpl.mkdirSync(path.dirname(outputPath), { recursive: true });
-    const tmpPath = `${outputPath}.partial`;
-    const file = fsImpl.createWriteStream(tmpPath);
+    const randomBytes = deps.randomBytes || crypto.randomBytes;
+    const tmpPath = `${outputPath}.partial-${process.pid}-${randomBytes(8).toString('hex')}`;
+    // `wx` maps to exclusive create. A pre-existing symlink or file makes the
+    // open fail instead of redirecting downloaded bytes outside the cache.
+    const file = fsImpl.createWriteStream(tmpPath, { flags: 'wx', mode: 0o600 });
     const cleanup = () => {
       try { fsImpl.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
     };
