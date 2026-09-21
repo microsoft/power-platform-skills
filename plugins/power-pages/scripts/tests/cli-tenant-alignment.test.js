@@ -26,6 +26,9 @@ function fakeExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {}) {
     if (command === 'pac' && args.join(' ') === 'auth who') {
       return `Connected as user@contoso.com\nTenant ID:    ${pacTenant}\n`;
     }
+    if (command === 'pac' && args.join(' ') === 'env who') {
+      return 'Org URL: https://org.crm.dynamics.com/\n';
+    }
     if (command === 'az' && args.join(' ') === 'account show --query tenantId -o tsv') {
       return `${azTenant}\n`;
     }
@@ -37,6 +40,9 @@ function fakeWindowsExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {})
   return (command, args) => {
     if (command === 'cmd.exe' && args.join(' ') === '/d /s /c pac.exe auth who') {
       return `Connected as user@contoso.com\nTenant ID:    ${pacTenant}\n`;
+    }
+    if (command === 'cmd.exe' && args.join(' ') === '/d /s /c pac.exe env who') {
+      return 'Org URL: https://org.crm.dynamics.com/\n';
     }
     if (command === 'cmd.exe' && args.join(' ') === '/d /s /c az.cmd account show --query tenantId -o tsv') {
       return `${azTenant}\n`;
@@ -71,6 +77,8 @@ test('validateCliTenantAlignment succeeds when PAC, Azure account, and token ten
     pacTenantId: TENANT_A,
     azTenantId: TENANT_A,
     tokenTenantId: TENANT_A,
+    expectedEnvironmentUrl: 'https://org.crm.dynamics.com',
+    pacEnvironmentUrl: 'https://org.crm.dynamics.com',
     mismatches: [],
     error: null,
   });
@@ -98,6 +106,21 @@ test('validateCliTenantAlignment blocks when PAC and Azure tenants differ', () =
   assert.equal(result.ok, false);
   assert.deepEqual(result.mismatches, ['pac-vs-az', 'pac-vs-token']);
   assert.match(result.error, /different tenants/i);
+});
+
+test('validateCliTenantAlignment blocks when PAC targets a different environment', () => {
+  const result = validateCliTenantAlignment({
+    envUrl: 'https://target.crm.dynamics.com',
+    token: fakeJwt(TENANT_A),
+  }, {
+    execFile: fakeExecFile(),
+    platform: 'linux',
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.mismatches, ['pac-vs-environment']);
+  assert.equal(result.expectedEnvironmentUrl, 'https://target.crm.dynamics.com');
+  assert.equal(result.pacEnvironmentUrl, 'https://org.crm.dynamics.com');
 });
 
 test('run requires an environment URL and acquires the token internally', () => {

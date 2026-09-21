@@ -7,7 +7,20 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const { parseArgs, safeResolve, contentType, isServableFile, streamFile, serverUrl } = require('../serve-static-dir');
+const {
+  cleanupOwnedRoot,
+  contentType,
+  createCleanupOwnership,
+  isServableFile,
+  main,
+  parseArgs,
+  requestsServerShutdown,
+  safeResolve,
+  serverUrl,
+  startServer,
+  streamFile,
+  waitForChildReady,
+} = require('../serve-static-dir');
 
 test('parseArgs reads static server options', () => {
   assert.deepEqual(parseArgs(['--root', '/tmp/import', '--urlFile', '/tmp/url.txt', '--port', '8123']), {
@@ -99,6 +112,12 @@ test('serverUrl brackets IPv6 literals without changing IPv4 hosts', () => {
   assert.equal(serverUrl('::1', 8123), 'http://[::1]:8123/');
 });
 
+test('server shutdown requires the final workflow success marker', () => {
+  assert.equal(requestsServerShutdown({ state: 'succeeded' }), false);
+  assert.equal(requestsServerShutdown({ state: 'failed', shutdownServer: true }), false);
+  assert.equal(requestsServerShutdown({ state: 'succeeded', shutdownServer: true }), true);
+});
+
 test('streamFile ends the response when read stream creation throws', () => {
   const writes = [];
   const res = {
@@ -134,4 +153,88 @@ test('streamFile handles stream errors after headers are written', () => {
   stream.emit('error', new Error('gone'));
 
   assert.deepEqual(writes, [['end', undefined]]);
+});
+
+test('waitForChildReady resolves only after the child reports a listening URL', async () => {
+  const child = new EventEmitter();
+  const pending = waitForChildReady(child, 1000);
+  process.nextTick(() => child.emit('message', { type: 'ready', url: 'http://127.0.0.1:8123/' }));
+  assert.deepEqual(await pending, { type: 'ready', url: 'http://127.0.0.1:8123/' });
+});
+
+test('waitForChildReady rejects child startup errors', async () => {
+  const child = new EventEmitter();
+  const pending = waitForChildReady(child, 1000);
+  process.nextTick(() => child.emit('message', { type: 'error', error: 'bind failed' }));
+  await assert.rejects(pending, /bind failed/);
+});
+
+test('main waits for child readiness before writing the URL file', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-main-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'index.html'), '<html></html>');
+  fs.writeFileSync(path.join(root, 'status.json'), '{"state":"running"}');
+  const child = new EventEmitter();
+  child.pid = 1234;
+  child.unref = () => {};
+  child.kill = () => {};
+  const urlFile = path.join(root, 'url.txt');
+  const pending = main(['--root', root, '--urlFile', urlFile], {
+    fork() {
+      process.nextTick(() => child.emit('message', { type: 'ready', url: 'http://127.0.0.1:8123/' }));
+      return child;
+    },
+  });
+
+  assert.equal(fs.existsSync(urlFile), false);
+  assert.deepEqual(await pending, { ok: true, url: 'http://127.0.0.1:8123/', pid: 1234 });
+  assert.equal(fs.readFileSync(urlFile, 'utf8'), 'http://127.0.0.1:8123/');
+});
+
+test('cleanup ownership removes only the owned temporary root', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-owned-'));
+  const ownership = createCleanupOwnership(root);
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(ownership.markerPath, { force: true });
+  });
+  fs.writeFileSync(path.join(root, 'status.json'), '{"state":"running"}');
+
+  assert.equal(cleanupOwnedRoot({
+    root: ownership.root,
+    cleanupMarker: ownership.markerPath,
+    cleanupToken: ownership.token,
+  }), true);
+  assert.equal(fs.existsSync(root), false);
+  assert.equal(fs.existsSync(ownership.markerPath), false);
+});
+
+test('startServer closes and removes its temporary root after success', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-success-'));
+  fs.writeFileSync(path.join(root, 'index.html'), '<html></html>');
+  const statusPath = path.join(root, 'status.json');
+  fs.writeFileSync(statusPath, '{"state":"running"}');
+  const ownership = createCleanupOwnership(root);
+  const started = await startServer({
+    root,
+    host: '127.0.0.1',
+    port: 0,
+    statusPath,
+    cleanupMarker: ownership.markerPath,
+    cleanupToken: ownership.token,
+    idleTimeoutMs: 2000,
+    maxLifetimeMs: 2000,
+    successGraceMs: 20,
+    statusPollMs: 10,
+  });
+  t.after(() => {
+    started.shutdown();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(ownership.markerPath, { force: true });
+  });
+
+  fs.writeFileSync(statusPath, '{"state":"succeeded","shutdownServer":true}');
+  await started.closed;
+  assert.equal(fs.existsSync(root), false);
+  assert.equal(fs.existsSync(ownership.markerPath), false);
 });

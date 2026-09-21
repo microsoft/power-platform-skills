@@ -219,12 +219,13 @@ test('provisionTemplateSite stops after clone failure and reports the failed ste
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
   createSource(source);
   let calls = 0;
 
   const result = provisionTemplateSite({
     sourcePath: source,
-    outputDirectory: path.join(dir, 'output'),
+    outputDirectory: output,
     siteName: '311 Portal',
   }, {
     runPac() {
@@ -235,8 +236,57 @@ test('provisionTemplateSite stops after clone failure and reports the failed ste
 
   assert.equal(result.ok, false);
   assert.equal(result.step, 'clone');
+  assert.equal(result.outputDirectoryRemoved, true);
   assert.match(result.error, /clone rejected/);
   assert.equal(calls, 1);
+  assert.equal(fs.existsSync(output), false);
+});
+
+test('provisionTemplateSite preserves a pre-existing empty output directory after clone failure', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+  fs.mkdirSync(output);
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: '311 Portal',
+  }, {
+    runPac() {
+      fs.writeFileSync(path.join(output, 'partial.txt'), 'partial');
+      return { status: 1, stdout: '', stderr: 'clone rejected' };
+    },
+  });
+
+  assert.equal(result.outputDirectoryRemoved, false);
+  assert.equal(fs.readFileSync(path.join(output, 'partial.txt'), 'utf8'), 'partial');
+});
+
+test('provisionTemplateSite removes a new output directory when clone output cannot be resolved', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: '311 Portal',
+  }, {
+    runPac() {
+      fs.writeFileSync(path.join(output, 'unexpected.txt'), 'not a code site');
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'clone-output');
+  assert.equal(result.outputDirectoryRemoved, true);
+  assert.equal(fs.existsSync(output), false);
 });
 
 test('provisionTemplateSite reports upload failure without retrying', (t) => {

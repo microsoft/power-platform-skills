@@ -23,7 +23,11 @@
 //   1 - Fatal error (no token, invalid args, network failure after retries)
 
 const fs = require('fs');
-const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const {
+  getAuthToken,
+  makeRequest,
+  validateDataverseEnvironmentUrl,
+} = require('./lib/validation-helpers');
 
 function parseArgs(argv = process.argv.slice(2), deps = {}) {
   const args = argv;
@@ -63,7 +67,11 @@ function parseArgs(argv = process.argv.slice(2), deps = {}) {
 }
 
 async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, request = makeRequest) {
-  const url = `${envUrl}/api/data/v9.2/${apiPath}`;
+  // doRequest is exported, so every caller must cross the same origin boundary
+  // before a bearer token is attached. Validation in main() cannot protect
+  // library callers that invoke this helper directly.
+  const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
+  const url = `${trustedEnvUrl}/api/data/v9.2/${apiPath}`;
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/json',

@@ -9,7 +9,13 @@ function decideReinstall({ installed, installedVersion, availableVersion, detect
   if (detectionFailed) return 'ask';
   if (!installed) return 'import';
   if (!installedVersion || !availableVersion) return 'ask';
-  if (compareVersions(availableVersion, installedVersion) > 0) return 'confirm-update';
+  try {
+    if (compareVersions(availableVersion, installedVersion) > 0) return 'confirm-update';
+  } catch {
+    // PAC output and Solution.xml are external inputs. If either version is
+    // malformed, keep the decision explicit instead of crashing the inspector.
+    return 'ask';
+  }
   return 'offer-clone';
 }
 

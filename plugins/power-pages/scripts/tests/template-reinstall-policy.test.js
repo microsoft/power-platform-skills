@@ -54,6 +54,19 @@ test('decideReinstall covers import, update, clone, and ask cases', () => {
   }
 });
 
+test('decideReinstall asks when installed or available versions are malformed', () => {
+  assert.equal(decideReinstall({
+    installed: true,
+    installedVersion: 'unknown',
+    availableVersion: '1.0.0.0',
+  }), 'ask');
+  assert.equal(decideReinstall({
+    installed: true,
+    installedVersion: '1.0.0.0',
+    availableVersion: '1.0.preview',
+  }), 'ask');
+});
+
 test('inspectSolutionDirectory reads unpacked Other/Solution.xml metadata', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inspect-template-solution-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

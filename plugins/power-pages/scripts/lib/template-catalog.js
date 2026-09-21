@@ -412,9 +412,19 @@ function downloadFile(url, outputPath, deps = {}) {
         }
         res.pipe(file);
         file.on('finish', () => {
-          file.close(() => {
-            fsImpl.renameSync(tmpPath, outputPath);
-            resolve(outputPath);
+          file.close((closeError) => {
+            if (closeError) {
+              cleanup();
+              reject(closeError);
+              return;
+            }
+            try {
+              fsImpl.renameSync(tmpPath, outputPath);
+              resolve(outputPath);
+            } catch (err) {
+              cleanup();
+              reject(err);
+            }
           });
         });
       },

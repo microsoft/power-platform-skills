@@ -65,3 +65,23 @@ test('doRequest sends parsed file body as JSON payload', async () => {
 
   assert.deepEqual(response, { statusCode: 202, body: '{"ok":true}', headers: { location: 'async-url' } });
 });
+
+test('doRequest rejects unapproved origins before attaching the bearer token', async () => {
+  let requested = false;
+  await assert.rejects(
+    () => doRequest(
+      'https://attacker.example',
+      'POST',
+      'ImportSolutionAsync',
+      '{}',
+      'token',
+      false,
+      async () => {
+        requested = true;
+        return { statusCode: 202, body: '{}' };
+      },
+    ),
+    /allowed Microsoft Dataverse or Power Platform endpoint/
+  );
+  assert.equal(requested, false);
+});

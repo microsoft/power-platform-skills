@@ -33,7 +33,9 @@ async function runBestEffortJsonCli(handler, deps = {}) {
   } catch (err) {
     stdout.write(formatJsonResult({ ok: false, error: err.message }));
   }
-  proc.exit(0);
+  // Setting exitCode lets Node flush JSON when stdout is a pipe. process.exit()
+  // can terminate before a larger catalog or variant payload is fully written.
+  proc.exitCode = 0;
 }
 
 module.exports = { parseTemplateRepoArgs, formatJsonResult, runBestEffortJsonCli };

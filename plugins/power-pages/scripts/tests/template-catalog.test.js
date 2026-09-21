@@ -692,6 +692,49 @@ test('downloadFile does not follow a pre-existing temporary-file symlink', async
   assert.equal(fs.readFileSync(outsidePath, 'utf8'), 'outside');
 });
 
+test('downloadFile rejects and removes the temporary file when final rename fails', async () => {
+  const removed = [];
+  const suffix = '0011223344556677';
+  const temporaryPath = `/cache/template.zip.partial-${process.pid}-${suffix}`;
+  const fakeFs = {
+    mkdirSync() {},
+    createWriteStream() {
+      const stream = new PassThrough();
+      stream.close = (callback) => callback();
+      return stream;
+    },
+    renameSync() {
+      throw new Error('rename denied');
+    },
+    rmSync(target) {
+      removed.push(target);
+    },
+  };
+  const fakeHttps = {
+    get(_url, _options, callback) {
+      const req = new EventEmitter();
+      req.destroy = (err) => req.emit('error', err);
+      process.nextTick(() => {
+        const res = new PassThrough();
+        res.statusCode = 200;
+        callback(res);
+        res.end(Buffer.from([0x50, 0x4b]));
+      });
+      return req;
+    },
+  };
+
+  await assert.rejects(
+    () => downloadFile('https://example.test/template.zip', '/cache/template.zip', {
+      fs: fakeFs,
+      https: fakeHttps,
+      randomBytes: () => Buffer.from(suffix, 'hex'),
+    }),
+    /rename denied/
+  );
+  assert.deepEqual(removed, [temporaryPath]);
+});
+
 test('downloadArtifact caches artifacts under the pinned sha and skips download when already cached', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -1293,18 +1336,18 @@ test('shared template CLI arg parser handles common repo/cache and path flags', 
 
 test('shared JSON CLI runner formats success and fail-open errors', async () => {
   const writes = [];
-  const exits = [];
+  const processes = [{}, {}];
   await runBestEffortJsonCli(async () => ({ ok: true, value: 1 }), {
     stdout: { write: (value) => writes.push(value) },
-    process: { exit: (code) => exits.push(code) },
+    process: processes[0],
   });
   await runBestEffortJsonCli(async () => { throw new Error('boom'); }, {
     stdout: { write: (value) => writes.push(value) },
-    process: { exit: (code) => exits.push(code) },
+    process: processes[1],
   });
 
   assert.equal(formatJsonResult({ ok: true }), '{\n  "ok": true\n}\n');
-  assert.deepEqual(exits, [0, 0]);
+  assert.deepEqual(processes.map((proc) => proc.exitCode), [0, 0]);
   assert.match(writes[0], /"value": 1/);
   assert.match(writes[1], /"ok": false/);
   assert.match(writes[1], /"error": "boom"/);

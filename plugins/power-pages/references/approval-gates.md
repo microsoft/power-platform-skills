@@ -468,7 +468,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (20 calls: 13 gates + 7 not-a-gates)
+### 6.13 `create-site` (20 calls: 14 gates + 6 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|

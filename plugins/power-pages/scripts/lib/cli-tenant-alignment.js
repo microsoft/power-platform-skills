@@ -1,7 +1,12 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { getAuthToken, runAzureCli } = require('./validation-helpers');
+const {
+  getAuthToken,
+  parseEnvironmentUrl,
+  runAzureCli,
+  validateDataverseEnvironmentUrl,
+} = require('./validation-helpers');
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -45,6 +50,13 @@ function runPacAuthWho({ execFile = execFileSync, platform = process.platform } 
   return execFile('pac', ['auth', 'who'], { encoding: 'utf8', timeout: 15000 });
 }
 
+function runPacEnvWho({ execFile = execFileSync, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'pac.exe', 'env', 'who'], { encoding: 'utf8', timeout: 15000 });
+  }
+  return execFile('pac', ['env', 'who'], { encoding: 'utf8', timeout: 15000 });
+}
+
 function runAzAccountShowTenant({ execFile = execFileSync, platform = process.platform } = {}) {
   return runAzureCli(
     ['account', 'show', '--query', 'tenantId', '-o', 'tsv'],
@@ -68,19 +80,50 @@ function getAzAccountTenantId(execFile = execFileSync, platform = process.platfo
   }
 }
 
-function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, tokenTenantId } = {}, deps = {}) {
+function getPacEnvironmentUrl(execFile = execFileSync, platform = process.platform) {
+  try {
+    return parseEnvironmentUrl(runPacEnvWho({ execFile, platform }));
+  } catch {
+    return null;
+  }
+}
+
+function validateCliTenantAlignment({
+  envUrl,
+  token,
+  pacTenantId,
+  azTenantId,
+  tokenTenantId,
+  pacEnvironmentUrl,
+} = {}, deps = {}) {
   const execFile = deps.execFile || execFileSync;
   const platform = deps.platform || process.platform;
+  let expectedEnvironmentUrl = null;
+  if (envUrl) {
+    try {
+      expectedEnvironmentUrl = validateDataverseEnvironmentUrl(envUrl);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+  const activeEnvironmentUrl = expectedEnvironmentUrl
+    ? (pacEnvironmentUrl
+        ? (() => {
+            try { return validateDataverseEnvironmentUrl(pacEnvironmentUrl); } catch { return null; }
+          })()
+        : getPacEnvironmentUrl(execFile, platform))
+    : null;
   const pacTenant = normalizeGuid(pacTenantId) || getPacTenantId(execFile, platform);
   const azTenant = normalizeGuid(azTenantId) || getAzAccountTenantId(execFile, platform);
-  const bearerToken = token || (envUrl
+  const bearerToken = token || (expectedEnvironmentUrl
     ? (deps.getAuthToken
-        ? deps.getAuthToken(envUrl)
-        : getAuthToken(envUrl, { execFile, platform }))
+        ? deps.getAuthToken(expectedEnvironmentUrl)
+        : getAuthToken(expectedEnvironmentUrl, { execFile, platform }))
     : null);
   const tokenTenant = normalizeGuid(tokenTenantId) || tenantIdFromToken(bearerToken);
 
   const missing = [];
+  if (expectedEnvironmentUrl && !activeEnvironmentUrl) missing.push('pacEnvironmentUrl');
   if (!pacTenant) missing.push('pacTenantId');
   if (!azTenant) missing.push('azTenantId');
   if (!tokenTenant) missing.push('tokenTenantId');
@@ -91,10 +134,15 @@ function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, to
       pacTenantId: pacTenant,
       azTenantId: azTenant,
       tokenTenantId: tokenTenant,
+      expectedEnvironmentUrl,
+      pacEnvironmentUrl: activeEnvironmentUrl,
     };
   }
 
   const mismatches = [];
+  if (expectedEnvironmentUrl && expectedEnvironmentUrl !== activeEnvironmentUrl) {
+    mismatches.push('pac-vs-environment');
+  }
   if (pacTenant !== azTenant) mismatches.push('pac-vs-az');
   if (pacTenant !== tokenTenant) mismatches.push('pac-vs-token');
   if (azTenant !== tokenTenant) mismatches.push('az-vs-token');
@@ -104,9 +152,11 @@ function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, to
     pacTenantId: pacTenant,
     azTenantId: azTenant,
     tokenTenantId: tokenTenant,
+    expectedEnvironmentUrl,
+    pacEnvironmentUrl: activeEnvironmentUrl,
     mismatches,
     error: mismatches.length
-      ? 'PAC CLI and Azure CLI are authenticated to different tenants. Switch PAC auth or Azure CLI tenant before importing.'
+      ? 'PAC CLI and Azure CLI are authenticated to different tenants or environments. Switch PAC auth or Azure CLI tenant before continuing.'
       : null,
   };
 }
@@ -116,6 +166,7 @@ module.exports = {
   parsePacTenantId,
   runAzAccountShowTenant,
   runPacAuthWho,
+  runPacEnvWho,
   tenantIdFromToken,
   validateCliTenantAlignment,
 };

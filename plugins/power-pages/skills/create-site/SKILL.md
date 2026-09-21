@@ -393,7 +393,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    6. Render and open a read-only status page:
       ```bash
-      # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
+      # Create <temp-import-status-dir>/ under the operating-system temporary directory,
+      # then write this initial status JSON to <temp-import-status-dir>/status.json:
       # Import path:
       # Use "Installing solution" when TEMPLATE_SOLUTIONS_TO_IMPORT has one entry,
       # otherwise use "Installing solutions":
@@ -406,10 +407,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
         --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
         --outputPath "<temp-import-status-dir>/index.html"
-      node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt"
+      node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt" --cleanupRoot
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
+      The server command returns only after the listener is ready. It removes the temporary status directory after a successful redirect, after the browser stops polling, or when the maximum lifetime expires.
    7. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash
       # Update the status JSON:
@@ -574,7 +576,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       |----------|--------|---------|
       | The template site could not be cloned, built, or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
-      Do not retry automatically. For **Retry site creation**, ask for a new empty directory using the same **Project Location** prompt, update `TEMPLATE_CLONE_OUTPUT_DIRECTORY`, and rerun the wrapper. If the user falls back to from-scratch, explain that local files, supporting solutions, or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
+      Do not retry automatically. If the wrapper returned `outputDirectoryRemoved: true`, **Retry site creation** may reuse the same selected location. Otherwise, ask for a new empty directory using the same **Project Location** prompt, update `TEMPLATE_CLONE_OUTPUT_DIRECTORY`, and rerun the wrapper. If the user falls back to from-scratch, explain that local files, supporting solutions, or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
    13. When clone, build, and upload succeed, mark **Clone, build, and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -607,10 +609,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        {
          "state": "succeeded",
          "message": "Template site is live. Opening it now...",
-         "redirectUrl": "<siteUrl>"
+         "redirectUrl": "<siteUrl>",
+         "shutdownServer": true
        }
        ```
-       Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
+       Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. `shutdownServer: true` tells the local server to remove the temporary status directory after a short redirect grace period. If the user closed the status page, show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds. Do not start a separate background command or Task to wait for the live URL to return HTTP 200. The status-page redirect and DNS note handle that delay without leaving work that can resume the conversation after the completion summary. If a reachability poll was started accidentally, stop it before marking **Show live template site** as `completed`.
    18. Mark **Show live template site** as `completed`, then present the template-path summary:

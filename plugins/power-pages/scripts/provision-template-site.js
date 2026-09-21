@@ -235,6 +235,21 @@ function validateSeparateProjectPaths(sourcePath, outputDirectory, deps = {}) {
   return null;
 }
 
+function removeScriptCreatedOutputDirectory(outputDirectory, existedBeforeRun, fsImpl = fs) {
+  if (existedBeforeRun || !fsImpl.existsSync(outputDirectory)) return false;
+  try {
+    // PAC may have written partial content before failing. Remove only a root
+    // this invocation created, and refuse if another process replaced it with
+    // a symlink or non-directory entry.
+    const outputStat = fsImpl.lstatSync(outputDirectory);
+    if (outputStat.isSymbolicLink() || !outputStat.isDirectory()) return false;
+    fsImpl.rmSync(outputDirectory, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function provisionTemplateSite(options, deps = {}) {
   const fsImpl = deps.fs || fs;
   const sourcePath = path.resolve(options.sourcePath || '');
@@ -261,7 +276,8 @@ function provisionTemplateSite(options, deps = {}) {
   }
   const separationError = validateSeparateProjectPaths(sourcePath, outputDirectory, deps);
   if (separationError) return { ok: false, step: 'validation', error: separationError };
-  if (fsImpl.existsSync(outputDirectory)) {
+  const outputDirectoryExisted = fsImpl.existsSync(outputDirectory);
+  if (outputDirectoryExisted) {
     let outputStat;
     try {
       outputStat = fsImpl.lstatSync(outputDirectory);
@@ -290,14 +306,24 @@ function provisionTemplateSite(options, deps = {}) {
     '--overwrite',
   ]);
   if (cloneResult.status !== 0) {
-    return { ok: false, step: 'clone', error: commandError('pac pages clone', cloneResult) };
+    return {
+      ok: false,
+      step: 'clone',
+      outputDirectoryRemoved: removeScriptCreatedOutputDirectory(outputDirectory, outputDirectoryExisted, fsImpl),
+      error: commandError('pac pages clone', cloneResult),
+    };
   }
 
   let clonedPath;
   try {
     clonedPath = findCodeSiteRoot(outputDirectory, fsImpl);
   } catch (err) {
-    return { ok: false, step: 'clone-output', error: err.message };
+    return {
+      ok: false,
+      step: 'clone-output',
+      outputDirectoryRemoved: removeScriptCreatedOutputDirectory(outputDirectory, outputDirectoryExisted, fsImpl),
+      error: err.message,
+    };
   }
 
   let clonedIdentity;
@@ -403,6 +429,7 @@ module.exports = {
   parseArgs,
   pathContains,
   provisionTemplateSite,
+  removeScriptCreatedOutputDirectory,
   runNpm,
   runPac,
   validateSeparateProjectPaths,

@@ -22,6 +22,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 - **Cloud-aware URL resolution** — Never hardcode API base URLs or site URL domains. Always derive them from the Cloud value returned by `pac auth who`.
 - **Token handling** — The agent only needs to verify the user is logged in to Azure CLI.
 - **Confirm before mutating** — Always present the full activation parameters to the user and get explicit approval before POSTing to the websites API.
+- **Preserve the caller's environment** — When another skill passes `environmentUrl`, verify PAC and Azure CLI still target that environment and tenant before activation.
 - **Caller status updates** — When `/create-site` supplies a `statusPath`, update that file before and after activation prompts so the open template status page shows when user input is required.
 
 **Initial request:** $ARGUMENTS
@@ -94,10 +95,19 @@ First inspect `$ARGUMENTS` for explicit imported-site identity from another skil
 ```text
 siteName: <name>
 websiteRecordId: <guid>
+environmentUrl: <url>
 statusPath: <path>
 ```
 
 When both values are present, set `SITE_IDENTITY_SOURCE = "arguments"` immediately and **skip the local-project activation status check below**. That check resolves identity from `powerpages.config.json` / `.powerpages-site`, which may be absent or unrelated when `/create-site` activates an imported template site. Continue to Phase 2 with the explicit identity.
+
+When `environmentUrl` is present, store it as `EXPECTED_ENVIRONMENT_URL` and verify the current CLI context before Phase 2:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<EXPECTED_ENVIRONMENT_URL>"
+```
+
+Continue only when the JSON result has `ok: true`. This check compares the active PAC environment URL with the caller's URL and verifies that PAC, the Azure account, and the Dataverse access token use the same tenant. If it fails, stop and ask the user to switch PAC or Azure CLI authentication. Do not activate the imported Website Record ID in a different environment.
 
 When `source` is `create-site template path` and `statusPath` is present, store it as `ACTIVATION_STATUS_PATH`. This is the existing template status file created by `/create-site`; do not create a separate status page.
 
