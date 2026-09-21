@@ -129,9 +129,9 @@
     },
     {
       "id": 22,
-      "coverage": "parallel-success-both-platforms",
-      "prompt": "Add Android and iOS push through delivery flows. Firebase is not configured, all required runtime, WIF, Apple, and APNs decisions are already explicit, and every worker preflight succeeds.",
-      "expected_output": "The parent runs Firebase authentication/project activation serially, lets /setup-fcm use at most two platform workers, waits for its complete parent join, then dispatches the qualified runtime, WIF, and iOS-prerequisite workers in one max-three wave. It joins and revalidates every result, performs one SHA-guarded parent memory update, and only then invokes FlowAgent flow authoring sequentially.",
+      "coverage": "serial-cloud-owners-noncloud-wave",
+      "prompt": "Add Android and iOS push through delivery flows. Firebase is not configured, all required runtime, WIF, Apple, and APNs decisions are explicit, and the two non-cloud worker preflights succeed.",
+      "expected_output": "The parent invokes /setup-fcm serially for all Firebase MCP work, invokes /setup-push-wif synchronously for all gcloud/Azure MCP work and approvals, then dispatches only runtime and iOS-prerequisite workers in a maximum-two MCP-free wave. FlowAgent authoring remains sequential.",
       "files": []
     },
     {
@@ -144,15 +144,15 @@
     {
       "id": 24,
       "coverage": "task-unavailable-serial-fallback",
-      "prompt": "Task execution is unavailable, but the parent has already collected complete Android+iOS runtime, WIF, and Apple/APNs decisions. Continue safely.",
-      "expected_output": "No execution worker starts. The skill prints one concise fallback notice and runs the deterministic serial owner/inline path with the same identities, exclusive files, validations, WORKER_RESULT parsing, and parent-only memory rule. It does not silently skip work or claim that all setup can run concurrently.",
+      "prompt": "Task execution is unavailable, but serial Firebase and WIF owners have completed and the parent has complete Android+iOS runtime and Apple/APNs decisions.",
+      "expected_output": "No execution worker starts. The parent uses the deterministic serial runtime inline path and combined setup-apns owner fallback. It does not rerun Firebase/WIF cloud work or claim Task preflight proves MCP availability.",
       "files": []
     },
     {
       "id": 25,
-      "coverage": "malformed-worker-result",
-      "prompt": "The WIF worker returns DONE but omits WORKER_RESULT, while the runtime worker succeeds with a valid result.",
-      "expected_output": "The parent joins all started tracks, accepts and revalidates the independent runtime result, treats the malformed WIF return as BLOCKED without inferring success from sender-auth.json, preserves safe runtime progress, and does not retry or enter fallback after execution began.",
+      "coverage": "worker-mcp-inheritance-forbidden",
+      "prompt": "The parent Firebase, gcloud, and Azure MCP connections are healthy, but background workers cannot access those MCP tools.",
+      "expected_output": "The orchestration treats MCP as owner-context capability: /setup-fcm and /setup-push-wif run serially in the main context, and only MCP-free runtime/iOS workers are dispatched. It never retries cloud MCP from a Task worker.",
       "files": []
     },
     {
@@ -165,22 +165,22 @@
     {
       "id": 27,
       "coverage": "platform-specific-partial-blocker",
-      "prompt": "Android and shared WIF/runtime work succeed, but the iOS prerequisite worker blocks on Apple Team identity drift. Continue toward the Android build stopping point.",
-      "expected_output": "The parent joins all workers, preserves and revalidates successful Android/runtime/WIF progress, records iOS as blocked without promoting Apple/APNs state, then runs FlowAgent authoring and the Android build sequentially when shared prerequisites are ready. It does not start the iOS build or let the iOS blocker erase Android progress.",
+      "prompt": "Serial Firebase and WIF owners plus Android runtime succeed, but the iOS prerequisite worker blocks on Apple Team identity drift. Continue toward the Android build stopping point.",
+      "expected_output": "The parent preserves successful Firebase/WIF/runtime progress, records iOS as blocked without promoting Apple/APNs state, then runs FlowAgent authoring and the Android build when shared prerequisites are ready. It does not start the iOS build or erase Android progress.",
       "files": []
     },
     {
       "id": 28,
-      "coverage": "worker-contract-preflight-plan-paths-and-ios-fallback",
-      "prompt": "Exercise the bounded worker contract with a selected same-tenant existing Entra registration that needs WIF repair plus iOS prerequisites, then assume Task preflight is unavailable.",
-      "expected_output": "Every Task preflight carries operation: preflight in the prompt and accepts only a mutation-free capability result. Existing-identity WIF first returns a read-only proposed diff, then executes only the unchanged explicitly approved plan and echoes all pinned identities, route, mutation/API lists, role decisions, and approvals. The parent resolves project-relative result paths against the absolute project root before checking exclusive files. The deterministic iOS fallback invokes setup-apns exactly once as the combined Apple-first/APNs owner and accepts one final WORKER_RESULT rather than separate Apple and APNs results.",
+      "coverage": "mcp-free-worker-contract-and-ios-fallback",
+      "prompt": "WIF repair is required and iOS prerequisites are pending, then Task preflight is unavailable.",
+      "expected_output": "The parent completes WIF synchronously through /setup-push-wif with exact approvals before worker dispatch. Remaining Task preflights are mutation-free and MCP-free. The deterministic iOS fallback invokes setup-apns exactly once as the combined Apple-first/APNs owner, while runtime falls back inline.",
       "files": []
     },
     {
       "id": 29,
       "coverage": "cold-wif-identity-bootstrap-reapproval",
-      "prompt": "Configure push through delivery flows with WIF. I explicitly choose create-dedicated-registration, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet. Keep unrelated runtime and iOS work safe.",
-      "expected_output": "The parent accepts a null Entra client ID only for the explicit create-dedicated-registration initial read-only absence inventory. It asks first for only the exact Entra identity/credential and secret-safe Key Vault bootstrap, runs identity-bootstrap serially outside the execution wave, validates the safe server-generated client ID receipt, and does not accept sender-auth.json or Google mutations from that stage. It then requires a fresh claim-driven sender-auth plan using that client ID, presents the exact remaining Google/API/RBAC actions for a second explicit approval, and only then allows final WIF execute to join eligible independent runtime/iOS work. The parent accepts identity-bootstrap-plan, identity-bootstrap, sender-auth-plan, and sender-auth results only in order, preserves the same run ID, never silently falls back or replays an uncertain mutating bootstrap, and writes memory only once after final join and SHA validation.",
+      "prompt": "Configure push through delivery flows with WIF. I explicitly choose create-dedicated-registration, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet.",
+      "expected_output": "The serial /setup-push-wif owner accepts a null client ID only for the explicit create-dedicated-registration absence inventory, obtains approval only for Entra/credential/Key Vault bootstrap, executes and rereads the server-generated client ID, then builds a fresh claim-driven remaining Google/API/RBAC plan for a second explicit approval. It writes sender-auth.json only after final four-stage proof and never delegates MCP work to a background agent.",
       "files": []
     },
     {
@@ -201,21 +201,21 @@
       "id": 32,
       "coverage": "wif-registration-choice",
       "prompt": "Add push notifications and use WIF. I have not chosen which Entra registration should authenticate the sender.",
-      "expected_output": "The parent asks once for reuse-app-registration, use-existing-registration, or create-dedicated-registration, freezes that choice before WIF planning, and never lets a worker infer or switch the registration source.",
+      "expected_output": "The parent asks once for reuse-app-registration, use-existing-registration, or create-dedicated-registration, freezes that choice before invoking /setup-push-wif, and never lets the owner silently switch registration source.",
       "files": []
     },
     {
       "id": 33,
       "coverage": "existing-registration-fast-path",
       "prompt": "Add push with WIF using a different existing same-tenant client ID.",
-      "expected_output": "The parent validates the supplied ID without editing auth.config.json and uses preflight -> sender-auth-plan -> approval -> sender-auth. It does not dispatch identity-bootstrap and requires every plan and result to echo use-existing-registration and the same client ID.",
+      "expected_output": "The serial /setup-push-wif owner validates the supplied ID without editing auth.config.json, performs read-only inventory, obtains exact approval, executes only the approved repair/provision work, and requires the same use-existing-registration client ID through final proof.",
       "files": []
     },
     {
       "id": 34,
       "coverage": "create-new-only-bootstrap",
       "prompt": "Add push with WIF and create a new dedicated sender registration.",
-      "expected_output": "Only the explicit create-dedicated-registration choice may use null-client-ID inventory and the identity-bootstrap-plan -> identity-bootstrap -> sender-auth-plan -> sender-auth sequence with two approvals.",
+      "expected_output": "Only the explicit create-dedicated-registration choice may start without a client ID. The serial owner uses two approvals: identity bootstrap first, then a fresh claim-driven remaining plan before final proof and sender-auth.json.",
       "files": []
     },
     {
@@ -243,7 +243,7 @@
       "id": 38,
       "coverage": "worker-preflight-stays-inert",
       "prompt": "Use worker preflight to discover whether Firebase, gcloud, Azure, and FlowAgent are installed and authenticated.",
-      "expected_output": "The parent rejects tool discovery inside worker preflight. Owner skills establish local/MCP/auth/context readiness before dispatch; worker preflight remains a no-read, no-network, no-write capability handshake.",
+      "expected_output": "The parent rejects tool discovery inside worker preflight. Owner skills establish local/MCP/auth/context readiness and perform every MCP call; remaining worker preflight is a no-read, no-network, no-write local capability handshake.",
       "files": []
     }
   ]

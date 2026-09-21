@@ -142,6 +142,10 @@ allowlisted gcloud CLI fallback.
 - Authentication failures route to login; authorization failures route to
   least-privilege access; API/policy failures route to the owning
   administrator. Do not suggest installation for those categories.
-- Worker `operation: preflight` remains a mutation-free capability handshake.
-  Tool installation, MCP recovery, authentication, and context proof are
-  parent/owner responsibilities before worker plan or execute dispatch.
+- A connected MCP surface belongs to the main owner context that proved its
+  readiness. A background `Task` may not inherit the parent's MCP connection
+  or tool availability.
+- Worker `operation: preflight` remains a mutation-free capability handshake
+  for non-cloud workers only. It does not test or prove MCP inheritance.
+  Tool installation, MCP recovery, authentication, context proof, and every
+  MCP call remain parent/owner responsibilities.

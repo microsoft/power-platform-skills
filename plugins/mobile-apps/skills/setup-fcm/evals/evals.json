@@ -215,44 +215,44 @@
     },
     {
       "id": 26,
-      "coverage": "parallel-platform-success",
-      "prompt": "Configure both Android and iOS. The Firebase project is active and read back, both exact app decisions are frozen, and the qualified platform-worker preflight succeeds.",
-      "expected_output": "The parent keeps authentication and project activation serial, launches exactly two mobile-app:firebase-platform-worker tasks in one bounded batch with disjoint Android/iOS exclusive files, joins both, validates each status plus WORKER_RESULT, performs fresh combined identity/config validation, and updates memory-bank.md once.",
+      "coverage": "serial-both-platform-success",
+      "prompt": "Configure both Android and iOS. The Firebase project is active and read back, and both exact app decisions are frozen.",
+      "expected_output": "The /setup-fcm owner keeps every Firebase MCP call in the main context, processes Android completely before iOS, performs fresh app/config validation for each, then runs combined cross-platform validation and updates memory-bank.md once.",
       "files": []
     },
     {
       "id": 27,
-      "coverage": "single-platform-worker",
+      "coverage": "serial-single-platform",
       "prompt": "Only iOS is selected and its Firebase app decision is complete. Configure the iOS client.",
-      "expected_output": "After serial Firebase foundation work, the skill runs one synchronous mobile-app:firebase-platform-worker for iOS, does not create a dummy Android task, validates the immutable iOS result, and retains the same parent-only final validation and single memory update.",
+      "expected_output": "The /setup-fcm owner processes only iOS in the main context, does not manufacture Android work or dispatch a Task, validates the immutable iOS app/config, and performs one final memory update.",
       "files": []
     },
     {
       "id": 28,
-      "coverage": "task-unavailable-inline-fallback",
-      "prompt": "Both native platforms need Firebase client configuration, but Task or the qualified firebase platform worker is unavailable.",
-      "expected_output": "The skill starts no worker, prints one concise fallback notice, and executes the same frozen Android-then-iOS algorithm inline with identical Firebase MCP-only, exclusive-path, validation, retry, and result rules before the combined parent validation and one memory update.",
+      "coverage": "background-worker-mcp-unavailable",
+      "prompt": "The parent Firebase MCP connection is healthy, but background Task workers cannot access Firebase MCP tools. Configure both native platforms.",
+      "expected_output": "The skill does not dispatch Firebase platform workers. It performs every Firebase list/create/read/config call serially in the /setup-fcm owner context, so worker MCP inheritance is irrelevant.",
       "files": []
     },
     {
       "id": 29,
-      "coverage": "malformed-platform-result",
-      "prompt": "The Android worker reports DONE with a duplicated or wrong-project WORKER_RESULT while the iOS worker succeeds.",
-      "expected_output": "The parent joins both tracks, rejects Android as blocked, accepts and revalidates the independent iOS result, does not infer Android success from files, does not enter fallback after execution started, and records platform states separately.",
+      "coverage": "serial-second-platform-blocked",
+      "prompt": "Android Firebase app/config setup succeeds, but iOS encounters a newly discovered duplicate-app choice before creation or config retrieval.",
+      "expected_output": "The owner preserves Android as configured, stops iOS before an unapproved mutation, asks for the exact immutable iOS app choice, and does not write the combined memory handoff until both selected platforms pass final validation.",
       "files": []
     },
     {
       "id": 30,
-      "coverage": "partial-platform-dispatch",
-      "prompt": "A two-platform Firebase task batch starts Android, but iOS is definitely undispatched.",
-      "expected_output": "The parent does not run iOS inline while Android owns its files. It joins and validates Android first, then runs only iOS synchronously by worker or inline fallback after ownership release, never reruns Android, and never permits concurrent ownership of one platform.",
+      "coverage": "serial-platform-resume",
+      "prompt": "A previous run completed Android Firebase configuration but stopped before iOS. Resume both-platform setup.",
+      "expected_output": "The owner revalidates and reuses the exact Android app/config without recreating it, then resumes iOS serially and writes the combined memory handoff only after both platforms validate.",
       "files": []
     },
     {
       "id": 31,
-      "coverage": "firebase-worker-executable-contract",
-      "prompt": "Preflight and then execute one Firebase platform worker while memory-bank.md exists and result paths are project-relative.",
-      "expected_output": "The Task prompt carries operation: preflight and accepts only the exact mutation-free capability result. Execution receives the pre-wave SHA-256, may read only raw memory-bank.md bytes to compare that hash, never writes memory, and returns project-relative paths that the parent resolves against absolute exclusive files. Every return must explicitly report scratchCleanupComplete true and ownershipReleased true before fallback, retry, or parent file access.",
+      "coverage": "firebase-owner-mcp-isolation",
+      "prompt": "Try to parallelize Android and iOS Firebase setup through background agents after parent MCP readiness succeeds.",
+      "expected_output": "The skill rejects cloud delegation because parent MCP readiness does not prove Task MCP inheritance. All Firebase MCP operations and platform file writes remain in /setup-fcm; background workers are not used.",
       "files": []
     },
     {

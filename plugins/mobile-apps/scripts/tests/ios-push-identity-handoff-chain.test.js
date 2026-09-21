@@ -44,17 +44,10 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
 
   assert.match(
     skill,
-    /parent runs[\s\S]*update `memory-bank\.md` exactly once with the combined\s+non-secret state/i,
+    /owner context[\s\S]*update `memory-bank\.md` exactly once with the combined\s+non-secret state/i,
     'documents the parent-owned single memory update',
   );
-  assert.match(
-    skill,
-    /Workers may read\s+only the raw `memory-bank\.md` bytes needed to compare that hash/,
-  );
-  assert.match(
-    skill,
-    /must\s+never parse, display, search, summarize, edit, replace, append, create, or\s+delete the file/,
-  );
+  assert.match(skill, /never delegate Firebase MCP\s+calls to a background `Task`/);
   assert.ok(skill.includes('memory-bank.md'), 'uses memory-bank.md');
   assert.match(skill, /Do not record Google\s+account details/, 'blocks credential storage');
   assert.ok(skill.includes('mcp__firebase__firebase_get_environment'), 'uses Firebase MCP environment readback');
@@ -278,13 +271,13 @@ test('iOS fallback has one combined setup-apns owner and one terminal result', (
   )).evals;
 
   const fallback = addPush.match(
-    /use this deterministic serial fallback[\s\S]*?(?=\n#### 4\.3)/,
+    /documented deterministic serial fallback[\s\S]*?(?=\nAfter successful preflight)/,
   )?.[0] || '';
-  assert.match(fallback, /apply the iOS combined envelope through the internal orchestrated owner\s+mode of `\/setup-apns` once/);
+  assert.match(fallback, /apply the combined `\/setup-apns`\s+owner path exactly once/);
   assert.match(fallback, /do not invoke\s+`\/setup-apple-ios` separately/);
   assert.match(fallback, /one final iOS `WORKER_RESULT`/);
   assert.strictEqual(
-    (fallback.match(/apply the iOS combined envelope[\s\S]*?`\/setup-apns` once/g) || []).length,
+    (fallback.match(/apply the combined `\/setup-apns`[\s\S]*?exactly once/g) || []).length,
     1,
     'fallback invokes one combined setup-apns owner',
   );

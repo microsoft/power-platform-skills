@@ -88,6 +88,13 @@ CLI or MCP server is missing from an authenticated IAM, API, policy, project,
 or transient read-back failure. Manual installation/login/restart paths must
 wait for the user and rerun the exact failed probe before resuming.
 
+Connected MCP tools are main-context owner capabilities. A background `Task`
+may not inherit the parent's connected MCP servers even when an agent
+frontmatter lists those tools. Keep Firebase MCP calls in `/setup-fcm`, gcloud
+and Azure MCP calls in `/setup-push-wif`, and FlowAgent calls in their owner
+skills. Background push workers must be MCP-free; their preflight proves only
+their local bounded contract.
+
 **Pinned bootstrap baselines for the documented MCP path:** Firebase MCP
 package `firebase-tools` **15.27.0** (with `15.28.1` still main/unpublished on npm),
 gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.

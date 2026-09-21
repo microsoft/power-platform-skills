@@ -59,21 +59,19 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
-  assert.match(lifecycle, /Firebase authentication, project selection\/creation, activation, and\s+read-back stay serial/);
-  assert.match(lifecycle, /at most two\s+`mobile-app:firebase-platform-worker` tracks/);
-  assert.match(lifecycle, /at most three independent tracks/);
+  assert.match(lifecycle, /`\/setup-fcm` owns every Firebase MCP call/);
+  assert.match(lifecycle, /`\/setup-push-wif` owns every gcloud\/Azure MCP call/);
+  assert.match(lifecycle, /at most two MCP-free tracks/);
   assert.match(lifecycle, /exactly one parseable `WORKER_RESULT`/);
   assert.match(lifecycle, /recompute the SHA-256 and stop on drift/);
   assert.match(lifecycle, /Every `Task` capability check carries `operation: preflight` in the prompt/);
   assert.match(lifecycle, /Preflight is mutation-free/);
-  assert.match(lifecycle, /app\s+registration or another same-tenant existing registration:[\s\S]*read-only `plan` -> explicit approval -> final `execute`/i);
+  assert.match(lifecycle, /app\s+registration or another same-tenant existing registration:[\s\S]*read-only\s+inventory -> explicit approval -> execution and proof/i);
   assert.match(lifecycle, /Only an explicitly\s+selected new dedicated registration uses the staged path/i);
-  assert.match(lifecycle, /fresh claim-driven read-only plan -> second explicit approval/);
-  assert.match(lifecycle, /first approval never authorizes the remaining plan/);
-  assert.match(lifecycle, /resolves them against the canonical absolute project root/);
-  assert.match(lifecycle, /report both scratch cleanup and\s+ownership release on every return/);
-  assert.match(lifecycle, /applies `\/setup-apns` once as the\s+combined Apple-first\/APNs owner/);
-  assert.match(lifecycle, /one final iOS result/);
+  assert.match(lifecycle, /fresh claim-driven plan -> second explicit\s+approval/);
+  assert.match(lifecycle, /first\s+approval never authorizes the remaining plan/);
+  assert.match(lifecycle, /resolves\s+them against the canonical absolute project root/);
+  assert.match(lifecycle, /proves only the local worker contract,\s+not MCP inheritance/);
   assert.match(lifecycle, /FlowAgent authoring, wrapped builds, installation handoffs, and physical\s+verification remain sequential/);
 });
 
@@ -107,7 +105,7 @@ test('add-push owns runtime integration and orchestrates platform owners', () =>
   assert.match(skill, /Build a stage-lazy readiness schedule/);
   assert.match(skill, /\*\*Configure app:\*\* Firebase client readiness only/);
   assert.match(skill, /Resource Manager error from Firebase MCP is not evidence that gcloud\s+is missing/);
-  assert.match(skill, /Worker `preflight` stays inert/);
+  assert.match(skill, /background `Task` may not inherit/);
 });
 
 test('build and physical verification boundaries remain non-overlapping', () => {
@@ -157,23 +155,22 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
   assert.match(addPush.evals[19].expected_output, /scheduleNotificationAsync/);
   assert.match(addPush.evals[20].expected_output, /same channel ID/);
-  assert.strictEqual(addPush.evals[21].coverage, 'parallel-success-both-platforms');
-  assert.match(addPush.evals[21].expected_output, /max-three wave/);
+  assert.strictEqual(addPush.evals[21].coverage, 'serial-cloud-owners-noncloud-wave');
+  assert.match(addPush.evals[21].expected_output, /maximum-two MCP-free wave/);
   assert.strictEqual(addPush.evals[22].coverage, 'single-track-single-platform');
   assert.strictEqual(addPush.evals[23].coverage, 'task-unavailable-serial-fallback');
-  assert.strictEqual(addPush.evals[24].coverage, 'malformed-worker-result');
+  assert.strictEqual(addPush.evals[24].coverage, 'worker-mcp-inheritance-forbidden');
   assert.strictEqual(addPush.evals[25].coverage, 'memory-sha-drift');
   assert.strictEqual(addPush.evals[26].coverage, 'platform-specific-partial-blocker');
   assert.strictEqual(
     addPush.evals[27].coverage,
-    'worker-contract-preflight-plan-paths-and-ios-fallback',
+    'mcp-free-worker-contract-and-ios-fallback',
   );
-  assert.match(addPush.evals[27].expected_output, /mutation-free capability result/);
-  assert.match(addPush.evals[27].expected_output, /read-only proposed diff/);
-  assert.match(addPush.evals[27].expected_output, /project-relative result paths/);
+  assert.match(addPush.evals[27].expected_output, /mutation-free and MCP-free/);
+  assert.match(addPush.evals[27].expected_output, /completes WIF synchronously/);
   assert.match(addPush.evals[27].expected_output, /setup-apns exactly once/);
   assert.strictEqual(addPush.evals[28].coverage, 'cold-wif-identity-bootstrap-reapproval');
-  assert.match(addPush.evals[28].expected_output, /null Entra client ID/);
+  assert.match(addPush.evals[28].expected_output, /null client ID/);
   assert.match(addPush.evals[28].expected_output, /second explicit approval/);
   assert.strictEqual(addPush.evals[29].coverage, 'apns-question-after-firebase');
   assert.match(addPush.evals[29].expected_output, /does not ask whether an APNs credential is already uploaded/);
@@ -186,7 +183,8 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[31].expected_output, /use-existing-registration/);
   assert.match(addPush.evals[31].expected_output, /create-dedicated-registration/);
   assert.strictEqual(addPush.evals[32].coverage, 'existing-registration-fast-path');
-  assert.match(addPush.evals[32].expected_output, /does not dispatch identity-bootstrap/);
+  assert.match(addPush.evals[32].expected_output, /serial \/setup-push-wif owner/);
+  assert.match(addPush.evals[32].expected_output, /same use-existing-registration client ID through final proof/);
   assert.strictEqual(addPush.evals[33].coverage, 'create-new-only-bootstrap');
   assert.match(addPush.evals[33].expected_output, /Only the explicit create-dedicated-registration choice/);
   assert.strictEqual(addPush.evals[34].coverage, 'configure-app-stage-lazy-readiness');

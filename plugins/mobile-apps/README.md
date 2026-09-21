@@ -521,9 +521,7 @@ Example edit flows:
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
-| `firebase-platform-worker` | Bounded Android-or-iOS Firebase client worker; `/setup-fcm` may run at most two after serial project activation |
 | `push-runtime-worker` | Bounded runtime integration worker with exclusive app-file ownership |
-| `push-wif-worker` | Bounded staged WIF worker; cold identity bootstrap writes no local file, and only final execute may write `sender-auth.json` |
 | `push-ios-prerequisites-worker` | Read-only validator for parent-collected Apple/APNs confirmations |
 
 ## Telemetry and privacy

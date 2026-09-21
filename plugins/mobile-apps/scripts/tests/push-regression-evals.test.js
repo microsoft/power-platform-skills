@@ -355,83 +355,30 @@ test('push owners share stage-specific readiness and evidence-based recovery', (
   for (const id of [73, 74, 75, 76, 77]) assert.ok(flowEvals.find((item) => item.id === id));
 });
 
-test('WIF worker plans read-only and executes only the unchanged approved diff', () => {
-  const fs = require('node:fs');
-  const worker = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'agents/push-wif-worker.md'),
-    'utf8',
-  );
+test('WIF owner plans and executes the exact approved diff serially', () => {
   const owner = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
+    'utf8',
+  );
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-wif-provisioning.md'),
     'utf8',
   );
   const parent = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
     'utf8',
   );
-  const evaluation = require(path.join(
-    PLUGIN_ROOT,
-    'skills/setup-push-wif/evals/evals.json',
-  )).evals.find(({ coverage }) => coverage === 'orchestrated-plan-approval-echo');
 
-  assert.ok(evaluation, 'setup-push-wif covers plan approval and execute echo');
-  for (const content of [worker, owner]) {
-    assert.match(content, /`operation: plan`[\s\S]*read-only/i);
-    assert.match(content, /proposedPlan/);
-    assert.match(content, /approved_plan/);
-    assert.match(content, /unchanged/);
-  }
-  assert.match(worker, /`plan` proposes; it never approves or executes/);
-  assert.match(owner, /Planning never grants\s+mutation permission/i);
-  assert.match(parent, /WIF `operation: plan` is never\s+part of this execution batch/);
-  assert.match(parent, /Pass the accepted `sender-auth-plan`'s `proposedPlan` object unchanged/);
-  assert.match(parent, /approved: true/);
+  assert.match(owner, /Show the full state\/diff, resource and RBAC mutations/);
+  assert.match(owner, /Obtain explicit confirmation before every\s+repair\/provision route/);
+  assert.match(owner, /first approval never authorizes the second stage/i);
+  assert.match(reference, /Any\s+discovered addition, route change, execution-mode change/);
+  assert.match(reference, /requires a new explicit approval/);
+  assert.match(parent, /invoke `\/setup-push-wif --working-dir <root>` synchronously/);
   assert.doesNotMatch(parent, /broader_fcm_role_approved/);
-  assert.doesNotMatch(worker, /broaderFcmRoleRequired|broaderFcmRoleApproved/);
-
-  const executeLine = [...worker.matchAll(/^WORKER_RESULT: (\{.+\})$/gm)]
-    .map((match) => JSON.parse(match[1]))
-    .find(({ operation }) => operation === 'execute');
-  assert.ok(executeLine, 'WIF worker publishes a parseable execute result');
-
-  for (const key of [
-    'firebaseProjectId',
-    'googleProjectId',
-    'azureTenantId',
-    'azureSubscriptionId',
-    'wifPoolId',
-    'wifProviderId',
-    'senderServiceAccount',
-    'entraSenderClientId',
-  ]) {
-    assert.ok(Object.hasOwn(executeLine.identities, key), `execute echoes identity ${key}`);
-  }
-  for (const key of [
-    'approved',
-    'registrationMode',
-    'route',
-    'mutations',
-    'apiEnablement',
-    'googleExecutionMode',
-    'leastPrivilegeRole',
-    'resourceGroup',
-    'keyVaultUri',
-    'keyVaultSecretName',
-    'runtimeConnectionPrincipal',
-    'inventoryObservedAt',
-  ]) {
-    assert.ok(Object.hasOwn(executeLine.decisions, key), `execute echoes decision ${key}`);
-  }
-  assert.strictEqual(executeLine.decisions.approved, true);
-  assert.match(executeLine.decisions.registrationMode, /registration/);
-  assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleApproved'));
-  assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleRequired'));
-  assert.match(evaluation.expected_output, /cloudmessaging\.messages\.create/);
-  assert.deepStrictEqual(executeLine.changedFiles, ['sender-auth.json']);
-  assert.deepStrictEqual(executeLine.validatedFiles, ['sender-auth.json']);
-  assert.match(parent, /resolve each against `working_dir`\s+before comparing it with the absolute exclusive path/);
-  assert.match(evaluation.expected_output, /execute consumes the unchanged plan/);
-  assert.match(evaluation.expected_output, /echoes every identity, route, list, role, and approval/);
+  assert.doesNotMatch(owner, /push-wif-worker/);
+  assert.doesNotMatch(reference, /WORKER_RESULT/);
+  assert.ok(!fs.existsSync(path.join(PLUGIN_ROOT, 'agents/push-wif-worker.md')));
 });
 
 test('WIF does not offer a broader Firebase Admin role', () => {
@@ -457,20 +404,19 @@ test('WIF does not offer a broader Firebase Admin role', () => {
   assert.match(reference, /`wif-custom-role-policy-blocked`/);
   assert.match(reference, /must not be offered/);
   assert.match(owner, /do not offer or ask about a broader Firebase/);
-  assert.match(parent, /Do not ask about a broader Firebase role or Firebase Admin SDK/);
+  assert.match(parent, /Do not ask about a broader Firebase role or\s+Firebase Admin SDK/);
   assert.doesNotMatch(`${reference}\n${owner}\n${parent}`, /broader_fcm_role_approved/);
   assert.ok(evaluation, 'WIF broader-role regression eval exists');
   assert.match(evaluation.expected_output, /does not ask for or offer broader Firebase role/);
 });
 
-test('WIF worker separates truly cold identity bootstrap from final execution', () => {
-  const fs = require('node:fs');
-  const worker = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'agents/push-wif-worker.md'),
-    'utf8',
-  );
+test('WIF owner separates truly cold identity bootstrap from final execution', () => {
   const parent = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const owner = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
     'utf8',
   );
   const reference = fs.readFileSync(
@@ -481,41 +427,17 @@ test('WIF worker separates truly cold identity bootstrap from final execution', 
     PLUGIN_ROOT,
     'skills/setup-push-wif/evals/evals.json',
   )).evals.find(({ coverage }) => coverage === 'orchestrated-cold-identity-bootstrap');
-  const workerResults = [...worker.matchAll(/^WORKER_RESULT: (\{.+\})$/gm)]
-    .map((match) => JSON.parse(match[1]));
-  const bootstrapPlan = workerResults.find(({ stage }) => stage === 'identity-bootstrap-plan');
-  const bootstrap = workerResults.find(({ operation }) => operation === 'identity-bootstrap');
-
   assert.ok(evaluation, 'setup-push-wif covers a genuinely absent Entra app');
-  assert.ok(bootstrapPlan, 'worker defines the initial bootstrap plan result');
-  assert.strictEqual(bootstrapPlan.identities.entraSenderClientId, null);
-  assert.strictEqual(
-    bootstrapPlan.decisions.registrationMode,
-    'create-dedicated-registration',
-  );
-  assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.googleMutations, []);
-  assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.apiEnablement, []);
-  assert.ok(bootstrap, 'worker defines the identity-bootstrap result');
-  assert.strictEqual(
-    bootstrap.decisions.registrationMode,
-    'create-dedicated-registration',
-  );
-  assert.ok(bootstrap.identityBootstrapReceipt.entraSenderClientId);
-  assert.deepStrictEqual(bootstrap.changedFiles, []);
-  assert.ok(!Object.hasOwn(bootstrap, 'senderAuthPath'));
-
-  for (const content of [worker, reference]) {
+  for (const content of [parent, owner, reference]) {
     assert.match(content, /create-dedicated-registration/);
-    assert.match(content, /reuse-app-registration/);
-    assert.match(content, /use-existing-registration/);
-    assert.match(content, /operation: identity-bootstrap/);
-    assert.match(content, /fresh (?:app-only token|read-only plan)/i);
-    assert.match(content, /server-generated\s+client\s+ID/i);
+    assert.match(content, /(?:server-)?generated\s+client ID/i);
+    assert.match(content, /fresh (?:claim|token)/i);
   }
-  assert.match(parent, /first approval does \*\*not\*\* authorize/);
-  assert.match(parent, /approval #2/);
-  assert.match(parent, /same `run_id`/);
-  assert.match(parent, /identity-bootstrap-plan -> identity-bootstrap ->\s+sender-auth-plan -> sender-auth/);
+  assert.match(parent, /two-stage approval boundary/);
+  assert.match(parent, /Bootstrap never mutates Google or writes `sender-auth\.json`/);
+  assert.match(owner, /first approval never authorizes the second stage/i);
+  assert.match(reference, /first present\s+only the narrow identity\/credential and secret-safe Key Vault bootstrap plan/);
+  assert.match(reference, /fresh complete plan for the remaining Google\/API\/RBAC work/);
   assert.match(evaluation.expected_output, /does not create sender-auth\.json/);
   assert.match(evaluation.expected_output, /second explicit approval/);
 });
@@ -527,10 +449,6 @@ test('WIF registration choice is immutable and same-tenant', () => {
   );
   const owner = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
-    'utf8',
-  );
-  const worker = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'agents/push-wif-worker.md'),
     'utf8',
   );
   const parent = fs.readFileSync(
@@ -546,7 +464,7 @@ test('WIF registration choice is immutable and same-tenant', () => {
     'utf8',
   );
 
-  for (const content of [flow, owner, worker, parent, reference, contract]) {
+  for (const content of [flow, owner, parent, reference, contract]) {
     assert.match(content, /reuse-app-registration/);
     assert.match(content, /use-existing-registration/);
     assert.match(content, /create-dedicated-registration/);
@@ -554,7 +472,6 @@ test('WIF registration choice is immutable and same-tenant', () => {
   assert.match(flow, /never write this sender-only ID to `auth\.config\.json`/i);
   assert.match(reference, /same (?:resolved )?tenant/i);
   assert.match(reference, /never\s+write it to `auth\.config\.json`/i);
-  assert.match(worker, /Only\s+`create-dedicated-registration` may use a null client ID/i);
   assert.match(parent, /Never silently switch modes/i);
   assert.match(contract, /registrationMode/);
 });
@@ -592,27 +509,28 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
   assert.match(orchestration.evals[19].expected_output, /scheduleNotificationAsync/);
   assert.match(orchestration.evals[20].expected_output, /same channel ID/);
-  assert.match(orchestration.evals[21].expected_output, /at most two platform workers/);
-  assert.match(orchestration.evals[21].expected_output, /max-three wave/);
+  assert.match(orchestration.evals[21].expected_output, /maximum-two MCP-free wave/);
+  assert.match(orchestration.evals[21].expected_output, /invokes \/setup-fcm serially/);
+  assert.match(orchestration.evals[21].expected_output, /invokes \/setup-push-wif synchronously/);
   assert.match(orchestration.evals[22].expected_output, /one synchronous mobile-app:push-runtime-worker/);
-  assert.match(orchestration.evals[23].expected_output, /deterministic serial owner\/inline path/);
-  assert.match(orchestration.evals[24].expected_output, /malformed WIF return as BLOCKED/);
+  assert.match(orchestration.evals[23].expected_output, /deterministic serial runtime inline path/);
+  assert.match(orchestration.evals[24].expected_output, /never retries cloud MCP from a Task worker/);
   assert.match(orchestration.evals[25].expected_output, /detects drift from the pre-wave hash/);
   assert.match(orchestration.evals[26].expected_output, /iOS as blocked/);
   assert.strictEqual(
     orchestration.evals[27].coverage,
-    'worker-contract-preflight-plan-paths-and-ios-fallback',
+    'mcp-free-worker-contract-and-ios-fallback',
   );
-  assert.match(orchestration.evals[27].expected_output, /operation: preflight/);
-  assert.match(orchestration.evals[27].expected_output, /unchanged explicitly approved plan/);
+  assert.match(orchestration.evals[27].expected_output, /Task preflights are mutation-free and MCP-free/);
+  assert.match(orchestration.evals[27].expected_output, /completes WIF synchronously/);
   assert.match(orchestration.evals[27].expected_output, /setup-apns exactly once/);
   assert.strictEqual(
     orchestration.evals[28].coverage,
     'cold-wif-identity-bootstrap-reapproval',
   );
-  assert.match(orchestration.evals[28].expected_output, /null Entra client ID/);
+  assert.match(orchestration.evals[28].expected_output, /null client ID/);
   assert.match(orchestration.evals[28].expected_output, /second explicit approval/);
-  assert.match(orchestration.evals[28].expected_output, /only in order/);
+  assert.match(orchestration.evals[28].expected_output, /never delegates MCP work to a background agent/);
 });
 
 test('iOS push orchestration invokes owners without duplicating their workflows', () => {

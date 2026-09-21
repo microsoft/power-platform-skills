@@ -32,56 +32,52 @@ real blocker.
 
 ## Bounded orchestration
 
-Push setup uses two bounded waves without treating the whole lifecycle as
-concurrent:
+Cloud owners are serial because a background `Task` cannot be assumed to
+inherit the parent context's connected MCP servers:
 
-1. Firebase authentication, project selection/creation, activation, and
-   read-back stay serial in `/setup-fcm`. After the parent collects all app and
-   replacement decisions, it may run at most two
-   `mobile-app:firebase-platform-worker` tracks, one per selected platform.
-2. Only after the complete Firebase parent join,
-   `/add-push-notifications` may run at most three independent tracks:
-   `mobile-app:push-runtime-worker`, `mobile-app:push-wif-worker`, and
-   `mobile-app:push-ios-prerequisites-worker`.
+1. `/setup-fcm` owns every Firebase MCP call and processes selected platform
+   app/config work serially, Android then iOS.
+2. `/setup-push-wif` owns every gcloud/Azure MCP call, approval, mutation,
+   proof, and sender-auth handoff serially.
+3. `/create-push-notification-flow` and verification owners keep FlowAgent in
+   their main contexts.
 
-The parent owns every question and approval. Before dispatch it freezes
-immutable decision envelopes, disjoint `exclusive_files`, and one
+After Firebase and eligible WIF work complete, `/add-push-notifications` may
+run at most two MCP-free tracks: `mobile-app:push-runtime-worker` and
+`mobile-app:push-ios-prerequisites-worker`.
+
+The parent owns every question and approval. Before non-cloud dispatch it
+freezes immutable decision envelopes, disjoint `exclusive_files`, and one
 `memory-bank.md` SHA-256. Workers never prompt, invoke another worker or skill,
-fan out, or write memory. Every return must have a recognized literal status
-line and exactly one parseable `WORKER_RESULT`; malformed, identity-drifted, or
-unexpected-file results are blocked rather than inferred from disk state.
+fan out, call MCP, or write memory. Every return must have a recognized literal
+status line and exactly one parseable `WORKER_RESULT`; malformed,
+identity-drifted, or unexpected-file results are blocked rather than inferred
+from disk state.
 
 Every `Task` capability check carries `operation: preflight` in the prompt.
 Preflight is mutation-free: no cloud calls, project or memory reads, file
-writes, or ownership acquisition. Firebase execution may read only raw memory
-bytes for the supplied SHA-256 guard and must report both scratch cleanup and
-ownership release on every return. Result paths remain project-relative; the
-parent resolves them against the canonical absolute project root before
-comparing them with absolute exclusive files.
+writes, or ownership acquisition. It proves only the local worker contract,
+not MCP inheritance. Result paths remain project-relative; the parent resolves
+them against the canonical absolute project root before comparing them with
+absolute exclusive files.
 
 Cold WIF preserves the short path when the user selects either the app
-registration or another same-tenant existing registration:
-read-only `plan` -> explicit approval -> final `execute`. The selected client
-ID is pinned before planning and cannot switch sources. Only an explicitly
+registration or another same-tenant existing registration: read-only
+inventory -> explicit approval -> execution and proof. Only an explicitly
 selected new dedicated registration uses the staged path: initial read-only
-inventory with a null client ID
--> approval for only the minimal Entra identity/credential and secret-safe Key
-Vault bootstrap -> serial `identity-bootstrap` returning the server-generated
-client ID -> fresh claim-driven read-only plan -> second explicit approval for
-the exact remaining Google/API/RBAC diff -> final `execute`. Bootstrap never
-mutates Google state or writes `sender-auth.json`; planning never authorizes
-mutation, and first approval never authorizes the remaining plan. The parent
-accepts these worker stages only in order and keeps the same run ID. If iOS
-worker dispatch cannot run, the serial fallback applies `/setup-apns` once as the
-combined Apple-first/APNs owner and accepts one final iOS result; it never
-combines separate Apple and APNs terminal results.
+inventory with no client ID -> approval for only the minimal
+Entra/credential/Key Vault bootstrap -> serial bootstrap returning the
+server-generated client ID -> fresh claim-driven plan -> second explicit
+approval for the exact remaining Google/API/RBAC diff -> final execution.
+Bootstrap never mutates Google state or writes `sender-auth.json`, and first
+approval never authorizes the remaining plan.
 
-Join every started task, including a partially dispatched batch, before
-starting an undispatched track or fallback. Group valid `NEEDS_CONTEXT`
-requests into one parent question, retry only affected tracks, and cap each
-worker at two retries. Preserve successful independent work when one
-platform-specific track blocks. Immediately before the single parent memory
-merge, recompute the SHA-256 and stop on drift rather than overwriting
+Join every started non-cloud task, including a partially dispatched batch,
+before starting an undispatched track or fallback. Group valid
+`NEEDS_CONTEXT` requests into one parent question, retry only affected tracks,
+and cap each worker at two retries. Preserve successful independent work when
+one platform-specific track blocks. Immediately before the single parent
+memory merge, recompute the SHA-256 and stop on drift rather than overwriting
 concurrent changes.
 
 If task execution is unavailable, use one synchronous worker or the documented
