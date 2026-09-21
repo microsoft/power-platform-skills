@@ -267,6 +267,7 @@
       }
 
       function phaseForStatus(status) {
+        if (status && (status.phase === 'siteAndSeed' || status.phase === 'creatingAndSeeding')) return 'siteAndSeed';
         if (status && (status.phase === 'site' || status.phase === 'cloning' || status.phase === 'uploading')) return 'site';
         if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
         if (status && (status.phase === 'activation' || status.phase === 'activating')) return 'activation';
@@ -285,6 +286,14 @@
         phaseSite.textContent = 'Creating site';
         phaseSeed.textContent = 'Seeding data';
         phaseActivation.textContent = 'Activating site';
+        if (phase === 'siteAndSeed') {
+          phaseSolution.classList.add('done');
+          phaseSolution.textContent = SOLUTION_INSTALLED_LABEL;
+          phaseSite.classList.add('active');
+          phaseSeed.classList.add('active');
+          if (mainHeading) mainHeading.textContent = 'Creating ' + TEMPLATE_NAME + ' template site and seeding data';
+          return;
+        }
         if (phase === 'site') {
           phaseSolution.classList.add('done');
           phaseSolution.textContent = SOLUTION_INSTALLED_LABEL;

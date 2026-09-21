@@ -74,6 +74,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /phaseForStatus/);
   assert.match(html, /renderPhase/);
   assert.match(html, /status\.phase/);
+  assert.match(html, /status\.phase === 'siteAndSeed'/);
+  assert.match(html, /phaseSite\.classList\.add\('active'\)/);
+  assert.match(html, /phaseSeed\.classList\.add\('active'\)/);
+  assert.match(html, /template site and seeding data/);
   assert.match(html, /const SOLUTION_INSTALLED_LABEL = "Solutions installed"/);
   assert.match(html, /const SOLUTION_NOUN = "solutions"/);
   assert.match(html, /phaseSolution\.textContent = SOLUTION_INSTALLED_LABEL/);

@@ -12,7 +12,7 @@ const {
   packTemplateSolution,
   parseArgs,
 } = require('../pack-template-solution');
-const { runPac } = require('../lib/pac-command');
+const { PAC_LOG_TAIL_BYTES, commandError, runPac } = require('../lib/pac-command');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'pack-template-solution-test-'));
@@ -168,4 +168,48 @@ test('runPac invokes pac.exe directly on Windows without a command shell', () =>
   assert.equal(calls[0][0], 'pac.exe');
   assert.deepEqual(calls[0][1], ['solution', 'pack', '--folder', 'source']);
   assert.equal(calls[0][2].shell, false);
+  assert.equal(calls[0][2].maxBuffer, undefined);
+  assert.equal(calls[0][2].stdio[0], 'ignore');
+  assert.equal(typeof calls[0][2].stdio[1], 'number');
+  assert.equal(calls[0][2].stdio[1], calls[0][2].stdio[2]);
+});
+
+test('runPac streams verbose output to disk and returns only its bounded tail', (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const marker = 'PAC upload completed';
+
+  const result = runPac(['pages', 'upload-code-site'], {
+    tmpRoot: root,
+    runCommand(command, args, options) {
+      assert.equal(command, process.platform === 'win32' ? 'pac.exe' : 'pac');
+      fs.writeSync(options.stdio[1], `${'x'.repeat(PAC_LOG_TAIL_BYTES * 2)}\n${marker}`);
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(Buffer.byteLength(result.stdout), PAC_LOG_TAIL_BYTES);
+  assert.match(result.stdout, new RegExp(`${marker}$`));
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('runPac keeps the PAC log tail when the command fails', (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = runPac(['pages', 'upload-code-site'], {
+    tmpRoot: root,
+    runCommand(command, args, options) {
+      fs.writeSync(options.stdio[2], 'Upload failed after processing site files');
+      const error = new Error('Command failed without captured stdio');
+      error.status = 1;
+      throw error;
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Upload failed after processing site files/);
+  assert.match(commandError('pac pages upload-code-site', result), /processing site files/);
+  assert.doesNotMatch(commandError('pac pages upload-code-site', result), /without captured stdio/);
+  assert.deepEqual(fs.readdirSync(root), []);
 });

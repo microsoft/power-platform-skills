@@ -514,7 +514,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --seedApplied "false"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
-   9. Mark **Clone, build, and upload template site** as `in_progress`. Update the status page:
+   9. Start site provisioning and seed-data application concurrently after all required solution imports finish:
+      - Mark **Clone, build, and upload template site** as `in_progress`.
+      - If seed data is present, mark **Apply template seed data** as `in_progress` and launch the seed-data workstream with `Task` using `run_in_background: true`. The background task must only fetch, apply, and verify seed data. It must not clone, build, upload, activate, update the shared status file, ask the user questions, or retry failed writes.
+      - Run the site-provisioning wrapper in the main conversation while the seed-data task runs. These workstreams are independent after the supporting solution import creates the required Dataverse tables.
+
+      When seed data is present, update the status page:
+      ```json
+      { "state": "running", "phase": "siteAndSeed", "message": "Creating template site and seeding data" }
+      ```
+      When seed data is absent, update it with:
       ```json
       { "state": "running", "phase": "site", "message": "Cloning, building, and uploading template site" }
       ```
@@ -525,8 +534,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --outputDirectory "<TEMPLATE_CLONE_OUTPUT_DIRECTORY>" \
         --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      Treat the wrapper as the sole template-site provisioning entry point. On success, save the returned `clonedPath` as both `CLONED_TEMPLATE_SITE_PATH` and `PROJECT_ROOT`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
-   10. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
+      Treat the wrapper as the sole template-site provisioning entry point. Do not rerun its underlying `pac`, `npm`, or build commands directly for diagnosis. Never pipe a mutating command such as `pac pages clone` or `pac pages upload-code-site` through `head`, `tail`, or another consumer that can close the output stream before the command finishes. The wrapper safely captures a bounded diagnostic tail without interrupting the command. On success, save the returned `clonedPath` as both `CLONED_TEMPLATE_SITE_PATH` and `PROJECT_ROOT`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
+   10. In the seed-data background task, run:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
+       ```
+       If the result is `ok: true`, use `localDir` as the seed directory:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
+       ```
+       Return the JSON summary (`inserted`, `failed`, `skipped`, `errors`) to the main conversation. Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`.
+   11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
+   12. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_failure \
@@ -538,6 +557,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --errorClass "<PacPagesClone|NpmInstall|NpmBuild|CompiledOutput|PacPagesUploadCodeSite>" \
          --errorDescription "<short non-PII failure category>"
        ```
+       Update the status page before firing the recovery gate:
+       ```json
+       { "state": "error", "phase": "site", "message": "Template site creation failed" }
+       ```
+       Diagnose the failure only from the wrapper's returned `step`, `error`, and preserved local path. Do not rerun the wrapper or any underlying command until the user chooses a recovery option.
        Then fire this gate:
 
       <!-- gate: create-site:1.5.clone-failed | category=progress | cancel-leaves=partial-template-clone -->
@@ -553,7 +577,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       | The template site could not be cloned, built, or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
       Do not retry automatically. For **Retry site creation**, ask for a new empty directory using the same **Project Location** prompt, update `TEMPLATE_CLONE_OUTPUT_DIRECTORY`, and rerun the wrapper. If the user falls back to from-scratch, explain that local files, supporting solutions, or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
-   11. When clone, build, and upload succeed, mark **Clone, build, and upload template site** as `completed` and run `template_clone_success` telemetry silently:
+   13. When clone, build, and upload succeed, mark **Clone, build, and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_success \
@@ -563,21 +587,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --audience "<internal|external from Phase 1 discovery>"
        ```
        Do not include the site name, clone path, URL, or Website Record ID in telemetry.
-   12. Mark **Show inactive template site** as `in_progress`. Tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). It is not activated yet. Seed data and activation are next." Mark **Show inactive template site** as `completed`.
-   13. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and update the status page:
-      ```json
-      { "state": "running", "phase": "seed", "message": "Seeding template data" }
-      ```
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
-       ```
-       If the result is `ok: true`, use `localDir` as the seed directory. If the result is `ok: false`, surface the error and continue to activation; seed-data fetch is best-effort.
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
-       ```
-       Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
-       Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
-   14. Mark **Apply template seed data** as `completed` or skipped.
+   14. Mark **Show inactive template site** as `in_progress`. Tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). It is not activated yet. Seed-data processing is complete, and activation is next." If the template has no seed data, say that instead of implying records were inserted. Mark **Show inactive template site** as `completed`.
    15. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
        ```json
        { "state": "running", "phase": "activation", "message": "Activating template site" }
@@ -1299,8 +1309,8 @@ When `TEMPLATE_SOLUTIONS_TO_IMPORT` contains exactly one entry, use the task sub
 |-------------|------------|-------------|
 | Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
 | Clone, build, and upload template site | Creating template site | Clone the packaged SPA source into the selected local directory, install dependencies, build and verify the configured compiled output, then upload the resulting code site |
-| Show inactive template site | Showing template site | Use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
-| Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
+| Apply template seed data | Applying seed data | In parallel with site creation, insert optional template seed records using the deterministic seed-data script; failures do not block activation |
+| Show inactive template site | Showing template site | After site creation and seeding join, use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
 
