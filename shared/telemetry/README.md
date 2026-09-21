@@ -86,7 +86,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **PAC + agent (when available, otherwise omitted):**
 
 - `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` is passed to the plugin resolver — power-pages uses it for Artemis region routing)
-- `pacCliVersion` — semver from `pac --version`
+- `pacCliVersion` — semver from the `pac help` version banner
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
 **Per-event:**
@@ -144,7 +144,7 @@ shared/telemetry/
 │  ├─ user-config.js         # reads/writes the per-plugin telemetry opt-out in config.json
 │  ├─ telemetry-config.js    # CLI behind /<plugin>:telemetry on|off|status
 │  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId / cloud
-│  ├─ agent-info.js          # detects AI agent host + reads `pac --version`
+│  ├─ agent-info.js          # detects AI agent host + reads `pac help`
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)

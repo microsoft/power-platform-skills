@@ -20,6 +20,10 @@ issue codes. It does not inspect accounts, tokens, projects, subscriptions,
 tenants, environments, MCP connections, cloud permissions, signing assets, or
 physical devices.
 
+PAC CLI availability is proved with the non-interactive `pac help` command.
+PAC does not provide a portable `pac --version` command; when the help banner
+contains `Version: <value>`, the probe records that bounded value.
+
 An exit code of `0` means every local prerequisite checked for that stage is
 ready. Exit code `2` means one or more local prerequisites are missing or
 unsupported. A successful local probe does **not** prove that an MCP server is

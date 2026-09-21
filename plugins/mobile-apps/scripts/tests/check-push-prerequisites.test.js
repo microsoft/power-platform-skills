@@ -5,8 +5,10 @@ const test = require('node:test');
 const {
   STAGE_REQUIREMENTS,
   checkStage,
+  commandSpec,
   parseArgs,
   probeNode,
+  probeVersion,
   sanitizeVersion,
 } = require('../check-push-prerequisites');
 
@@ -98,6 +100,39 @@ test('flow readiness reports each independently missing local command', () => {
   );
 });
 
+test('PAC readiness uses the supported help command and parses its version banner', () => {
+  assert.deepEqual(commandSpec('pac'), {
+    command: 'pac',
+    args: ['help'],
+  });
+
+  const calls = [];
+  const result = checkStage('flow-authoring', {
+    nodeVersion: 'v22.14.0',
+    spawnSync(command, args) {
+      calls.push({ command, args });
+      if (command === 'pac') {
+        return {
+          status: 0,
+          stdout: 'Microsoft PowerPlatform CLI\nVersion: 1.46.2+g1234567\n',
+          stderr: '',
+        };
+      }
+      return { status: 0, stdout: `${command} 1.2.3\n`, stderr: '' };
+    },
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(
+    calls.find(({ command }) => command === 'pac'),
+    { command: 'pac', args: ['help'] },
+  );
+  assert.equal(
+    result.checks.find(({ name }) => name === 'pac').version,
+    '1.46.2+g1234567',
+  );
+});
+
 test('unsupported Node and non-macOS Xcode use stable categories', () => {
   assert.deepEqual(probeNode({ nodeVersion: 'v18.20.0' }), {
     name: 'node',
@@ -132,4 +167,8 @@ test('iOS verification does not unnecessarily require Xcode after build', () => 
 test('version output is bounded and strips unsafe punctuation', () => {
   assert.equal(sanitizeVersion('tool 1.2.3\nsecret=ignored'), 'tool 1.2.3');
   assert.equal(sanitizeVersion('{"azure-cli":"2.0"}'), 'azure-cli2.0');
+  assert.equal(
+    probeVersion('pac', 'Microsoft PowerPlatform CLI\nVersion: 1.46.2+g1234567\n'),
+    '1.46.2+g1234567',
+  );
 });

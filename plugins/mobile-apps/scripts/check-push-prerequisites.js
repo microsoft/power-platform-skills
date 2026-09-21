@@ -46,12 +46,24 @@ function sanitizeVersion(value) {
   return firstLine.replace(/[^\w.+() /-]/g, '').slice(0, 120) || null;
 }
 
+function probeVersion(name, value) {
+  const output = String(value || '');
+  if (name === 'pac') {
+    // `pac` has no portable `--version` command. Its non-interactive help banner
+    // includes a line such as `Version: 1.46.2+g...`, so use that when present.
+    const match = output.match(/^\s*Version:\s*(.+?)\s*$/im);
+    if (match) return sanitizeVersion(match[1]);
+  }
+  return sanitizeVersion(output);
+}
+
 function commandSpec(name, options = {}) {
   switch (name) {
     case 'npm':
     case 'npx':
-    case 'pac':
       return { command: name, args: ['--version'] };
+    case 'pac':
+      return { command: name, args: ['help'] };
     case 'gcloud':
       return buildGcloudProcessInvocation(['--version'], options);
     case 'az':
@@ -95,7 +107,7 @@ function probeCommand(name, options = {}) {
     name,
     status: 'ready',
     code: null,
-    version: sanitizeVersion(result.stdout || result.stderr),
+    version: probeVersion(name, result.stdout || result.stderr),
   };
 }
 
@@ -240,5 +252,6 @@ module.exports = {
   parseArgs,
   probeCommand,
   probeNode,
+  probeVersion,
   sanitizeVersion,
 };
