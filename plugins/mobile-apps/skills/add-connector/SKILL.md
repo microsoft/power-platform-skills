@@ -66,14 +66,14 @@ Common connector API names:
 **Cloud flows are supported by the Power Apps CLI, but they are not connector data sources.** If the user wants to invoke an existing Power Automate cloud flow from the app, use the flow-specific commands instead of `app add data-source`:
 
 ```bash
-npx pa app list-flows --search '<flow-name-or-keyword>' --non-interactive
-npx pa app add flow --flow-id <flow-guid> --non-interactive
+npx --no-install pa app list-flows --search '<flow-name-or-keyword>' --non-interactive
+npx --no-install pa app add flow --flow-id <flow-guid> --non-interactive
 ```
 
 To remove a flow later:
 
 ```bash
-npx pa app remove flow --flow-id <flow-guid> --force --non-interactive
+npx --no-install pa app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 After `app add flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
@@ -91,43 +91,43 @@ Run the `/list-connections` skill with the connector API ID (for example `shared
 
 | Connector shape | Examples | Required discovery | Add command |
 | --- | --- | --- | --- |
-| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive` |
-| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `connection list-datasets`, then `connection list-tables` | `npx pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive` |
-| SQL stored procedure | SQL Server | `connection list-datasets`, then `connection list-procedures` if needed | `npx pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive` |
+| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive` |
+| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `connection list-datasets`, then `connection list-tables` | `npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive` |
+| SQL stored procedure | SQL Server | `connection list-datasets`, then `connection list-procedures` if needed | `npx --no-install pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive` |
 
 **For action-style connectors, print before starting:**
-> "→ Running `npx pa app add data-source --non-interactive` for <connector>. ~10–30 seconds (writes generated services + connector schemas)."
+> "→ Running `npx --no-install pa app add data-source --non-interactive` for <connector>. ~10–30 seconds (writes generated services + connector schemas)."
 
 Then run:
 
 ```bash
-npx pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive
+npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive
 ```
 
 **For table-based connectors, discover datasets and tables first:**
 
 ```bash
-npx pa connection list-datasets --connector <apiId> --connection-id <connectionId> --non-interactive
-npx pa connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --non-interactive
+npx --no-install pa connection list-datasets --connector <apiId> --connection-id <connectionId> --non-interactive
+npx --no-install pa connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --non-interactive
 ```
 
 Present the datasets/tables to the user if they did not specify them. Add one data source per selected table:
 
 ```bash
-npx pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive
+npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive
 ```
 
 **For SQL stored procedures, discover procedures only when the user asks to invoke a stored procedure rather than a table:**
 
 ```bash
-npx pa connection list-procedures --connection-id <connectionId> --dataset '<database>' --non-interactive
-npx pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive
+npx --no-install pa connection list-procedures --connection-id <connectionId> --dataset '<database>' --non-interactive
+npx --no-install pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive
 ```
 
 **For Dataverse actions/functions rather than tables, discovery is available but this plugin only adds Dataverse table CRUD:**
 
 ```bash
-npx pa app find-dataverse-api --search '<operation-name>' --json --non-interactive
+npx --no-install pa app find-dataverse-api --search '<operation-name>' --json --non-interactive
 ```
 
 Surface the matching operation metadata and STOP with a clear note that this plugin can add Dataverse table CRUD through `/add-dataverse`, but does not add Dataverse actions/functions.
@@ -136,6 +136,8 @@ If the user actually needs Dataverse table CRUD, stop and delegate to `/add-data
 
 **Parameter reference:**
 
+- `--no-install` — npm execution flag, placed before `pa`; use the project-local grouped shim after the shared local CLI gate succeeds.
+- `--non-interactive` — required on every Power Apps CLI invocation; fail fast instead of prompting. This does not replace `--no-install` or `--force` on supported remove commands.
 - `--connector` — connector API ID (often `shared_<connector>`, e.g., `shared_office365users`). Use the exact value provided by the caller or connector docs.
 - `--connection-id` / `-c` — required for non-Dataverse connectors unless using `--connection-ref`. Get from `connection create`, the maker portal, or caller context.
 - `--connection-ref` / `-cr` — optional connection reference name when adding into a solution-aware app.
@@ -174,7 +176,7 @@ Help the user write code using the generated service methods.
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify the new connector wires in cleanly (~10–20 seconds)."
 
-`npx pa app add data-source --non-interactive` (Step 3) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking so the new connector is wired into the runtime schema map:
+`npx --no-install pa app add data-source --non-interactive` (Step 3) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking so the new connector is wired into the runtime schema map:
 
 ```bash
 npm run generate-schemas
@@ -194,9 +196,9 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
 
 ```bash
-npx pa app remove data-source --connector <apiId> --name '<data-source-or-table-name>' --force --non-interactive
-npx pa app remove data-source --connector shared_sql --name '<procedure>' --force --non-interactive
-npx pa app remove flow --flow-id <flow-guid> --force --non-interactive
+npx --no-install pa app remove data-source --connector <apiId> --name '<data-source-or-table-name>' --force --non-interactive
+npx --no-install pa app remove data-source --connector shared_sql --name '<procedure>' --force --non-interactive
+npx --no-install pa app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting success.
@@ -213,5 +215,5 @@ No separate executor or provider wiring is needed — Dataverse and non-Datavers
 
 ## Notes
 
-- Generated files in `src/generated/` are produced directly by `npx pa app add data-source --non-interactive`. Differences in behavior come from runtime wiring in this mobile plugin.
+- Generated files in `src/generated/` are produced directly by `npx --no-install pa app add data-source --non-interactive`. Differences in behavior come from runtime wiring in this mobile plugin.
 - This skill never modifies `app.config.js` or `playerConfig.ts` — connector discovery is dynamic at runtime.

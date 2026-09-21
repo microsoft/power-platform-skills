@@ -26,6 +26,11 @@ connector wiring.
 	npm install
 	```
 
+	Before running Power Apps commands, ensure the project has
+	`node_modules/.bin/pa` or `node_modules/.bin/pa.cmd`. If missing, stop and
+	restore the declared dependencies or migrate an older template. Keep
+	`--no-install` on every invocation; do not install the unrelated `pa` package.
+
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
 	For GitHub Copilot in VS Code:
@@ -199,7 +204,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `distPath` to `dist-web` in `power.config.json`, then run
-`npx pa app push --non-interactive`. Ensure the Code App and Mobile App have
+`npx --no-install pa app push --non-interactive`. Ensure the Code App and Mobile App have
 different app IDs by removing the `appId` field before pushing the app.
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages

@@ -66,7 +66,6 @@ test('pinned grouped pa CLI initializes MobileApp and emits a verifiable Dataver
     'index.html',
     '--app-url',
     'http://localhost:8081',
-    '--json',
   ]);
   const config = JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8'));
   assert.equal(config.appType, 'MobileApp');
@@ -81,7 +80,6 @@ test('pinned grouped pa CLI initializes MobileApp and emits a verifiable Dataver
     environmentUrl,
     '--table',
     'systemuser',
-    '--json',
   ]);
 
   const services = verifyDataverseServices(root, ['systemuser']);

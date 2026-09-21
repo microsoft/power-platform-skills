@@ -105,4 +105,4 @@ At execution time, each confirmed connector maps to a skill invocation:
 | SharePoint Online | `/add-sharepoint` |
 | Any other non-Dataverse connector | `/add-connector <api-name>` |
 
-`/add-connector` owns the `npx pa app add data-source --non-interactive` call for its connector. The orchestrator never calls `npx pa app add data-source --non-interactive` directly.
+`/add-connector` owns the `npx --no-install pa app add data-source --non-interactive` call for its connector. The orchestrator never calls `npx --no-install pa app add data-source --non-interactive` directly.

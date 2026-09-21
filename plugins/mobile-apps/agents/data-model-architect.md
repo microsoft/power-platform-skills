@@ -38,8 +38,8 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT run `npx pa app add data-source --connector dataverse --org-url <envUrl> --table <table> --non-interactive`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx pa *` command; retry the original command once after auth is corrected.
+- **Read-only.** You MUST NOT run `npx --no-install pa app add data-source --connector dataverse --org-url <envUrl> --table <table> --non-interactive`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx --no-install pa *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Use exact target metadata for every
   proposed table, including standard tables, and prefer reuse > extension >
   new. In planning-snapshot-only mode that evidence comes only from the validated

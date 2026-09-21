@@ -33,8 +33,8 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT create Dataverse tables, run `npx pa app add data-source --non-interactive`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx pa *` command; retry the original command once after auth is corrected.
+- **Read-only.** You MUST NOT create Dataverse tables, run `npx --no-install pa app add data-source --non-interactive`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx --no-install pa *` command; retry the original command once after auth is corrected.
 - **Single human plan document.** Everything user-reviewed goes into
   `<working_dir>/native-app-plan.md`. Deterministic execution uses the
   normalized schema contract plus the gate-owned
@@ -827,7 +827,7 @@ Sections approved:
 Next steps for the orchestrator:
   1. Auth + environment selection
   2. Use the user-prepared fresh template folder materialized from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` with `degit`
-  3. npx pa app init --app-type MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
+  3. npx --no-install pa app init --app-type MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
   4. If Dataverse was approved, apply data model via /add-dataverse using the plan
   5. Apply native capabilities via /add-native using the plan
   6. Apply connectors via /add-connector per connector using the plan

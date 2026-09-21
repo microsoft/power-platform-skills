@@ -6,7 +6,7 @@ Does NOT apply to `/add-dataverse` — Dataverse uses the runtime's built-in exe
 
 ## Connection ID or reference (required)
 
-All non-Dataverse connectors require either a **connection ID** (`--connection-id` / `-c`) or a **connection reference** (`--connection-ref` / `-cr`) when adding via `npx pa app add data-source --non-interactive`. Without one, the command fails with:
+All non-Dataverse connectors require either a **connection ID** (`--connection-id` / `-c`) or a **connection reference** (`--connection-ref` / `-cr`) when adding via `npx --no-install pa app add data-source --non-interactive`. Without one, the command fails with:
 
 ```
 CONNECTION_ID argument is required for connector data sources
@@ -21,8 +21,8 @@ Use one of these supported paths:
 - Otherwise create a connection with `connection create` and use the returned `connectionId`.
 
 ```bash
-npx pa connection create --connector <apiId> --json --non-interactive
-npx pa connection list-references --solution-id <solutionId> --non-interactive
+npx --no-install pa connection create --connector <apiId> --json --non-interactive
+npx --no-install pa connection list-references --solution-id <solutionId> --non-interactive
 ```
 
 With `--json`, `connection create` prints `{ "connectionId": "...", "displayName": "..." }` on success. Browser-based connection creation is disabled by default in the CLI; if a connector is not SSO-eligible and interactive browser creation is required, set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` before running the command, or create the connection in the maker portal.
@@ -34,7 +34,7 @@ If `connection create` fails because browser-based connection creation is disabl
 1. Construct the URL using the active environment ID from `power.config.json`:
    `https://make.powerapps.com/environments/<environment-id>/connections`
 2. Direct the user to **+ New connection** → search for the connector → sign in / consent.
-3. Capture the connection ID from the portal or rerun `npx pa connection create --connector <apiId> --json --non-interactive` if the connector can now complete.
+3. Capture the connection ID from the portal or rerun `npx --no-install pa connection create --connector <apiId> --json --non-interactive` if the connector can now complete.
 
 ### Step 3 — Add the data source
 
@@ -42,19 +42,19 @@ Use long-form flags. Run from the app root after `power.config.json` exists, and
 
 ```bash
 # Non-tabular connectors (Teams, Office 365 Users, Azure DevOps, etc.)
-npx pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive
+npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --non-interactive
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) — also need dataset and resource name
-npx pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive
+npx --no-install pa app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>' --non-interactive
 
 # SQL stored procedures
-npx pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive
+npx --no-install pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive
 ```
 
 **Dataverse is different** — never needs a connection ID, but non-interactive
 generation requires the Dataverse URL resolved for the configured environment:
 ```bash
-npx pa app add data-source --connector dataverse --org-url <environmentUrl> --table <table-logical-name> --non-interactive
+npx --no-install pa app add data-source --connector dataverse --org-url <environmentUrl> --table <table-logical-name> --non-interactive
 ```
 
 ## Common connector apiId values
@@ -76,9 +76,9 @@ These are common connector API IDs you may see in connection output:
 ## Discovering datasets and tables (tabular connectors)
 
 ```bash
-npx pa connection list-datasets --connector <apiId> --connection-id <connectionId> --non-interactive
-npx pa connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --non-interactive
-npx pa connection list-procedures --connection-id <connectionId> --dataset '<database>' --non-interactive
+npx --no-install pa connection list-datasets --connector <apiId> --connection-id <connectionId> --non-interactive
+npx --no-install pa connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --non-interactive
+npx --no-install pa connection list-procedures --connection-id <connectionId> --dataset '<database>' --non-interactive
 ```
 
 For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoint.com/sites/sales`). The **table** is the list display name.
@@ -88,18 +88,18 @@ For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoi
 Use these instead of hand-rolled discovery when they match the user's goal:
 
 ```bash
-npx pa connection list-references --solution-id <solutionId> --non-interactive
-npx pa app list-environment-variables --non-interactive
-npx pa app list-flows --search '<flow-name-or-keyword>' --non-interactive
-npx pa app find-dataverse-api --search '<operation-name>' --json --non-interactive
-npx pa connection create --connector <apiId> --json --non-interactive
+npx --no-install pa connection list-references --solution-id <solutionId> --non-interactive
+npx --no-install pa app list-environment-variables --non-interactive
+npx --no-install pa app list-flows --search '<flow-name-or-keyword>' --non-interactive
+npx --no-install pa app find-dataverse-api --search '<operation-name>' --json --non-interactive
+npx --no-install pa connection create --connector <apiId> --json --non-interactive
 ```
 
 Cloud flows are added with `app add flow`, not `app add data-source`:
 
 ```bash
-npx pa app add flow --flow-id <flow-guid> --non-interactive
-npx pa app remove flow --flow-id <flow-guid> --force --non-interactive
+npx --no-install pa app add flow --flow-id <flow-guid> --non-interactive
+npx --no-install pa app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
