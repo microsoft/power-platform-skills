@@ -24,23 +24,23 @@ const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
 const { classifyOps } = require('./lib/op-diff.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const snapStore = require('./lib/apply-snapshot-store.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
-function makeSdk(env) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-'));
   try {
     const sdk = createMakerSdk({
-      workspacePath: sdkTempDir,
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
       instanceUrl: env,
       httpClient,
     });
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     const cleanup = () => {
       fs.rmSync(sdkTempDir, { recursive: true, force: true });
     };
@@ -118,15 +118,27 @@ async function teardownModelApp(spec, opts, deps) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = (typeof flags.spec === 'string' ? flags.spec : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
-  if (!env || !specArg || flags.workspace === true) {
-    process.stderr.write(
-      'Usage: node scripts/teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n' +
-      '  Note: --workspace only controls the optional --clear-workspace cleanup; teardown itself uses a throwaway SDK workspace.\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n' +
+    '  Note: --workspace only controls the optional --clear-workspace cleanup; teardown itself uses a throwaway SDK workspace.';
+  // Strictness matters more here than anywhere else: this tool deletes. A mistyped
+  // `--allow-destructiv` was previously dropped in silence, and the safety flag the operator
+  // believed they had passed simply did not exist.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'spec', 'apply', 'allow-destructive', 'clear-workspace', 'workspace'],
+    needValue: ['env', 'spec', 'workspace'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  const workspaceArg = flags.workspace;
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
@@ -134,7 +146,7 @@ async function main() {
   const apply = flags.apply === true;
   const allowDestructive = flags['allow-destructive'] === true;
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const { sdk, cleanup } = makeSdk(env);
+  const { sdk, cleanup } = await makeSdk(env);
   let r;
   let thrown = null;
   try {

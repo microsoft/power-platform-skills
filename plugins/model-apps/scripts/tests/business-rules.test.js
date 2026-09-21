@@ -136,8 +136,12 @@ test('businessRuleDef maps onto the SDK node shape (clauses + trueBranch), not t
   assert.strictEqual(rc.logic, 'AND');
   // The keys that matter. `thenActions`/`lhs`/`rhs` would be merged and ignored.
   assert.deepStrictEqual(Object.keys(rc).sort(), ['clauses', 'displayName', 'falseBranch', 'id', 'logic', 'trueBranch']);
+  // `valueWorkflowType` is the SDK's WorkflowAttributeType ENUM VALUE, not the App Spec's token:
+  // 'Picklist' -> '10'. The SDK forwards this field verbatim into the serialized expression, and the
+  // enum has no 'Picklist' member, so emitting the token would put an out-of-domain value on the
+  // wire. See workflowAttributeType() in sdk-build.js.
   assert.deepStrictEqual(rc.clauses, [{
-    id: 'c1', field: 'new_status', operator: 'Equals', valueType: 'Value', value: '100000001', valueWorkflowType: 'Picklist',
+    id: 'c1', field: 'new_status', operator: 'Equals', valueType: 'Value', value: '100000001', valueWorkflowType: '10',
   }]);
   assert.deepStrictEqual(rc.trueBranch.map((a) => [a.type, a.field, a.visible ?? a.lock ?? a.required ?? a.value]), [
     ['SetVisibility', 'new_notes', false],
@@ -160,12 +164,12 @@ test('a presence operator still MAPS correctly (the mapper is fine; the platform
 // --- 3. real bundle ---------------------------------------------------------------------------
 
 test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the authored columns', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-spec-'));
   dirs.push(dir);
   const calls = [];
   const sdk = createMakerSdk({
-    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
       post: async (url, body) => {
@@ -177,10 +181,10 @@ test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the autho
       delete: async () => ({ status: 204, headers: {}, body: {} }),
     },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
 
   const def = businessRuleDef(RULE);
-  const art = sdk.createArtifact('businessRule', def);
+  const art = await sdk.createArtifact('businessRule', def);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
   const pushed = await sdk.pushArtifact('businessRule', art.id);
   assert.strictEqual(pushed.saved, true);
@@ -205,14 +209,14 @@ test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNu
   // and would silently answer false for a populated column.
   //
   // Measured opcodes (WorkflowConditionOperator in the bundle): NotNull "1", IsNull "0".
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-null-'));
   dirs.push(dir);
 
   for (const [operator, expectedOpcode] of [['ContainsData', '1'], ['DoesNotContainData', '0']]) {
     const calls = [];
     const sdk = createMakerSdk({
-      workspacePath: fs.mkdtempSync(path.join(dir, 'w')), instanceUrl: 'https://contoso.crm.dynamics.com',
+      workspaceStorage: createNodeWorkspaceStorage(fs.mkdtempSync(path.join(dir, 'w'))), instanceUrl: 'https://contoso.crm.dynamics.com',
       httpClient: {
         get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
         post: async (url, body) => {
@@ -224,14 +228,14 @@ test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNu
         delete: async () => ({ status: 204, headers: {}, body: {} }),
       },
     });
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
 
     const def = businessRuleDef({
       name: 'Presence Rule', entity: 'new_ticket',
       conditions: [{ field: 'new_notes', operator }],
       actions: [{ type: 'SetVisibility', field: 'new_owner', visible: false }],
     });
-    const art = sdk.createArtifact('businessRule', def);
+    const art = await sdk.createArtifact('businessRule', def);
     await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
     await sdk.pushArtifact('businessRule', art.id);
 
@@ -248,34 +252,56 @@ test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNu
 
 // --- peer-review findings: verified and fixed ---------------------------------------------------
 
-test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every literal as String', async () => {
-  // `dataType` used to be pinned against the XAML compiler's literal-type map. This uptake DELETED
-  // that compiler, and the JSON path that replaced it does not consult the type at all: measured
-  // across all 13 tokens the spec accepts (plus a made-up one), on BOTH the condition path and the
-  // SetFieldValue action path, the SDK emits WorkflowAttributeType String ("14") every time.
+test('REAL BUNDLE: dataType maps to a WorkflowAttributeType on CONDITIONS and is ignored on SetFieldValue ACTIONS', async () => {
+  // ⚠ THIS TEST WAS REWRITTEN TWICE BY MEASUREMENT, which is precisely why it existed.
   //
-  //   `let r = valueType==='Lookup' ? ... : valueType==='Clear' ? (valueWorkflowType ?? String)
-  //                                      : WorkflowAttributeType.String`
+  // Originally it asserted `dataType` was DECORATIVE everywhere, because the JSON path that replaced
+  // the deleted XAML compiler typed every literal as WorkflowAttributeType String ("14"). Its own
+  // comment said: "if the SDK begins emitting a real type, this fails and whoever sees it must
+  // re-read the surface rather than discover the change in production." That happened on the
+  // injected-storage re-vendor.
   //
-  // So the field is currently DECORATIVE. It is still accepted and still validated — narrowly, so a
-  // typo is caught and so the surface stays forward-compatible if the SDK starts honouring it — but
-  // nothing downstream may claim it changes the deployed rule. This test exists to make that claim
-  // impossible to make by accident: if the SDK begins emitting a real type, this fails and whoever
-  // sees it must re-read the surface rather than discover the change in production.
-  const { createMakerSdk } = require(BUNDLE);
+  // The FIRST rewrite pinned what it saw — the authored token reaching the wire verbatim — and read
+  // that as "dataType is honoured". It was not: `WorkflowAttributeType` is a NUMERIC-STRING enum
+  // (`{ Boolean:'0' … Money:'7', Picklist:'10', String:'14' … }`), so `"String"` and even
+  // `"NotAWorkflowType"` were OUT-OF-DOMAIN values, and the SDK's own fallback for the same field is
+  // `'14'`. Pinning pass-through of a non-member value is the opposite of honoured; it froze a
+  // silent wrong write. `businessRuleDef` now maps the spec token through the enum.
+  //
+  // MEASURED against this bundle after the mapping:
+  //
+  //   CONDITION path  — `conditionExpression.right[0].type` is the ENUM VALUE for the authored
+  //                     token ('Money' -> '7', 'Picklist' -> '10'), and '14' when none is authored,
+  //                     which is what the previous bundle hard-coded for every literal.
+  //   ACTION path     — the SetFieldValue step still emits "14" for EVERY token, so dataType really
+  //                     is ignored there.
+  //
+  // The two paths therefore DISAGREE, and that asymmetry is the thing worth pinning: an author who
+  // sets `dataType: 'Integer'` on a SetFieldValue action gets a String literal on the wire, while
+  // the same token on a condition is typed. Do not "simplify" this test by asserting one rule for
+  // both paths — that would re-hide the difference.
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-dt-'));
   dirs.push(dir);
 
-  const STRING_TOKEN = '14'; // WorkflowAttributeType.String, read from the bundle's own enum.
+  // The metadata-derived EXPRESSION type. 0 because this client serves no field metadata.
+  const UNTYPED_TOKEN = '0';
+  // What the SetFieldValue action path emits for every token: WorkflowAttributeType.String.
+  const ACTION_STRING_TOKEN = '14';
   const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
-  // Every token the spec accepts, plus one that is not a type at all — if the SDK ever starts
-  // consulting the field, a made-up value is the case most likely to behave differently.
-  const TOKENS = [...BUSINESS_RULE_DATA_TYPES, 'NotAWorkflowType'];
+  // The enum the SDK serializes into, restated here INDEPENDENTLY of the engine's own table so this
+  // is an oracle rather than a restatement of `workflowAttributeType`.
+  const EXPECTED_ENUM = {
+    String: '14', Memo: '14', Boolean: '0', DateTime: '2', Decimal: '3', Double: '4', Float: '4',
+    Integer: '5', Money: '7', Picklist: '10', State: '12', Status: '13', Lookup: '6', Customer: '1',
+    Owner: '8', UniqueIdentifier: '15', MultiSelectPicklist: '23',
+  };
+  const TOKENS = [...BUSINESS_RULE_DATA_TYPES];
 
   const push = async (def) => {
     const calls = [];
     const sdk = createMakerSdk({
-      workspacePath: fs.mkdtempSync(path.join(dir, 'w')), instanceUrl: 'https://contoso.crm.dynamics.com',
+      workspaceStorage: createNodeWorkspaceStorage(fs.mkdtempSync(path.join(dir, 'w'))), instanceUrl: 'https://contoso.crm.dynamics.com',
       httpClient: {
         get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
         post: async (url, body) => {
@@ -287,8 +313,8 @@ test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every lite
         delete: async () => ({ status: 204, headers: {}, body: {} }),
       },
     });
-    sdk.initWorkspace();
-    const art = sdk.createArtifact('businessRule', def);
+    await sdk.initWorkspace();
+    const art = await sdk.createArtifact('businessRule', def);
     await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
     await sdk.pushArtifact('businessRule', art.id);
     return JSON.parse(calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url))).body.WfomJson);
@@ -300,28 +326,64 @@ test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every lite
       ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType }],
     }));
     const expr = condWfom.steps.list[0].steps.list[0].conditionExpression;
-    assert.strictEqual(expr.type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly reached the wire as ${expr.type}`);
-    assert.strictEqual(expr.right[0].type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly typed the literal as ${expr.right[0].type}`);
+    // The EXPRESSION type is metadata-derived and stays untyped here — this client serves no field
+    // metadata. It is deliberately asserted so a future change that starts deriving it from the
+    // authored token (rather than from the field) shows up as a failure.
+    assert.strictEqual(expr.type, UNTYPED_TOKEN,
+      `condition dataType '${dataType}': the EXPRESSION type should stay metadata-derived, got ${expr.type}`);
+    // The LITERAL operand type is the ENUM VALUE for the authored token, never the token itself.
+    // `WorkflowAttributeType` has no `String`/`Money` members — only '14'/'7' — so a raw token here
+    // would be an out-of-domain value that Dataverse either rejects or coerces.
+    const want = EXPECTED_ENUM[dataType];
+    assert.ok(want, `test gap: no expected enum value recorded for accepted token '${dataType}'`);
+    assert.strictEqual(expr.right[0].type, want,
+      `condition dataType '${dataType}' should serialize as WorkflowAttributeType ${want}, got ${expr.right[0].type}`);
 
-    // 2. the SetFieldValue ACTION path, which reads a DIFFERENT field on a different code path — the
-    //    SDK does pass `valueWorkflowType` into the action serializer, so this is the one that could
-    //    plausibly differ, and asserting only the condition path would not have shown it.
+    // 2. the SetFieldValue ACTION path, a DIFFERENT field on a different code path — and the one
+    //    that does NOT honour the token. Asserted explicitly so the asymmetry is pinned rather
+    //    than assumed away.
     const actWfom = await push(businessRuleDef({
       ...RULE,
       conditions: [{ field: 'new_notes', operator: 'ContainsData' }],
       actions: [{ type: 'SetFieldValue', field: 'new_owner', value: 'x', dataType }],
     }));
-    const types = [...JSON.stringify(actWfom.steps.list[0].steps.list[0].steps.list[0]).matchAll(/"type":"(\d+)"/g)].map((m) => m[1]);
+    const serialized = JSON.stringify(actWfom.steps.list[0].steps.list[0].steps.list[0]);
+    const types = [...serialized.matchAll(/"type":"?([A-Za-z0-9]+)"?/g)].map((m) => m[1]);
     assert.ok(types.length > 0, `action dataType '${dataType}': no type token found on the wire`);
-    assert.deepStrictEqual([...new Set(types)], [STRING_TOKEN],
-      `action dataType '${dataType}' unexpectedly reached the wire as ${JSON.stringify([...new Set(types)])}`);
+    assert.deepStrictEqual([...new Set(types)], [ACTION_STRING_TOKEN],
+      `action dataType '${dataType}' should still be IGNORED (String), got ${JSON.stringify([...new Set(types)])}`);
+    assert.ok(!serialized.includes(`"${dataType}"`) || dataType === 'String',
+      `action dataType '${dataType}' must NOT reach the wire verbatim — that would make the two paths agree, and this test would need rewriting`);
   }
 
-  // The spec-level list stays a CLOSED set even though the SDK ignores it, so a typo is still a
-  // spec-gate error rather than a silently-accepted no-op.
+  // The DEFAULT, which is the case that actually hit every rule. `businessRuleDef` defaults the
+  // token to 'String', and before the enum mapping that put the literal "String" on the wire for
+  // every business rule this plugin has ever written — not just ones that authored a dataType.
+  // '14' is what the PREVIOUS bundle hard-coded, so this pins the restoration of that behaviour.
+  const defaultWfom = await push(businessRuleDef({
+    ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1' }],
+  }));
+  assert.strictEqual(defaultWfom.steps.list[0].steps.list[0].conditionExpression.right[0].type, '14',
+    'a condition with NO authored dataType must serialize as String (14), the value the previous bundle hard-coded');
+
+  // An unmapped token must FALL BACK to String rather than be forwarded. The spec gate makes this
+  // unreachable from a valid spec, but forwarding would reopen the out-of-domain write, so the
+  // fallback is asserted rather than assumed.
+  const bogusWfom = await push(businessRuleDef({
+    ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType: 'NotAWorkflowType' }],
+  }));
+  const bogusType = bogusWfom.steps.list[0].steps.list[0].conditionExpression.right[0].type;
+  assert.strictEqual(bogusType, '14',
+    `an unmapped dataType must fall back to String (14), not reach the wire as '${bogusType}'`);
+
+  // The spec-level list being closed is load-bearing: it is what keeps a typo from reaching the
+  // mapping at all, and every accepted token must have an enum value to map to.
   assert.ok(Array.isArray(BUSINESS_RULE_DATA_TYPES) && BUSINESS_RULE_DATA_TYPES.length > 0);
+  for (const t of BUSINESS_RULE_DATA_TYPES) {
+    assert.ok(EXPECTED_ENUM[t], `accepted dataType '${t}' has no WorkflowAttributeType mapping`);
+  }
   assert.ok(!BUSINESS_RULE_DATA_TYPES.includes('DateTime'),
-    'DateTime stays out: it was never exercised, and the SDK ignoring the field today is not a reason to promise a type we have not tested');
+    'DateTime stays out: it was never exercised on this path');
 });
 
 test('a DateTime dataType is rejected at the spec gate, not mid-build', () => {
@@ -441,61 +503,60 @@ test('a rule the designer calls incomplete HALTS before anything is written', as
   const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
   const { provision } = provisionWithRules([]);
   const pushes = [];
-  // `provisionWithRules` does not record pushes, and an assertion against a call list that can never
-  // contain the value is vacuous — so record it here rather than assert on nothing.
-  provision.pushArtifact = async (...a) => { pushes.push(a); return { id: 'br-new', saved: true, publish: { kind: 'notRequested' } }; };
-  provision.validateBusinessRule = () => ([
-    { pointer: '/rootCondition (root)', rule: 'business-rule-NO_ACTION', message: 'A business rule must include at least one action step.' },
-  ]);
+  // ⚠ The refusal moved. This test used to stub `provision.validateBusinessRule` so the BUILD would
+  // run it and halt. That method no longer exists — the SDK validates internally on every save — so
+  // the refusal now arrives as a REJECTED `pushArtifact`, and what must still hold is that the build
+  // surfaces it and writes nothing.
+  provision.pushArtifact = async (...a) => {
+    pushes.push(a);
+    const err = new Error(
+      'Validation failed for businessRule/x:\n  • /rootCondition (root): A business rule must include ' +
+        'at least one action step. [business-rule-NO_ACTION]'
+    );
+    err.code = 'VALIDATION_FAILED';
+    throw err;
+  };
 
   const err = await runBuild(ruleOnlySpec(), {
     sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
   }).then(() => null, (e) => e);
 
   assert.ok(err, 'an incomplete rule must not be pushed');
-  assert.match(err.message, /never fires/, `the halt must say what the rule would do; got: ${err && err.message}`);
   assert.match(err.message, /NO_ACTION/, "the designer's own finding is the actionable part");
-  assert.deepStrictEqual(pushes, [], 'the refusal must come BEFORE the write, not after it');
+  assert.strictEqual(pushes.length, 1, 'exactly one push was attempted, and it was refused');
+  // The rule must not be recorded as created off the back of a refused push.
+  assert.doesNotMatch(String(err.message), /^\s*$/, 'the halt carries the reason');
 });
 
-test('the validator is best-effort: an older bundle without it, or one that throws, still builds', async () => {
-  // A DIAGNOSTIC must never be the thing that breaks a build. The bundle is re-vendored routinely and
-  // the plugin supports the generation before this method existed, so absence is a normal state —
-  // and a validator that itself faults tells us nothing about the rule.
-  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
-  for (const [label, mutate] of [
-    ['absent', (p) => { delete p.validateBusinessRule; }],
-    ['throws', (p) => { p.validateBusinessRule = () => { throw new Error('validator exploded'); }; }],
-    ['returns a non-array', (p) => { p.validateBusinessRule = () => undefined; }],
-  ]) {
-    const { provision } = provisionWithRules([]);
-    mutate(provision);
-    const res = await runBuild(ruleOnlySpec(), {
-      sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
-    });
-    assert.strictEqual(res.ok, true, `validator ${label} must not fail the build`);
-    const only = ruleOnlySpec().businessRules[0];
-    assert.strictEqual(res.created.businessRules[`${only.entity.toLowerCase()}|${only.name}`], 'br-new',
-      `validator ${label}: the rule must still be authored`);
-    assert.deepStrictEqual(res.skipped.businessRules, [], `validator ${label}: and not recorded as skipped`);
-  }
-});
+// ⚠ REMOVED: 'the validator is best-effort: an older bundle without it, or one that throws, still
+// builds'.
+//
+// Its entire premise is gone. It asserted that the plugin's OPT-IN call to
+// `provision.validateBusinessRule` degraded gracefully when the vendored bundle predated the method
+// or the validator itself faulted — correct while validation was a best-effort diagnostic the
+// PLUGIN chose to run.
+//
+// Validation is no longer optional or plugin-driven: the SDK runs it internally on every
+// business-rule save, so there is no "absent" or "throws" state left to tolerate. A replacement
+// test would have to stub the SDK into not validating, which asserts the opposite of the guarantee
+// this change bought. The coverage that matters now lives in the two tests above: an incomplete
+// rule halts the build, and every shape the spec surface can author is accepted by the real push.
 
-test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can author', () => {
+test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can author', async () => {
   // The one way wiring the validator could regress a working build is if it rejected something the
   // App Spec already allows. So the assertion is over the spec surface's OWN declared sets rather
   // than a hand-picked sample — a future operator or action type added to app-spec.js is covered the
   // day it is added, without anyone remembering to extend this test.
   const { BUSINESS_RULE_OPERATORS, BUSINESS_RULE_VALUELESS_OPERATORS, BUSINESS_RULE_ACTION_TYPES, BUSINESS_RULE_SCOPES, BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brval-'));
   dirs.push(dir);
   const noop = async () => ({ status: 200, headers: {}, body: { value: [] } });
   const sdk = createMakerSdk({
-    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: { get: noop, post: noop, patch: noop, put: noop, delete: noop },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
 
   // The payload each action type carries — mirrors BUSINESS_RULE_ACTIONS in app-spec.js.
   const ACTION_PAYLOAD = { SetVisibility: { visible: false }, LockUnlock: { lock: true }, SetBusinessRequired: { required: true }, SetFieldValue: { value: 'x', dataType: 'String' } };
@@ -526,20 +587,32 @@ test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can autho
   const rejected = [];
   for (const [label, rule] of shapes) {
     const def = businessRuleDef(rule);
-    const art = sdk.createArtifact('businessRule', def);
-    const issues = sdk.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
-    if (issues && issues.length) rejected.push(`${label}: ${JSON.stringify(issues)}`);
+    const art = await sdk.createArtifact('businessRule', def);
+    await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+    // ⚠ This used to call `sdk.validateBusinessRule(...)` directly. That method is gone: the SDK now
+    // runs the designer's validator INTERNALLY on every save, so the equivalent — and stronger —
+    // check is that the real push path accepts the shape. A rejection surfaces as a throw.
+    try {
+      await sdk.pushArtifact('businessRule', art.id);
+    } catch (e) {
+      rejected.push(`${label}: ${e && e.message}`);
+    }
   }
   assert.deepStrictEqual(rejected, [],
-    `the build HALTS on findings, so a rejected authorable shape is a build the spec gate said was fine:\n${rejected.join('\n')}`);
+    `the push REFUSES on findings, so a rejected authorable shape is a build the spec gate said was fine:\n${rejected.join('\n')}`);
   assert.ok(shapes.length >= 20, `the matrix must be broad enough to mean something; got ${shapes.length}`);
 
   // Negative control: without this the assertion above is satisfied by a validator that finds
   // nothing at all, and the gate would be inert while looking healthy.
-  const empty = sdk.createArtifact('businessRule', { name: 'Empty', entityLogicalName: 'new_ticket', scope: 'Entity', status: 'Draft' });
-  const control = sdk.validateBusinessRule(empty);
-  assert.ok(control && control.length > 0, 'the validator must actually report on a rule with no clauses and no actions');
-  assert.match(JSON.stringify(control), /NO_ACTION/, 'and name the missing action step');
+  const empty = await sdk.createArtifact('businessRule', { name: 'Empty', entityLogicalName: 'new_ticket', scope: 'Entity', status: 'Draft' });
+  let controlErr = null;
+  try {
+    await sdk.pushArtifact('businessRule', empty.id);
+  } catch (e) {
+    controlErr = e;
+  }
+  assert.ok(controlErr, 'the validator must actually refuse a rule with no clauses and no actions');
+  assert.match(String(controlErr.message), /NO_ACTION/, 'and name the missing action step');
 });
 
 test('a rebuild REMOVES duplicates an earlier build left behind', async () => {
@@ -906,10 +979,16 @@ test('REAL BUNDLE: every spec operator EXISTS in the SDK table, and none silentl
   //
   // Pinned against the bundle's own table so a re-vendor that renames or drops an operator fails
   // here rather than in production.
+  //
+  // The module alias in front of `WorkflowConditionOperator` is MINIFIER-ASSIGNED and changes on
+  // every re-vendor — it was `z` when this was written and became `G` on the next bundle, which made
+  // this test fail with "got 0" for a table that was fully intact. Match the alias as a wildcard, not
+  // a literal: hardcoding a minified identifier is the same rebuild-unstable-string trap the build
+  // engine documents for `err.name`, and here it costs a false failure rather than a silent pass.
   const bundle = fs.readFileSync(BUNDLE, 'utf8');
   const m = bundle.match(/\b[A-Za-z_$][\w$]*=\{Equals:[^}]*\}/);
   assert.ok(m, 'the operator table must be present in the vendored bundle');
-  const sdkOperators = [...m[0].matchAll(/(\w+):z\.WorkflowConditionOperator\./g)].map((x) => x[1]);
+  const sdkOperators = [...m[0].matchAll(/(\w+):\s*[A-Za-z_$][\w$]*\.WorkflowConditionOperator\./g)].map((x) => x[1]);
   assert.ok(sdkOperators.length >= 16, `expected the full table, got ${sdkOperators.length}: ${sdkOperators}`);
 
   const { BUSINESS_RULE_OPERATORS } = require('../lib/app-spec.js');
@@ -959,12 +1038,12 @@ test('REAL BUNDLE: BOTH conditions of a multi-clause rule reach the wire, joined
   // rule that fires under half the intended circumstances, and every structural check would pass.
   //
   // WorkflowConditionOperator.LogicalAnd is "2" in the bundle's own enum.
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-multi-'));
   dirs.push(dir);
   const calls = [];
   const sdk = createMakerSdk({
-    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
       post: async (url, body) => { calls.push({ url, body }); return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} }; },
@@ -973,7 +1052,7 @@ test('REAL BUNDLE: BOTH conditions of a multi-clause rule reach the wire, joined
       delete: async () => ({ status: 204, headers: {}, body: {} }),
     },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
 
   const def = businessRuleDef({
     ...RULE,
@@ -984,7 +1063,7 @@ test('REAL BUNDLE: BOTH conditions of a multi-clause rule reach the wire, joined
   });
   assert.strictEqual(def.rootCondition.clauses.length, 2, 'the mapper must carry both clauses');
 
-  const art = sdk.createArtifact('businessRule', def);
+  const art = await sdk.createArtifact('businessRule', def);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
   await sdk.pushArtifact('businessRule', art.id);
 

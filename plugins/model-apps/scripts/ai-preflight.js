@@ -7,7 +7,7 @@
 //
 // Usage: node ai-preflight.js --env <orgUrl> [--app <uniqueName>]
 
-const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const fs = require('node:fs');
@@ -104,12 +104,19 @@ function runPreflight(readiness, effective = {}) {
 }
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const app = typeof flags.app === 'string' ? flags.app : null;
+  const argv = process.argv.slice(2);
+  const { flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]';
+  const flagError = validateFlags(argv, { known: ['env', 'app'], needValue: ['env', 'app'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const env = flags.env;
+  const app = flags.app || null;
 
-  if (!env || flags.app === true) {
-    process.stderr.write('Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]\n');
+  if (!env) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 
@@ -120,12 +127,12 @@ async function main() {
 
   let report;
   try {
-    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
     const httpClient = createAzHttpClient(env);
-    const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
     // Keep SDK construction inside the protected region too: a constructor failure happens after the
     // temp directory exists, so the finally must own both construction and init to avoid leaks.
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);
 

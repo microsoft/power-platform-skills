@@ -7,17 +7,24 @@
 //   node scripts/preview-form.js --spec @<app-folder>/app-spec.json [--entity new_workorder]
 const path = require('node:path');
 const { renderForms } = require('./lib/form-preview.js');
-const { parseArgs, readJsonArg } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec, validateAppSpec } = require('./lib/app-spec.js');
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const specArg = (typeof flags.spec === 'string' ? flags.spec : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  if (!specArg) {
-    process.stderr.write('Usage: node scripts/preview-form.js --spec @<app-folder>/app-spec.json [--entity <schemaName>]\n');
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/preview-form.js --spec @<app-folder>/app-spec.json [--entity <schemaName>]';
+  const flagError = validateFlags(argv, { known: ['spec', 'entity'], needValue: ['spec', 'entity'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
+  const specArg = flags.spec || positional[0];
+  if (!specArg) {
+    process.stderr.write(USAGE + '\n');
+    process.exit(1);
+  }
+  const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const validation = validateAppSpec(spec, { profile: 'structural' });
   if (!validation.ok) {
@@ -26,7 +33,7 @@ function main() {
     process.stderr.write(`Invalid App Spec:\n${validation.errors.map((e) => `  - ${e}`).join('\n')}\n`);
     process.exit(1);
   }
-  const entity = typeof flags.entity === 'string' ? flags.entity : undefined;
+  const entity = flags.entity;
   process.stdout.write(renderForms(spec, entity) + '\n');
 }
 

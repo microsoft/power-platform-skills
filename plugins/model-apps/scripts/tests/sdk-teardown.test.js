@@ -228,6 +228,65 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   assert.deepStrictEqual(kinds, ['app', 'genpage', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
+// Regression (found by LIVE teardown of a self-referencing hierarchy): a 1:N whose referenced and
+// referencing tables are the SAME table is removed by the table delete. Deleting it on its own first
+// fails — its lookup sits on the same table that hosts the form still referencing it — so teardown
+// printed `✗ relationship … referenced by 2 other components` and exited NON-ZERO on a run that then
+// deleted the table and left the environment completely clean. Self-referencing hierarchies became a
+// mainstream shape once sample data could seed them (#544), so this cry-wolf is now routine.
+test('#544 a SELF-referencing relationship is deleted AFTER its table, not before', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  const steps = planTeardown(spec);
+  const kinds = steps.map((s) => s.kind);
+  const relIdx = kinds.indexOf('relationship');
+  const tblIdx = kinds.indexOf('table');
+  assert.ok(relIdx !== -1, 'it is still planned — deferring, not skipping, is what keeps it safe');
+  assert.ok(tblIdx !== -1 && tblIdx < relIdx, 'the table delete (which cascades it) comes first');
+});
+
+// If the table is RETAINED, the deferred delete is what stops the relationship leaking. The spec
+// cannot tell a retained table from a deleted one (live discovery also skips non-custom tables),
+// which is why this is an ordering change rather than a skip.
+test('#544 a self-referencing relationship on an EXISTING (retained) table is still planned', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [], existing: true }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
+});
+
+// The `relationship` kind already tolerates not-found, which is what makes the deferral safe when
+// the table delete cascaded it away. Asserting it here so a future change to that flag is caught.
+test('#544 the relationship kind tolerates not-found (what makes the deferral safe)', () => {
+  assert.strictEqual(KIND_HANDLERS.relationship.tolerateNotFound, true);
+});
+
+// And a normal two-table relationship is untouched by the narrowing — still BEFORE the tables.
+test('#544 a relationship between two DIFFERENT tables is still planned before the tables', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [
+      { schemaName: 'new_parent', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_child', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_parent', referencing: 'new_child', lookup: { schemaName: 'new_ParentId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_parent' }] }] }] },
+  };
+  const kinds = planTeardown(spec).map((s) => s.kind);
+  assert.strictEqual(kinds.filter((k) => k === 'relationship').length, 1);
+  assert.ok(kinds.indexOf('relationship') < kinds.indexOf('table'), 'unchanged ordering for a two-table relationship');
+});
+
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
 // it must be planned AFTER the table; and the build's generated default app icon web resource must
 // be cleaned up or it leaks as an orphan the spec never declared.
@@ -378,6 +437,71 @@ test('deleteStep does NOT swallow a dependency block ("referenced by N component
     () => deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr1', name: 'x.js' }]),
     /referenced by 3 other components/,
     'a real dependency failure must not be silently tolerated as "undeletable"'
+  );
+});
+
+// A blocked relationship delete must name what is holding it. Dataverse returns only a COUNT, which
+// is a dead end on the retained-table path (`existing: true`), where the blocker is typically a form
+// the build authored but the CURRENT spec no longer declares — so teardown cannot plan its deletion.
+function dependencyBlockSdk({ dataverse } = {}) {
+  return {
+    deleteRelationship: async () => {
+      const e = new Error('The EntityRelationship(cc5fe264-1fb1-f111-aaad-70a8a59c16bf) component cannot be deleted because it is referenced by 2 other components. For a list of referenced components, use the RetrieveDependenciesForDeleteRequest.');
+      e.statusCode = 400;
+      throw e;
+    },
+    ...(dataverse ? { dataverse } : {}),
+  };
+}
+
+test('a dependency-blocked relationship names the blocking components instead of just a count', async () => {
+  // Mirrors the live shapes: RelationshipDefinitions resolves the MetadataId, the dependency read
+  // returns componenttype 60 (SystemForm), and the form's name comes from `systemforms`.
+  const seen = [];
+  const dataverse = {
+    get: async (p) => {
+      seen.push(p);
+      if (p.startsWith('/RelationshipDefinitions')) return { status: 200, body: { value: [{ MetadataId: 'cc5fe264-1fb1-f111-aaad-70a8a59c16bf' }] } };
+      if (p.startsWith('/RetrieveDependenciesForDelete')) return { status: 200, body: { value: [{ dependentcomponenttype: 60, dependentcomponentobjectid: '5bebe418-1cbd-47c9-91b3-c5a3a31edcb2' }] } };
+      if (p.startsWith('/systemforms(')) return { status: 200, body: { name: 'Self Ref Acct Form' } };
+      return { status: 404, body: null };
+    },
+  };
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk({ dataverse }), KIND_HANDLERS.relationship, [{ id: 'pp668_account_account', schemaName: 'pp668_account_account' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/, 'keeps the platform text so isDependencyBlocked still matches');
+      assert.match(err.message, /Still referenced by: form "Self Ref Acct Form" \(5bebe418-1cbd-47c9-91b3-c5a3a31edcb2\)/);
+      assert.match(err.message, /re-run teardown/, 'tells the operator what to do next');
+      return true;
+    }
+  );
+  assert.ok(seen.some((p) => p.includes("SchemaName eq 'pp668_account_account'")), 'resolves the relationship by schema name');
+  assert.ok(seen.some((p) => p.includes('ComponentType=10')), 'asks for EntityRelationship dependencies');
+});
+
+test('the dependency diagnostic is fail-quiet: without a raw client the platform error is unchanged', async () => {
+  // Diagnostics layered on an already-failing delete must never replace a real error with a worse
+  // one, so an SDK with no `dataverse` (older callers, unit-test doubles) rethrows verbatim.
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk(), KIND_HANDLERS.relationship, [{ id: 'r1', schemaName: 'r1' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/);
+      assert.ok(!/Still referenced by/.test(err.message), 'no half-built diagnostic is appended');
+      return true;
+    }
+  );
+});
+
+test('the dependency diagnostic falls back to the raw error when the dependency read fails', async () => {
+  const dataverse = { get: async () => { throw new Error('metadata read unavailable'); } };
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk({ dataverse }), KIND_HANDLERS.relationship, [{ id: 'r1', schemaName: 'r1' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/);
+      assert.ok(!/metadata read unavailable/.test(err.message), 'the diagnostic failure never masks the real one');
+      return true;
+    }
   );
 });
 
@@ -1006,9 +1130,46 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
   assert.ok(removeCalls.some((c) => c.entityLogicalName === 'new_memo'), 'removeRowSummary called for the candidate table');
 });
 
-test('planTeardown omits ai-summaries steps when spec.ai.summaries is absent', () => {
+test('planTeardown omits ai-summaries steps when the spec has no `ai` block at all', () => {
   const steps = planTeardown(fullSpec()); // no spec.ai
-  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary steps when spec has no ai.summaries');
+  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary steps when the spec opts out of ai entirely');
+});
+
+// The regression this section now guards, found by a LIVE teardown rather than by review.
+//
+// The build calls `selectSummaryTables` UNCONDITIONALLY whenever `spec.ai` exists, so a spec that
+// carries only `ai.appFeatures` still gets a row summary per eligible table. Teardown used to plan
+// its removal only `if (spec.ai && spec.ai.summaries)`, so for exactly that spec it planned nothing —
+// and the orphaned `msdyn_aimodel` references the table, so Dataverse then REFUSED the table delete:
+//   ✗ table new_uptakeorder — HTTP 400 … referenced by 1 other components
+// Teardown finished "with errors" having left the table and everything in it behind.
+//
+// Asserted as build/teardown SYMMETRY rather than as "an aiSummary step exists": the two must plan
+// over the identical set, which is the property that was violated, and a one-off existence check
+// would not catch the next divergence (`default: 'off'` plus a per-table opt-in, say).
+test('teardown plans a row-summary removal for a spec with ai.appFeatures and NO summaries block', () => {
+  const { selectSummaryTables } = require(path.join(__dirname, '..', 'lib', 'ai-candidates.js'));
+  const spec = {
+    solution: { uniqueName: 'AiTest', publisherPrefix: 'new' },
+    app: { name: 'AiApp' },
+    entities: [
+      { schemaName: 'new_memo', displayName: 'Memo', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_body', displayName: 'Body', type: 'Memo' }] },
+    ],
+    relationships: [],
+    ai: { appFeatures: { formFill: true } }, // no `summaries` — the shape that regressed
+  };
+
+  const built = selectSummaryTables(spec).map((s) => String(s).toLowerCase());
+  assert.deepStrictEqual(built, ['new_memo'], 'precondition: the BUILD would create a summary here');
+
+  const plan = planTeardown(spec);
+  const planned = plan.filter((s) => s.kind === 'aiSummary').map((s) => s.target.entityLogicalName);
+  assert.deepStrictEqual(planned, built, 'teardown must plan exactly the set the build creates');
+
+  const aiIdx = plan.findIndex((s) => s.kind === 'aiSummary');
+  const tableIdx = plan.findIndex((s) => s.kind === 'table');
+  assert.ok(tableIdx === -1 || aiIdx < tableIdx,
+    'the summary must be removed BEFORE the table, or Dataverse refuses the table delete');
 });
 
 test('planTeardown omits ai-summaries steps when default is off and no overrides', () => {

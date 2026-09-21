@@ -1086,7 +1086,11 @@ If the publish call returns a non-2xx status, report the error and stop — do n
 
 **Telemetry checkpoint: `verify_dataverse_schema`**
 
-Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
+Confirm every table in `SERVICE_REQUIRED_TABLES`, including reused-as-is tables,
+plus any created or extended table, is queryable after publication when needed.
+Use the resolved effective names from the approved operation manifest or the
+standalone path's verified service list, not Creation Order alone. Use **one**
+filtered query for the bounded set, not one request per table:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
@@ -1095,11 +1099,16 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 ```
 
 - **Every expected name present in `value[]`** → confirmed.
-- **Any expected name missing** → that table did not survive publish — report which ones and stop.
+- **Any expected name missing** → schema/service verification is incomplete.
+  Return to the owning reconciliation step; do not mark that table materialized
+  or invent a new table to replace a missing reuse target.
 
 ### Step 6d — Write `.datamodel-manifest.json`
 
-After all tables are verified, write the manifest to the project root using the `Write` tool:
+After schema verification in Step 6c and generated-service verification in
+Step 6 both pass, write the manifest to the project root using the `Write`
+tool. This is the application's verified table inventory, not a schema-write
+log; a reuse-only app must still have a populated manifest:
 
 ```json
 {
@@ -1123,7 +1132,19 @@ After all tables are verified, write the manifest to the project root using the 
 
 `metadataId` and `solution` are required for `status: "new"` or `"extended"` entries — they're how Step 5a distinguishes "we own this on a re-run" from "name collision." Reused tables can omit both.
 
-Include only tables confirmed in Step 6c. Do NOT include tables reused with no schema changes.
+Include every service-required table confirmed in Step 6c, including tables
+reused with no schema changes, plus verified new/extended tables. Use
+`status: "reused"` for unchanged existing tables; retain `"new"` and
+`"extended"` only for their actual outcomes. Preserve effective adapted names,
+entity-set names, and verified column/relationship/key facts from reconciliation
+and any post-write metadata reads. Exclude deferred or unverified tables.
+
+Before returning, check that every `SERVICE_REQUIRED_TABLES` name occurs in the
+manifest and has verified generated service output. A partial or empty manifest
+from an earlier run is repaired by repeating Step 6's read-only service verifier
+and Steps 6c–6d, not by replaying successful schema writes. Recording a reused
+table does not authorize a metadata POST or republish; the existing sample-data
+record-count checks and standard-system-table exclusions still apply.
 
 ### Step 7 — Inspect generated files
 

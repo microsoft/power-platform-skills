@@ -6,11 +6,13 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 - Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 
 ## Setup
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
+
+Have questions or feedback? Join the [Native Apps Office Hours](OFFICE_HOURS.md).
 
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
@@ -92,17 +94,26 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+    `/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+    runs schema generation and type-checking before Expo starts.
+    The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+    so `/debug-app` works after switching between VS Code, Copilot CLI, and
+    Claude Code without asking for a terminal ID.
+
+    To start Metro manually instead, run the command below from the app directory.
+    Manual starts and `/debug-app` use the same `.powernative` log source.
 
     ```bash
     npm run dev
     ```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+    The Metro config removes sensitive lines before writing logs. The complete
+    `.powernative/` folder is ignored by the template's `.gitignore`.
+
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    - Play store: (coming soon)
-    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## License and notices
 
@@ -150,7 +161,7 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with `npm run dev` ready to go. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
 
 ## Quick examples
 
@@ -166,10 +177,10 @@ What happens:
 1. **Wizard** (~30s) — confirms device class / aesthetic
 2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
 3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
+4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx pa app init --app-type MobileApp --non-interactive`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
@@ -258,6 +269,8 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx pa app add data-source --non-interactive`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
+| `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx pa app push --non-interactive` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
@@ -267,7 +280,7 @@ Example edit flows:
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
-| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Auto-proposed by `/create-mobile-app` Step 6.85 for offline-relevant apps; also runs standalone on existing apps. |
+| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. The bundled offline package is consumed by the native host for local storage, queued synchronization, reconnect handling, and status UX, so the skill configures the host runtime instead of generating duplicate app-owned offline infrastructure. Offered explicitly by `/create-mobile-app` after Dataverse materialization; connectivity wording in the initial prompt does not auto-enable it. Also runs standalone on existing apps. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |
 | `/assign-offline-profile` | 🟡 v0.1 | Bind users / teams to a Mobile Offline Profile via `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` rows. Without this, the profile exists but no one's app uses it. Accepts `--user <upn>`, `--team <name>`, `--me`, `--all-app-users`, `--unassign-*` flags. |
 | `/edit-offline-profile` | 🟡 v0.1 | Change ONE aspect of an existing profile (table scope, sync frequency, column list, name/description) without re-running the full wizard. Mirrors the `/edit-app` gated edit pattern. Accepts `--rename`, `--table X --scope`, `--table X --sync`, `--table X --columns add:/remove:/reset` flags. |
@@ -278,7 +291,7 @@ Example edit flows:
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — coordinates the data-model + screen-planner architects, plans native capabilities + connectors inline, runs 4 approval gates |
+| `native-app-planner` | Orchestrator — approves data platform + native capabilities + connectors, conditionally coordinates the data-model architect, coordinates screen planning, and runs up to 4 approval gates |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |

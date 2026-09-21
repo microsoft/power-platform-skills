@@ -35,6 +35,9 @@ const {
   canonicalPersonaName,
   BUSINESS_RULE_VALUELESS_OPERATORS,
   bpfUniqueName,
+  labelText,
+  choiceValueMap,
+  BPF_ROLE_ACCESS,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -49,6 +52,10 @@ const {
   provisionSampleData,
   BuildHalt: _BuildHalt,
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
+  findExistingTable,
+  findExistingColumns,
+  relationshipExists,
+  localizedLabelLcidsInSpec,
 } = require('./entity-provision.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
@@ -57,6 +64,8 @@ const {
   firstSectionRowsPointer,
   findFieldCellPointer,
   findFieldCellLocation,
+  findSectionLocation,
+  declaredSectionByField,
   subgridCellIntent,
   subgridSectionIntent,
   quickViewCellIntent,
@@ -74,7 +83,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 
@@ -294,15 +303,21 @@ function resolvePhases({ only, skip, from, to } = {}) {
 
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
+//
+// Resolution goes through `choiceValueMap`, the SHARED rule, rather than `options.indexOf(val)`.
+// Two reasons, and the first is a real defect the naive version had: a LOCALIZED option is an
+// object (`{ "1033": "Open", "3082": "Abierto" }`), so `indexOf("Abierto")` returns -1 and the
+// LABEL was sent as the value of a numeric picklist condition — an invalid or silently ineffective
+// view filter. The second is that `choiceValueMap` also resolves a column bound to a `globalChoice`,
+// which the inline-only lookup never did.
 function resolveFilterValue(spec, entityLogical, attr, val) {
   if (typeof val !== 'string') return val;
   const e = entityByLogical(spec, entityLogical);
   const c = e && (e.columns || []).find((x) => x.schemaName.toLowerCase() === String(attr).toLowerCase());
-  if (c && (c.type === 'Choice' || c.type === 'MultiChoice') && Array.isArray(c.options)) {
-    const i = c.options.indexOf(val);
-    if (i >= 0) return 100000000 + i;
-  }
-  return val;
+  if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice')) return val;
+  const byLabel = choiceValueMap(e, spec)[String(c.schemaName).toLowerCase()];
+  const hit = byLabel && byLabel[val];
+  return typeof hit === 'number' ? hit : val;
 }
 
 function primaryNameOf(spec, logical) {
@@ -329,19 +344,49 @@ function planFor(spec, opts) {
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
   if (has('data-model')) {
+    // The relationship probe identity must match the one the APPLY path uses, or an existing
+    // relationship reads as `create`. `provisionDataModel` queries the REFERENCED (parent) entity's
+    // OneToManyRelationships — the child's collection does not contain it — and builds the schema
+    // name WITH the publisher prefix. Getting either wrong is invisible for a self-referencing
+    // relationship (referenced === referencing), which is exactly the shape this was first tested on.
+    const relPrefix = spec.solution && spec.solution.publisherPrefix;
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
-      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${e.displayName}")` });
+      // `labelText` returns "" for an absent displayName, or for a localized map with nothing usable
+      // — which rendered a dry-run line as `table new_order ("")`, an empty quoted string the reader
+      // has to decode. Fall back to the schema name, which is what the CREATE itself falls back to
+      // (`displayName || schemaName`), so the plan says what the build will actually do.
+      const shown = labelText(e.displayName, spec && spec.languageCode) || e.schemaName;
+      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${shown}")`, key: { kind: 'table', entity: e.schemaName } });
       if (quickCreateEnabledFor(spec, e)) items.push({ phase: 'data-model', label: `enable quick create on ${e.schemaName.toLowerCase()}` });
       for (const c of e.columns || []) {
-        if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
+        if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`, key: { kind: 'column', entity: e.schemaName, name: c.schemaName } });
+      }
+      const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+      for (const c of [e.primaryAttribute, ...buildable]) {
+        if (c && c.schemaName && Object.prototype.hasOwnProperty.call(c, 'required')) {
+          items.push({ phase: 'data-model', label: `required ${e.schemaName}.${c.schemaName}` });
+        }
+      }
+      for (const c of buildable) {
+        if (c.type !== 'Customer' && (
+          c.defaultValue !== undefined || c.integerFormat !== undefined
+          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined
+        )) {
+          items.push({ phase: 'data-model', label: `column capabilities ${e.schemaName}.${c.schemaName}` });
+        }
+      }
+      for (const c of e.columns || []) {
+        if (c && c.schemaName && c.visualization !== undefined) {
+          items.push({ phase: 'data-model', label: `visualization ${e.schemaName}.${c.schemaName} (${c.visualization})` });
+        }
       }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
     for (const r of spec.relationships || []) {
-      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}` });
-      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}` });
+      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany' } });
+      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany' } });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -349,13 +394,22 @@ function planFor(spec, opts) {
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
-  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
+  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name } });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
-  if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
+  if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}`, key: { kind: 'chart', entity: c.entity, name: c.name } });
   if (has('forms')) for (const f of spec.forms || []) {
     const ft = f.formType || 'Main';
     const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
-    items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
+    // The form's Dataverse NAME is whatever compileFormIntent derives (the author may omit `name`),
+    // and that is the name the reuse lookup keys on — so derive it the same way rather than guessing.
+    // Wrapped because planFor must stay total: a spec shape compileFormIntent rejects should still
+    // produce a plan LINE (it just cannot be probed live), never crash the dry run.
+    let formKey;
+    try {
+      const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
+      formKey = { kind: 'form', entity: def.entityLogicalName, name: def.name, formType: ft, formId: f.formId };
+    } catch { formKey = undefined; }
+    items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}`, ...(formKey ? { key: formKey } : {}) });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
@@ -366,13 +420,20 @@ function planFor(spec, opts) {
   }
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
-  if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
+  if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap`, key: { kind: 'app', uniqueName: appUniqueName(spec) } });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
-  if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
-  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+  // Budgeted whenever the pages phase runs, NOT only when the spec has page subareas. The runtime
+  // finalizes on `appHasPageSubareas(spec) || appWasExisting`, and `appWasExisting` is a LIVE fact
+  // planFor cannot see — so gating the plan on the spec alone under-counted every rebuild against an
+  // app that already existed, and the run overran its own denominator ([37/36], live-reproduced on a
+  // page-less spec). The runner's total is fixed at construction from plan.length, so the only way to
+  // stay in step is to budget the step and have the runtime emit an explicit `skip` when it does not
+  // fire — the same shape as the existing-column "applied on create" skips.
+  if (has('pages')) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
+  if (has('ai-features') && specOptsIntoAi(spec)) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
     // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
     // the documented semantics — `default` is the app-level DEFAULT and `tables[x].enabled: true` is
@@ -386,10 +447,21 @@ function planFor(spec, opts) {
     const n = (p.jobs || []).length;
     items.push({ phase: 'security', label: `security role "${p.persona}" (${n} job${n === 1 ? '' : 's'})` });
   }
+  // Role grants are planned after personas because they run after them (a grant on a role this spec
+  // also authors is rejected at validation, but the ORDER still matters for reading the plan).
+  if (has('security')) for (const g of spec.roleGrants || []) {
+    const n = (g.privileges || []).length;
+    items.push({ phase: 'security', label: `grant privileges on ${n} table${n === 1 ? '' : 's'} to existing role ${roleGrantLabel(g)}` });
+  }
   // Form role assignment is planned under `security` (not `forms`) because it can only run once the
   // roles exist — see the 7b block in the engine for why.
   if (has('security')) for (const f of spec.forms || []) {
     if (f && f.securityRoles) items.push({ phase: 'security', label: `form roles for ${f.name || f.formType || 'Main'} on ${f.entity}` });
+  }
+  // Flow role grants are planned under `security` for the same reason form ones are: they target the
+  // backing table ACTIVATION creates, and they need persona roles that do not exist until this phase.
+  if (has('security')) for (const f of spec.businessProcessFlows || []) {
+    if (f && f.securityRoles) items.push({ phase: 'security', label: `flow roles for ${f.name} (backing table ${bpfUniqueName(f.name)})` });
   }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -491,7 +563,11 @@ function defaultViewColumns(spec, entity, opts = {}) {
 function subgridLabel(spec, sg) {
   if (sg.label) return sg.label;
   const child = entityByLogical(spec, String(sg.childEntity || '').toLowerCase());
-  return (child && (child.pluralName || child.displayName)) || sg.childEntity;
+  // Resolved through labelText: a LOCALIZED plural/display name is an object, and returning it here
+  // put "[object Object]" into the form's section and control labels — and, because the form
+  // projection stringifies for change detection, made two DIFFERENT localized labels hash the same.
+  const lang = spec && spec.languageCode;
+  return labelText(child && child.pluralName, lang) || labelText(child && child.displayName, lang) || sg.childEntity;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
 // (opt out per-entity with enrichDefaultViews:false).
@@ -667,6 +743,7 @@ async function ensureAppIcon(spec, created, deps) {
   const existing = await findByName(name);
   if (existing) {
     created.webResources[name] = existing;
+    runner.skip('app-shell', `app icon (generated) ${name} (exists — reuse)`);
     return existing;
   }
   let id;
@@ -940,9 +1017,42 @@ function formIdentityKey(f) {
 // `valueType` is always `'Value'`: the SDK's other axes (`Field`, `Lookup`, `Expression`, `Clear`)
 // need shapes the App Spec does not model, so exposing the name would offer authors a choice they
 // cannot use. The App Spec calls the type hint `dataType` rather than the SDK's `valueWorkflowType`,
-// because `valueType` already means that other thing here — and note it is currently DECORATIVE:
-// measured across every accepted token, on both the condition and the action path, the SDK types
-// every literal as String. See BUSINESS_RULE_DATA_TYPES in app-spec.js.
+// because `valueType` already means that other thing here. See BUSINESS_RULE_DATA_TYPES in
+// app-spec.js.
+//
+// `dataType` is NO LONGER decorative on the CONDITION path, and that changed under us in the SDK
+// uptake. The previous bundle consulted `valueWorkflowType` only for `valueType: 'Clear'` and
+// hard-typed every ordinary literal as `WorkflowAttributeType.String`; the current bundle uses the
+// field for ALL value types, VERBATIM, with no name -> enum mapping of its own
+// (`… : e.valueWorkflowType ?? WorkflowAttributeType.String`).
+//
+// `WorkflowAttributeType` is a NUMERIC-STRING enum — `{ Boolean:'0' … Money:'7', Picklist:'10',
+// String:'14' … }` — so passing the App Spec's human token would put an out-of-domain value on the
+// wire. MEASURED against the vendored bundle before this mapping existed, the condition literal
+// carried `"String"`, `"Money"`, and even `"NotAWorkflowType"` straight through, while the SDK's own
+// fallback for the same field is `'14'`. Note this hit EVERY rule, not only ones that authored a
+// `dataType`, because the default below is the token `'String'` rather than the enum value.
+//
+// LIVE-MEASURED that this fails SILENTLY rather than loudly: a build carrying the raw tokens
+// deployed all four probe rules with 0 failures and activated them. The platform does not reject the
+// value, so nothing upstream of a user noticing the rule never fires would surface it — and
+// `--verify` cannot, because it checks existence, duplicate count and statecode, never the rule's
+// WFOM.
+//
+// The ACTION path still types every literal as String on the SDK side, so it is unaffected — the
+// asymmetry is deliberate and pinned in business-rules.test.js.
+const WORKFLOW_ATTRIBUTE_TYPE = {
+  boolean: '0', customer: '1', datetime: '2', decimal: '3', float: '4', double: '4', integer: '5',
+  lookup: '6', money: '7', owner: '8', partylist: '9', picklist: '10', key: '11', state: '12',
+  status: '13', string: '14', memo: '14', uniqueidentifier: '15', entitynamereference: '16',
+  entity: '17', entitycollection: '18', multiselectpicklist: '23',
+};
+// Unknown tokens fall back to String rather than being forwarded. The spec gate already restricts
+// `dataType` to BUSINESS_RULE_DATA_TYPES, so this is unreachable from a valid spec; forwarding an
+// unmapped token would reopen exactly the out-of-domain write this mapping exists to close.
+function workflowAttributeType(dataType) {
+  return WORKFLOW_ATTRIBUTE_TYPE[String(dataType || 'String').toLowerCase()] || '14';
+}
 function businessRuleDef(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
   const clauseId = ids('c');
@@ -966,14 +1076,14 @@ function businessRuleDef(rule) {
         field: String(c.field).toLowerCase(),
         operator: c.operator,
         valueType: 'Value',
-        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: workflowAttributeType(c.dataType) }),
       })),
       trueBranch: (rule.actions || []).map((a) => {
         const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
         if (a.type === 'SetVisibility') node.visible = a.visible;
         else if (a.type === 'LockUnlock') node.lock = a.lock;
         else if (a.type === 'SetBusinessRequired') node.required = a.required;
-        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = workflowAttributeType(a.dataType); }
         return node;
       }),
       falseBranch: [],
@@ -1079,9 +1189,12 @@ async function ensureAppNotAvailableToRole(sdk, appId, roleId) {
 // Resolve the business unit a persona's role lives in, so role QUERIES (teardown, verify) scope to the
 // SAME (name, BU) identity the SDK uses on create (createPersonaRole keys a role by name WITHIN a BU).
 // Returns the explicit `businessUnitId`, else the org ROOT business unit (the SDK's own default — a BU
-// with no parent), else null when it can't be resolved (caller then falls back to a name-only match:
-// best-effort, so a transient BU-lookup failure never blocks teardown/verify). `q` is a queryRecords fn
-// (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU lookup for the run.
+// with no parent), else NULL when it cannot be resolved. Every current caller treats null as FAIL
+// CLOSED and reports the role as missing rather than matching on name alone (teardown
+// sdk-teardown.js, verify verify-spec.js, and the roleGrant apply path) — a name-only match could
+// touch a same-named role in a DIFFERENT business unit, which for a grant is privilege escalation.
+// `q` is a queryRecords fn (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU
+// lookup for the run.
 async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
   if (businessUnitId && FORM_GUID_RE.test(businessUnitId)) return businessUnitId;
   if (Object.prototype.hasOwnProperty.call(cache, 'rootBu')) return cache.rootBu;
@@ -1098,12 +1211,226 @@ async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
 }
 
 // The `_businessunitid_value eq <guid>` OData clause (Edm.Guid is UNQUOTED) that scopes a role query to a
-// business unit. Empty string when the BU is unknown (name-only fallback). `bu` is GUID-validated by
+// business unit. Empty string when the BU is unknown — but no caller reaches that today: every one
+// treats an unresolved BU as fail-closed before calling this. `bu` is GUID-validated by
 // resolveRoleBusinessUnit, so interpolation is injection-safe.
 function roleBuClause(bu) {
   return bu && FORM_GUID_RE.test(String(bu)) ? ` and _businessunitid_value eq ${bu}` : '';
 }
 
+// A stable, human-readable name for a `roleGrants[]` entry, used in plan lines, progress labels and
+// errors. Prefers the display name the author wrote; falls back to the pinned id.
+function roleGrantLabel(g) {
+  const name = g && typeof g.role === 'string' ? g.role.trim() : '';
+  return name ? `"${name}"` : `${(g && g.roleId) || '?'}`;
+}
+
+// Resolve the EXISTING role a `roleGrants[]` entry extends. AB#6686429.
+//
+// Fail-closed on every ambiguity, because the write is a privilege grant: granting on the wrong role is
+// a silent access-control defect that no later phase would catch.
+//   - `roleId` pinned → confirm the row EXISTS (an absent id is a stale pin, not a create trigger — this
+//     surface never creates a role) and report its name so the build log names what was actually changed.
+//   - `role` name → exact-match within the resolved business unit (explicit `businessUnitId`, else the org
+//     ROOT BU — the same identity `createPersonaRole`, teardown and verify use). 0 matches and >1 match
+//     are BOTH errors; ">1" happens when the same role name exists in several BUs and the author must
+//     disambiguate.
+//
+// Unlike the persona path this deliberately does NOT require the SDK ownership marker: the whole point is
+// to extend a role somebody else built. `ismanaged` is not a blocker either — Dataverse permits
+// AddPrivilegesRole on a managed role, and refusing would block the bug's actual scenario (a solution's
+// shipped roles). It IS surfaced in the returned detail so the log says what was touched.
+async function resolveRoleGrantTarget(provision, grant, buCache) {
+  if (grant.roleId) {
+    const rows = await provision.queryRecords('role', { select: ['roleid', 'name', 'ismanaged'], filter: `roleid eq ${grant.roleId}`, top: 1 });
+    const row = rows && rows[0];
+    if (!row) throw new Error(`roleGrant: pinned roleId ${grant.roleId} does not exist on this environment — correct the id, or target the role by name`);
+    return { roleId: String(row.roleid), name: row.name || '', managed: row.ismanaged === true };
+  }
+  const name = String(grant.role).trim();
+  const bu = await resolveRoleBusinessUnit((e, o) => provision.queryRecords(e, o), grant.businessUnitId, buCache);
+  // FAIL CLOSED when the BU cannot be resolved. Teardown/verify fall back to a name-only match because a
+  // false negative there is merely noisy; here a name-only match could grant privileges on a same-named
+  // role in a DIFFERENT business unit, which is a real privilege escalation.
+  if (!bu) throw new Error(`roleGrant "${name}": could not resolve the business unit to scope the role lookup — pin the role with 'roleId' instead`);
+  const rows = await provision.queryRecords('role', {
+    select: ['roleid', 'name', 'ismanaged'],
+    filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
+    top: 5,
+  });
+  const matches = (rows || []).filter((r) => r && r.roleid);
+  if (!matches.length) throw new Error(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
+  if (matches.length > 1) throw new Error(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
+  return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };
+}
+
+
+// Decide, against the LIVE environment, whether each planned item would be created or reused. #559.
+//
+// The dry run used to print `planFor`'s static, spec-derived listing and exit before any discovery,
+// so the identical plan appeared for a spec whose every artifact already exists and for one that
+// would create everything from nothing. A caller could not tell CREATE from REUSE — which is the one
+// question a dry run exists to answer before a production apply.
+//
+// This deliberately reuses the BUILD'S OWN discovery — `findExistingTable`, `findExistingColumns`,
+// `relationshipExists` and the shared `artifactIdentityQuery` — rather than re-implementing a
+// parallel "does it exist?" pass. A second implementation would drift from the one that actually
+// decides at apply time, and a dry run that confidently disagrees with the apply is worse than one
+// that says nothing.
+//
+// Read-only: every call here is a GET/query. Nothing is created, updated or published.
+//
+// Three states, because two would have to lie:
+//   create   — probed, not present: the apply will create it.
+//   reuse    — probed, present: the apply will discover and skip/reconcile it.
+//   unknown  — probed and the read FAILED. Never collapsed into create or reuse: guessing "create"
+//              overstates the work and guessing "reuse" understates it, and both read as certainty.
+// An item with no `key` is left unprobed (`state` absent) — the plan line still prints.
+async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
+  // Localization is decided PER ITEM, because that is how the apply path decides it (per entity in
+  // entity-provision.js, per relationship lookup label). A spec-wide flag would push a plain-label
+  // table down the fail-closed path because some unrelated table is localized, and the plan would
+  // then contradict the apply it exists to predict.
+  //
+  // The entity map is built here rather than carried on the key so it cannot depend on probe ORDER:
+  // `tableCache` is keyed by table alone, and a form/view item naming the same table must not be
+  // able to seed the cache with a different localization answer than the table item would.
+  //
+  // The previous spec-wide read also called `localizedLabelLcidsInSpec` without importing it. It
+  // lives in entity-provision.js, not app-spec.js, so the identifier was undeclared and the
+  // `typeof … === 'function'` guard silently evaluated to false on every run — the flag was never
+  // once true.
+  const localizedByEntity = new Map();
+  for (const e of (spec && spec.entities) || []) {
+    localizedByEntity.set(String(e.schemaName || '').toLowerCase(), localizedLabelLcidsInSpec({ entities: [e] }).length > 0);
+  }
+  const tableCache = new Map();   // entity logical -> { found: bool|null }
+  const columnCache = new Map();  // entity logical -> Set<logicalName> | null
+
+  // `findExistingColumns` is written for the APPLY path, where a failed read is safe to treat as
+  // "assume every column is new" — the create's own already-exists handling absorbs the duplicates.
+  // A dry run has no create to absorb anything, so the same `[]` would print `+ create` for columns
+  // that exist. The helper calls `warn` exactly when it is returning that fallback, so the warning
+  // is the signal that the answer was not conclusive.
+  const columnsOf = async (logical) => {
+    if (!columnCache.has(logical)) {
+      let readFailed = false;
+      try {
+        const cols = await findExistingColumns(provision, logical, (msg) => {
+          readFailed = true;
+          if (typeof warn === 'function') warn(msg);
+        });
+        columnCache.set(logical, readFailed ? null : new Set((cols || []).map((c) => String(c.logicalName || '').toLowerCase())));
+      } catch { columnCache.set(logical, null); }
+    }
+    return columnCache.get(logical);
+  };
+
+  // `relationshipExists` falls back to the BROAD `fetchEntityMetadata` read when the narrow one is
+  // inconclusive. Two reasons not to take that fallback here: the vendored implementation WRITES the
+  // fetched metadata into the on-disk workspace, which a read-only dry run must not do (it would
+  // change cached state a later apply reads); and the apply path deliberately treats its `null` as
+  // "absent" because the create absorbs the race, which a dry run must not copy. Handing it a
+  // reader with no `fetchEntityMetadata` makes an inconclusive probe return `null`, which becomes
+  // `unknown` below.
+  const relReader = { dataverse: provision && provision.dataverse };
+
+  const tableState = async (logical) => {
+    if (!tableCache.has(logical)) {
+      try {
+        const hit = await findExistingTable(provision, logical, { hasLocalizedLabels: localizedByEntity.get(logical) === true });
+        tableCache.set(logical, { found: !!hit });
+      } catch (err) {
+        // Includes the BuildHalt findExistingTable raises for a LOCALIZED spec whose probe is
+        // inconclusive — which is precisely an "unknown", not an absence.
+        //
+        // `why` is kept SHORT because it is printed once per plan line, and every column, view and
+        // form on the table inherits it: the BuildHalt text is a ~390-character remediation
+        // paragraph, so a 20-column table would emit ~8 KB of the same prose. The full text is kept
+        // on `whyLong` for the table's own line, where it is worth reading once.
+        const full = String((err && err.message) || err);
+        tableCache.set(logical, { found: null, why: 'the table existence probe was inconclusive', whyLong: full });
+      }
+    }
+    return tableCache.get(logical);
+  };
+
+  // Resolve view/chart/form/app the way the BUILD resolves them, so the plan cannot claim a state
+  // the apply then contradicts:
+  //   - forms go through `resolveExistingFormId`, which validates a pinned `formId` (a stale or
+  //     foreign pin makes the apply HALT — reporting that as create/reuse would hide it) and throws
+  //     on two same-(entity,type,name) forms;
+  //   - views/charts go through `provision.findArtifact`, which raises on an ambiguous identity;
+  //   - the app is keyed by its deterministic unique name.
+  // Anything thrown becomes `unknown` with the resolver's own message, which is the actionable one.
+  const artifactPresent = async (kind, def) => {
+    if (kind === 'form') return !!(await resolveExistingFormId(provision, def));
+    if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
+      return !!(await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName }));
+    }
+    const q = artifactIdentityQuery(kind, def);
+    if (!q) return null;
+    const rows = await provision.queryRecords(q.set, { select: [q.idField], filter: q.filter, top: 1 });
+    return !!(rows && rows.length);
+  };
+
+  for (const item of plan) {
+    const k = item.key;
+    if (!k) continue;
+    try {
+      if (k.kind === 'table') {
+        const t = await tableState(String(k.entity).toLowerCase());
+        item.state = t.found === null ? 'unknown' : (t.found ? 'reuse' : 'create');
+        // The table's own line carries the FULL reason (the halt text names the remediation); every
+        // other item on the same table gets the short form, so the paragraph is printed once.
+        if (t.found === null) item.stateWhy = t.whyLong || t.why;
+      } else if (k.kind === 'column') {
+        const logical = String(k.entity).toLowerCase();
+        const t = await tableState(logical);
+        // A column on a table that does not exist is unambiguously a create — and asking Dataverse
+        // for the attributes of a non-existent table only produces a metadata-cache error.
+        if (t.found === false) { item.state = 'create'; continue; }
+        if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
+        const cols = await columnsOf(logical);
+        if (!cols) { item.state = 'unknown'; item.stateWhy = 'the table\'s attributes could not be read'; continue; }
+        item.state = cols.has(String(k.name).toLowerCase()) ? 'reuse' : 'create';
+      } else if (k.kind === 'relationship') {
+        // Tri-state: `null` means the probe could not tell. The apply path treats that as absent
+        // (its create absorbs the race); a plan has nothing to absorb it, so it must say so.
+        // The localized-label flag is deliberately NOT threaded here. Its only effect inside
+        // `relationshipExists` is to suppress the `fetchEntityMetadata` fallback — and `relReader`
+        // has no `fetchEntityMetadata` at all (see above), so an inconclusive probe already returns
+        // `null` either way. Passing it would be inert code that reads as though it decides
+        // something.
+        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType);
+        item.state = present === null || present === undefined ? 'unknown' : (present ? 'reuse' : 'create');
+        if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
+      } else if (k.kind === 'app') {
+        const present = await artifactPresent('app', { uniqueName: k.uniqueName });
+        item.state = present ? 'reuse' : 'create';
+      } else if (k.kind === 'view' || k.kind === 'chart' || k.kind === 'form') {
+        // A form/view/chart on a table that does not exist yet cannot exist either, and the filter
+        // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
+        const t = await tableState(String(k.entity).toLowerCase());
+        if (t.found === false) { item.state = 'create'; continue; }
+        // …and if the TABLE probe was inconclusive, nothing about its artifacts is knowable either.
+        // Without this the plan contradicts itself in adjacent lines — `? unknown` for the table and
+        // a confident `+ create` for every view and form on it — and the apply never gets that far:
+        // findExistingTable raises BuildHalt for exactly this state, outside any runner.run, so the
+        // build aborts in `data-model`. The form arm is the worst of the three, because
+        // resolveExistingFormId deliberately swallows the MetadataCache 400 and returns null, which
+        // `!!` then flattens into a confident "absent".
+        if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
+        const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
+        item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
+      }
+    } catch (err) {
+      item.state = 'unknown';
+      item.stateWhy = String((err && err.message) || err);
+    }
+  }
+  return plan;
+}
 
 // --- orchestrator ----------------------------------------------------------------------
 async function runSdkBuild(spec, opts = {}) {
@@ -1120,11 +1447,30 @@ async function runSdkBuild(spec, opts = {}) {
   const plan = planFor(spec, { sampleData, publish, phases });
 
   if (!apply) {
-    plan.forEach((p, i) => emit({ phase: p.phase, status: 'skip', label: p.label, n: i + 1, total: plan.length }));
-    return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
+    // #559: resolve create-vs-reuse against the live environment before printing the plan. Opt out
+    // with `livePlan: false` for an offline/spec-only listing (the old behaviour). Probing is
+    // skipped silently when the caller supplied no reader — a dry run must still work without one.
+    const canProbe = opts.livePlan !== false && provision && typeof provision.queryRecords === 'function';
+    if (canProbe) {
+      try {
+        await annotateLivePlan(plan, { spec, provision, warn: opts.warn });
+      } catch (err) {
+        // The plan itself is still worth printing; say the states are missing rather than implying
+        // every item is a create.
+        emit({ phase: 'plan', status: 'warn', label: `live plan unavailable (${(err && err.message) || err}) — showing the spec-derived plan only`, n: 0, total: plan.length });
+      }
+    }
+    plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
+    return {
+      ok: true,
+      dryRun: true,
+      livePlan: canProbe,
+      plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
+      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}) })),
+    };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1217,7 +1563,7 @@ async function runSdkBuild(spec, opts = {}) {
     // `description` is new on forms in this SDK uptake (dashboards, rows in the same systemform
     // table, always had it). Passed only when the spec sets one: omitted on push it is not written,
     // so an existing server-side description survives an edit that did not set one.
-    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
+    const art = await provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
     const tabs = def.tabs || [];
     // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
     for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
@@ -1293,6 +1639,57 @@ async function runSdkBuild(spec, opts = {}) {
       added = true;
     }
     return added;
+  };
+
+  // Fetch a just-created form before wiring its event handlers, tolerating the workspace-metadata
+  // race. AB#6688905.
+  //
+  // `buildArtifact` resolves once the form ROW exists, but the SDK persists the workspace copy as two
+  // files — `.maker-workspace/forms/<id>.json` and `.maker-workspace/.metadata/forms/<id>.meta.json`
+  // — and `fetchArtifact` reads the metadata one. Under `mapLimit` several forms are written
+  // concurrently, and the reporter hit the window between them:
+  //   UNKNOWN: unknown error, open '...\.maker-workspace\.metadata\forms\<id>.meta.json'
+  // with the sibling `.json` already on disk. `UNKNOWN` (not ENOENT) is what Windows reports for a
+  // concurrent-access/sharing violation, which is why this matches on the PATH rather than the code
+  // — matching only ENOENT would miss the shape that was actually observed.
+  //
+  // A retry is the correct remedy rather than a workaround: the reporter's second identical run
+  // succeeded, so the state is transient by construction, and the build is idempotent. Bounded and
+  // narrow on purpose — a form whose metadata never lands still fails, with a message that names the
+  // race instead of the bare `UNKNOWN` the operator could do nothing with.
+  //
+  // ⚠ THE SDK NOW RETRIES TOO, and this is deliberately kept as a SECOND layer rather than deleted.
+  // The vendored `WorkspaceManager` retries `EPERM`/`EACCES`/`EBUSY`/`UNKNOWN` on its own and treats a
+  // file deleted between its `exists` probe and its open as absent. Two reasons this outer retry still
+  // earns its place: the SDK's authors explicitly decline to call that fix MEASURED (a two-process
+  // harness never reproduced the failure, so the trigger is environmental — an AV scanner or indexer
+  // holding a handle), and an exhausted SDK budget rethrows the bare `UNKNOWN` unchanged, which is the
+  // message the operator could do nothing with. The layering costs nothing on the happy path. Delete
+  // this only against evidence that the SDK's budget is sufficient, not merely because it exists.
+  const isWorkspaceMetadataRace = (err) => {
+    const msg = (err && err.message) || String(err || '');
+    return /[\\/]\.metadata[\\/]/.test(msg) && /\.meta\.json/.test(msg);
+  };
+  const fetchFormForWiring = async (id, f) => {
+    const attempts = 4;
+    let last;
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        return await provision.fetchArtifact('form', id);
+      } catch (err) {
+        last = err;
+        if (!isWorkspaceMetadataRace(err) || i === attempts - 1) break;
+        // Linear, not exponential: the writer is a local file flush, so the wait needed is
+        // milliseconds — a doubling backoff would spend seconds waiting for something already done.
+        await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+      }
+    }
+    if (isWorkspaceMetadataRace(last)) {
+      throw new Error(`form ${f && (f.name || f.entity)}: the workspace metadata for this form was still not readable after ${attempts} attempts `
+        + `(${(last && last.message) || last}). The form row itself was created — this is a local workspace write race, not a Dataverse failure. `
+        + 'Re-run the same command: the build is idempotent and the metadata will exist on the next run.');
+    }
+    throw last;
   };
 
   // Reconcile an EXISTING form to the spec: fetch it, ADD any spec field/sub-grid not already placed
@@ -1411,6 +1808,287 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
+  // After a whole tab or form-column is appended, record where each of its sections landed, so the
+  // field pass places into them through the same locator the converge path produces. A freshly
+  // added container's sections occupy indices 0..n-1 in declaration order.
+  const recordColumnSectionTargets = (out, wantColumn, tabIndex, columnIndex, liveColumns) => {
+    const live = ((liveColumns || [])[columnIndex] || {}).sections || [];
+    (wantColumn.sections || []).forEach((s, si) => {
+      out[s.name] = { pointer: '/tabs/' + tabIndex + '/columns/' + columnIndex + '/sections/' + si, name: (live[si] || {}).name };
+    });
+  };
+
+  const recordSectionTargets = (out, wantTab, tabIndex, liveTab) => {
+    (wantTab.columns || []).forEach((c, ci) => recordColumnSectionTargets(out, c, tabIndex, ci, (liveTab || {}).columns));
+  };
+
+  // Identity of a deployed tab/section across rebuilds, in descending order of confidence:
+  //   1. NAME  — what the compiler emits, so a form this plugin created matches itself exactly.
+  //   2. LABEL — what the author sees and types; survives a name this plugin did not choose
+  //      (a form built in Maker, or by a much older version).
+  //   3. POSITION — last resort, and the one that makes an AUTO -> EXPLICIT migration converge.
+  //      The auto layout emits `tab_general`/`section_general`, while an explicit layout with no
+  //      authored names emits `tab_0`/`section_0_0` — so name matching alone would append a second
+  //      tab to every form this plugin had already built, on every single rebuild.
+  // A container is CREATED only when all three miss, which is what stops a rebuild duplicating one.
+  //
+  // `claimed` carries the indices an EARLIER want already took. Without it every want is matched
+  // independently, and because the compiler substitutes a DEFAULT label for an unlabeled container
+  // ('General' for a tab, 'Details' for a section), an author who labels nothing produces several
+  // wants with an identical label — the label pass then returns index 0 for all of them and the
+  // whole layout collapses into one container. Position has the same failure with repeated indices.
+  //
+  // `skip` hides containers the weaker passes must not claim. Only NAME may match them, because a
+  // name is positive evidence and a label/position is not.
+  const matchContainer = (list, want, wantIndex, opts) => {
+    const items = list || [];
+    const claimed = (opts && opts.claimed) || null;
+    const skip = (opts && opts.skip) || (() => false);
+    const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
+    const free = (i) => !claimed || !claimed.has(i);
+    let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
+    if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
+    if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
+    return idx < 0 ? null : { index: idx, item: items[idx] };
+  };
+
+  // A section the ENGINE owns rather than one the author laid out: a sub-grid host, or the
+  // notes/timeline section. `addSubgrids` appends one such section per authored sub-grid on EVERY
+  // layout (auto included), and `compileFormIntent` appends the notes section — so they sit in the
+  // same `sections[]` array as the author's own, just after them.
+  //
+  // They must be invisible to the LABEL and POSITION passes. Otherwise, as soon as an explicit
+  // layout declares as many sections as the index of the first appended one, the positional fallback
+  // claims the sub-grid: it gets relabelled to the author's section title, bound field controls are
+  // injected into the row holding the grid control, and the author's section is never created. The
+  // build is green and a rebuild converges on the same wrong shape, so nothing downstream reports it.
+  //
+  // Detected structurally (every cell carries a control with no `fieldName`) rather than by name, so
+  // it holds for a sub-grid whose section the author renamed in Maker. An EMPTY section has no cells
+  // and is deliberately NOT engine-owned — it stays matchable so a vacated section can be reused.
+  const isEngineOwnedSection = (s) => {
+    const cells = ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+    return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
+  };
+
+  // Send only the keys that actually differ, so a rebuild that changes nothing issues no writes.
+  const diffPatch = (live, want, keys) => {
+    const patch = {};
+    for (const k of keys) if (want[k] !== undefined && live[k] !== want[k]) patch[k] = want[k];
+    return patch;
+  };
+
+  // Converge an EXISTING form's CONTAINER topology (tabs, form-columns, sections) onto the spec's
+  // explicit layout, before any field is placed.
+  //
+  // Why this exists: the reconcile used to flatten an explicit layout entirely — every field was
+  // appended to `firstSectionRowsPointer`, i.e. the first section of the first tab, and no tab or
+  // section was ever created or reshaped. Because declaring explicit `tabs` ALSO switches pruning
+  // on, an author who moved to an explicit two-column layout to reorganize a deployed form got the
+  // old topology, minus any field they had not re-declared, and a successful build (#575).
+  //
+  // Containers are created EMPTY (`rows: []`) and every field is placed by the single pass that
+  // follows. Adding a tab with its compiled cells intact would duplicate any field already on the
+  // form elsewhere, and would leave two code paths that can each place a control.
+  //
+  // Existing containers are UPDATED IN PLACE rather than replaced, so ids — and any control a maker
+  // added to a section by hand — survive. `updateElement` merges when both sides are objects, so
+  // patching only the differing keys preserves everything else in the container.
+  //
+  // Returns the desired-section-name -> deployed-section locator map the field pass places through.
+  // It cannot re-derive this by name: a position-matched section keeps its own deployed name (it is
+  // deliberately NOT renamed, because form scripts and business rules can reference a section name).
+  const reconcileFormTopology = async (formId, def) => {
+    // An engine-owned section carries its rows INTACT when created: the field pass places only bound
+    // fields, so a notes/timeline section created empty would deploy a visible section header
+    // promising a control that nothing ever adds.
+    const stripRows = (section) => (isEngineOwnedSection(section) ? Object.assign({}, section) : Object.assign({}, section, { rows: [] }));
+    const sectionTargets = {};
+    const wantTabs = def.tabs || [];
+    // Indices already taken by an earlier want, so two wants can never converge on one container.
+    const claimedTabs = new Set();
+    const claimedSections = new Map(); // column pointer -> Set(index)
+    const claimedIn = (key) => { if (!claimedSections.has(key)) claimedSections.set(key, new Set()); return claimedSections.get(key); };
+    for (let ti = 0; ti < wantTabs.length; ti++) {
+      const wantTab = wantTabs[ti];
+      // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
+      // computed against an earlier snapshot can address the wrong container.
+      let form = await provision.getArtifact('form', formId) || {};
+      const tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      if (!tabMatch) {
+        await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
+          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: (c.sections || []).map(stripRows) })),
+        }));
+        form = await provision.getArtifact('form', formId) || {};
+        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        if (added) { claimedTabs.add(added.index); recordSectionTargets(sectionTargets, wantTab, added.index, added.item); }
+        continue;
+      }
+      claimedTabs.add(tabMatch.index);
+      const tabPointer = '/tabs/' + tabMatch.index;
+      const tabPatch = diffPatch(tabMatch.item, wantTab, ['label', 'expanded', 'visible']);
+      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, tabPointer, tabPatch);
+
+      const wantColumns = wantTab.columns || [];
+      for (let ci = 0; ci < wantColumns.length; ci++) {
+        form = await provision.getArtifact('form', formId) || {};
+        const liveTab = (form.tabs || [])[tabMatch.index];
+        if (!liveTab) break; // defensive: the tab vanished mid-reconcile
+        const liveColumns = liveTab.columns || [];
+        if (ci >= liveColumns.length) {
+          // A tab that gained a form-column — e.g. a single-column form widened into two.
+          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], {
+            sections: (wantColumns[ci].sections || []).map(stripRows),
+          }));
+          form = await provision.getArtifact('form', formId) || {};
+          recordColumnSectionTargets(sectionTargets, wantColumns[ci], tabMatch.index, ci, ((form.tabs || [])[tabMatch.index] || {}).columns);
+          continue;
+        }
+        if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
+          await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
+        }
+        const wantSections = wantColumns[ci].sections || [];
+        for (let si = 0; si < wantSections.length; si++) {
+          const wantSection = wantSections[si];
+          form = await provision.getArtifact('form', formId) || {};
+          const columnPointer = tabPointer + '/columns/' + ci;
+          const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
+          // A section may have been dragged to a different tab in Maker; it is still THAT section,
+          // so a form-wide name hit outranks a positional one inside this column.
+          const global = wantSection.name ? findSectionLocation(form, wantSection.name) : null;
+          const claimedHere = claimedIn(columnPointer);
+          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si, { claimed: claimedHere, skip: isEngineOwnedSection });
+          if (!global && !local) {
+            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
+            form = await provision.getArtifact('form', formId) || {};
+            const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const addedIdx = addedList.length - 1;
+            claimedHere.add(addedIdx);
+            sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
+            continue;
+          }
+          if (local) claimedHere.add(local.index);
+          else if (global && global.pointer.startsWith(columnPointer + '/sections/')) {
+            // A form-wide NAME hit inside THIS column still consumes that index. Without this, a
+            // later want in the same column could match the very section the name hit already took
+            // (by label or position), routing two authored sections onto one deployed section.
+            const idx = Number(global.pointer.slice((columnPointer + '/sections/').length));
+            if (Number.isInteger(idx)) claimedHere.add(idx);
+          }
+          const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
+          const live = global ? global.section : local.item;
+          sectionTargets[wantSection.name] = { pointer, name: live.name };
+          // `columns` is the key that matters most: it is what makes a section render as two
+          // columns rather than one, and it was previously unreachable on an existing form.
+          const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
+          if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
+        }
+      }
+    }
+    return sectionTargets;
+  };
+
+  // Resolve a section target recorded during the topology pass back to a live pointer.
+  // Prefer the deployed NAME (stable across the row-level mutations the field pass makes) and fall
+  // back to the recorded pointer for a section that carries no name at all.
+  const resolveSectionPointer = (form, target) => {
+    if (!target) return null;
+    if (target.name) {
+      const loc = findSectionLocation(form, target.name);
+      if (loc) return loc.pointer;
+    }
+    return target.pointer || null;
+  };
+
+  const sectionAt = (form, pointer) => {
+    const t = String(pointer || '').split('/').filter(Boolean);
+    if (t.length !== 6) return null;
+    const tab = (form.tabs || [])[Number(t[1])];
+    const col = tab && (tab.columns || [])[Number(t[3])];
+    return (col && (col.sections || [])[Number(t[5])]) || null;
+  };
+
+  // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
+  // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
+  // changes nothing issues no writes.
+  const convergeCellSpans = async (formId, form, location, wantCell) => {
+    if (!location || !wantCell) return;
+    const live = cellAt(form, location);
+    if (!live) return;
+    const patch = {};
+    for (const key of ['colspan', 'rowspan']) {
+      const want = wantCell[key];
+      if (want === undefined) continue; // no opinion — never overwrite a maker's hand-set span
+      const current = live[key] === undefined ? 1 : live[key];
+      if (current !== want) patch[key] = want;
+    }
+    if (Object.keys(patch).length) await provision.updateElement('form', formId, location.cellPointer, patch);
+  };
+
+  // The live cell a findFieldCellLocation result points at.
+  const cellAt = (form, location) => {
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    return (row && (row.cells || [])[location.cellIndex]) || null;
+  };
+
+  // Place one field in the section the layout declares, whether it is absent or merely misplaced.
+  //
+  // A field whose declared section could not be resolved falls back to the form's first section —
+  // exactly the pre-existing behavior. A layout the topology pass could not materialize must still
+  // never lose a field.
+  const placeFieldInSection = async (formId, logical, wantCell, target) => {
+    let form = await provision.getArtifact('form', formId) || {};
+    const targetPointer = resolveSectionPointer(form, target);
+    const existing = findFieldCellLocation(form, logical);
+
+    if (!existing) {
+      const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
+      if (!rowsPtr) return;
+      await provision.addElement('form', formId, rowsPtr, { cells: [wantCell] });
+      return;
+    }
+    // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
+    // used to be create-only on an existing form: an author who widened a field to `colspan: 2` on a
+    // deployed form got a green build and an unchanged cell.
+    //
+    // Only spans the author EXPLICITLY set are written. `fieldCellIntent` omits a span of 1, so an
+    // absent span means "no opinion" and leaves a cell a maker widened by hand alone — the same rule
+    // that keeps `isReadOnly: false` from ever being written.
+    await convergeCellSpans(formId, form, existing, wantCell);
+
+    // Already on the form and already in the right section (or we have no opinion) — leave it be,
+    // so a rebuild converges instead of reshuffling the form on every run.
+    if (!targetPointer || existing.sectionPointer === targetPointer) return;
+
+    // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
+    // adapter-derived or maker-edited control state survive the move.
+    let rowIndex = ((sectionAt(form, targetPointer) || {}).rows || []).length - 1;
+    if (rowIndex < 0) {
+      // A section this run just created has no row to move into. The SDK accepts a row with an
+      // empty cells array and serializes it correctly, so seed one and target that.
+      await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
+      rowIndex = 0;
+    }
+    form = await provision.getArtifact('form', formId) || {};
+    const from = findFieldCellLocation(form, logical);
+    const liveTarget = resolveSectionPointer(form, target);
+    if (!from || !liveTarget) return;
+    const row = ((sectionAt(form, liveTarget) || {}).rows || [])[rowIndex];
+    if (!row) return;
+    await provision.moveElement('form', formId, from.cellPointer, liveTarget + '/rows/' + rowIndex + '/cells', { index: (row.cells || []).length });
+    // Moving the only cell out of a row leaves an empty `<row/>` that renders as a blank line and
+    // would accumulate one per relocated field. Row indices are unchanged by a cell move, so the
+    // source row is still where it was.
+    if (from.rowCellCount === 1) {
+      const after = await provision.getArtifact('form', formId) || {};
+      const stranded = jsonPointerRow(after, from.rowPointer);
+      if (stranded && (stranded.cells || []).length === 0) {
+        await provision.removeElement('form', formId, from.rowPointer);
+      }
+    }
+  };
+
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
     // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
@@ -1421,13 +2099,18 @@ async function runSdkBuild(spec, opts = {}) {
       if (fn) wantCellByLogical[String(fn).toLowerCase()] = c;
     }
     const want = formFieldLogicals(def);
-    const have = new Set(formFieldLogicals(await provision.getArtifact('form', formId) || {}));
+    // An EXPLICIT layout is author-controlled topology, so converge the containers first and then
+    // place every field into the section that layout names. An AUTO layout has exactly one section
+    // and no authored structure to honor, so it keeps the additive first-section behavior —
+    // reshaping a form a maker built by hand is not something an auto layout ever asked for.
+    let declaredSection = {};
+    let sectionTargets = {};
+    if (def.__explicitLayout) {
+      declaredSection = declaredSectionByField(def.tabs);
+      sectionTargets = await reconcileFormTopology(formId, def);
+    }
     for (const logical of want) {
-      if (have.has(logical)) continue; // idempotent: already on the form
-      const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', formId) || {});
-      if (!rowsPtr) break;
-      await provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
-      have.add(logical);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]]);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -1467,7 +2150,7 @@ async function runSdkBuild(spec, opts = {}) {
   // Reconcile an EXISTING author view: fetch it, UNION its current columns with the spec's (so a
   // manual column add in Maker is preserved AND the spec's new lookup columns land), set, push,
   // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
-  const reconcileView = async (viewId, def) => {
+  const reconcileView = async (viewId, def, authoredQuery) => {
     await provision.fetchArtifact('view', viewId);
     const current = await provision.getArtifact('view', viewId) || {};
     const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
@@ -1493,6 +2176,20 @@ async function runSdkBuild(spec, opts = {}) {
     const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
     if (wantDescription && wantDescription !== String(current.description || '')) {
       await provision.updateElement('view', viewId, '/description', wantDescription);
+    }
+    // An EXISTING view's FetchXML (filters + sort) is not reapplied here — only columns and the
+    // description converge. Silence made an authored filter edit look applied when it was not, so
+    // the no-op is reported instead. It is a warning rather than a failure because the common way to
+    // hit it is entirely benign: the build reconciles onto the platform's auto-generated
+    // "Active <Plural>" view, which every table already has.
+    //
+    // `authoredQuery` is passed in rather than derived from `def`, because `viewDef` folds the
+    // implicit `statecode eq 0` of `activeOnly` into the same `filters.conditions` array as the
+    // author's own — so a non-empty array does not mean the author declared anything, and warning
+    // off it would fire on every rebuild of every view. `--verify` proves the deployed fetchxml
+    // separately and FAILS on a divergence; this explains what verification will report.
+    if (authoredQuery && typeof opts.warn === 'function') {
+      opts.warn(`view '${def.name}' already exists — its columns and description were updated, but authored filters/sort are NOT reapplied to an existing view. Rename the view to author a separate one, or adjust its filters in Maker.`);
     }
     requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
     reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
@@ -1525,11 +2222,17 @@ async function runSdkBuild(spec, opts = {}) {
     try {
       await provision.updateRecord('systemform', formId, { isdefault: true });
       promoted = true;
-    } catch {
-      /* best-effort — leave promoted=false so we skip the destructive deactivation below */
+    } catch (err) {
+      // Best-effort for the BUILD (leave promoted=false so the destructive deactivation below is
+      // skipped), but no longer SILENT. Swallowing this outright let a build record a selected
+      // default form it had not actually promoted, and report success — the exact silent-partial
+      // class `--verify` exists to catch. Verification now proves `systemform.isdefault`
+      // independently, so this warning is the signal that explains the failure it will report.
+      const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
+      if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return;
-    if (typeof provision.queryRecords !== 'function') return;
+    if (!deactivateOthers || !promoted) return promoted;
+    if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
       // (formactivationstate 1 -> 0); ours is skipped by id. A form already inactive
@@ -1553,10 +2256,11 @@ async function runSdkBuild(spec, opts = {}) {
     } catch {
       /* best-effort */
     }
+    return promoted;
   };
 
   // helper: create an artifact — or UPDATE it in place if it already exists — then add to the solution.
-  const buildArtifact = (type, def) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
+  const buildArtifact = (type, def, meta) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
     // Update-in-place: editing a deployed spec must land, so a form is reconciled (fields +
     // sub-grids) and a view has its columns reconciled, instead of the artifact being reused
     // unchanged (the old behavior silently dropped every edit while still reporting success).
@@ -1567,10 +2271,10 @@ async function runSdkBuild(spec, opts = {}) {
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
       const existingId = await resolveExistingFormId(provision, def);
-      if (existingId) return reconcileForm(existingId, def);
+      if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
-      if (existingId) return reconcileView(existingId, def);
+      if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
     // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
@@ -1581,7 +2285,7 @@ async function runSdkBuild(spec, opts = {}) {
       id = await createFormShell(def);
       await addSubgrids(id, def.__subgrids);
     } else {
-      id = provision.createArtifact(type, def).id;
+      id = (await provision.createArtifact(type, def)).id;
     }
     const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
@@ -1590,7 +2294,7 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
-    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
     // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
@@ -1696,7 +2400,7 @@ async function runSdkBuild(spec, opts = {}) {
         return existingId;
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
-        const art = provision.createArtifact('chart', def);
+        const art = await provision.createArtifact('chart', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         // Created here, so it IS workspace-resident and publishable.
@@ -1746,21 +2450,10 @@ async function runSdkBuild(spec, opts = {}) {
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
-      // Gap 2: make our main form the entity's default so the app opens it, not the blank stock form.
-      // Guarded to a table THIS build OWNS — a custom, publisher-prefixed table that isn't flagged
-      // `existing`. A system/reused table (account, systemuser, or anything without our prefix) must
-      // never have its default form re-pointed: that's a shared, environment-wide side effect.
-      if ((d.f.formType || 'Main') === 'Main') {
-        const entSpec = entityByLogical(spec, d.f.entity.toLowerCase());
-        const prefix = spec.solution && spec.solution.publisherPrefix;
-        const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-          String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-        if (isOwnCustomTable) await promoteDefaultForm(id, d.f.entity.toLowerCase(), d.f.deactivateOtherMainForms === true);
-      }
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
         await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
-          await provision.fetchArtifact('form', id);
+          await fetchFormForWiring(id, d.f);
           // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
           if (await wireFormEvents(id, wantedEvents)) {
@@ -1773,7 +2466,79 @@ async function runSdkBuild(spec, opts = {}) {
     });
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
-    defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    //
+    // AB#6686426 — default-form promotion, ONCE per entity, AFTER every form exists.
+    //
+    // This used to run inside the concurrent per-form build above, so on a table with several Main
+    // forms every one of them promoted itself and the LAST to finish won. Which form a table opened
+    // with therefore depended on completion order — an alternate read-only or OnSave-blocked form
+    // could silently become the default, changing normal app behaviour.
+    //
+    // Selection is explicit first (`forms[].isDefault`), then a documented stable fallback: the FIRST
+    // Main form in spec order. Both are order-independent, which is the property that was missing.
+    // Still guarded to a table THIS build owns — re-pointing the default form of a system or reused
+    // table is an environment-wide side effect.
+    const promotedEntities = new Set();
+    const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      const current = mainByEntity.get(key);
+      // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
+      if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
+        mainByEntity.set(key, { id: ids[i], f: d.f });
+      }
+    });
+    for (const [entityLogical, chosen] of mainByEntity) {
+      const entSpec = entityByLogical(spec, entityLogical);
+      const prefix = spec.solution && spec.solution.publisherPrefix;
+      const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+        String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+      if (!isOwnCustomTable) continue;
+      // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
+      // bookkeeping below — a build that could not set the flag must not report a default form it
+      // did not set, which is what `result.created.defaultForms` claims.
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      if (promoted) promotedEntities.add(entityLogical);
+    }
+    if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
+      [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])
+    );
+
+    // overwrites the first. That is correct for what the map is for — the app shell wires one form
+    // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
+    // concludes the other ids were lost. `created.formIds` below is keyed by the (entity, formType,
+    // name) triple and normally holds them all.
+    //
+    // The warning deliberately does NOT promise that `formIds` is complete: `formIdentityKey` omits
+    // `formId`, which the App Spec supports precisely so two forms can share an entity, type and
+    // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
+    // the reader to a map that cannot answer them either.
+    const mainFormSeen = new Map(); // entity -> { shownName, identityKey } for the first Main form, in spec order
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      // `name` is optional on a form and is compiled to "<entity> form"; using the raw spec value
+      // here would print "undefined" for exactly the forms the author did not name.
+      const shownName = d.f.name || (d.def && d.def.name) || `${key} form`;
+      if (!mainFormSeen.has(key)) {
+        mainFormSeen.set(key, { shownName, identityKey: formIdentityKey(d.f) });
+      } else if (typeof opts.warn === 'function') {
+        const first = mainFormSeen.get(key);
+        // Compared on the stored IDENTITY KEY of the earlier form, not on a key rebuilt from its
+        // DISPLAY name. Those differ for an UNNAMED form: `formIdentityKey` uses `f.name || ''`
+        // while `shownName` falls back to "<entity> form", so rebuilding from the display name made
+        // two unnamed Main forms look distinct when they actually collide in `created.formIds` —
+        // and the warning then pointed the reader at a map that could not separate them either.
+        const distinct = formIdentityKey(d.f) !== first.identityKey;
+        opts.warn(`entity ${key} has more than one Main form ("${first.shownName}" and "${shownName}"); `
+          + `created.forms keeps ONE id per entity for the app shell, so it now reports "${shownName}". `
+          + (distinct
+            ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
+            : 'These two share an entity, type and name, so created.formIds cannot separate them either — give them distinct names.'));
+      }
+      result.created.forms[key] = ids[i];
+    });
     // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
     // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
     // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and
@@ -1962,45 +2727,33 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
-        const art = provision.createArtifact('businessRule', def);
+        const art = await provision.createArtifact('businessRule', def);
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
-        // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
-        // node, ignored by the serializer, and written as a rule with no clauses and no actions:
-        // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
-        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring") and, until this
-        // SDK, the spec gate was the only thing standing in front of it.
+        // The push USED to be unable to tell you a rule was wrong: a mis-shaped condition tree was
+        // MERGED onto the node, ignored by the serializer, and written as a rule with no clauses and
+        // no actions — HTTP 204, activated, and it never fired.
         //
-        // The SDK now exposes the business-rule designer's OWN completeness validator — the same one
-        // the designer gates its Save button on — and states plainly that nothing on the push path
-        // runs it, so run it here, BEFORE the write.
+        // That trap is CLOSED at the source as of the injected-storage re-vendor. The SDK now runs
+        // the business-rule designer's own completeness validator internally on EVERY save — create
+        // and update, Active and Draft — so an incomplete or mis-shaped rule is REFUSED by
+        // `pushArtifact` below, naming the offending clause, and nothing reaches the wire.
+        // Measured and pinned in sdk-uptake-contract.test.js ("a wrongly-shaped condition is now
+        // REFUSED at push, closing the empty-rule trap"), which asserts both the refusal and that no
+        // request was made.
         //
-        // Strict about FINDINGS, best-effort about the VALIDATOR. Findings halt: a rule that reports
-        // success and never fires is exactly the silent-wrong-artifact class this engine exists to
-        // prevent, and it is invisible afterwards. But a bundle without the method, or a validator
-        // that throws, must not block a build it cannot judge.
+        // ⚠ The explicit validation call that used to sit HERE is therefore gone, and its removal is
+        // a TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
+        // validator method, which no longer exists. The old call was best-effort by design (a bundle
+        // without the method must not block a build it cannot judge), so it silently degraded to NO
+        // validation whenever the vendored bundle predated it. Re-adding a defensive
+        // `typeof ... === 'function'` block would now be dead code that never runs and implies
+        // coverage living elsewhere.
         //
-        // Field metadata is deliberately NOT passed: without it the SDK SUPPRESSES the
-        // metadata-dependent checks (Clear eligibility, value-type compatibility, max length) rather
-        // than failing them, and the structural checks are the ones that close the trap above.
-        // Passing them would cost an attribute read per rule for checks the spec gate already covers.
-        //
-        // MEASURED against this bundle: every shape this spec surface can author — all 16 operators,
-        // all 4 action types, every scope and status, multi-condition and multi-action — reports zero
-        // issues, so this cannot reject a rule that was previously buildable.
-        if (typeof provision.validateBusinessRule === 'function') {
-          let issues = null;
-          try {
-            issues = provision.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
-          } catch { /* a diagnostic that cannot run must never fail the build */ }
-          if (Array.isArray(issues) && issues.length) {
-            const detail = issues.map((i) => `${(i && i.rule) || 'issue'}: ${(i && i.message) || ''}`.trim()).join('; ');
-            throw new BuildHalt(
-              `business rule "${rule.name}" on ${rule.entity} is incomplete and would deploy as a rule that never fires — ${detail}`,
-              { phase: 'business-rules', code: 'business-rule-incomplete', recoverable: false });
-          }
-        }
+        // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
+        // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
+        // mention in prose as a live call, then demand it back on the vendored bundle.
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
@@ -2081,7 +2834,14 @@ async function runSdkBuild(spec, opts = {}) {
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
       const existing = await provision.queryRecords('workflow', {
-        select: ['workflowid', 'statecode', 'createdon'],
+        // `uniquename` is selected, not derived. Activation creates the flow's backing TABLE with
+        // exactly this name, and the security phase grants privileges on that table. For a flow this
+        // build created, `bpfUniqueName(flow.name)` IS the deployed value — but a REUSED flow may
+        // have been authored in Maker or by another tool under any unique name at all, and a
+        // later display-name rename does not follow it. Deriving instead of reading would then grant
+        // on a table that either does not exist or, worse, belongs to something else entirely.
+        // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+        select: ['workflowid', 'statecode', 'createdon', 'uniquename'],
         // Definition rows only, and BusinessFlow only — see bpfFilter.
         filter: bpfFilter(flow.name, entityLogical),
         // Ordered and > 1 for the same reason as business rules: `top: 1` unordered adopts an
@@ -2118,6 +2878,10 @@ async function runSdkBuild(spec, opts = {}) {
           runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
         }
         result.created.businessProcessFlows[key] = existingId;
+        // The DEPLOYED backing-table name, read back rather than derived (see the select above). A
+        // row with no `uniquename` (an older projection, or a double that does not model the field)
+        // falls back to the derivation, which is still the right answer for anything this tool made.
+        result.created.bpfBackingTables[key] = String(existing[0].uniquename || bpfUniqueName(flow.name)).toLowerCase();
         // Reconcile solution membership on the REUSE path too. `addSolutionComponent` is otherwise
         // only reached by the create branch, so a run where the flow was created but the component
         // add failed (or a flow created by an earlier build of a different solution) would be reused
@@ -2185,9 +2949,14 @@ async function runSdkBuild(spec, opts = {}) {
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
         // condition tree there is no element-surface follow-up to make.
-        const art = provision.createArtifact('bpf', bpfDef(flow));
+        const art = await provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
+        // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
+        // adapter derived `uniquename` from it, and `unique` above is that same derivation — already
+        // proven collision-free by the clash checks. Recorded explicitly so the security phase reads
+        // ONE map regardless of which branch produced the flow.
+        result.created.bpfBackingTables[key] = unique;
         // componentType 29 (workflow) — a BPF is a workflow row, so it ships in the solution the same
         // way a business rule does. Without this the process is left out of the solution and does not
         // travel on export/import.
@@ -2213,7 +2982,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
-        const art = provision.createArtifact('command', def);
+        const art = await provision.createArtifact('command', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`, opts.warn);
         result.created.commands[entityLogical] = pushed.id;
       });
@@ -2240,7 +3009,7 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
-        const art = provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
+        const art = await provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
         // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
         // without awaiting them — the push below could then race an unfinished tile insert.
         const tiles = dash.tiles || [];
@@ -2318,7 +3087,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
-      const art = provision.createArtifact('app', def);
+      const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
@@ -2572,12 +3341,23 @@ async function runSdkBuild(spec, opts = {}) {
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           return result.created.app;
         });
+      } else {
+        // planFor budgets this step for every pages-phase run, so consume the slot even when there is
+        // nothing to write — otherwise the remaining steps renumber past the advertised total.
+        runner.skip('pages', `finalize sitemap (genpage subareas) (${skipSitemapFinalize ? 'content-only re-upload — sitemap unchanged' : 'no sitemap change'})`);
       }
     } finally {
       // Always clean up run-scoped staging (never leave env GUIDs on disk) and release the advisory lease.
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       lease.release();
     }
+  } else if (has('pages')) {
+    // The pages phase was selected but the block above did not open: a FRESH app with a page-less
+    // spec has nothing to build and no pre-existing pages to remove, and its sitemap was already
+    // written by the app-shell create path. planFor still budgeted the finalize step (it cannot see
+    // that the app is fresh), so consume the slot here rather than leaving the run one short of its
+    // advertised total.
+    runner.skip('pages', 'finalize sitemap (genpage subareas) (fresh page-less app — sitemap written on create)');
   }
 
   // 7b-ii. Modern ("new look") shell — opt-in via `app.newLook`.
@@ -2663,14 +3443,13 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
-  //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
-  //     skips features whose admin gate is off; it never throws.
-  // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
+  // 7c. AI features (opt-in via spec.ai). Enable app-level agents + configure per-table row
+  //     summaries. `setAppAiFeatures` never throws — every outcome arrives as data in a bucket.
+  // Features the SDK did not put in `applied`, deferred for a post-publish re-issue (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
 
-  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+  if (has('ai-features') && specOptsIntoAi(spec)) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
     const flags = resolveAiFlags(spec);
@@ -2708,10 +3487,15 @@ async function runSdkBuild(spec, opts = {}) {
       // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
       //   notPersisted — the write returned 204 but no override was observed for the whole retry
       //                  budget; Dataverse can accept an app-scope write and store nothing.
+      //   skipped      — as notPersisted, PLUS the feature's org readiness gate reads off, which is
+      //                  offered as the explanation. Since AB#6688904 the SDK ATTEMPTS every write
+      //                  and reads the gate only afterwards, to explain a failure that happened —
+      //                  it no longer pre-empts the write, so this bucket is now evidence, not a
+      //                  prediction.
       //   unverified   — the write was issued but the proof could not be READ (no access to
       //                  appsettings/settingdefinitions/appmodules, or a transport error).
-      //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
-      //                  of the batch still reports, so this arrives as data, never as an exception.
+      //   failed       — the write threw. The SDK keeps going so the rest of the batch still
+      //                  reports, so this arrives as data, never as an exception.
       //
       // RE-CONFIRMATION (safety net): with `appModuleId` supplied above, the SDK can prove the
       // override row here, pre-publish, so the normal path decides the verdict in this phase. The
@@ -2722,10 +3506,20 @@ async function runSdkBuild(spec, opts = {}) {
       // `reconfirmAiFeatures` below) against the identical override-row oracle the verifier uses.
       // The re-proof can only ever UPGRADE a feature, never hide a real failure.
       //
+      // `skipped` is deferred WITH the rest, and that is the plugin half of AB#6688904. On a freshly
+      // created app NO app-scope write persists until the app is published, so the SDK's post-write
+      // gate read fires for every feature — and for the ones that happen to have a distinct org gate
+      // (`nlSearch`, `nlChart`, `formFillSmartPaste`) an org-wide `false` then labels them `skipped`.
+      // Treating that as a final answer would abandon them before the one sequence measured to work,
+      // and `--verify` would then fail on an override row the build gave up on writing. The reported
+      // environment ran a working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off, so
+      // a gate reading off is not proof the app-scope write cannot land — only the retry can settle
+      // it. Anything still `skipped` after the retry is reported as an admin action, not a defect.
+      //
       // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
       // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
       // class this phase exists to remove). `outcomes` is per-feature detail, not a bucket.
-      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'skipped' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
+      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
       for (const key of problemKeys) {
         for (const feature of r[key]) {
           const outcome = (r.outcomes || []).find((o) => o && o.feature === feature);
@@ -2734,9 +3528,8 @@ async function runSdkBuild(spec, opts = {}) {
       }
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
-      if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
       if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
-      return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
+      return parts.length ? parts.join('; ') : '(none)';
     });
     // Same rule as the plan: `selectSummaryTables` owns the default-vs-override decision, so calling
     // it unconditionally is what lets `default: 'off'` + `tables[x].enabled: true` opt a single table
@@ -2908,6 +3701,165 @@ async function runSdkBuild(spec, opts = {}) {
       });
     }
 
+    // 7a-bis. Role grants (`roleGrants[]`) — ADD privileges for a table to a PRE-EXISTING role. AB#6686429.
+    //
+    // The scenario this exists for: a table is added to an app whose solution already ships four data
+    // roles. Before this, the table, its forms and its nav deployed while every non-admin persona still
+    // had no access to it, and nothing said so.
+    //
+    // ADDITIVE, never converging. `addEntityPrivilegesToRole` compiles to `AddPrivilegesRole`, so a
+    // privilege the role already holds is re-asserted and every privilege the spec does NOT mention is
+    // left alone. That is what makes it safe to point at a role somebody else owns — and it is also why
+    // this surface cannot REVOKE (documented in references/app-spec-schema-advanced.md).
+    //
+    // Idempotency comes from Dataverse, not from a read-compare here: re-POSTing a grant the role already
+    // holds at the same depth succeeds and changes nothing. Re-POSTing at a HIGHER depth raises it. We do
+    // not pre-read the role's privileges, because a read-then-write would be racy and the write is
+    // already the converged operation.
+    //
+    // Runs AFTER the persona loop so that, if a future change ever allowed both to touch one role, the
+    // additive grant lands last rather than being converged away. Today validation rejects that overlap
+    // outright (see validateRoleGrants).
+    const roleGrantBuCache = {}; // memoize the root-BU lookup across grants in this build
+    // Resolved-id guards. The static validator can only compare NAMES, so a `roleId` pinned at a role
+    // a persona also authors, or a name-and-id pair aliasing one role, both slip past it. Both are
+    // caught here on the identity that actually matters — the resolved Dataverse role id:
+    //   * persona overlap would let ReplacePrivilegesRole converge the grant away on the next build,
+    //     and a failure BETWEEN the two passes leaves the access removed;
+    //   * two grants on one role split a depth conflict across two SDK calls, where the SDK's
+    //     "entities sharing one privilege must request one depth" check cannot see it and the later
+    //     write silently wins.
+    const personaRoleIds = new Map(); // lowercased roleId -> persona name, from the loop above
+    for (const [name, rr] of Object.entries(result.created.roles || {})) {
+      if (rr && rr.roleId) personaRoleIds.set(String(rr.roleId).toLowerCase(), name);
+    }
+    const grantedRoleIds = new Map(); // lowercased roleId -> the label of the grant that claimed it
+    // TWO PASSES, deliberately. Resolving and guarding EVERY grant before applying ANY is what makes
+    // the identity guards below worth having: with resolve-guard-apply interleaved per grant, a spec
+    // whose second entry aliases the first applied grant #1 and only then halted, leaving one role
+    // changed and one not, with nothing in the output saying which. Every guard here rejects a spec
+    // that is wrong independently of the environment, so it costs nothing to learn that first.
+    const resolvedGrants = [];
+    for (const grant of spec.roleGrants || []) {
+      const label = roleGrantLabel(grant);
+      let target;
+      try {
+        target = await resolveRoleGrantTarget(provision, grant, roleGrantBuCache);
+      } catch (err) {
+        // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
+        // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
+        // users still cannot open the table — the exact failure this feature was filed for.
+        throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
+      }
+      const idKey = String(target.roleId).toLowerCase();
+      if (personaRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
+          + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
+          + 'undone on the next build — declare these privileges on that persona\'s job instead.',
+          { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
+        );
+      }
+      if (grantedRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
+          + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
+          + 'SDK only detects that within a single call, so the later write would silently win.',
+          { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
+        );
+      }
+      grantedRoleIds.set(idKey, label);
+      resolvedGrants.push({ grant, label, target });
+    }
+    for (const { grant, label, target } of resolvedGrants) {
+      await runner.run('security', `grant privileges to existing role ${label}`, async () => {
+        let applied;
+        try {
+          applied = await provision.addEntityPrivilegesToRole(target.roleId, grant.privileges);
+        } catch (err) {
+          // Apply-time metadata guards live here: a table that exposes no such access, and the SDK's
+          // shared-privilege rule (two tables aliasing to one prv* must request one depth). Both are
+          // author errors that only live metadata can detect, so they surface with the SDK's own message.
+          throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false });
+        }
+        const n = Array.isArray(applied) ? applied.length : 0;
+        // Keyed on the resolved ROLE ID, with the display name carried in the value. Keying on
+        // `target.name` collapsed two DIFFERENT roles that share a display name — which the spec
+        // gate deliberately allows, because a role is identified by (name, business unit) and the
+        // same name in two BUs is two roles. The second grant then overwrote the first in this map,
+        // so `--json` consumers saw one grant where two were applied. The id is the identity the
+        // apply itself guards on, so it cannot collide.
+        result.created.roleGrants[target.roleId] = { roleId: target.roleId, name: target.name, managed: target.managed, privileges: applied || [] };
+        // The role is NOT added to the app's solution. A persona role is ours to place; a pre-existing role
+        // already lives wherever its owner put it, and adding a foreign (possibly managed) role to this
+        // solution would take an ownership decision the author did not ask for. If the role is already a
+        // component of this solution, its updated privileges export with it either way.
+        return `${n} privilege${n === 1 ? '' : 's'} granted on ${target.name || target.roleId}${target.managed ? ' (managed role)' : ''}`;
+      });
+    }
+
+    // 7b-bis. Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
+    //
+    // Runs in SECURITY, not in the flow phase, for the same reason `forms[].securityRoles` does: a
+    // persona's role does not exist until the loop above has run.
+    //
+    // The target is the flow's BACKING TABLE, not the flow row. Activating a flow makes the platform
+    // create an org-owned table, and holding privileges on THAT is what lets a persona run the
+    // process. Two things were measured live before this was written (see validateBpfSecurityRoles):
+    // the table is organization-owned and every privilege is Global-only, so there is no scope to
+    // author; and the public `addEntityPrivilegesToRole` grants on it (the SDK's internal BPF role
+    // helper is not on its public surface).
+    //
+    // The table NAME is taken from `created.bpfBackingTables`, which the flow phase read back from
+    // the deployed `workflow.uniquename`. It is only DERIVED from the display name as a last resort:
+    // a flow authored elsewhere, or renamed after creation, keeps its original unique name, and
+    // granting on the derivation would target a table that does not exist — or one that belongs to
+    // something else. The fallback still covers the doubles and older projections that do not carry
+    // the field, where the derivation is the correct answer anyway.
+    const flowsWithRoles = (spec.businessProcessFlows || []).filter((f) => f && f.securityRoles);
+    for (const f of flowsWithRoles) {
+      const flowKey = `${String(f.entity).toLowerCase()}|${f.name}`;
+      const backingTable = result.created.bpfBackingTables[flowKey] || bpfUniqueName(f.name);
+      const label = `flow "${f.name}" (backing table ${backingTable})`;
+      // The flow must have been built in THIS invocation, or its backing table may not exist —
+      // ACTIVATION is what creates it. Checked BEFORE runner.run and reported through runner.skip,
+      // because a value returned from runner.run is not emitted: a silent skip would report a clean
+      // build in which nobody can run the process, which is the failure #513 exists to fix.
+      // The key mirrors the flow phase's own `${entityLogical}|${flow.name}`.
+      const built = result.created.businessProcessFlows[flowKey];
+      if (!built) {
+        runner.skip('security', `flow roles for ${f.name} (the business-process-flows phase did not run in this invocation, so the backing table may not exist yet)`);
+        continue;
+      }
+      await runner.run('security', `flow roles for ${f.name}`, async () => {
+        const personas = (f.securityRoles.personas || []);
+        // Case-INSENSITIVE, exactly like the form path immediately below — and for the same reason.
+        // `validateBpfSecurityRoles` resolves the persona reference against a LOWERCASED set, so a
+        // spec naming "dispatcher" for a persona declared as "Dispatcher" validates clean. A
+        // case-sensitive lookup here would then halt at the near-last phase, with a message claiming
+        // the persona "has no role in this build" — which is false; it was declared and its role was
+        // created. Late halt, wrong diagnosis, half-built app.
+        const roleByLower = new Map(Object.entries(result.created.roles || {})
+          .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
+        const roleIds = personas.map((p) => {
+          const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
+          if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false });
+          return { persona: p, roleId: rr.roleId };
+        });
+        for (const { persona, roleId } of roleIds) {
+          try {
+            // Organization scope is not a choice: the backing table is org-owned and its privileges
+            // report CanBeGlobal only, so any other depth is rejected by the platform.
+            await provision.addEntityPrivilegesToRole(roleId, [{ entity: backingTable, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+          } catch (err) {
+            throw new BuildHalt(`${label}: could not grant to persona '${persona}': ${err && err.message ? err.message : err}`, { phase: 'security', code: 'bpf-role-grant-failed', recoverable: false });
+          }
+        }
+        result.created.bpfRoleGrants[f.name] = { backingTable, personas };
+        return `${roleIds.length} persona(s) granted ${BPF_ROLE_ACCESS.join('/')} on ${backingTable}`;
+      });
+    }
+
     // 7b. Offer forms to specific security roles (`forms[].securityRoles`). AB#6648526.
     //
     // This runs in the SECURITY phase, not the forms phase, because a persona's role does not exist
@@ -3020,8 +3972,13 @@ async function runSdkBuild(spec, opts = {}) {
     const appUnique = appUniqueName(spec);
     const BUCKET_LABELS = {
       notPersisted: ['NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+      // Distinct wording from NOT PERSISTED on purpose: both mean the override row is absent, but
+      // `skipped` carries a diagnosis the operator can ACT on — an environment admin has to turn the
+      // feature on before any app can. The SDK's own per-feature `reason` names the gate and its
+      // value, and it is preferred over this text wherever it is present.
+      skipped: ['ADMIN GATE OFF', 'the write was issued, no app-scope override appeared, and the feature\u2019s org readiness gate reads off \u2014 an environment admin must enable it first'],
       unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
-      failed: ['FAILED', 'the write or its org-gate read threw'],
+      failed: ['FAILED', 'the write threw'],
     };
     // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
     // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
@@ -3075,7 +4032,12 @@ async function runSdkBuild(spec, opts = {}) {
     const af = result.created.ai && result.created.ai.appFeatures;
     if (af && reproven.length) {
       af.applied = [...(af.applied || []), ...reproven];
-      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
+      // `skipped` is cleaned up like every other non-success bucket. It used to be exempt, back when
+      // the SDK pre-empted a gated write and `skipped` therefore meant "never attempted" — a state
+      // no retry could change. Since AB#6688904 the write IS attempted, so a feature can genuinely
+      // move from `skipped` to `applied`, and leaving it listed in both would make
+      // `created.ai.appFeatures` contradict itself for any `--json` consumer.
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'outcomes') af[key] = af[key].filter((f) => !reproven.includes(f));
       for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
@@ -3091,4 +4053,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

@@ -141,8 +141,8 @@ test('REAL BUNDLE: the derived uniquename really does ignore the table and the p
   // that drifts would silently stop catching the collision it exists to catch.
   const { bpfUniqueName } = require('../lib/app-spec.js');
   for (const [name, entity] of [['Ticket Handling', 'new_ticket'], ['ticket-handling', 'new_case'], ['!!!', 'new_ticket']]) {
-    const { sdk, writes } = realSdk();
-    const art = sdk.createArtifact('bpf', bpfDef({ name, entity, status: 'Draft', stages: [{ name: 'S', steps: [{ name: 'P' }] }] }));
+    const { sdk, writes } = await realSdk();
+    const art = await sdk.createArtifact('bpf', bpfDef({ name, entity, status: 'Draft', stages: [{ name: 'S', steps: [{ name: 'P' }] }] }));
     await sdk.pushArtifact('bpf', art.id);
     const post = writes.find((w) => w.verb === 'POST' && /\/workflows$/.test(w.url));
     assert.strictEqual(post.body.uniquename, bpfUniqueName(name), `${name} on ${entity}`);
@@ -205,10 +205,16 @@ test('a cross-entity stage is rejected rather than silently retargeted', () => {
 test('a knob the build cannot verify is REJECTED, not ignored — at flow, stage AND step level', () => {
   // Silently dropping a key the author wrote is how a spec "deploys" something it does not: they
   // would see the stages appear and reasonably assume the rest applied.
-  for (const key of ['securityRoles', 'branch', 'actions', 'globalActions']) {
-    const errs = errorsFor([{ ...FLOW, [key]: key === 'securityRoles' ? ['Salesperson'] : [{}] }]);
+  //
+  // `securityRoles` is NO LONGER in this list: it is supported since #513 (see the dedicated tests
+  // below). It stays rejected as an ARRAY though — the shape here — because the supported form is
+  // an object, so the old spelling still fails rather than being read as something else.
+  for (const key of ['branch', 'actions', 'globalActions']) {
+    const errs = errorsFor([{ ...FLOW, [key]: [{}] }]);
     assert.ok(errs.some((e) => new RegExp(`unsupported key '${key}'`).test(e)), `${key}: ${JSON.stringify(errs)}`);
   }
+  const arrayRoles = errorsFor([{ ...FLOW, securityRoles: ['Salesperson'] }]);
+  assert.ok(arrayRoles.some((e) => /securityRoles must be an object like \{ "personas"/.test(e)), JSON.stringify(arrayRoles));
   // STAGE level is where an author would naturally write branching/actions — the SDK models them
   // there, and bpfDef maps only name/entity/steps, so an unguarded key vanishes without a word.
   for (const key of ['branch', 'actions', 'nextStageId', 'category', 'relationshipName']) {
@@ -287,13 +293,13 @@ test('every BPF query in build, verify and teardown goes through bpfFilter', () 
 
 // --- 3. real bundle -----------------------------------------------------------------------------
 
-function realSdk() {
+async function realSdk() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-'));
   dirs.push(dir);
   const writes = [];
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const sdk = createMakerSdk({
-    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
       post: async (url, body) => { writes.push({ verb: 'POST', url: String(url), body }); return { status: 200, headers: {}, body: { workflowid: '44444444-4444-4444-4444-444444444444' } }; },
@@ -302,7 +308,7 @@ function realSdk() {
       delete: async () => ({ status: 204, headers: {}, body: {} }),
     },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
   return { sdk, writes };
 }
 
@@ -310,8 +316,8 @@ test('REAL BUNDLE: a BPF is authored through the generic artifact lifecycle', as
   // There is no dedicated BPF method on the SDK surface — it is createArtifact -> pushArtifact, and
   // the whole stage/step tree rides on the create payload (unlike a business rule's condition tree,
   // which needs an updateElement). Pinning that tells a future implementer which surface to build on.
-  const { sdk } = realSdk();
-  const art = sdk.createArtifact('bpf', bpfDef(FLOW));
+  const { sdk } = await realSdk();
+  const art = await sdk.createArtifact('bpf', bpfDef(FLOW));
   assert.ok(art && art.id, 'createArtifact returns an artifact with an id');
   assert.deepStrictEqual(Object.keys(art).sort(), ['entityLogicalName', 'id', 'name', 'stages', 'status']);
   // The adapter stamps ids on stages and steps; the plugin deliberately does not mint them.
@@ -323,8 +329,8 @@ test('REAL BUNDLE: a BPF is authored through the generic artifact lifecycle', as
 });
 
 test('REAL BUNDLE: the wire payload is a category-4 BusinessFlow definition carrying the stages', async () => {
-  const { sdk, writes } = realSdk();
-  const art = sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft', description: 'd' }));
+  const { sdk, writes } = await realSdk();
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft', description: 'd' }));
   await sdk.pushArtifact('bpf', art.id);
 
   const post = writes.find((w) => w.verb === 'POST' && /\/workflows$/.test(w.url));
@@ -351,8 +357,8 @@ test('REAL BUNDLE: the wire payload is a category-4 BusinessFlow definition carr
 test('REAL BUNDLE: an Active flow is activated in the same push (statecode 1 / statuscode 2)', async () => {
   // Activation is a SECOND, non-atomic request. It is what makes the process appear on the form, so
   // a re-vendor that stopped issuing it would deploy flows nobody can see.
-  const { sdk, writes } = realSdk();
-  const art = sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Active' }));
+  const { sdk, writes } = await realSdk();
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Active' }));
   await sdk.pushArtifact('bpf', art.id);
   const patch = writes.find((w) => w.verb === 'PATCH' && /workflows\(/.test(w.url));
   assert.ok(patch, `an activation PATCH must follow the create; got ${JSON.stringify(writes.map((w) => w.verb + ' ' + w.url))}`);
@@ -360,8 +366,8 @@ test('REAL BUNDLE: an Active flow is activated in the same push (statecode 1 / s
 });
 
 test('REAL BUNDLE: a Draft flow is NOT activated', async () => {
-  const { sdk, writes } = realSdk();
-  const art = sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
+  const { sdk, writes } = await realSdk();
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
   await sdk.pushArtifact('bpf', art.id);
   assert.strictEqual(writes.some((w) => w.verb === 'PATCH'), false, 'Draft must not be activated');
 });
@@ -375,8 +381,8 @@ test('REAL BUNDLE: XML carrying character data still parses (the headless text-n
   //
   // This asserts the SHIPPED bundle is fixed. A re-vendor that reintroduces it fails here rather
   // than in a user's build.
-  const { sdk } = realSdk();
-  const art = sdk.createArtifact('bpf', bpfDef(FLOW));
+  const { sdk } = await realSdk();
+  const art = await sdk.createArtifact('bpf', bpfDef(FLOW));
   await assert.doesNotReject(() => sdk.pushArtifact('bpf', art.id));
 });
 
@@ -791,6 +797,30 @@ test('REGRESSION: a status-only edit is a full build but NOT permanent debt', ()
   const restaged = specWith([{ ...FLOW, stages: [{ name: 'Only', steps: [{ name: 'S', field: 'new_notes' }] }] }]);
   const stageEdit = classifyChanges(restaged, draft);
   assert.ok(stageEdit.debt.some((d) => /edit-not-convergent/.test(d.reason)), `a stage edit is real debt; got ${JSON.stringify(stageEdit.debt)}`);
+});
+
+test('REGRESSION: a securityRoles-only edit is a full build but NOT permanent debt either (#513)', () => {
+  // Stronger than the `status` case above. A BPF grant always targets a PERSONA role, and the
+  // security phase applies persona roles with `ReplacePrivilegesRole` — so a rebuild both ADDS a
+  // newly-declared persona and REMOVES one that was dropped. Filing permanent debt disabled every
+  // later fast apply over a divergence a full build erases. (`roleGrants[]` would NOT qualify: it is
+  // additive and cannot revoke.)
+  const { classifyChanges } = require('../lib/classify-changes.js');
+  const withPersonas = (personas) => {
+    const s = specWith([personas ? { ...FLOW, securityRoles: { personas } } : { ...FLOW }]);
+    s.personas = [{ persona: 'Dispatcher', jobs: [{ name: 'J', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }];
+    return s;
+  };
+  const none = withPersonas(null);
+  const granted = withPersonas(['Dispatcher']);
+
+  for (const [label, cur, prior] of [['added', granted, none], ['removed', none, granted]]) {
+    const r = classifyChanges(cur, prior);
+    assert.deepStrictEqual(r.debt, [], `securityRoles ${label} is reconciled; got ${JSON.stringify(r.debt)}`);
+    assert.ok(r.changedPhases.includes('business-process-flows'), `${label}: it still needs a full build`);
+    assert.ok(r.fullReasons.some((x) => /securityRoles changed — reconciled/.test(x)),
+      `${label}: and the reason must name the field that changed, not the whole converged list: ${JSON.stringify(r.fullReasons)}`);
+  }
 });
 
 test('REGRESSION: the same status-only rule applies to business rules', () => {

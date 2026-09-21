@@ -5,12 +5,13 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter } = require('./sdk-build.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
-const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
+const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
@@ -48,6 +49,26 @@ async function verifySpec(spec, read, opts = {}) {
   // normal `--changed-only` fast-apply path that would be wrong every single time.
   const environmentSkipped = [];
   const phaseSkipped = [];
+
+  const selectedDefaultForms = new Map();
+  for (const f of spec.forms || []) {
+    const formType = f.formType || 'Main';
+    if (formType !== 'Main') continue;
+    const entity = String(f.entity || '').toLowerCase();
+    if (!entity) continue;
+    // Mirror the BUILD's promotion guard exactly (sdk-build.js `isOwnCustomTable`): the build
+    // refuses to re-point the default form of a reused or stock table, because that is an
+    // environment-wide side effect on a table the spec does not own. Asserting `isdefault` for a
+    // table the build deliberately never promotes makes `--verify` permanently unsatisfiable for any
+    // spec that puts a Main form on `account`, `contact`, or an `existing: true` table.
+    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entity);
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+      String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+    if (!isOwnCustomTable) continue;
+    const current = selectedDefaultForms.get(entity);
+    if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
+  }
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -97,7 +118,7 @@ async function verifySpec(spec, read, opts = {}) {
     let rows = [];
     let readError = null;
     try {
-      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
     } catch (error) {
       readError = error;
     }
@@ -111,6 +132,43 @@ async function verifySpec(spec, read, opts = {}) {
       const deployed = new Set(layoutColumnNames(row.layoutxml));
       const missingCols = specCols.filter((c) => !deployed.has(c));
       add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+    }
+    if (row && Object.prototype.hasOwnProperty.call(row, 'fetchxml')) {
+      const expected = expectedViewFetchParts(spec, v);
+      // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
+      // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
+      // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
+      // that the App Spec never authored, and those must not block a good app.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
+      if (!row.fetchxml && (expected.conditions.length || expected.orders.length)) {
+        if (expected.conditions.length) add('view-filters', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored filters');
+        if (expected.orders.length) add('view-sort', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored sort');
+        continue;
+      }
+      const actual = parseFetchXml(row.fetchxml);
+      if (expected.conditions.length) {
+        const missing = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
+        add('view-filters', viewName, missing.length === 0, missing.length ? `missing filter(s): ${missing.map(formatCondition).join('; ')}` : '');
+      }
+      if (expected.orders.length) {
+        // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
+        // `[name asc, createdon desc]` would satisfy an authored `[createdon desc, name asc]` under a
+        // per-order `some(...)`, even though the two views return rows in different orders.
+        //
+        // Authored orders must therefore appear as an ordered SUBSEQUENCE of the deployed ones.
+        // Extra platform-owned orders are still tolerated (same subset rule as the filters above),
+        // but the authored ones may not be reordered relative to each other.
+        let ei = 0;
+        for (const got of actual.orders) {
+          if (ei < expected.orders.length && orderMatches(expected.orders[ei], got)) ei++;
+        }
+        const satisfied = ei === expected.orders.length;
+        const absent = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
+        add('view-sort', viewName, satisfied, satisfied ? ''
+          : absent.length
+            ? `missing sort(s): ${absent.map(formatOrder).join('; ')}`
+            : `deployed sort order does not match the authored precedence ${expected.orders.map(formatOrder).join(', ')} (deployed: ${actual.orders.map(formatOrder).join(', ')})`);
+      }
     }
   }
   for (const ch of spec.charts || []) {
@@ -129,6 +187,21 @@ async function verifySpec(spec, read, opts = {}) {
       id = await resolveExistingFormId(read, { entityLogicalName: String(f.entity).toLowerCase(), name, formType: f.formType, formId: f.formId });
     } catch { id = null; }
     add('form', name, id);
+    const entityLogical = String(f.entity || '').toLowerCase();
+    if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
+      let state = null;
+      let readError = null;
+      try { state = await read.formDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
+      // Default-form promotion is a stored systemform flag, not a property of the App Spec or the
+      // build result. A form can exist with the right name/type while still not being the table's
+      // default, so this proves the platform row the model-driven runtime uses.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+      const present = !!(state && state.isDefault === true);
+      add('form-default', `${entityLogical}.${name}`, present, present ? '' :
+        readError
+          ? `could not read deployed systemform.isdefault: ${readError}`
+          : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
+    }
   }
 
   // Relationships (existence) — currently a build can declare a relationship that silently fails to
@@ -316,6 +389,52 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // App-module TABLE membership (appmodulecomponent componenttype 1).
+  //
+  // The sitemap and the app's component list are SEPARATE facts, and they can disagree: an app can
+  // show a table in navigation while omitting it from its Tables list. That is an internally
+  // inconsistent app definition and it breaks consumers that read app-module membership — but every
+  // check above passes, because the table EXISTS and the sitemap DOES name it. Verify reported PASS
+  // on exactly that app, which is what made the divergence invisible.
+  //
+  // Scoped to SITEMAP-VISIBLE entities on purpose. A spec entity with no subarea is a legitimate
+  // data-model-only/supporting table that the build does not pin, so requiring it would fail every
+  // app that declares one.
+  //
+  // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
+  // never become a TypeError for them (same rule as `columnVisualization`).
+  if (typeof read.appEntityComponents === 'function') {
+    const sitemapEntities = [];
+    for (const a of (spec.appShell && spec.appShell.areas) || []) {
+      for (const g of a.groups || []) {
+        for (const sa of g.subAreas || []) {
+          const logical = sa && sa.entity ? String(sa.entity).toLowerCase() : null;
+          if (logical && !sitemapEntities.includes(logical)) sitemapEntities.push(logical);
+        }
+      }
+    }
+    if (sitemapEntities.length) {
+      const res = await read.appEntityComponents(sitemapEntities);
+      if (!res || res.ok !== true) {
+        // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
+        // shape of the bug this check exists to catch.
+        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
+      } else {
+        // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
+        const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
+        for (const logical of sitemapEntities) add('app-table-component', logical, present.has(logical));
+        // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA
+        // table itself, so the row points at no real table. Those rows are junk, they accumulate
+        // across reconciliation attempts, and they are worth naming even when every declared table
+        // is present.
+        if (res.placeholder) {
+          add('app-table-component', 'invalid `entity` placeholder component(s)', false,
+            'the app module contains component(s) pointing at the `entity` metadata table rather than a real table — remove them.');
+        }
+      }
+    }
+  }
+
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
   // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed (Imp7):
@@ -416,6 +535,11 @@ async function verifySpec(spec, read, opts = {}) {
   // therefore verify the role exists AND carries the SDK ownership marker (a same-name role someone
   // else built would pass a bare existence check but is NOT the role the security phase authored).
   const roleBuCache = {}; // memoize the root-BU lookup across personas in this verify pass
+  let appRoleIdsP;
+  const appRoleIds = async () => {
+    if (!appRoleIdsP) appRoleIdsP = read.appRoleIds();
+    return appRoleIdsP;
+  };
   for (const p of spec.personas || []) {
     const roleName = canonicalPersonaName(p); // trimmed — matches the SDK's created name
     if (!roleName) continue;
@@ -433,6 +557,18 @@ async function verifySpec(spec, read, opts = {}) {
       }
     } catch { row = undefined; }
     add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
+
+    if (row && p.appAccess !== false && typeof read.appRoleIds === 'function') {
+      let res = null;
+      try { res = await appRoleIds(); } catch (e) { res = { ok: false, reason: (e && e.message) || String(e) }; }
+      if (!res || res.ok !== true) {
+        add('app-role', roleName, false, `could not read appmoduleroles_association rows: ${(res && res.reason) || 'unknown'}`);
+      } else {
+        const ids = new Set((res.roleIds || []).map((id) => String(id).toLowerCase()));
+        add('app-role', roleName, ids.has(String(row.roleid).toLowerCase()),
+          ids.has(String(row.roleid).toLowerCase()) ? '' : 'persona role is not associated to the app module, so the app may not appear for users with this role');
+      }
+    }
 
     // Privilege depth check — reader-gated (see `entityRelationships` / `commandBar` above for the
     // same pattern), so an existence-only reader behaves exactly as before. Proving the role ROW
@@ -466,6 +602,143 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // Role grants (`roleGrants[]`) — privileges ADDED to a pre-existing role. AB#6686429.
+  //
+  // Verified with the SAME subset comparison as personas, and for a stronger reason: unlike a persona
+  // role (converged by ReplacePrivilegesRole, so existence implies content), a grant is ADDITIVE onto a
+  // role we do not own. Nothing else proves the grant landed — the role existed before and still exists
+  // whether or not the privileges were added. A subset check is exactly right here: every privilege the
+  // role holds beyond the declared set is somebody else's and must never be a finding.
+  //
+  // Deliberately NOT checked: the SDK ownership marker. The role belongs to someone else by definition.
+  for (const g of spec.roleGrants || []) {
+    const declaredName = typeof g.role === 'string' ? g.role.trim() : '';
+    const label = declaredName || String(g.roleId || '?');
+    let row;
+    try {
+      if (g.roleId) {
+        const rows = await read.queryRecords('role', { select: ['roleid', 'name'], filter: `roleid eq ${g.roleId}`, top: 1 });
+        row = (rows || [])[0];
+      } else {
+        // Same fail-closed BU scoping as the apply path: a name-only fallback could verify against a
+        // same-named role in another business unit and report a grant that never happened as held.
+        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), g.businessUnitId, roleBuCache);
+        if (bu) {
+          const rows = await read.queryRecords('role', { select: ['roleid', 'name'], filter: `name eq '${odataLit(declaredName)}'${roleBuClause(bu)}`, top: 5 });
+          row = (rows || []).length === 1 ? rows[0] : undefined; // ambiguity is not proof
+        }
+      }
+    } catch { row = undefined; }
+    add('role-grant', label, row, row ? '' : 'the role named by this roleGrant was not found (or its business unit could not be resolved, or the name is ambiguous)');
+    if (!row || typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
+    // `declaredPrivileges` folds in an `appmodule` read for a persona; a roleGrant grants exactly what it
+    // declares and must not imply app access, so the triples are flattened here instead of reusing it.
+    const declared = [];
+    for (const pr of g.privileges || []) {
+      for (const a of pr.access || []) declared.push({ entity: String(pr.entity || '').toLowerCase(), access: String(a), scope: pr.scope || 'user' });
+    }
+    let actual = null;
+    try {
+      actual = await read.rolePrivileges(row.roleid);
+    } catch { actual = null; }
+    if (!Array.isArray(actual)) {
+      add('role-grant-privileges', label, false, 'could not read the role\'s privileges');
+      continue;
+    }
+    const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+    const entityPrivileges = new Map();
+    for (const entity of new Set(declared.map((d) => d.entity))) {
+      try {
+        const privs = await read.entityPrivileges(entity);
+        if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
+      } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
+    }
+    const cmp = compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId);
+    add('role-grant-privileges', label, cmp.ok, cmp.ok
+      ? `${declared.length} granted privilege(s) held`
+      : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; '));
+  }
+
+  // Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
+  //
+  // Verified on the flow's BACKING TABLE, not on the flow row: activation creates an org-owned table
+  // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
+  // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
+  // more than this one grant.
+  for (const f of spec.businessProcessFlows || []) {
+    if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
+    if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
+    // READ the deployed unique name, do not derive it. A flow authored in Maker, or one renamed
+    // after creation, keeps a `uniquename` unrelated to its display name — and that name IS the
+    // backing table. Verifying against the derivation would report a real grant as missing, or (if
+    // an unrelated table happens to hold the derived name) PASS while the actual flow is ungranted,
+    // which is the worse of the two. Falls back to the derivation only when the row cannot be read,
+    // where it remains correct for anything this tool created.
+    // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+    //
+    // Three outcomes, kept apart because two of them used to collapse into one. A successful query
+    // returning NO ROWS means the flow does not exist — it was never created, or never activated —
+    // and the derivation must NOT be used then: `bpfUniqueName(f.name)` could coincide with an
+    // unrelated table, whose privileges would verify clean and report a PASS for a flow that is
+    // absent. That is the one direction this check exists to prevent. A read that THREW is different:
+    // we could not look, so the derivation stands and the privilege read below fails closed anyway.
+    let backingTable = bpfUniqueName(f.name);
+    let flowMissing = false;
+    try {
+      const rows = await read.queryRecords('workflow', {
+        select: ['workflowid', 'uniquename'],
+        filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
+        orderBy: 'createdon asc',
+        top: 5,
+      });
+      const row = rows && rows[0];
+      if (!row) flowMissing = true;
+      else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+      // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
+      // derived name is the best available answer for anything this tool created.
+    } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    if (flowMissing) {
+      add('bpf-roles', f.name, false,
+        `no business process flow named '${f.name}' exists on '${String(f.entity).toLowerCase()}', so its backing table cannot be identified and no role grant on it can be verified`);
+      continue;
+    }
+    let privs = null;
+    try {
+      privs = await read.entityPrivileges(backingTable);
+    } catch { privs = null; }
+    if (!Array.isArray(privs)) {
+      // Fail CLOSED: an unreadable backing table is not proof the grant landed. It also catches the
+      // realistic case that the flow never activated, so the table does not exist at all.
+      add('bpf-roles', f.name, false, `could not read privileges for the flow's backing table '${backingTable}' — it is created by ACTIVATION, so this also means the flow may not be active`);
+      continue;
+    }
+    for (const personaName of f.securityRoles.personas) {
+      // Resolve the reference to the persona's CANONICAL name, case-insensitively — the validator
+      // accepts a case-mismatched reference, and the deployed role carries the persona's own casing.
+      // Querying `name eq '<as written>'` would miss it and report a real grant as missing.
+      const declaredPersona = (spec.personas || []).find((p) => String(canonicalPersonaName(p) || '').toLowerCase() === String(personaName).trim().toLowerCase());
+      const roleName = String((declaredPersona && canonicalPersonaName(declaredPersona)) || personaName).trim();
+      let row;
+      try {
+        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), declaredPersona && declaredPersona.businessUnitId, roleBuCache);
+        if (bu) {
+          const rows = await read.queryRecords('role', { select: ['roleid', 'description', 'ismanaged'], filter: `name eq '${odataLit(roleName)}'${roleBuClause(bu)}`, top: 5 });
+          row = (rows || []).find((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER);
+        }
+      } catch { row = undefined; }
+      if (!row) { add('bpf-roles', `${f.name} / ${roleName}`, false, 'persona role not found'); continue; }
+      let actual = null;
+      try { actual = await read.rolePrivileges(row.roleid); } catch { actual = null; }
+      if (!Array.isArray(actual)) { add('bpf-roles', `${f.name} / ${roleName}`, false, "could not read the role's privileges"); continue; }
+      const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+      const declared = BPF_ROLE_ACCESS.map((access) => ({ entity: backingTable, access, scope: 'organization' }));
+      const cmp = compareRolePrivileges(declared, new Map([[backingTable, privs]]), actualByPrivilegeId);
+      add('bpf-roles', `${f.name} / ${roleName}`, cmp.ok, cmp.ok
+        ? `${declared.length} privilege(s) held on ${backingTable}`
+        : cmp.missing.map((m) => `${m.access}: ${m.reason}`).join('; '));
+    }
+  }
+
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
   // every requested AI feature was skipped (admin gate off) or silently not persisted still reported a
   // clean PASS — a false success signal for automation (ADO 6603383).
@@ -484,9 +757,11 @@ async function verifySpec(spec, read, opts = {}) {
   // with three features written and ZERO verified: a clean PASS for features the platform may never
   // have stored. One resolver, both callers.
   //
-  // A feature the org gate SKIPPED therefore fails here, which is intended: the spec asked for it and
-  // it is not configured on the app. The effective value is still read, but only as context in the
-  // failure message ("in effect as X by environment fallback").
+  // A feature whose write did not persist therefore FAILS here, which is intended: the spec asked for
+  // it and it is not configured on the app. That includes one the SDK bucketed as `skipped` — since
+  // AB#6688904 that means "attempted, absent, and an org gate reads off", i.e. an admin action is
+  // outstanding, not that the request was withdrawn. The effective value is still read, but only as
+  // context in the failure message ("in effect as X by environment fallback").
   //
   // Reader-gated like the other content checks: this needs BOTH `retrieveSetting` (context) and
   // `queryRecords` (the proof), so an existence-only reader skips it entirely rather than falling
@@ -533,6 +808,77 @@ async function verifySpec(spec, read, opts = {}) {
           : !proof.exists
             ? `requested '${want}' but this app has NO app-scope override for '${setting}' (it is in effect as '${inForce}' only by environment fallback, so the app was never configured)`
             : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
+    }
+  }
+
+  // AI row summaries (`ai.summaries`). AB#6689110.
+  //
+  // Without this a spec that REQUESTS a row summary verified clean when none was created: the build
+  // legitimately degrades to a skip when the environment does not license AI Builder (see the
+  // ai-features phase), but nothing downstream re-asserted the request, so a licensed-environment
+  // failure and an unlicensed skip both ended in a green `PASS`. The reporter saw `PASS, 45/45` with
+  // the requested summary absent — a build that reports success while a declared artifact does not
+  // exist is the one outcome verification exists to prevent.
+  //
+  // `selectSummaryTables` is the SAME selector the build uses, so the set verified is exactly the set
+  // requested — including the `default: 'off'` + per-table `enabled: true` opt-in the reporter used.
+  // Duplicating the default-vs-override rule here would let the two drift, which is how a verifier
+  // starts proving something other than what was built.
+  //
+  // The oracle is the `msdyn_aimodel` row the SDK creates, named `<entity> row summary` — the same
+  // name the build's own orphan sweep matches, and the name the platform quotes back in its
+  // duplicate-key error, so it is the stored value rather than a guess.
+  //
+  // Reader-gated: `queryRecords` only. A reader without it skips rather than guessing.
+  //
+  // AI-OPT-IN gated FIRST, via the shared predicate. `selectSummaryTables` is a candidate selector,
+  // not an opt-in test: handed a spec with no `ai` block it reads `summaries` as `{}` — "default
+  // auto" — and returns every entity with a descriptive column. Calling it ungated made verify FAIL
+  // a spec that never mentioned AI, reporting "ai.summaries requests a row summary for 'x'" for a
+  // summary nobody requested and the build never created. That is a false failure on the build's own
+  // `--verify` exit code, and it hits most specs, since almost every table has a text column.
+  const summaryTables = specOptsIntoAi(spec) ? selectSummaryTables(spec) : [];
+  if (summaryTables.length && typeof read.queryRecords === 'function') {
+    for (const logical of summaryTables) {
+      const modelName = `${String(logical).toLowerCase()} row summary`;
+      let rows = null;
+      let readError = null;
+      try {
+        rows = await read.queryRecords('msdyn_aimodel', {
+          select: ['msdyn_aimodelid', 'msdyn_name', 'statecode'],
+          filter: `msdyn_name eq '${odataLit(modelName)}'`,
+          top: 5,
+        });
+      } catch (e) { readError = (e && e.message) || String(e); }
+      // Fail CLOSED. `msdyn_aimodel` is readable by any role that can run the build, so an
+      // unreadable list is not evidence of absence — and reporting PASS on a read we could not make
+      // is the same false confidence this check exists to remove.
+      if (!Array.isArray(rows)) {
+        add('ai-summary', logical, false,
+          `could not read the AI model list to prove the requested row summary exists${readError ? `: ${readError}` : ''}`);
+        continue;
+      }
+      const active = rows.filter((r) => Number(r && r.statecode) === 1);
+      const present = active.length > 0;
+      // `statecode` was selected but not USED — existence alone was the test. That is a reachable
+      // false PASS rather than a theoretical one: on an environment that does not license the
+      // row-summary capability the SDK CREATES the `msdyn_aimodel` row and only then fails to
+      // publish it, leaving a committed but unusable row behind (the same orphan the build's own
+      // sweep tries to remove, and deliberately leaves in place when it cannot). Verify then found a
+      // row with the right name and reported PASS for a summary nobody can use.
+      //
+      // The encoding is MEASURED from the environment's own metadata, not assumed:
+      //   EntityDefinitions(LogicalName='msdyn_aimodel')/Attributes(LogicalName='statecode') →
+      //   0 = Inactive (defaultStatus 0), 1 = Active (defaultStatus 1)
+      // See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities
+      add('ai-summary', logical, present, present ? `'${modelName}' exists and is active` :
+        rows.length
+          ? `ai.summaries requests a row summary for '${logical}', and an AI model named '${modelName}' exists but is INACTIVE `
+            + `(statecode ${rows.map((r) => Number(r && r.statecode)).join(', ')}). The model row is created before it is published, so an `
+            + 'environment that does not license the row-summary (AI Builder) capability leaves exactly this behind — the summary will not run.'
+          : `ai.summaries requests a row summary for '${logical}', but no AI model named '${modelName}' exists in this environment. `
+            + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
+            + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
     }
   }
 
@@ -583,6 +929,158 @@ async function verifySpec(spec, read, opts = {}) {
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function expectedViewFetchParts(spec, view) {
+  const def = viewDef(spec, view);
+  const conditions = [];
+  const walk = (group) => {
+    for (const c of (group && group.conditions) || []) {
+      conditions.push({
+        attribute: String(c.attribute || '').toLowerCase(),
+        operator: String(c.operator || 'eq').toLowerCase(),
+        value: c.value === undefined ? undefined : String(c.value),
+      });
+    }
+    for (const child of (group && group.groups) || []) walk(child);
+  };
+  walk(def.filters);
+  const orders = (def.sort || []).map((s) => ({
+    attribute: String(s.attribute || '').toLowerCase(),
+    descending: s.descending === true,
+  }));
+  return { conditions: conditions.filter((c) => c.attribute && c.operator), orders };
+}
+
+function xmlDecode(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function tagAttrs(tag) {
+  const attrs = {};
+  const re = /\b([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  let m;
+  while ((m = re.exec(String(tag || ''))) !== null) attrs[String(m[1]).toLowerCase()] = xmlDecode(m[2] != null ? m[2] : m[3]);
+  return attrs;
+}
+
+// Parse only the FetchXML facts the App Spec authors and the verifier must prove. Raw deployed
+// shape, with the platform quirks that matter:
+//   <fetch><entity name="new_ticket">
+//     <filter type="and">
+//       <condition attribute="ownerid" operator="eq-userid" />
+//       <condition attribute="modifiedon" operator="this-week"></condition>
+//       <condition attribute="new_priority" operator="ne" value="100000000" />
+//     </filter>
+//     <order attribute="createdon" descending="true" />
+//   </entity></fetch>
+// Current-user and relative-date operators serialize with NO `value` attribute; that is a correct
+// deployed condition, not malformed XML. Attribute order and quote style vary, and Dataverse may add
+// extra filters, so callers compare for presence rather than byte equality.
+// Strip every `<link-entity>` subtree, leaving only what belongs to the view's ROOT `<entity>`.
+//
+// FetchXML puts a joined table's own predicates and ordering inside `<link-entity>`:
+//   <entity name="account">
+//     <filter><condition attribute="statecode" operator="eq" value="0" /></filter>
+//     <link-entity name="contact" from="parentcustomerid" to="accountid">
+//       <filter><condition attribute="statecode" operator="eq" value="0" /></filter>
+//     </link-entity>
+//   </entity>
+// Both conditions read `statecode eq 0`, but only the first is a predicate on `account`. Scanning the
+// whole document let the linked one satisfy an authored base-entity condition by coincidence — a
+// verifier reporting PASS on a view that does not filter the way the spec says, which is the one
+// outcome an oracle must never produce.
+//
+// Written as a depth scanner rather than a regex because link-entities NEST, and `<link-entity ... />`
+// may also be self-closing (a join used only for its column projection) — a non-greedy regex would
+// stop at the first `</link-entity>` and let an outer subtree leak back in.
+function baseEntityFetchXml(xml) {
+  const s = String(xml || '');
+  const re = /<(\/?)link-entity\b([^>]*)>/gi;
+  let out = '';
+  let last = 0;
+  let depth = 0;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (m[1] === '/') {
+      if (depth > 0) depth -= 1;
+      if (depth === 0) last = re.lastIndex;
+      continue;
+    }
+    if (depth === 0) out += s.slice(last, m.index);
+    // A self-closing start tag opens nothing, so only its own text is dropped.
+    if (!/\/\s*$/.test(m[2])) depth += 1;
+    last = re.lastIndex;
+  }
+  // An unbalanced document (depth still open) contributes no trailing text rather than guessing.
+  if (depth === 0) out += s.slice(last);
+  return out;
+}
+
+function parseFetchXml(xml) {
+  // Both scans are scoped to the root entity — see baseEntityFetchXml. Orders are scoped for the
+  // same reason as conditions: an `<order>` inside a link-entity sorts the joined table, and letting
+  // it into this list would satisfy — or break — the authored sort precedence with a foreign order.
+  const scoped = baseEntityFetchXml(xml);
+  const conditions = [];
+  const conditionRe = /<condition\b[^>]*?(?:\/>|>[\s\S]*?<\/condition>)/gi;
+  let m;
+  while ((m = conditionRe.exec(scoped)) !== null) {
+    const tag = m[0];
+    const attrs = tagAttrs(tag);
+    if (!attrs.attribute || !attrs.operator) continue;
+    // `in`/`not-in`/`between` serialize their operands as SIBLING <value> elements:
+    //   <condition attribute="statuscode" operator="in"><value>1</value><value>2</value></condition>
+    // Reading only the first made an authored `in 2` unprovable against a view that really does
+    // filter on it. Single-operand conditions use the `value` ATTRIBUTE instead, which wins when
+    // present; an operator with no operand at all (`eq-userid`, `last-x-days`) yields [undefined],
+    // which conditionMatches treats as "attribute+operator is the whole claim".
+    const inner = [];
+    const valueRe = /<value\b[^>]*>([\s\S]*?)<\/value>/gi;
+    let vm;
+    while ((vm = valueRe.exec(tag)) !== null) inner.push(xmlDecode(vm[1].trim()));
+    const values = attrs.value !== undefined ? [attrs.value] : (inner.length ? inner : [undefined]);
+    for (const value of values) {
+      conditions.push({
+        attribute: String(attrs.attribute).toLowerCase(),
+        operator: String(attrs.operator).toLowerCase(),
+        value: value === undefined ? undefined : String(value),
+      });
+    }
+  }
+  const orders = [];
+  const orderRe = /<order\b[^>]*>/gi;
+  while ((m = orderRe.exec(scoped)) !== null) {
+    const attrs = tagAttrs(m[0]);
+    if (!attrs.attribute) continue;
+    orders.push({
+      attribute: String(attrs.attribute).toLowerCase(),
+      descending: String(attrs.descending || 'false').toLowerCase() === 'true',
+    });
+  }
+  return { conditions, orders };
+}
+
+function conditionMatches(want, got) {
+  if (want.attribute !== got.attribute || want.operator !== got.operator) return false;
+  return want.value === undefined || String(want.value) === String(got.value);
+}
+
+function orderMatches(want, got) {
+  return want.attribute === got.attribute && want.descending === got.descending;
+}
+
+function formatCondition(c) {
+  return `${c.attribute} ${c.operator}${c.value === undefined ? '' : ` ${c.value}`}`;
+}
+
+function formatOrder(o) {
+  return `${o.attribute} ${o.descending ? 'desc' : 'asc'}`;
 }
 
 // Extract the deployed column logical names from a saved view's layoutxml. Shape (Dataverse grid
@@ -647,4 +1145,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };

@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -109,6 +109,23 @@ function validateProvisionInput(input) {
 
     entityByLower.set(e.schemaName.toLowerCase(), e);
 
+    // Localized labels are validated HERE too, with the SHARED validator, not only in
+    // `validateAppSpec`. This input is a documented App Spec subset and `provision-entities.js` is a
+    // SEPARATE entry point whose only gate is this function — so without these lines a per-LCID label
+    // with a language tag key, or a localized displayName with no pluralName, returned ok:true and
+    // reached `createTable`, where the tag key throws mid-build and the missing plural is derived by
+    // appending "s" to one language. The solution is provisioned BEFORE the data model, so the
+    // failure would land after a write. Same reasoning as sharing ENTITY_KEYS: two entry points that
+    // disagree about what a label IS teach the author two different rules for one field.
+    validateLabel(e.displayName, `entity '${e.schemaName}': displayName`, errors, { baseLanguageCode: input.languageCode });
+    validateLabel(e.pluralName, `entity '${e.schemaName}': pluralName`, errors, { baseLanguageCode: input.languageCode });
+    if (isLocalizedLabelMap(e.displayName) && labelIsMissing(e.pluralName)) {
+      errors.push(`entity '${e.schemaName}': pluralName is required when displayName is a localized label — the plural cannot be derived by appending "s" in every language`);
+    }
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      validateLabel(e.primaryAttribute.displayName, `entity '${e.schemaName}': primaryAttribute.displayName`, errors, { baseLanguageCode: input.languageCode });
+    }
+
     // Validate primaryAttribute
     if (!e.primaryAttribute || typeof e.primaryAttribute !== 'object') {
       errors.push(`entity '${e.schemaName}': primaryAttribute is required and must be an object`);
@@ -136,7 +153,20 @@ function validateProvisionInput(input) {
         if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
           errors.push(`entity '${e.schemaName}': column '${c.schemaName}' (${c.type}) needs options[] or a globalChoice reference`);
         }
+        validateLabel(c.displayName, `entity '${e.schemaName}': column '${c.schemaName || ''}' displayName`, errors, { baseLanguageCode: input.languageCode });
+        validateChoiceOptionLabels(c.options, `entity '${e.schemaName}': column '${c.schemaName || ''}'`, errors, { baseLanguageCode: input.languageCode });
       }
+    }
+
+    // `alternateKeys[].displayName` is a label too, and it reaches `createAlternateKey` from THIS
+    // entry point. Omitting it here left `{"es-ES": "Clave"}` returning ok:true and throwing
+    // "localized label key 'es-ES' is not an LCID" mid-provision — after the solution and tables are
+    // already written. `validateAppSpec` has always covered it; the two gates must not disagree.
+    if (Array.isArray(e.alternateKeys)) {
+      e.alternateKeys.forEach((k, i) => {
+        if (!k || typeof k !== 'object') return;
+        validateLabel(k.displayName, `entity '${e.schemaName}': alternateKeys[${i}] displayName`, errors, { baseLanguageCode: input.languageCode });
+      });
     }
   }
 
@@ -176,6 +206,12 @@ function validateProvisionInput(input) {
         } else if (!r.lookup.schemaName || typeof r.lookup.schemaName !== 'string') {
           errors.push('OneToMany relationship: lookup.schemaName is required');
         }
+        // The lookup COLUMN's label, same reasoning as the alternate-key label above: it is passed
+        // straight to `createRelationship` from this entry point, and a language-tag key throws
+        // there rather than here.
+        if (r.lookup && typeof r.lookup === 'object') {
+          validateLabel(r.lookup.displayName, `OneToMany relationship (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { baseLanguageCode: input.languageCode });
+        }
       }
 
       // Validate ManyToMany relationships
@@ -213,6 +249,12 @@ function validateProvisionInput(input) {
         if (!Array.isArray(g.options) || g.options.length === 0) {
           errors.push(`globalChoice '${g.name || ''}': options must be a non-empty array`);
         }
+        validateLabel(g.displayName, `globalChoice '${g.name || ''}': displayName`, errors, { baseLanguageCode: input.languageCode });
+        validateChoiceOptionLabels(g.options, `globalChoice '${g.name || ''}'`, errors, { baseLanguageCode: input.languageCode });
+        // Same rejection as validateAppSpec, from the same shared helper: Dataverse stores only the
+        // base language for a global option set and reports nothing. Two entry points that disagree
+        // about what a label IS is the whole reason these gates share their validators.
+        rejectLocalizedGlobalChoice(g, `globalChoice '${g.name || ''}'`, errors);
       }
     }
   }

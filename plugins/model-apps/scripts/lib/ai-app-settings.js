@@ -70,12 +70,34 @@ const AI_FEATURE_MAX_VALUE = 1000000;
 const DEFAULT_APP_FEATURES = { formFill: true, nlSearch: true, nlChart: true, m365: false };
 
 /**
+ * Does this spec opt into AI at all?
+ *
+ * The ONE predicate the build, the verifier and teardown must all use. `selectSummaryTables` does
+ * NOT decide this: handed a spec with no `ai` block it reads `summaries` as `{}`, which means
+ * "default auto", and returns every entity carrying a descriptive column. That is correct for what
+ * it is — a candidate selector — but it is not an opt-in test, and treating it as one has now gone
+ * wrong twice in two different files:
+ *   * teardown gated on `spec.ai.summaries` and planned NOTHING for a spec carrying only
+ *     `ai.appFeatures`, so the row summary the build created blocked the table delete;
+ *   * verify gated on nothing at all, so a spec with NO `ai` block failed with
+ *     "ai.summaries requests a row summary for 'x'" for a summary nobody requested and the build
+ *     never created — a false FAIL on the build's own exit code, for most specs.
+ * Both were the same mistake in opposite directions. Asking here, once, is what stops a third.
+ *
+ * `null` is treated as opting out alongside `undefined`: it is what a JSON caller produces for
+ * "no AI", and the build has always read it that way.
+ */
+function specOptsIntoAi(spec) {
+  return !!spec && spec.ai !== undefined && spec.ai !== null;
+}
+
+/**
  * The EXACT flag set the build writes for a spec — and therefore the exact set verify must
  * reconcile. Both callers MUST go through this; that equality is the whole point of the module.
  * Returns null when the spec opts out of `ai` entirely (no features are written, none are checked).
  */
 function resolveAiFlags(spec) {
-  if (!spec || spec.ai === undefined || spec.ai === null) return null;
+  if (!specOptsIntoAi(spec)) return null;
   const flags = Object.assign({}, DEFAULT_APP_FEATURES, spec.ai.appFeatures || {});
   // Drop keys the SDK has no setting for: it ignores them, so verifying them would invent a
   // permanent failure for a spec the validator already reports on.
@@ -293,6 +315,7 @@ module.exports = {
   AI_FEATURE_KEYS,
   AI_FEATURE_MAX_VALUE,
   DEFAULT_APP_FEATURES,
+  specOptsIntoAi,
   resolveAiFlags,
   featureWantValue,
   sameSettingValue,

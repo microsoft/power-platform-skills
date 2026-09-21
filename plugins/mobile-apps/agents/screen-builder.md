@@ -106,6 +106,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   3. **If your spec's service is NOT in the table** (or your fallback Glob doesn't find it) — the data source has not been generated yet. Write the screen with the expected import path from your spec and add `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` above the call. Do NOT invent a service or rename to something that does exist.
   4. **Method missing on a service that does exist** (table lists `getAll, get` but spec calls `update`) — do NOT silently substitute. Add `// TODO(method-missing): <ServiceName>.update not generated; expected per plan` and write the call as-if; orchestrator's tsc pass will catch it and surface to user.
 - **Generated service results are non-throwing and create results may be sparse.** Power Apps generated services return `IOperationResult<T>` (`success`, `data`, `error`) and may not throw on failed network/API calls. After every `get`, `getAll`, `create`, `update`, or `delete` call, check `result.success`. If false, throw or surface `result.error` immediately. Never rely on `try/catch` alone and never read `result.data` without a preceding success check. For `create()`, success does **not** guarantee `result.data` contains the new primary ID; the SDK may return 204-style success with sparse/empty data. If the screen needs the new record ID for navigation, child rows, lookup binds, or file/photo upload, follow the create-then-navigate rule below and pre-generate the ID with `newId()`. Bug prevented: visible buttons that silently no-op because the initial load/create failed and `record` stayed null; detail routes like `/scanner/undefined` that call Dataverse as `table(undefined)`.
+- **Custom events are explicit and app-defined.** If and only if the assigned screen spec contains a `Custom events` entry, import `getCustomEventsLogger` from `@microsoft/power-apps-native-host` and emit exactly those named events at the specified successful/failure trigger. Never use `getAppLogger()` for custom events. Pass only the approved scalar properties from the spec; do not add operation results or response payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs. For a measured duration, use the logger's `trackScenario()` tracker rather than a hand-supplied `duration_ms` property. If custom events are disabled, the custom-events logger is a safe no-op.
 - **Dataverse display labels — use the `lookupName` / `formattedValue` helpers from `@/utils`, never inline annotation reads or guessed `*name` fields.** This is a hard rule for list rows, detail fields, search/filter fields, and empty-state summaries. Do NOT select, read, search, or destructure invented lookup/choice display fields such as separate `*idname`, `*statusname`, `*owneridname`, `*createdbyname`, or other `*name` shadow properties — those virtual columns are NOT queryable on custom entities and putting them in `$select` returns HTTP 400 on every list read. Do NOT inline the raw annotation key (`record['_<lookup>_value@OData.Community.Display.V1.FormattedValue']`) either — it is brittle and easy to typo. Always:
 
   ```tsx
@@ -1118,31 +1119,10 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     The large title collapses on scroll (iOS Settings / Mail / App Store). On Android it degrades to a standard toolbar. Pass `contentInsetAdjustmentBehavior="automatic"` to your `ScrollView` or `FlatList` so content scrolls under the collapsing header. Detail and Form screens pushed onto the stack do NOT use large title — they use `headerShown: true` with standard height.
 
-41. **Connectivity banner — use `@react-native-community/netinfo` (already in template).** Every app MUST show a persistent "No connection" banner when the device loses connectivity. Do NOT build this per-screen — it lives in `app/(app)/_layout.tsx` (or `src/components/ConnectivityBanner.tsx` if the orchestrator created it). If the banner primitive exists, do nothing. If your screen is the protected layout (`_layout.tsx`), wire it:
-
-    ```tsx
-    import NetInfo from '@react-native-community/netinfo';
-    import { useTheme } from 'tamagui';
-
-    const [isConnected, setIsConnected] = React.useState(true);
-    const theme = useTheme();
-    React.useEffect(() => {
-      const unsub = NetInfo.addEventListener(state => {
-        setIsConnected(state.isConnected ?? true);
-      });
-      return () => unsub();
-    }, []);
-
-    // Render above the slot/navigator:
-    {!isConnected && (
-      <XStack bg="$red4" px="$4" py="$2" items="center" justify="center" gap="$2">
-        <Ionicons name="cloud-offline-outline" size={16} color={theme.red10.val} />
-        <Text fontSize="$2" fontWeight="600" color="$red10">No connection</Text>
-      </XStack>
-    )}
-    ```
-
-    This is different from the offline *sync* bar (which tracks pending local writes). The connectivity banner is binary: connected or not. Field apps lose signal constantly — users must know before they tap Save and get a silent failure.
+41. **Connectivity UI follows the approved specification.** Apply
+    [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md).
+    Implement connectivity diagnostics or app-owned sync UI only when the
+    approved per-screen specification names that product feature.
 
 42. **Layout animations on list add/remove.** Every `FlatList` that supports create or delete MUST animate insertions and removals. Wrap `renderItem` content in Reanimated `Animated.View` with `entering`, `exiting`, and `layout` props:
 

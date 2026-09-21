@@ -178,8 +178,19 @@ test('an inline entry OVERRIDES the form-level fieldOptions default for the same
 });
 
 test('normalizeFieldEntry lower-cases both name and anchor (every downstream compare is lower-case)', () => {
-  assert.deepStrictEqual(normalizeFieldEntry('New_Name'), { name: 'new_name', readOnly: false, hidden: false, after: undefined });
-  assert.deepStrictEqual(normalizeFieldEntry({ name: 'New_B', after: 'New_A' }), { name: 'new_b', readOnly: false, hidden: false, after: 'new_a' });
+  assert.deepStrictEqual(normalizeFieldEntry('New_Name'), { name: 'new_name', readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined });
+  assert.deepStrictEqual(normalizeFieldEntry({ name: 'New_B', after: 'New_A' }), { name: 'new_b', readOnly: false, hidden: false, after: 'new_a', colspan: undefined, rowspan: undefined });
+});
+
+test('normalizeFieldEntry keeps a span only when it exceeds the adapter default of 1', () => {
+  // A colspan of 1 IS the default, so recording it would make the cell builder emit an explicit
+  // attribute for every ordinary field and overwrite a span widened by hand in the designer.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 1 }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2 }).colspan, 2);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', rowspan: 3 }).rowspan, 3);
+  // Non-numeric and fractional values must not reach the serializer as-is.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 'wide' }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2.7 }).colspan, 2);
 });
 
 test('fieldOptionsMap ignores a non-object entry rather than throwing on a half-typed spec', () => {

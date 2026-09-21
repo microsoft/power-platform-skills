@@ -33,6 +33,7 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // this list is the living contract of what a re-vendored bundle MUST keep exposing.
 const SKILL_SDK_SURFACE = [
   'addElement',
+  'addEntityPrivilegesToRole',
   'addSolutionComponent',
   'associateRecords',
   'configureRowSummary',
@@ -66,6 +67,7 @@ const SKILL_SDK_SURFACE = [
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  'getEntityPrivileges',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
@@ -98,18 +100,18 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
-  // The business-rule designer's OWN completeness validator. Nothing on the push path runs it, and a
-  // rule the compiler could not understand deploys as an EMPTY rule with HTTP 204 — so losing this
-  // method silently re-opens a trap that has no other detector.
-  'validateBusinessRule',
+  // ⚠ `validateBusinessRule` was REMOVED from this list deliberately. The SDK no longer exposes it:
+  // the designer's completeness validator now runs INTERNALLY on every business-rule save, so an
+  // incomplete rule is refused by `pushArtifact` rather than by an opt-in call. Re-adding it here
+  // would fail this guard against a correct bundle.
 ];
 
 function realSdk() {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const noop = async () => ({});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-surface-'));
   const sdk = createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://example.crm.dynamics.com',
     httpClient: { get: noop, post: noop, patch: noop, delete: noop, put: noop },
   });

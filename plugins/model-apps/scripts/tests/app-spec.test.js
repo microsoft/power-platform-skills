@@ -608,6 +608,66 @@ test('#1 a valid $parent.match that resolves to a real parent row still passes',
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+// --- #544: self-referencing sample data, validated at LINT time -------------------------------
+// The build halting partway through sample-data — after other data is already written — is the
+// worst outcome, so the rules the seeder enforces at runtime are all gated here first.
+function selfRefDesk() {
+  const s = cloneDesk();
+  s.entities.push({ schemaName: 'new_org', displayName: 'Org', pluralName: 'Orgs', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId', displayName: 'Parent Org' } });
+  s.sampleData.new_org = [
+    { new_name: 'Root' },
+    { new_name: 'Child', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },
+  ];
+  return s;
+}
+
+test('#544 a self-referencing $parent hierarchy is VALID (the seeder creates it in waves)', () => {
+  const r = validateAppSpec(selfRefDesk());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('#544 a self-reference cycle is rejected at lint time, naming the record indices', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Child' } };
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e) && /0, 1/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a row that is its own parent is rejected as a cycle', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org = [{ new_name: 'Loop', $parent: { entity: 'new_org', match: { new_name: 'Loop' } } }];
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 TWO relationships for one pair make a $parent ambiguous unless it names the lookup', () => {
+  const s = selfRefDesk();
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  const ambiguous = validateAppSpec(s);
+  assert.strictEqual(ambiguous.ok, false);
+  assert.ok(ambiguous.errors.some((e) => /ambiguous/.test(e) && /new_ParentOrgId/.test(e) && /new_GroupAncestorId/.test(e)), JSON.stringify(ambiguous.errors));
+
+  s.sampleData.new_org[1].$parent.lookup = 'new_GroupAncestorId';
+  const named = validateAppSpec(s);
+  assert.strictEqual(named.ok, true, JSON.stringify(named.errors));
+});
+
+test('#544 a $parent.lookup that names no relationship lists the valid ones', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[1].$parent.lookup = 'new_NotARelationship';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /new_NotARelationship/.test(e) && /new_ParentOrgId/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a cross-entity $parent is unaffected by the self-reference checks', () => {
+  // The stock desk binds tickets to customers; no self-reference exists anywhere in it.
+  assert.strictEqual(validateAppSpec(cloneDesk()).ok, true);
+});
+
 test('#1 (hardening) a non-array $parents is rejected (it diverges from the seeder otherwise)', () => {
   const bad = cloneDesk();
   bad.sampleData.new_ticket[0] = { new_name: 'Row', new_priority: 'High', new_status: 'New',
@@ -1175,4 +1235,41 @@ test('the value describer cannot itself throw (BigInt / a throwing getter)', () 
     assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); }, `${label} must not crash the validator`);
     assert.strictEqual(res.ok, false, `${label} must still be rejected`);
   }
+});
+
+// --- AB#6686426: default-form selection must be deterministic --------------------------------------
+//
+// Promotion used to run INSIDE the concurrent per-form build, so every Main form on an owned custom
+// table promoted itself and the LAST to finish won. Which form a table opened with therefore depended
+// on completion order — an alternate read-only or OnSave-blocked form could silently become the
+// default. Promotion is now ONE serialized pass after every form exists, choosing an explicit
+// `isDefault` first and otherwise the first Main form in spec order.
+
+const deskWithForms = (forms) => { const s = cloneDesk(); s.forms = forms; return s; };
+const mainForm = (name, over = {}) => ({
+  entity: desk.entities[0].schemaName, name, formType: 'Main',
+  sections: [{ label: 'General', columns: [desk.entities[0].primaryAttribute.schemaName] }], ...over,
+});
+
+test('AB#6686426: isDefault must be a boolean', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: 'yes' })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /isDefault must be a boolean/);
+});
+
+test('AB#6686426: two Main forms cannot both claim isDefault', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: true }), mainForm('B', { isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /exactly one form can be the table's default/);
+});
+
+test('AB#6686426: isDefault on a NON-Main form is rejected — only Main forms are promoted', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('QC', { formType: 'QuickCreate', isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /only meaningful on a Main form/);
+});
+
+test('AB#6686426: one isDefault among several Main forms is valid', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A'), mainForm('B', { isDefault: true }), mainForm('C')]), { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
