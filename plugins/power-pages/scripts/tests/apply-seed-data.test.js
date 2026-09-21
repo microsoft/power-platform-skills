@@ -519,6 +519,73 @@ test('validateAttachmentFile rejects symbolic links without reading their target
   assert.match(validateAttachmentFile(linkPath), /not a file/);
 });
 
+test('validateAttachmentFile rejects files reached through a symlinked directory', (t) => {
+  const seedDir = tempDir();
+  const outside = tempDir();
+  t.after(() => {
+    fs.rmSync(seedDir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(outside, 'invoice.pdf'), 'sensitive content');
+  const linkedDir = path.join(seedDir, 'files');
+  try {
+    fs.symlinkSync(outside, linkedDir, 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.match(
+    validateAttachmentFile(path.join(linkedDir, 'invoice.pdf'), { seedDir }),
+    /symbolic link/
+  );
+});
+
+test('applySeedData rejects invalid entity-set paths before sending authenticated requests', async (t) => {
+  const seedDir = tempDir();
+  t.after(() => fs.rmSync(seedDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(seedDir, '010-invalid.json'), JSON.stringify({
+    entitySetName: '../WhoAmI',
+    records: [{ name: 'invalid' }],
+  }));
+  let requests = 0;
+
+  const result = await applySeedData({
+    seedDir,
+    envUrl: 'https://org.crm.dynamics.com',
+  }, {
+    token: 'token',
+    makeRequest: async () => {
+      requests += 1;
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(requests, 0);
+  assert.equal(result.failed, 1);
+  assert.match(result.errors[0].message, /Invalid Dataverse OData operation name/);
+});
+
+test('applySeedData rejects untrusted environment URLs before acquiring a token', async () => {
+  let tokenCalls = 0;
+  const result = await applySeedData({
+    seedDir: '/tmp/missing',
+    envUrl: 'https://attacker.invalid',
+  }, {
+    getAuthToken: () => {
+      tokenCalls += 1;
+      return 'token';
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0].message, /not an allowed Microsoft Dataverse/);
+  assert.equal(tokenCalls, 0);
+});
+
 test('applySeedData rejects non-object __files before posting', async () => {
   const fsImpl = {
     existsSync: () => true,

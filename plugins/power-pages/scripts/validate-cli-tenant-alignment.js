@@ -9,17 +9,16 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--envUrl') args.envUrl = argv[++i];
-    else if (arg === '--token') args.token = argv[++i];
   }
   return args;
 }
 
 function run(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
-  if (!args.envUrl && !args.token) {
+  if (!args.envUrl) {
     return {
       ok: false,
-      error: 'Usage: validate-cli-tenant-alignment.js [--envUrl <url>] [--token <bearer-token>] (at least one required)',
+      error: 'Usage: validate-cli-tenant-alignment.js --envUrl <url>',
     };
   }
   return validateCliTenantAlignment(args, deps);

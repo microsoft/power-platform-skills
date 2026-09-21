@@ -13,7 +13,10 @@ function resolveTemplateImportContext(deps = {}) {
   if (!token) {
     return { ok: false, environmentUrl, error: 'Azure CLI token unavailable. Run `az login` first.' };
   }
-  return { ok: true, environmentUrl, token };
+  // Token availability is checked here, but the credential stays in-process.
+  // Each authenticated helper reacquires it rather than exposing it in JSON,
+  // shell history, process listings, or subagent prompts.
+  return { ok: true, environmentUrl };
 }
 
 module.exports = { resolveTemplateImportContext };

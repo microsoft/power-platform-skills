@@ -307,13 +307,25 @@ function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location 
  * signing in via `az login --allow-no-subscriptions`.
  * @returns {string|null} Access token, or null if unavailable
  */
-function getAuthToken(resourceUrl) {
+function runAzureCli(args, deps = {}) {
+  const execFile = deps.execFile || execFileSync;
+  const platform = deps.platform || process.platform;
+  const options = { encoding: 'utf8', timeout: 15000, shell: false };
+  if (platform === 'win32') {
+    // Azure CLI is exposed as az.cmd on Windows. Route the fixed argument array
+    // through cmd.exe because Node cannot execute .cmd shims directly.
+    // See: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'az.cmd', ...args], options);
+  }
+  return execFile('az', args, options);
+}
+
+function getAuthToken(resourceUrl, deps = {}) {
   try {
     const trustedResourceUrl = validateTokenResourceUrl(resourceUrl);
-    return execFileSync(
-      'az',
+    return runAzureCli(
       ['account', 'get-access-token', '--resource', trustedResourceUrl, '--query', 'accessToken', '-o', 'tsv'],
-      { encoding: 'utf8', timeout: 15000, shell: false }
+      deps
     ).trim();
   } catch {
     return null;
@@ -533,6 +545,7 @@ module.exports = {
   validateAuthenticatedRequestUrl,
   validateBapUrl,
   validateBapPollingUrl,
+  runAzureCli,
   getAuthToken,
   makeRequest,
   odataGet,

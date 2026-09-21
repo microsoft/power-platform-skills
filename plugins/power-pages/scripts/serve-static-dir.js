@@ -43,11 +43,24 @@ function safeResolve(root, urlPath) {
   return fullPath === rootPath || fullPath.startsWith(rootPath + path.sep) ? fullPath : null;
 }
 
-function isServableFile(filePath) {
+function isServableFile(filePath, options = {}) {
+  const fsImpl = options.fs || fs;
+  const root = path.resolve(options.root || path.dirname(filePath));
   try {
-    if (!fs.existsSync(filePath)) return false;
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink();
+    if (!fsImpl.existsSync(root) || !fsImpl.existsSync(filePath)) return false;
+    const rootStat = fsImpl.lstatSync(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return false;
+    const resolvedFile = path.resolve(filePath);
+    if (resolvedFile === root || !resolvedFile.startsWith(root + path.sep)) return false;
+    let current = root;
+    for (const segment of path.relative(root, resolvedFile).split(path.sep)) {
+      current = path.join(current, segment);
+      if (fsImpl.lstatSync(current).isSymbolicLink()) return false;
+    }
+    const realRoot = fsImpl.realpathSync(root);
+    const realFile = fsImpl.realpathSync(resolvedFile);
+    if (realFile === realRoot || !realFile.startsWith(realRoot + path.sep)) return false;
+    return fsImpl.lstatSync(resolvedFile).isFile();
   } catch {
     return false;
   }
@@ -81,7 +94,7 @@ function serverUrl(host, port) {
 function startServer({ root, host, port, urlFile }) {
   const server = http.createServer((req, res) => {
     const filePath = safeResolve(root, req.url);
-    if (!filePath || !isServableFile(filePath)) {
+    if (!filePath || !isServableFile(filePath, { root })) {
       res.writeHead(404);
       res.end('Not found');
       return;

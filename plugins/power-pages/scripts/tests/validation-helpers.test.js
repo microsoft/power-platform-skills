@@ -50,6 +50,29 @@ test('getAuthToken rejects POSIX and Windows metacharacter payloads before invok
     delete require.cache[require.resolve(helpersPath)];
   });
 
+  test('getAuthToken invokes the Azure CLI cmd shim safely on Windows', () => {
+    const { getAuthToken } = require(helpersPath);
+    const calls = [];
+    const token = getAuthToken('https://org.crm.dynamics.com', {
+      platform: 'win32',
+      execFile(file, args, options) {
+        calls.push({ file, args, options });
+        return 'windows-token\n';
+      },
+    });
+
+    assert.equal(token, 'windows-token');
+    assert.equal(calls[0].file, 'cmd.exe');
+    assert.deepEqual(calls[0].args, [
+      '/d', '/s', '/c', 'az.cmd',
+      'account', 'get-access-token',
+      '--resource', 'https://org.crm.dynamics.com',
+      '--query', 'accessToken',
+      '-o', 'tsv',
+    ]);
+    assert.equal(calls[0].options.shell, false);
+  });
+
   const { getAuthToken } = require(helpersPath);
   assert.equal(getAuthToken('https://org.crm.dynamics.com/;echo-marker'), null);
   assert.equal(getAuthToken('https://org.crm.dynamics.com/&echo-marker%PATH%'), null);

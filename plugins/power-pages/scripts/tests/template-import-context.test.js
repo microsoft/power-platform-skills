@@ -5,14 +5,13 @@ const assert = require('node:assert/strict');
 
 const { resolveTemplateImportContext } = require('../lib/template-import-context');
 
-test('resolveTemplateImportContext returns environment URL and token from shared helpers', () => {
+test('resolveTemplateImportContext verifies token availability without returning the credential', () => {
   assert.deepEqual(resolveTemplateImportContext({
     getEnvironmentUrl: () => 'https://org.crm.dynamics.com',
     getAuthToken: (resource) => `token-for-${resource}`,
   }), {
     ok: true,
     environmentUrl: 'https://org.crm.dynamics.com',
-    token: 'token-for-https://org.crm.dynamics.com',
   });
 });
 

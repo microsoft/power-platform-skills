@@ -100,12 +100,15 @@ test('validateCliTenantAlignment blocks when PAC and Azure tenants differ', () =
   assert.match(result.error, /different tenants/i);
 });
 
-test('run requires either an environment URL or token and passes CLI args through', () => {
-  assert.deepEqual(parseArgs(['--envUrl', 'https://org.crm.dynamics.com', '--token', 't']), {
+test('run requires an environment URL and acquires the token internally', () => {
+  assert.deepEqual(parseArgs(['--envUrl', 'https://org.crm.dynamics.com']), {
     envUrl: 'https://org.crm.dynamics.com',
-    token: 't',
   });
   assert.equal(run([]).ok, false);
-  assert.match(run([]).error, /\[--envUrl <url>\] \[--token <bearer-token>\] \(at least one required\)/);
-  assert.equal(run(['--token', fakeJwt(TENANT_A)], { execFile: fakeExecFile(), platform: 'linux' }).ok, true);
+  assert.match(run([]).error, /--envUrl <url>/);
+  assert.equal(run(['--envUrl', 'https://org.crm.dynamics.com'], {
+    execFile: fakeExecFile(),
+    platform: 'linux',
+    getAuthToken: () => fakeJwt(TENANT_A),
+  }).ok, true);
 });

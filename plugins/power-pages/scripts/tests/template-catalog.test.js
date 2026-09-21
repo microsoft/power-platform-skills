@@ -622,6 +622,30 @@ test('downloadArtifact caches artifacts under the pinned sha and skips download 
   assert.equal(downloads, 1);
 });
 
+test('downloadArtifact rejects cached symlinks and non-files', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const artifactPath = 'templates/spa/company/previews/home.png';
+  const cachedPath = artifactCachePath({ cacheRoot: dir, sha: SHA, artifactPath });
+  fs.mkdirSync(path.dirname(cachedPath), { recursive: true });
+  const target = path.join(dir, 'outside.png');
+  fs.writeFileSync(target, 'outside');
+  try {
+    fs.symlinkSync(target, cachedPath);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  await assert.rejects(
+    () => downloadArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath, cacheRoot: dir }),
+    /regular file/
+  );
+});
+
 test('artifactCachePath rejects paths that escape the sha cache directory', () => {
   assert.throws(
     () => artifactCachePath({ cacheRoot: '/tmp/cache', sha: SHA, artifactPath: '../secret.zip' }),
@@ -886,6 +910,27 @@ test('website code validation handles SPA and traditional source layouts', (t) =
     'adx_name: Traditional Site\n'
   );
   assert.equal(validateWebsiteCodeDirectory(traditionalDir, { kind: 'traditional' }), null);
+});
+
+test('website code validation rejects a symlinked root', (t) => {
+  const dir = tempDir();
+  const target = tempDir();
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+  const link = path.join(dir, 'website-code');
+  try {
+    fs.symlinkSync(target, link, 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.match(validateWebsiteCodeDirectory(link, { kind: 'spa' }), /regular directory/);
 });
 
 test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __files attachments without tree API', async (t) => {

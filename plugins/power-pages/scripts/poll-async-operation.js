@@ -4,12 +4,11 @@
 // Reusable across export-solution and import-solution skills.
 //
 // Usage:
-//   node poll-async-operation.js --asyncJobId "<guid>" --envUrl "https://contoso.crm.dynamics.com" --token "<bearer-token>"
+//   node poll-async-operation.js --asyncJobId "<guid>" --envUrl "https://contoso.crm.dynamics.com"
 //
 // Optional:
 //   --intervalMs <ms>      Poll interval in milliseconds (default: 5000)
 //   --maxAttempts <n>      Maximum poll attempts (default: 60 = ~5 minutes at 5s)
-//   --tokenResource <url>  Resource URL for token refresh (default: envUrl)
 //
 // Output (JSON to stdout):
 //   { "status": "Succeeded", "asyncJobId": "...", "attempts": 12 }
@@ -19,7 +18,11 @@
 //   { "error": "..." }   — when arguments are missing or network errors prevent polling
 
 const fs = require('fs');
-const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const {
+  getAuthToken,
+  makeRequest,
+  validateDataverseEnvironmentUrl,
+} = require('./lib/validation-helpers');
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj));
@@ -32,7 +35,7 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const args = {};
-  const keys = ['--asyncJobId', '--envUrl', '--token', '--intervalMs', '--maxAttempts', '--tokenResource', '--statusFile'];
+  const keys = ['--asyncJobId', '--envUrl', '--intervalMs', '--maxAttempts', '--statusFile'];
   for (const key of keys) {
     const idx = argv.indexOf(key);
     if (idx !== -1 && idx + 1 < argv.length) {
@@ -90,7 +93,12 @@ async function pollAsyncOperation(rawArgs, deps = {}) {
   if (!rawArgs.asyncJobId) return { error: 'Missing required argument: --asyncJobId' };
   if (!rawArgs.envUrl) return { error: 'Missing required argument: --envUrl' };
 
-  const envUrl = normalizeEnvUrl(rawArgs.envUrl);
+  let envUrl;
+  try {
+    envUrl = validateDataverseEnvironmentUrl(normalizeEnvUrl(rawArgs.envUrl));
+  } catch (err) {
+    return { error: err.message };
+  }
   const asyncJobId = normalizeAsyncJobId(rawArgs.asyncJobId);
   if (!asyncJobId) return { error: `Invalid async operation id: ${rawArgs.asyncJobId}` };
   const intervalResult = parsePositiveInteger(rawArgs.intervalMs, 5000, '--intervalMs');
@@ -99,22 +107,18 @@ async function pollAsyncOperation(rawArgs, deps = {}) {
   if (attemptsResult.error) return attemptsResult;
   const intervalMs = intervalResult.value;
   const maxAttempts = attemptsResult.value;
-  const tokenResource = rawArgs.tokenResource || envUrl;
+  const tokenResource = envUrl;
   const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
   const getToken = deps.getAuthToken || getAuthToken;
   const request = deps.makeRequest || makeRequest;
   const wait = deps.sleep || sleep;
 
-  // Token may be passed in directly (to avoid redundant az CLI calls) or refreshed each cycle.
-  let token = rawArgs.token || null;
+  let token = null;
   const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs)); // refresh every ~60s
 
-  // Acquire initial token if not provided
+  token = getToken(tokenResource);
   if (!token) {
-    token = getToken(tokenResource);
-    if (!token) {
-      return { error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` };
-    }
+    return { error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` };
   }
 
   let lastHttpStatus = null;

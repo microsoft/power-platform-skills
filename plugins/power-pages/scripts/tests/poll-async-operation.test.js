@@ -27,6 +27,7 @@ test('poll-async-operation rejects invalid polling arguments before requests', a
     token: 'token',
   };
   const deps = {
+    getAuthToken: () => 'token',
     makeRequest: async () => {
       requested = true;
       return { statusCode: 200, body: '{}' };
@@ -63,11 +64,10 @@ test('poll-async-operation leaves progress indeterminate while import is running
   const result = await pollAsyncOperation({
     asyncJobId: '00000000-0000-0000-0000-000000000000',
     envUrl: 'https://org.crm.dynamics.com',
-    token: 'token',
     intervalMs: '1',
     maxAttempts: '1',
     statusFile,
-  }, { makeRequest, sleep: async () => {} });
+  }, { getAuthToken: () => 'token', makeRequest, sleep: async () => {} });
 
   assert.equal(requests, 1);
   assert.equal(result.status, 'Timeout');
@@ -94,11 +94,10 @@ test('poll-async-operation normalizes envUrl and braced async operation ids', as
   const result = await pollAsyncOperation({
     asyncJobId: '{ABCDEFAB-1234-5678-9ABC-ABCDEFABCDEF}',
     envUrl: 'https://org.crm.dynamics.com/api/data/v9.2',
-    token: 'token',
     intervalMs: '1',
     maxAttempts: '1',
     statusFile: path.join(dir, 'status.json'),
-  }, { makeRequest, sleep: async () => {} });
+  }, { getAuthToken: () => 'token', makeRequest, sleep: async () => {} });
 
   assert.equal(result.status, 'Succeeded');
   assert.match(requestedUrl, /^\/api\/data\/v9\.2\/asyncoperations\(abcdefab-1234-5678-9abc-abcdefabcdef\)\?/);
@@ -115,11 +114,10 @@ test('poll-async-operation keeps transient HTTP status details out of the loader
   const result = await pollAsyncOperation({
     asyncJobId: '00000000-0000-0000-0000-000000000000',
     envUrl: 'https://org.crm.dynamics.com',
-    token: 'token',
     intervalMs: '1',
     maxAttempts: '1',
     statusFile,
-  }, { makeRequest, sleep: async () => {} });
+  }, { getAuthToken: () => 'token', makeRequest, sleep: async () => {} });
 
   assert.equal(result.status, 'Timeout');
   assert.equal(result.lastHttpStatus, 400);
@@ -127,4 +125,20 @@ test('poll-async-operation keeps transient HTTP status details out of the loader
   const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
   assert.equal(status.message, 'Template import is still running. Check the agent terminal.');
   assert.equal('progressPercent' in status, false);
+});
+
+test('poll-async-operation rejects an untrusted environment before acquiring a token', async () => {
+  let tokenCalls = 0;
+  const result = await pollAsyncOperation({
+    asyncJobId: '00000000-0000-0000-0000-000000000000',
+    envUrl: 'https://attacker.invalid',
+  }, {
+    getAuthToken: () => {
+      tokenCalls += 1;
+      return 'token';
+    },
+  });
+
+  assert.match(result.error, /not an allowed Microsoft Dataverse/);
+  assert.equal(tokenCalls, 0);
 });

@@ -83,10 +83,25 @@ test('checkAvailableLanguages reports request failures', async () => {
   });
 });
 
-test('parseArgs reads env URL and token arguments', () => {
-  assert.deepEqual(parseArgs(['--envUrl', 'https://org.crm.dynamics.com/', '--token', 'abc', '--requiredLocaleIds', '1033,1041']), {
+test('checkAvailableLanguages rejects untrusted environment URLs before acquiring a token', async () => {
+  let tokenCalls = 0;
+  const result = await checkAvailableLanguages({
+    envUrl: 'https://attacker.invalid',
+    requiredLocaleIds: [1033],
+    resolveToken: () => {
+      tokenCalls += 1;
+      return 'token';
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not an allowed Microsoft Dataverse/);
+  assert.equal(tokenCalls, 0);
+});
+
+test('parseArgs reads environment and locale arguments without accepting a bearer token', () => {
+  assert.deepEqual(parseArgs(['--envUrl', 'https://org.crm.dynamics.com/', '--requiredLocaleIds', '1033,1041']), {
     envUrl: 'https://org.crm.dynamics.com/',
-    token: 'abc',
     requiredLocaleIds: [1033, 1041],
   });
 });

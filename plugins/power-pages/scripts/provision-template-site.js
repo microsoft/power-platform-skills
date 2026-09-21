@@ -164,6 +164,51 @@ function inspectCompiledOutput(clonedPath, fsImpl = fs) {
   throw new Error(`Build output directory is empty: ${outputPath}`);
 }
 
+function canonicalPathForCreation(targetPath, fsImpl = fs) {
+  let current = path.resolve(targetPath);
+  const missingSegments = [];
+  while (!fsImpl.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    missingSegments.unshift(path.basename(current));
+    current = parent;
+  }
+  const canonicalParent = fsImpl.realpathSync(current);
+  return path.join(canonicalParent, ...missingSegments);
+}
+
+function pathContains(parentPath, childPath, platform = process.platform) {
+  const normalize = (value) => {
+    const resolved = path.resolve(value);
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const parent = normalize(parentPath);
+  const child = normalize(childPath);
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+function validateSeparateProjectPaths(sourcePath, outputDirectory, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const platform = deps.platform || process.platform;
+  try {
+    const sourceStat = fsImpl.lstatSync(sourcePath);
+    if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+      return 'sourcePath must be a regular directory';
+    }
+    const canonicalSource = fsImpl.realpathSync(sourcePath);
+    const canonicalOutput = canonicalPathForCreation(outputDirectory, fsImpl);
+    if (
+      pathContains(canonicalSource, canonicalOutput, platform) ||
+      pathContains(canonicalOutput, canonicalSource, platform)
+    ) {
+      return 'outputDirectory must be separate from sourcePath';
+    }
+  } catch (err) {
+    return `Could not validate sourcePath and outputDirectory: ${err.message}`;
+  }
+  return null;
+}
+
 function provisionTemplateSite(options, deps = {}) {
   const fsImpl = deps.fs || fs;
   const sourcePath = path.resolve(options.sourcePath || '');
@@ -188,13 +233,8 @@ function provisionTemplateSite(options, deps = {}) {
   if (sourceNpmConfigStat.isSymbolicLink() || !sourceNpmConfigStat.isFile()) {
     return { ok: false, step: 'validation', error: 'sourcePath .npmrc must be a regular file' };
   }
-  if (
-    sourcePath === outputDirectory ||
-    outputDirectory.startsWith(`${sourcePath}${path.sep}`) ||
-    sourcePath.startsWith(`${outputDirectory}${path.sep}`)
-  ) {
-    return { ok: false, step: 'validation', error: 'outputDirectory must be separate from sourcePath' };
-  }
+  const separationError = validateSeparateProjectPaths(sourcePath, outputDirectory, deps);
+  if (separationError) return { ok: false, step: 'validation', error: separationError };
   if (fsImpl.existsSync(outputDirectory)) {
     let outputStat;
     try {
@@ -335,7 +375,9 @@ module.exports = {
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
   parseArgs,
+  pathContains,
   provisionTemplateSite,
   runNpm,
   runPac,
+  validateSeparateProjectPaths,
 };

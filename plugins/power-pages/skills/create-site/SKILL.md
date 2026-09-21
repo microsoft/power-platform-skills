@@ -257,14 +257,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    4. Mark **Confirm target environment** as `completed` and **Validate CLI tenant alignment** as `in_progress`, then confirm PAC CLI and Azure CLI are authenticated to the same tenant before any import preflight that depends on both CLIs:
       ```bash
-      node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<environmentUrl>" --token "<token>"
+      node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<environmentUrl>"
       ```
       - **`ok: true`**: mark **Validate CLI tenant alignment** as `completed`.
       - **`ok: false`**: surface the error and the `pacTenantId`, `azTenantId`, and `tokenTenantId` fields when present. Stop before import and tell the user to switch either PAC auth or Azure CLI to the same tenant, then rerun the skill. Do not emit `template_import_failure` because no import was attempted.
    5. Mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
-      node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
+      node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
       ```
       Capture both JSON results before deciding what to do next. Do not mutate `blockedattachments` until the language check has also completed; if the language check blocks import, route to the language-requirement question without changing attachment settings.
       Evaluate the `.js` result:
@@ -459,7 +459,6 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
         --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
         --envUrl "<environmentUrl>" \
-        --token "<token>" \
         --intervalMs 30000 \
         --maxAttempts 75 \
         --statusFile "<temp-import-status-dir>/status.json"

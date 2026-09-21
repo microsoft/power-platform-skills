@@ -1,7 +1,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { getAuthToken } = require('./validation-helpers');
+const { getAuthToken, runAzureCli } = require('./validation-helpers');
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -46,13 +46,10 @@ function runPacAuthWho({ execFile = execFileSync, platform = process.platform } 
 }
 
 function runAzAccountShowTenant({ execFile = execFileSync, platform = process.platform } = {}) {
-  if (platform === 'win32') {
-    // Azure CLI installs an az.cmd shim on Windows. Route through cmd.exe so PATH
-    // lookup matches the user's terminal while keeping the executable literal
-    // fixed for the secure-process validator.
-    return execFile('cmd.exe', ['/d', '/s', '/c', 'az.cmd', 'account', 'show', '--query', 'tenantId', '-o', 'tsv'], { encoding: 'utf8', timeout: 15000 });
-  }
-  return execFile('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], { encoding: 'utf8', timeout: 15000 });
+  return runAzureCli(
+    ['account', 'show', '--query', 'tenantId', '-o', 'tsv'],
+    { execFile, platform }
+  );
 }
 
 function getPacTenantId(execFile = execFileSync, platform = process.platform) {
@@ -74,10 +71,13 @@ function getAzAccountTenantId(execFile = execFileSync, platform = process.platfo
 function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, tokenTenantId } = {}, deps = {}) {
   const execFile = deps.execFile || execFileSync;
   const platform = deps.platform || process.platform;
-  const getToken = deps.getAuthToken || getAuthToken;
   const pacTenant = normalizeGuid(pacTenantId) || getPacTenantId(execFile, platform);
   const azTenant = normalizeGuid(azTenantId) || getAzAccountTenantId(execFile, platform);
-  const bearerToken = token || (envUrl ? getToken(envUrl) : null);
+  const bearerToken = token || (envUrl
+    ? (deps.getAuthToken
+        ? deps.getAuthToken(envUrl)
+        : getAuthToken(envUrl, { execFile, platform }))
+    : null);
   const tokenTenant = normalizeGuid(tokenTenantId) || tenantIdFromToken(bearerToken);
 
   const missing = [];

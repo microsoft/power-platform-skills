@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-const { makeRequest } = require('./lib/validation-helpers');
+const {
+  getAuthToken,
+  makeRequest,
+  validateDataverseEnvironmentUrl,
+} = require('./lib/validation-helpers');
 const { formatJsonResult } = require('./lib/template-cli-args');
 
 const DEFAULT_REQUIRED_LOCALE_IDS = [1033];
@@ -10,7 +14,6 @@ function parseArgs(argv = process.argv.slice(2)) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--envUrl') args.envUrl = argv[++i];
-    else if (argv[i] === '--token') args.token = argv[++i];
     else if (argv[i] === '--requiredLocaleIds') {
       args.requiredLocaleIds = argv[++i]
         .split(',')
@@ -28,15 +31,27 @@ function normalizeRequiredLocaleIds(requiredLocaleIds) {
   return [...new Set(ids.filter((id) => Number.isInteger(id)))];
 }
 
-async function checkAvailableLanguages({ envUrl, token, requiredLocaleIds, request = makeRequest } = {}) {
+async function checkAvailableLanguages({
+  envUrl,
+  token,
+  requiredLocaleIds,
+  request = makeRequest,
+  resolveToken = getAuthToken,
+} = {}) {
   if (!envUrl) {
     return { ok: false, error: 'Missing --envUrl.' };
   }
+  let normalizedEnvUrl;
+  try {
+    normalizedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  token = token || resolveToken(normalizedEnvUrl);
   if (!token) {
-    return { ok: false, error: 'Missing --token.' };
+    return { ok: false, error: `Azure CLI token unavailable for ${normalizedEnvUrl}. Run \`az login\` first.` };
   }
 
-  const normalizedEnvUrl = envUrl.replace(/\/+$/, '');
   const res = await request({
     url: `${normalizedEnvUrl}/api/data/v9.2/RetrieveAvailableLanguages`,
     method: 'GET',

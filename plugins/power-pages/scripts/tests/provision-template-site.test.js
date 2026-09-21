@@ -396,6 +396,56 @@ test('provisionTemplateSite rejects an output path that is a file', (t) => {
   );
 });
 
+test('provisionTemplateSite rejects case-variant output paths inside the source on Windows', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'TemplateSource');
+  createSource(source);
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: path.join(dir, 'templatesource', 'clone'),
+    siteName: '311 Portal',
+  }, {
+    platform: 'win32',
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    step: 'validation',
+    error: 'outputDirectory must be separate from sourcePath',
+  });
+});
+
+test('provisionTemplateSite rejects output paths whose existing parent resolves into the source', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  createSource(source);
+  const linkedParent = path.join(dir, 'linked-source');
+  try {
+    fs.symlinkSync(source, linkedParent, 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: path.join(linkedParent, 'clone'),
+    siteName: '311 Portal',
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    step: 'validation',
+    error: 'outputDirectory must be separate from sourcePath',
+  });
+});
+
 test('provisionTemplateSite requires project-local npm configuration', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -2,7 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const {
+  getAuthToken,
+  makeRequest,
+  validateDataverseEnvironmentUrl,
+} = require('./validation-helpers');
 const generateUuid = require('../generate-uuid');
 
 const FILE_BLOCK_SIZE_BYTES = 4 * 1024 * 1024;
@@ -14,6 +18,7 @@ const FILE_BLOCK_SIZE_BYTES = 4 * 1024 * 1024;
 // activation must never depend on seed upload success.
 const TOKEN_REFRESH_EVERY_REQUESTS = 25;
 const ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.txt', '.csv', '.json', '.docx', '.xlsx']);
+const ODATA_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function emptySummary() {
   return { ok: true, inserted: 0, failed: 0, skipped: 0, errors: [] };
@@ -193,6 +198,7 @@ function normalizeExportRecord(record, primaryKey, idToEntitySet, filesByRecordI
 }
 
 function validateFilesContract({ seedDir, seed, record }, deps = {}) {
+  const fsImpl = deps.fs || fs;
   // Attachment-bearing seed records use this raw shape:
   //   {
   //     "entitySetName": "cr123_invoices",
@@ -222,6 +228,43 @@ function validateFilesContract({ seedDir, seed, record }, deps = {}) {
     const seedRoot = path.resolve(seedDir);
     const absolutePath = path.resolve(seedDir, relativePath);
     if (!absolutePath.startsWith(seedRoot + path.sep)) return `Attachment path must stay under seed-data root: ${relativePath}`;
+    const containmentError = validateContainedPath(seedRoot, absolutePath, fsImpl);
+    if (containmentError) return containmentError;
+  }
+  return null;
+}
+
+function validateContainedPath(rootPath, targetPath, fsImpl = fs) {
+  const root = path.resolve(rootPath);
+  const target = path.resolve(targetPath);
+  if (target === root || !target.startsWith(root + path.sep)) {
+    return `Attachment path must stay under seed-data root: ${targetPath}`;
+  }
+  try {
+    const rootStat = fsImpl.lstatSync(root);
+    if (
+      (typeof rootStat.isDirectory === 'function' && !rootStat.isDirectory()) ||
+      (typeof rootStat.isSymbolicLink === 'function' && rootStat.isSymbolicLink())
+    ) {
+      return `Seed-data root must be a regular directory: ${root}`;
+    }
+    let current = root;
+    for (const segment of path.relative(root, target).split(path.sep)) {
+      current = path.join(current, segment);
+      const stat = fsImpl.lstatSync(current);
+      if (typeof stat.isSymbolicLink === 'function' && stat.isSymbolicLink()) {
+        return `Attachment path contains a symbolic link: ${current}`;
+      }
+    }
+    if (typeof fsImpl.realpathSync === 'function') {
+      const realRoot = fsImpl.realpathSync(root);
+      const realTarget = fsImpl.realpathSync(target);
+      if (realTarget === realRoot || !realTarget.startsWith(realRoot + path.sep)) {
+        return `Attachment path resolves outside seed-data root: ${targetPath}`;
+      }
+    }
+  } catch (err) {
+    return `Attachment path could not be inspected: ${targetPath} (${err.message})`;
   }
   return null;
 }
@@ -244,6 +287,10 @@ function readFilePrefix(filePath, length, deps = {}) {
 
 function validateAttachmentFile(filePath, deps = {}) {
   const fsImpl = deps.fs || fs;
+  if (deps.seedDir) {
+    const containmentError = validateContainedPath(deps.seedDir, filePath, fsImpl);
+    if (containmentError) return containmentError;
+  }
   const ext = path.extname(filePath).toLowerCase();
   if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) return `Attachment extension is not allowed: ${ext || '(none)'}`;
   if (!fsImpl.existsSync(filePath)) return `Attachment file not found: ${filePath}`;
@@ -374,8 +421,12 @@ function postDataverseAction({ envUrl, tokenProvider, actionName, body }, deps =
 
 function postDataverseJson({ envUrl, tokenProvider, apiPath, body, includeHeaders = false }, deps = {}) {
   const request = deps.makeRequest || makeRequest;
+  const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
+  if (!ODATA_IDENTIFIER_RE.test(String(apiPath || ''))) {
+    throw new Error(`Invalid Dataverse OData operation name: ${apiPath}`);
+  }
   return request({
-    url: `${envUrl.replace(/\/+$/, '')}/api/data/v9.2/${apiPath}`,
+    url: `${trustedEnvUrl}/api/data/v9.2/${apiPath}`,
     method: 'POST',
     headers: {
       Authorization: `Bearer ${tokenProvider()}`,
@@ -404,6 +455,7 @@ function createTokenProvider({ envUrl, initialToken, resolveToken, refreshEvery 
 async function applySeedData({ seedDir, envUrl }, deps = {}) {
   const summary = emptySummary();
   try {
+    envUrl = validateDataverseEnvironmentUrl(envUrl);
     const seedEntries = [];
     for (const filePath of listSeedFiles(seedDir, deps)) {
       try {
@@ -475,7 +527,7 @@ async function uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenPr
   for (const [columnName, relativePath] of Object.entries(files)) {
     try {
       const filePath = path.join(seedDir, relativePath);
-      const fileError = validateAttachmentFile(filePath, deps);
+      const fileError = validateAttachmentFile(filePath, { ...deps, seedDir });
       if (fileError) throw new Error(fileError);
       await uploadFileColumn({
         envUrl,
@@ -503,6 +555,7 @@ module.exports = {
   isDuplicateConflict,
   splitReservedFiles,
   validateFilesContract,
+  validateContainedPath,
   validateAttachmentFile,
   uploadFileColumn,
   uploadRecordFiles,

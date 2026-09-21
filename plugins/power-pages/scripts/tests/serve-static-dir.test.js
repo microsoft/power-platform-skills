@@ -63,6 +63,31 @@ test('isServableFile rejects symbolic links', (t) => {
   assert.equal(isServableFile(link), false);
 });
 
+test('isServableFile rejects files reached through a symlinked parent', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-outside-'));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(outside, 'secret.json'), '{"secret":true}');
+  const linkedDir = path.join(root, 'linked-dir');
+  try {
+    fs.symlinkSync(outside, linkedDir, 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.equal(
+    isServableFile(path.join(linkedDir, 'secret.json'), { root }),
+    false
+  );
+});
+
 test('contentType returns useful types for import status assets', () => {
   assert.equal(contentType('index.html'), 'text/html; charset=utf-8');
   assert.equal(contentType('status.json'), 'application/json; charset=utf-8');

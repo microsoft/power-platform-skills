@@ -522,9 +522,19 @@ async function downloadArtifact(options = {}, deps = {}) {
   if (!artifactPath) throw new Error('artifactPath is required');
   const fsImpl = deps.fs || fs;
   const localPath = artifactCachePath({ cacheRoot, sha, artifactPath });
-  if (fsImpl.existsSync(localPath)) return { localPath, cached: true };
+  if (fsImpl.existsSync(localPath)) {
+    const cachedStat = fsImpl.lstatSync(localPath);
+    if (cachedStat.isSymbolicLink() || !cachedStat.isFile()) {
+      throw new Error(`Cached template artifact must be a regular file: ${localPath}`);
+    }
+    return { localPath, cached: true };
+  }
   const download = deps.downloadFile || ((url, dest) => downloadFile(url, dest, deps));
   await download(buildRawUrl({ owner, repo, sha, filePath: artifactPath }), localPath);
+  const downloadedStat = fsImpl.lstatSync(localPath);
+  if (downloadedStat.isSymbolicLink() || !downloadedStat.isFile()) {
+    throw new Error(`Downloaded template artifact must be a regular file: ${localPath}`);
+  }
   return { localPath, cached: false };
 }
 
@@ -545,6 +555,11 @@ function validateRepositoryDirectoryPath(directoryPath, fieldName, label) {
 
 function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
   const fsImpl = deps.fs || fs;
+  if (!fsImpl.existsSync(localPath)) return 'Website code directory is missing';
+  const rootStat = fsImpl.lstatSync(localPath);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    return 'Website code directory must be a regular directory';
+  }
   // Both traditional and code sites keep PAC website source under
   // `.powerpages-site/website.yml`. Code sites also carry the package metadata
   // and project-local npm configuration needed to build and upload the SPA.
@@ -554,12 +569,20 @@ function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
     : ['powerpages.config.json', 'package.json', '.npmrc'];
   for (const requiredFile of requiredFiles) {
     const requiredPath = path.join(localPath, requiredFile);
-    if (!fsImpl.existsSync(requiredPath) || !fsImpl.statSync(requiredPath).isFile()) {
+    if (!fsImpl.existsSync(requiredPath)) {
+      return `Website code directory is missing ${requiredFile}`;
+    }
+    const requiredStat = fsImpl.lstatSync(requiredPath);
+    if (requiredStat.isSymbolicLink() || !requiredStat.isFile()) {
       return `Website code directory is missing ${requiredFile}`;
     }
   }
   const websiteMetadataPath = path.join(localPath, '.powerpages-site', 'website.yml');
-  if (!fsImpl.existsSync(websiteMetadataPath) || !fsImpl.statSync(websiteMetadataPath).isFile()) {
+  if (!fsImpl.existsSync(websiteMetadataPath)) {
+    return 'Website code directory is missing .powerpages-site/website.yml';
+  }
+  const metadataStat = fsImpl.lstatSync(websiteMetadataPath);
+  if (metadataStat.isSymbolicLink() || !metadataStat.isFile()) {
     return 'Website code directory is missing .powerpages-site/website.yml';
   }
 

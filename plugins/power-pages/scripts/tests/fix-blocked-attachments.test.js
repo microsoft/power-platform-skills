@@ -93,6 +93,22 @@ test('passes --environment as a literal argv value with shell disabled', async (
   }
 });
 
+test('invokes pac.exe directly on Windows', async () => {
+  const calls = [];
+  await fixBlockedAttachments({
+    extensions: ['css'],
+    quiet: true,
+    platform: 'win32',
+    execImpl: (file, args, options) => {
+      calls.push({ file, args, options });
+      return SAMPLE_PAC_OUTPUT;
+    },
+  });
+
+  assert.equal(calls[0].file, 'pac.exe');
+  assert.equal(calls[0].options.shell, false);
+});
+
 test('passes Dataverse-derived setting metacharacters as one literal argv value', async () => {
   const currentValue = 'exe;dll;&marker|%PATH%!;js';
   let updateArgs = null;
