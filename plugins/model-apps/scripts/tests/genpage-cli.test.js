@@ -776,3 +776,31 @@ test('a TRANSIENT failure is still retried and can succeed', async () => {
   assert.strictEqual(res.pageId, GUID);
   assert.strictEqual(uploadAttempts, 2, 'a transient failure must still be retried');
 });
+
+// --- #588.6: a path ending in a separator must not swallow the flags that follow ----------------
+// Windows command-line parsing treats `\"` as an ESCAPED QUOTE, so a directory argument ending in
+// a backslash escaped its own closing quote. Captured from a real cmd.exe parse before the fix:
+//   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
+// i.e. the path absorbed the rest of the command line and --app-id was never passed.
+test('a trailing backslash is doubled so it cannot escape the closing quote', () => {
+  // `String.raw` cannot be used here: a template literal may not END with a backslash, because it
+  // escapes the closing backtick. Ordinary escapes it is.
+  const dir = 'C:\\Users\\Power User\\download\\';
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], 'win32');
+  // The run before the closing quote is doubled; the following flag stays a separate argument.
+  assert.match(inv.command, /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after$/,
+    `the trailing separator must be escaped; got ${inv.command}`);
+});
+
+test('interior backslashes are left alone (every Windows path has them)', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], 'win32');
+  assert.match(inv.command, /"C:\\Users\\Power User\\download"/,
+    `an ordinary path must round-trip unchanged; got ${inv.command}`);
+});
+
+test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
+  const dir = '/home/user/download\\';
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], 'linux');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
+    'the POSIX path spawns pac directly, so nothing may be rewritten');
+});

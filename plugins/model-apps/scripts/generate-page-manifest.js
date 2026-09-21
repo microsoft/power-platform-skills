@@ -195,9 +195,31 @@ declare global {
 }
 
 function writeIfAllowed(filePath, content, force) {
-  if (fs.existsSync(filePath) && !force) {
+  // Probed with `lstat`, NOT `existsSync`. `existsSync` FOLLOWS symlinks, so a DANGLING link — one
+  // whose target does not exist yet — reported "nothing here", skipped every check below, and
+  // `writeFileSync` then CREATED the file at the outside target. MEASURED: a `package.json`
+  // symlinked to a non-existent path outside the working directory was created there, which is worse
+  // than the overwrite this guard was first written for. `lstat` describes the LINK itself.
+  let st = null;
+  try { st = fs.lstatSync(filePath); } catch { st = null; } // ENOENT => genuinely nothing there
+
+  if (st && !st.isFile()) {
+    // `--force` may overwrite the file this tool OWNS, never whatever that name points at. A symlink,
+    // directory or special file is not ours, whether its target exists or not. This covers the
+    // escaping symlink completely: the leaf is refused before its target is ever resolved, so no
+    // separate "does the real path escape?" test is needed (and one is unreachable here — realpath
+    // resolves the same ancestors for both the file and its directory, so they can never disagree
+    // once the leaf is known to be a regular file).
+    const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'directory' : 'special file';
+    const e = new Error(`refusing to overwrite ${filePath}: it is not a regular file (${kind})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  if (st && !force) {
     return { wrote: false, reason: 'exists (use --force to overwrite)' };
   }
+
   try {
     fs.writeFileSync(filePath, content);
   } catch (err) {
@@ -271,6 +293,9 @@ module.exports = {
   parseArgs,
   buildPackageJson,
   buildAmbientDeclarations,
+  // Exported for the output-confinement tests: `--force` must overwrite the file this tool owns,
+  // never whatever a symlink at that name points at.
+  writeIfAllowed,
   RUNTIME_DEPENDENCIES,
   DEV_DEPENDENCIES,
 };

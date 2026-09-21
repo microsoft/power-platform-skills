@@ -19,7 +19,18 @@ function quoteArg(a) {
   const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
   // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
   // each percent so prompts/names containing environment-variable syntax round-trip literally.
-  return /[\s"'&|<>^()%]/.test(s) ? `"${q}"` : s;
+  if (!/[\s"'&|<>^()%]/.test(s)) return s;
+  // A run of backslashes immediately before the closing quote must be DOUBLED. Windows command-line
+  // parsing treats `\"` as an escaped quote, so a directory argument ending in a separator —
+  //   --output-directory "C:\Users\Power User\download\"
+  // — escaped its own closing quote and swallowed the following flags into the path. MEASURED via a
+  // real cmd.exe parse:
+  //   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
+  // Only the trailing run matters: an interior `\` is literal to the parser, so escaping those would
+  // corrupt every ordinary Windows path.
+  // See: https://learn.microsoft.com/cpp/cpp/main-function-command-line-args#parsing-c-command-line-arguments
+  const trailingSlashesDoubled = q.replace(/(\\+)$/, (m) => m + m);
+  return `"${trailingSlashesDoubled}"`;
 }
 
 // Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
