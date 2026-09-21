@@ -56,6 +56,7 @@ function runPac(args, deps = {}) {
     // See: https://nodejs.org/api/child_process.html#maxbuffer-and-unicode
     stdio: ['ignore', logFd, logFd],
   };
+  if (deps.cwd) options.cwd = deps.cwd;
   try {
     const isWindows = (deps.platform || process.platform) === 'win32';
     const command = isWindows ? 'pac.exe' : 'pac';

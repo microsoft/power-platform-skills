@@ -297,14 +297,25 @@ function provisionTemplateSite(options, deps = {}) {
   }
   fsImpl.mkdirSync(outputDirectory, { recursive: true });
 
-  const pac = deps.runPac || ((args) => runPac(args, deps));
+  let pacWorkingDirectory;
+  try {
+    // `pac pages clone --overwrite` can replace the selected output directory.
+    // When that directory is also the wrapper's inherited CWD, later PAC calls
+    // can fail because the process still holds a stale directory handle. Run
+    // every PAC command from the canonical parent, which clone never replaces.
+    pacWorkingDirectory = fsImpl.realpathSync(path.dirname(outputDirectory));
+  } catch (err) {
+    return { ok: false, step: 'validation', error: `Could not resolve a stable PAC working directory: ${err.message}` };
+  }
+  const pacCommandOptions = { cwd: pacWorkingDirectory };
+  const pac = deps.runPac || ((args, commandOptions = {}) => runPac(args, { ...deps, ...commandOptions }));
   const cloneResult = pac([
     'pages', 'clone',
     '--path', sourcePath,
     '--outputDirectory', outputDirectory,
     '--name', siteName,
     '--overwrite',
-  ]);
+  ], pacCommandOptions);
   if (cloneResult.status !== 0) {
     return {
       ok: false,
@@ -393,7 +404,7 @@ function provisionTemplateSite(options, deps = {}) {
     'pages', 'upload-code-site',
     '--rootPath', clonedPath,
     '--siteName', siteName,
-  ]);
+  ], pacCommandOptions);
   if (uploadResult.status !== 0) {
     return {
       ok: false,

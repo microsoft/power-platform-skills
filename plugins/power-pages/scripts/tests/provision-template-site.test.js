@@ -162,8 +162,8 @@ test('provisionTemplateSite clones, installs, builds, validates output, then upl
     outputDirectory: output,
     siteName: 'Supplier Portal',
   }, {
-    runPac(args) {
-      pacCalls.push(args);
+    runPac(args, commandOptions) {
+      pacCalls.push({ args, cwd: commandOptions.cwd });
       if (args[1] === 'clone') {
         createSource(path.join(output, 'supplier-portal'), {
           id: CLONED_ID,
@@ -192,18 +192,24 @@ test('provisionTemplateSite clones, installs, builds, validates output, then upl
     compiledPath: 'dist',
   });
   assert.deepEqual(pacCalls, [
-    [
-      'pages', 'clone',
-      '--path', source,
-      '--outputDirectory', output,
-      '--name', 'Supplier Portal',
-      '--overwrite',
-    ],
-    [
-      'pages', 'upload-code-site',
-      '--rootPath', clonedPath,
-      '--siteName', 'Supplier Portal',
-    ],
+    {
+      args: [
+        'pages', 'clone',
+        '--path', source,
+        '--outputDirectory', output,
+        '--name', 'Supplier Portal',
+        '--overwrite',
+      ],
+      cwd: fs.realpathSync(dir),
+    },
+    {
+      args: [
+        'pages', 'upload-code-site',
+        '--rootPath', clonedPath,
+        '--siteName', 'Supplier Portal',
+      ],
+      cwd: fs.realpathSync(dir),
+    },
   ]);
   assert.deepEqual(npmCalls, [
     [[
@@ -263,6 +269,30 @@ test('provisionTemplateSite preserves a pre-existing empty output directory afte
 
   assert.equal(result.outputDirectoryRemoved, false);
   assert.equal(fs.readFileSync(path.join(output, 'partial.txt'), 'utf8'), 'partial');
+});
+
+test('provisionTemplateSite runs PAC from the output parent for a pre-existing current-directory target', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'current-directory');
+  createSource(source);
+  fs.mkdirSync(output);
+  const pacWorkingDirectories = [];
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: '311 Portal',
+  }, {
+    runPac(args, commandOptions) {
+      pacWorkingDirectories.push(commandOptions && commandOptions.cwd);
+      return { status: 1, stdout: '', stderr: 'clone rejected' };
+    },
+  });
+
+  assert.equal(result.step, 'clone');
+  assert.deepEqual(pacWorkingDirectories, [fs.realpathSync(dir)]);
 });
 
 test('provisionTemplateSite removes a new output directory when clone output cannot be resolved', (t) => {
@@ -662,6 +692,7 @@ test('runPac invokes pac.exe directly on Windows without a command shell', () =>
   const calls = [];
   runPac(['pages', 'clone', '--path', 'source'], {
     platform: 'win32',
+    cwd: 'C:\\stable-parent',
     runCommand(command, args, options) {
       calls.push([command, args, options]);
       return 'ok';
@@ -669,6 +700,7 @@ test('runPac invokes pac.exe directly on Windows without a command shell', () =>
   });
   assert.equal(calls[0][0], 'pac.exe');
   assert.deepEqual(calls[0][1], ['pages', 'clone', '--path', 'source']);
+  assert.equal(calls[0][2].cwd, 'C:\\stable-parent');
   assert.equal(calls[0][2].shell, false);
 });
 
