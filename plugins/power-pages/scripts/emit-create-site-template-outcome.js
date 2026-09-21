@@ -28,8 +28,14 @@ function run(argv = process.argv.slice(2)) {
   return emitTemplateOutcome(args);
 }
 
-if (require.main === module) {
-  process.stdout.write(formatJsonResult(run()));
+function toCliResult(result) {
+  // The emitted event can contain tenant-scoped identifiers. Keep it inside the
+  // telemetry boundary and expose only whether the best-effort emission ran.
+  return { ok: Boolean(result && result.ok === true) };
 }
 
-module.exports = { parseArgs, run };
+if (require.main === module) {
+  process.stdout.write(formatJsonResult(toCliResult(run())));
+}
+
+module.exports = { parseArgs, run, toCliResult };

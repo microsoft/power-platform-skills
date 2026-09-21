@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo } = require('../lib/create-site-template-telemetry');
-const { parseArgs } = require('../emit-create-site-template-outcome');
+const { parseArgs, toCliResult } = require('../emit-create-site-template-outcome');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
@@ -190,6 +190,20 @@ test('parseArgs and normalizeBool handle CLI values', () => {
   assert.deepEqual(parseArgs(['--eventName', 'template_import_success', '--templateKind', 'spa', '--seedApplied', '1']), { eventName: 'template_import_success', templateKind: 'spa', seedApplied: '1' });
   assert.equal(normalizeBool('1'), true);
   assert.equal(normalizeBool('false'), false);
+});
+
+test('telemetry CLI output excludes the emitted event and organization identifiers', () => {
+  assert.deepEqual(toCliResult({
+    ok: true,
+    event: {
+      data: {
+        orgId: 'organization-guid',
+        tenantId: 'tenant-guid',
+      },
+    },
+  }), { ok: true });
+  assert.deepEqual(toCliResult({ ok: false, error: 'private failure details' }), { ok: false });
+  assert.deepEqual(toCliResult(null), { ok: false });
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {

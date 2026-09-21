@@ -118,6 +118,42 @@ function pathContains(parentPath, childPath) {
   return child === parent || child.startsWith(parent + path.sep);
 }
 
+function resolveNewFileWithinRoot(root, filePath, options = {}) {
+  const fsImpl = options.fs || fs;
+  const resolvedRoot = path.resolve(root);
+  const resolvedFile = path.resolve(filePath);
+  const rootStat = fsImpl.lstatSync(resolvedRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error('Static server root must be a regular directory');
+  }
+  if (resolvedFile === resolvedRoot || !pathContains(resolvedRoot, resolvedFile)) {
+    throw new Error('urlFile must stay inside the static server root');
+  }
+
+  let current = resolvedRoot;
+  const relativeParent = path.relative(resolvedRoot, path.dirname(resolvedFile));
+  for (const segment of relativeParent.split(path.sep).filter((part) => part && part !== '.')) {
+    current = path.join(current, segment);
+    const stat = fsImpl.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error('urlFile parent directories must be regular directories');
+    }
+  }
+
+  const canonicalRoot = fsImpl.realpathSync(resolvedRoot);
+  const canonicalParent = fsImpl.realpathSync(path.dirname(resolvedFile));
+  if (!pathContains(canonicalRoot, canonicalParent)) {
+    throw new Error('urlFile must stay inside the static server root');
+  }
+  try {
+    fsImpl.lstatSync(resolvedFile);
+    throw new Error('urlFile must not already exist');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return path.join(canonicalParent, path.basename(resolvedFile));
+}
+
 function createCleanupOwnership(root, deps = {}) {
   const fsImpl = deps.fs || fs;
   const osImpl = deps.os || os;
@@ -311,6 +347,7 @@ function waitForChildReady(child, timeoutMs = DEFAULT_READY_TIMEOUT_MS) {
 
 async function main(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
+  const fsImpl = deps.fs || fs;
   if (!args.root) return { ok: false, error: 'Usage: serve-static-dir.js --root <dir> [--urlFile <path>]' };
   if (args.child) {
     const started = await startServer(args, deps);
@@ -359,11 +396,8 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     const ready = await waitForChildReady(child, args.readyTimeoutMs || DEFAULT_READY_TIMEOUT_MS);
     if (args.urlFile) {
-      const urlFile = path.resolve(args.urlFile);
-      if (!pathContains(path.resolve(args.root), urlFile)) {
-        throw new Error('urlFile must stay inside the static server root');
-      }
-      fs.writeFileSync(urlFile, ready.url, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      const urlFile = resolveNewFileWithinRoot(servedRoot, args.urlFile, { fs: fsImpl });
+      fsImpl.writeFileSync(urlFile, ready.url, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     }
     child.unref();
     return { ok: true, url: ready.url, pid: child.pid };
@@ -403,6 +437,7 @@ module.exports = {
   isServableFile,
   main,
   parseArgs,
+  resolveNewFileWithinRoot,
   requestsServerShutdown,
   safeResolve,
   serverUrl,

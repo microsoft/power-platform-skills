@@ -14,6 +14,7 @@ const {
   isServableFile,
   main,
   parseArgs,
+  resolveNewFileWithinRoot,
   requestsServerShutdown,
   safeResolve,
   serverUrl,
@@ -189,6 +190,31 @@ test('main waits for child readiness before writing the URL file', async (t) => 
   assert.equal(fs.existsSync(urlFile), false);
   assert.deepEqual(await pending, { ok: true, url: 'http://127.0.0.1:8123/', pid: 1234 });
   assert.equal(fs.readFileSync(urlFile, 'utf8'), 'http://127.0.0.1:8123/');
+});
+
+test('URL file creation rejects a symlinked parent directory', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-url-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-url-outside-'));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  const linkedDir = path.join(root, 'linked-dir');
+  try {
+    fs.symlinkSync(outside, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () => resolveNewFileWithinRoot(root, path.join(linkedDir, 'url.txt')),
+    /parent directories must be regular directories/
+  );
+  assert.equal(fs.existsSync(path.join(outside, 'url.txt')), false);
 });
 
 test('cleanup ownership removes only the owned temporary root', (t) => {

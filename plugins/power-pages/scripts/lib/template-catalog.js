@@ -595,7 +595,9 @@ async function fetchCatalog(options = {}, deps = {}) {
     // traditional solution-import provisioning path is implemented.
     const selectableCatalog = {
       ...catalog,
-      templates: catalog.templates.filter(isSpaTemplate),
+      templates: normalizeCatalogFamilies({
+        templates: catalog.templates.filter(isSpaTemplate),
+      }),
     };
     const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
     writeCacheFileAtomic(cacheRoot, catalogLocalPath, JSON.stringify(catalog, null, 2), fsImpl);

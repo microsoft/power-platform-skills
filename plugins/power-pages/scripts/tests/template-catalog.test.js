@@ -180,7 +180,10 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
     catalogLocalPath: path.join(dir, SHA, 'templates/manifest.json'),
     cacheDir: path.join(dir, SHA),
     catalog,
-    selectableCatalog: catalog,
+    selectableCatalog: {
+      ...catalog,
+      templates: normalizeCatalogFamilies(catalog),
+    },
   });
   assert.deepEqual(gitCalls, [['git', ['ls-remote', '--tags', 'https://github.com/o/r.git']]]);
   assert.deepEqual(seen, [
@@ -345,6 +348,10 @@ test('fetchCatalog keeps traditional entries but exposes only SPA templates for 
   assert.equal(result.ok, true);
   assert.equal(result.catalog.templates.length, 2);
   assert.deepEqual(result.selectableCatalog.templates.map((template) => template.id), ['supplier-portal']);
+  assert.deepEqual(
+    result.selectableCatalog.templates[0].variants.map((variant) => variant.variantKey),
+    ['react', 'vue']
+  );
   assert.equal(result.catalog.templates[1].variants.none.websiteCodePath, undefined);
   assert.equal(result.catalog.templates[1].variants.none.solutionPath, undefined);
 });
