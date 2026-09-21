@@ -394,13 +394,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```bash
       # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
       # Import path:
-      # { "state": "running", "phase": "solution", "message": "Importing supporting solutions" }
+      # Use "Installing solution" when TEMPLATE_SOLUTIONS_TO_IMPORT has one entry,
+      # otherwise use "Installing solutions":
+      # { "state": "running", "phase": "solution", "message": "<solution install label>" }
       # SKIP_TEMPLATE_SOLUTION_IMPORT path:
       # { "state": "running", "phase": "site", "message": "Preparing template site" }
       node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
         --templateName "<SELECTED_TEMPLATE.displayName>" \
         --statusPath "<temp-import-status-dir>/status.json" \
         --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
+        --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
         --outputPath "<temp-import-status-dir>/index.html"
       node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt"
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
@@ -1289,6 +1292,8 @@ After Phase 1.5 selects the template path, append the pre-install tasks immediat
 | Confirm template install | Confirming template install | Show the selected template and target environment, then ask for final install consent |
 
 After the reinstall policy chooses a normal import, update, or import-anyway path, append:
+
+When `TEMPLATE_SOLUTIONS_TO_IMPORT` contains exactly one entry, use the task subject **Import template supporting solution** and active form **Importing supporting solution**. Use the plural forms in the table for two or more entries.
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|

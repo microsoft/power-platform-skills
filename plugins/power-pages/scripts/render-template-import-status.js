@@ -14,12 +14,13 @@ const LOCAL_PREVIEW_SIGNATURES = {
 };
 
 function parseArgs(argv) {
-  const args = { open: false, previewImages: [] };
+  const args = { open: false, previewImages: [], solutionCount: 1 };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--templateName') args.templateName = argv[++i];
     else if (argv[i] === '--statusPath') args.statusPath = argv[++i];
     else if (argv[i] === '--outputPath') args.outputPath = argv[++i];
     else if (argv[i] === '--previewImagesJson') args.previewImages = JSON.parse(argv[++i] || '[]');
+    else if (argv[i] === '--solutionCount') args.solutionCount = Number(argv[++i]);
     else if (argv[i] === '--open') args.open = true;
   }
   return args;
@@ -79,10 +80,21 @@ function jsonForScript(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
-function renderTemplateImportStatus({ templateName, statusPath, outputPath, previewImages = [], open = false }, deps = {}) {
+function renderTemplateImportStatus({
+  templateName,
+  statusPath,
+  outputPath,
+  previewImages = [],
+  solutionCount = 1,
+  open = false,
+}, deps = {}) {
   if (!templateName || !statusPath || !outputPath) {
-    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--previewImagesJson <json>] [--open]');
+    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--previewImagesJson <json>] [--solutionCount <count>] [--open]');
   }
+  if (!Number.isSafeInteger(solutionCount) || solutionCount < 1) {
+    throw new Error('solutionCount must be a positive integer');
+  }
+  const pluralSolutions = solutionCount > 1;
   const templatePath = path.join(__dirname, '..', 'skills', 'create-site', 'assets', 'template-import-status.html');
   const statusUrl = path.dirname(path.resolve(statusPath)) === path.dirname(path.resolve(outputPath))
     ? path.basename(statusPath)
@@ -94,8 +106,18 @@ function renderTemplateImportStatus({ templateName, statusPath, outputPath, prev
       TEMPLATE_NAME: templateName,
       STATUS_URL: statusUrl,
       PREVIEW_IMAGES: localizePreviewImages(previewImages, outputPath),
+      SOLUTION_INSTALLING_LABEL: pluralSolutions ? 'Installing solutions' : 'Installing solution',
+      SOLUTION_INSTALLED_LABEL: pluralSolutions ? 'Solutions installed' : 'Solution installed',
+      SOLUTION_NOUN: pluralSolutions ? 'solutions' : 'solution',
     },
-    requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL', 'PREVIEW_IMAGES'],
+    requiredKeys: [
+      'TEMPLATE_NAME',
+      'STATUS_URL',
+      'PREVIEW_IMAGES',
+      'SOLUTION_INSTALLING_LABEL',
+      'SOLUTION_INSTALLED_LABEL',
+      'SOLUTION_NOUN',
+    ],
     emitStatus: false,
   });
   if (open) {

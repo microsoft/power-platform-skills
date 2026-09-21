@@ -18,12 +18,14 @@ test('parseArgs accepts import status page inputs', () => {
     '--statusPath', '/tmp/status.json',
     '--outputPath', '/tmp/import.html',
     '--previewImagesJson', '["file:///tmp/a.png"]',
+    '--solutionCount', '2',
     '--open',
   ]), {
     templateName: 'Supplier Portal',
     statusPath: '/tmp/status.json',
     outputPath: '/tmp/import.html',
     previewImages: ['file:///tmp/a.png'],
+    solutionCount: 2,
     open: true,
   });
 });
@@ -39,6 +41,7 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
     statusPath,
     outputPath,
     previewImages: ['file:///tmp/a.png', 'file:///tmp/b.png'],
+    solutionCount: 2,
   });
   const html = fs.readFileSync(outputPath, 'utf8');
 
@@ -71,8 +74,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /phaseForStatus/);
   assert.match(html, /renderPhase/);
   assert.match(html, /status\.phase/);
-  assert.match(html, /phaseSolution\.textContent = 'Solutions installed'/);
-  assert.match(html, /'Installing ' \+ TEMPLATE_NAME \+ ' solutions'/);
+  assert.match(html, /const SOLUTION_INSTALLED_LABEL = "Solutions installed"/);
+  assert.match(html, /const SOLUTION_NOUN = "solutions"/);
+  assert.match(html, /phaseSolution\.textContent = SOLUTION_INSTALLED_LABEL/);
+  assert.match(html, /'Installing ' \+ TEMPLATE_NAME \+ ' ' \+ SOLUTION_NOUN/);
   assert.match(html, /phaseSite\.textContent = 'Created site'/);
   assert.match(html, /'Creating ' \+ TEMPLATE_NAME \+ ' template site'/);
   assert.match(html, /'Seeding ' \+ TEMPLATE_NAME \+ ' template data'/);
@@ -91,6 +96,39 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /window\.location\.assign/);
   assert.match(html, /\^https\?:/);
   assert.match(html, /Template setup needs attention/);
+});
+
+test('renderTemplateImportStatus uses singular solution copy for one solution', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'import.html');
+  const statusPath = path.join(dir, 'status.json');
+
+  renderTemplateImportStatus({
+    templateName: '311 Portal',
+    statusPath,
+    outputPath,
+    solutionCount: 1,
+  });
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  assert.match(html, /Installing solution/);
+  assert.match(html, /const SOLUTION_INSTALLED_LABEL = "Solution installed"/);
+  assert.match(html, /const SOLUTION_NOUN = "solution"/);
+});
+
+test('renderTemplateImportStatus rejects invalid solution counts', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.throws(
+    () => renderTemplateImportStatus({
+      templateName: '311 Portal',
+      statusPath: path.join(dir, 'status.json'),
+      outputPath: path.join(dir, 'import.html'),
+      solutionCount: 0,
+    }),
+    /positive integer/
+  );
 });
 
 test('renderTemplateImportStatus does not print the shared renderTemplate status line', (t) => {
