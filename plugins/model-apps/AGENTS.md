@@ -1146,6 +1146,29 @@ that keeps an `external` web resource. Expect a clean environment afterwards *ex
 `<prefix>publisher`; if a probe must restore the environment exactly, remove that row yourself after
 confirming it owns no other solution.
 
+**`appmodulecomponent` rows also survive an app delete, and there is no supported way to remove
+them. Do not treat this as a teardown bug — it has been re-reported as one, and re-measured.** The
+platform neither cascades these children nor exposes a delete for them. Measured live:
+
+- `appmodulecomponent` registers exactly two SDK messages — `Retrieve` and `RetrieveMultiple`. A
+  direct `DELETE` is not *denied*, it **does not exist**, which is why it 400s.
+- `RemoveAppComponents` is registered, but while the app still exists it returns **HTTP 204 and
+  removes nothing** — the same "204 means ACCEPTED, not done" trap already recorded above for
+  `AddAppComponents` pinning a hidden `task` component. After the app row is gone it 404s, because
+  the action binds to the app.
+- So there is no window in which this is fixable from here. Adding a `RemoveAppComponents` call to
+  teardown would emit a request that silently does nothing and **imply a cleanup that never
+  happened** — worse than leaving the rows.
+
+Scale, so the residue is not mistaken for something this plugin causes: a read-only audit of a
+shared test environment found **10,189 orphaned rows across 281 distinct absent parents** — i.e.
+every app ever deleted there, by any tool, leaves its component rows behind. A model-apps fixture
+contributes a handful. The rows are unreachable metadata, not app-owned data, and a rebuild of the
+same app does not adopt or trip over them.
+
+If this ever becomes fixable, the prerequisite is a platform-supported delete (or a cascade) for
+`appmodulecomponent`; re-check the registered SDK messages before attempting it again.
+
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
 (navigate/snapshot/click/screenshot).
