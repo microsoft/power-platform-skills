@@ -145,6 +145,12 @@ test('inspectSolutionZip reports corrupt or unreadable solution.xml as ok:false'
   assert.deepEqual(inspectSolutionZip('/tmp/template.zip', {
     solutionXml: '<SolutionManifest><UniqueName>missing_version</UniqueName></SolutionManifest>',
   }), { ok: false, error: 'solution.xml did not include UniqueName and Version' });
+  assert.deepEqual(inspectSolutionZip('/tmp/template.zip', {
+    solutionXml: '<SolutionManifest><UniqueName>invalid_version</UniqueName><Version>1.0.preview</Version></SolutionManifest>',
+  }), {
+    ok: false,
+    error: 'solution.xml Version must contain one to four non-negative integer segments',
+  });
 });
 
 test('inspect-template-solution CLI parser and runner accept unpacked solution source', () => {

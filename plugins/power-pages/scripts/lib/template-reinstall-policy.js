@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { compareVersions } = require('./bump-solution-version');
+const { compareVersions, parseVersionToSegments } = require('./bump-solution-version');
 
 function decideReinstall({ installed, installedVersion, availableVersion, detectionFailed } = {}) {
   if (detectionFailed) return 'ask';
@@ -102,6 +102,14 @@ function inspectSolutionXml(xml) {
   const managed = getTag(xml, 'Managed');
   if (!uniqueName || !version) {
     return { ok: false, error: 'solution.xml did not include UniqueName and Version' };
+  }
+  try {
+    parseVersionToSegments(version);
+  } catch {
+    return {
+      ok: false,
+      error: 'solution.xml Version must contain one to four non-negative integer segments',
+    };
   }
   return { ok: true, uniqueName, version, managed: managed === '1' };
 }
