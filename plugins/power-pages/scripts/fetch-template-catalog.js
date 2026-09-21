@@ -6,7 +6,7 @@ const { parseTemplateRepoArgs, runBestEffortJsonCli } = require('./lib/template-
 
 // Accepted argv shape:
 //   --owner microsoft --repo power-pages-samples --ref latest-release
-//   --catalogPath templates/manifest.json --cacheRoot /tmp/powerpages-templates
+//   --catalogPath templates/manifest.json --cacheRoot ~/.power-platform-skills/template-cache
 // `--ref` defaults to `latest-release`, which resolves GitHub's latest Release
 // tag and then pins that tag to an immutable commit SHA for the run.
 // All flags are optional; unknown flags are ignored so future callers can add

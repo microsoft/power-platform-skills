@@ -5,7 +5,7 @@ const { applySeedData } = require('./lib/apply-seed-data');
 const { formatJsonResult, runBestEffortJsonCli } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
-//   --seedDir /tmp/powerpages-templates/<sha>/templates/spa/<id>/seed-data
+//   --seedDir ~/.power-platform-skills/template-cache/<sha>/templates/spa/<id>/seed-data
 //   --envUrl https://org.crm.dynamics.com
 // Missing args are returned as `{ ok:false }` so create-site can continue to
 // activation; seeding is best-effort and must never block go-live.

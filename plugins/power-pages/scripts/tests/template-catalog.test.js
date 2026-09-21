@@ -13,6 +13,7 @@ const {
   buildGitRemoteUrl,
   cacheDirForSha,
   artifactCachePath,
+  ensurePrivateCacheRoot,
   requestJson,
   downloadFile,
   fetchCatalog,
@@ -192,6 +193,7 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
 test('fetchCatalog rejects a symlinked catalog cache file without modifying its target', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  ensurePrivateCacheRoot(dir);
   const catalogPath = path.join(dir, SHA, 'templates', 'manifest.json');
   const outsidePath = path.join(dir, 'outside.json');
   fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
@@ -219,6 +221,7 @@ test('fetchCatalog rejects a symlinked catalog cache file without modifying its 
 test('fetchCatalog rejects symlinked directories inside the catalog cache path', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  ensurePrivateCacheRoot(dir);
   const outsideDir = path.join(dir, 'outside');
   const templatesPath = path.join(dir, SHA, 'templates');
   fs.mkdirSync(path.dirname(templatesPath), { recursive: true });
@@ -760,9 +763,53 @@ test('downloadArtifact caches artifacts under the pinned sha and skips download 
   assert.equal(downloads, 1);
 });
 
+test('template cache root is private and carries an ownership marker', (t) => {
+  const parent = tempDir();
+  const dir = path.join(parent, 'cache');
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+
+  assert.equal(ensurePrivateCacheRoot(dir), path.resolve(dir));
+  const markerPath = path.join(dir, '.powerpages-template-cache.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath, 'utf8')), {
+    schemaVersion: 1,
+    ownerUid: typeof process.getuid === 'function' ? process.getuid() : null,
+  });
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(dir).mode & 0o077, 0);
+    assert.equal(fs.statSync(markerPath).mode & 0o077, 0);
+  }
+});
+
+test('template cache rejects an unclaimed pre-populated root', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'preplanted.txt'), 'untrusted');
+
+  assert.throws(
+    () => ensurePrivateCacheRoot(dir),
+    /cache root is not owned by this tool/
+  );
+});
+
+test('template cache rejects roots accessible to other users', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX permission bits are not meaningful on Windows');
+    return;
+  }
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.chmodSync(dir, 0o755);
+
+  assert.throws(
+    () => ensurePrivateCacheRoot(dir),
+    /cache root must be private to the current user/
+  );
+});
+
 test('downloadArtifact rejects cached symlinks and non-files', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  ensurePrivateCacheRoot(dir);
   const artifactPath = 'templates/spa/company/previews/home.png';
   const cachedPath = artifactCachePath({ cacheRoot: dir, sha: SHA, artifactPath });
   fs.mkdirSync(path.dirname(cachedPath), { recursive: true });
@@ -877,6 +924,7 @@ test('downloadTemplateVariant combines variant website code with family solution
 test('downloadTemplateVariant replaces a symlinked checkout root instead of trusting its contents', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  ensurePrivateCacheRoot(dir);
   const variantPath = 'templates/spa/company/variants/react';
   const solutionsPath = 'templates/spa/company/solutions';
   const checkoutRoot = repositoryDirectoryCheckoutRoot({
@@ -938,6 +986,7 @@ test('downloadTemplateVariant replaces a symlinked checkout root instead of trus
 test('downloadTemplateVariant rejects a symlinked checkout parent directory', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  ensurePrivateCacheRoot(dir);
   const outsideDir = path.join(dir, 'outside-checkouts');
   const symlinkedParent = path.join(dir, SHA, '.directory-checkouts', 'templates', 'spa');
   fs.mkdirSync(path.dirname(symlinkedParent), { recursive: true });

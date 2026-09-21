@@ -315,7 +315,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 >
 > **Trigger:** Phase 1.5 after the template variant and its unpacked solutions are downloaded and the target environment is resolved.
 > **Why we ask:** The install can import unmanaged supporting solutions and create a new code site. Choosing the wrong environment or template is disruptive and cannot be cleanly undone.
-> **Cancel leaves:** `template-cache` — the discovered solution sources and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
+> **Cancel leaves:** `template-cache` — the discovered solution sources and preview images may remain in the private SHA-keyed template cache; no org mutation has occurred.
 
    7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template install** as `in_progress`, present the template and environment, and ask:
 
@@ -342,7 +342,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         > **Trigger:** Phase 1.5 when one of the selected template solutions is already installed and the downloaded source has a newer version.
         > **Loop behavior:** Fires once per matching entry in `SELECTED_TEMPLATE_SOLUTIONS`; three solutions needing updates require three confirmations.
         > **Why we ask:** Updating an unmanaged solution merges changes into the environment and cannot be cleanly rolled back.
-        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the private SHA-keyed template cache; no org mutation happens if cancelled.
 
         Use `AskUserQuestion`:
 
@@ -362,7 +362,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         > **Trigger:** Phase 1.5 when `check-solution-installed.js` cannot determine whether one selected template solution already exists.
         > **Loop behavior:** Fires once per unknown entry in `SELECTED_TEMPLATE_SOLUTIONS`; an answer applies only to the named solution.
         > **Why we ask:** Importing an unmanaged solution that may already exist can merge components.
-        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the private SHA-keyed template cache; no org mutation happens if cancelled.
 
         Use `AskUserQuestion`:
 
@@ -383,7 +383,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       >
       > **Trigger:** Phase 1.5 when every selected template solution is installed at the same or a newer version.
       > **Why we ask:** The skill will skip all solution imports but still clone and upload a new code site.
-      > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no site clone/upload happens if cancelled.
+      > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the private SHA-keyed template cache; no site clone/upload happens if cancelled.
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -430,7 +430,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       > **Trigger:** Phase 1.5 when local validation or `pac solution pack` fails for one discovered solution.
       > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
       > **Why we ask:** No environment mutation has happened, but template installation cannot continue without a valid temporary solution ZIP.
-      > **Cancel leaves:** `template-cache` — downloaded template source remains in the SHA-keyed temp cache; partial pack output has been removed.
+      > **Cancel leaves:** `template-cache` — downloaded template source remains in the private SHA-keyed template cache; partial pack output has been removed.
 
       Use `AskUserQuestion`:
 
@@ -489,7 +489,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       > **Trigger:** Phase 1.5 when `ImportSolutionAsync` fails, times out, or reports component-level failures.
       > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
       > **Why we ask:** The environment may contain the current partial unmanaged import plus any earlier solutions imported during this run; retrying or switching paths should be an explicit choice.
-      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the SHA-keyed temp cache; the current partial import and any earlier successful solution imports remain in Dataverse and are explained in the error summary.
+      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the private SHA-keyed template cache; the current partial import and any earlier successful solution imports remain in Dataverse and are explained in the error summary.
 
       Use `AskUserQuestion`:
 

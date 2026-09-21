@@ -15,9 +15,11 @@ const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro', 'none', 'other']);
 const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const CACHE_MARKER_FILE = '.powerpages-template-cache.json';
+const CACHE_MARKER_VERSION = 1;
 
 function getDefaultCacheRoot() {
-  return path.join(os.tmpdir(), 'powerpages-templates');
+  return path.join(os.homedir(), '.power-platform-skills', 'template-cache');
 }
 
 function encodePath(filePath) {
@@ -52,18 +54,84 @@ function isPathInside(rootPath, candidatePath) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-function ensureSafeCacheDirectory(cacheRoot, directoryPath, fsImpl = fs) {
+function assertOwnedPrivateCacheEntry(entryPath, stat, entryType) {
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    throw new Error(`Template cache ${entryType} must be owned by the current user: ${entryPath}`);
+  }
+  // POSIX permission bits are not meaningful on Windows. On POSIX, cached
+  // package metadata and website source must not be readable or writable by
+  // another local account because npm later executes content from this cache.
+  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+    throw new Error(`Template cache ${entryType} must be private to the current user: ${entryPath}`);
+  }
+}
+
+function ensurePrivateCacheRoot(cacheRoot, fsImpl = fs) {
   const resolvedCacheRoot = path.resolve(cacheRoot || getDefaultCacheRoot());
+  fsImpl.mkdirSync(resolvedCacheRoot, { recursive: true, mode: 0o700 });
+  const rootStat = fsImpl.lstatSync(resolvedCacheRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`Template cache root must be a real directory: ${resolvedCacheRoot}`);
+  }
+  assertOwnedPrivateCacheEntry(resolvedCacheRoot, rootStat, 'root');
+
+  const markerPath = path.join(resolvedCacheRoot, CACHE_MARKER_FILE);
+  if (!fsImpl.existsSync(markerPath)) {
+    const existingEntries = fsImpl.readdirSync(resolvedCacheRoot);
+    if (existingEntries.length > 0) {
+      throw new Error(`Template cache root is not owned by this tool: ${resolvedCacheRoot}`);
+    }
+
+    let markerDescriptor;
+    try {
+      markerDescriptor = fsImpl.openSync(markerPath, 'wx', 0o600);
+      fsImpl.writeFileSync(markerDescriptor, JSON.stringify({
+        schemaVersion: CACHE_MARKER_VERSION,
+        ownerUid: typeof process.getuid === 'function' ? process.getuid() : null,
+      }), 'utf8');
+      fsImpl.closeSync(markerDescriptor);
+      markerDescriptor = undefined;
+    } catch (err) {
+      // A concurrent template command may have initialized the same private
+      // cache between the existence check and exclusive marker creation.
+      if (err.code !== 'EEXIST') throw err;
+    } finally {
+      if (markerDescriptor !== undefined) {
+        try { fsImpl.closeSync(markerDescriptor); } catch { /* best-effort */ }
+      }
+    }
+  }
+
+  const markerStat = fsImpl.lstatSync(markerPath);
+  if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+    throw new Error(`Template cache ownership marker must be a regular file: ${markerPath}`);
+  }
+  assertOwnedPrivateCacheEntry(markerPath, markerStat, 'ownership marker');
+
+  let marker;
+  try {
+    marker = JSON.parse(fsImpl.readFileSync(markerPath, 'utf8'));
+  } catch {
+    throw new Error(`Template cache ownership marker is malformed: ${markerPath}`);
+  }
+  const currentUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (
+    marker.schemaVersion !== CACHE_MARKER_VERSION ||
+    marker.ownerUid !== currentUid
+  ) {
+    throw new Error(`Template cache ownership marker is invalid: ${markerPath}`);
+  }
+
+  return resolvedCacheRoot;
+}
+
+function ensureSafeCacheDirectory(cacheRoot, directoryPath, fsImpl = fs) {
+  const resolvedCacheRoot = ensurePrivateCacheRoot(cacheRoot, fsImpl);
   const resolvedDirectory = path.resolve(directoryPath);
   if (!isPathInside(resolvedCacheRoot, resolvedDirectory)) {
     throw new Error(`Template cache directory must stay under the cache root: ${resolvedDirectory}`);
   }
 
-  fsImpl.mkdirSync(resolvedCacheRoot, { recursive: true });
-  const rootStat = fsImpl.lstatSync(resolvedCacheRoot);
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-    throw new Error(`Template cache root must be a real directory: ${resolvedCacheRoot}`);
-  }
   const canonicalCacheRoot = fsImpl.realpathSync(resolvedCacheRoot);
 
   let currentPath = resolvedCacheRoot;
@@ -1023,6 +1091,7 @@ module.exports = {
   DEFAULT_REF,
   DEFAULT_CATALOG_PATH,
   getDefaultCacheRoot,
+  ensurePrivateCacheRoot,
   buildRawUrl,
   buildGitRemoteUrl,
   cacheDirForSha,
