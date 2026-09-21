@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const {
+  copyMissingTemplateFiles,
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
@@ -415,13 +416,19 @@ test('provisionTemplateSite requires project-local npm configuration', (t) => {
   });
 });
 
-test('provisionTemplateSite stops if cloning omits project-local npm configuration', (t) => {
+test('provisionTemplateSite restores project files omitted by PAC without replacing cloned identity', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');
   const output = path.join(dir, 'output');
   createSource(source);
-  let npmCalled = false;
+  fs.writeFileSync(path.join(source, 'dataverse-choice-values.json'), '{"status":{"Open":100000000}}');
+  fs.mkdirSync(path.join(source, 'tests'));
+  fs.writeFileSync(path.join(source, 'tests', 'serviceRequests.test.mjs'), 'export {};\n');
+  fs.mkdirSync(path.join(source, '.powerpages-site', '.portalconfig'));
+  fs.writeFileSync(path.join(source, '.powerpages-site', '.portalconfig', 'manifest.yml'), 'portalVersion: 1\n');
+  const npmCalls = [];
+  let pacCalls = 0;
 
   const result = provisionTemplateSite({
     sourcePath: source,
@@ -429,6 +436,7 @@ test('provisionTemplateSite stops if cloning omits project-local npm configurati
     siteName: '311 Portal',
   }, {
     runPac(args) {
+      pacCalls++;
       if (args[1] === 'clone') {
         const clonedPath = path.join(output, '311-portal');
         createSource(clonedPath, { id: CLONED_ID, name: '311 Portal' });
@@ -436,16 +444,61 @@ test('provisionTemplateSite stops if cloning omits project-local npm configurati
       }
       return { status: 0, stdout: 'ok', stderr: '' };
     },
-    runNpm() {
-      npmCalled = true;
+    runNpm(args, cwd) {
+      npmCalls.push(args);
+      assert.equal(fs.existsSync(path.join(cwd, '.npmrc')), true);
+      assert.equal(fs.existsSync(path.join(cwd, 'dataverse-choice-values.json')), true);
+      assert.equal(fs.existsSync(path.join(cwd, 'tests', 'serviceRequests.test.mjs')), true);
+      assert.equal(fs.existsSync(path.join(cwd, '.powerpages-site', '.portalconfig', 'manifest.yml')), true);
+      if (args[0] === 'run') {
+        fs.mkdirSync(path.join(cwd, 'dist'));
+        fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
+      }
       return { status: 0, stdout: 'ok', stderr: '' };
     },
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.step, 'clone-output');
-  assert.match(result.error, /missing .*\.npmrc/);
-  assert.equal(npmCalled, false);
+  assert.equal(result.ok, true);
+  assert.equal(result.websiteRecordId, CLONED_ID);
+  assert.equal(pacCalls, 2);
+  assert.deepEqual(npmCalls.map((args) => args[0]), ['install', 'run']);
+  assert.equal(
+    fs.readFileSync(path.join(output, '311-portal', '.npmrc'), 'utf8'),
+    fs.readFileSync(path.join(source, '.npmrc'), 'utf8')
+  );
+});
+
+test('copyMissingTemplateFiles rejects source symlinks and preserves cloned website metadata', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const clone = path.join(dir, 'clone');
+  createSource(source, { id: SOURCE_ID });
+  createSource(clone, { id: CLONED_ID });
+  fs.writeFileSync(path.join(source, 'extra.json'), '{}');
+
+  assert.deepEqual(copyMissingTemplateFiles(source, clone), ['extra.json']);
+  assert.match(
+    fs.readFileSync(path.join(clone, '.powerpages-site', 'website.yml'), 'utf8'),
+    new RegExp(CLONED_ID)
+  );
+
+  const target = path.join(dir, 'outside.json');
+  const link = path.join(source, 'linked.json');
+  fs.writeFileSync(target, '{}');
+  try {
+    fs.symlinkSync(target, link);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+  assert.throws(
+    () => copyMissingTemplateFiles(source, clone),
+    /symbolic link: linked\.json/
+  );
 });
 
 test('runPac invokes pac.exe directly on Windows without a command shell', () => {

@@ -8,6 +8,7 @@ const { commandError, runPac } = require('./lib/pac-command');
 const { readWebsiteYml } = require('./lib/detect-project-context');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CLONED_IDENTITY_PATH = path.join('.powerpages-site', 'website.yml');
 
 function parseArgs(argv) {
   const args = {};
@@ -49,6 +50,52 @@ function inspectClonedSiteIdentity(clonedPath, deps = {}) {
     siteName: website.name || null,
     websiteRecordId: website.id,
   };
+}
+
+function copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl = fs) {
+  const restoredFiles = [];
+  const queue = [''];
+  while (queue.length > 0) {
+    const relativeDir = queue.shift();
+    const sourceDir = path.join(sourcePath, relativeDir);
+    for (const entry of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
+      const relativePath = path.join(relativeDir, entry.name);
+      if (relativePath === CLONED_IDENTITY_PATH) continue;
+      const sourceEntryPath = path.join(sourcePath, relativePath);
+      const clonedEntryPath = path.join(clonedPath, relativePath);
+      const sourceStat = fsImpl.lstatSync(sourceEntryPath);
+      if (sourceStat.isSymbolicLink()) {
+        throw new Error(`Template source contains a symbolic link: ${relativePath}`);
+      }
+
+      if (sourceStat.isDirectory()) {
+        if (fsImpl.existsSync(clonedEntryPath)) {
+          const clonedStat = fsImpl.lstatSync(clonedEntryPath);
+          if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
+            throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+          }
+        } else {
+          fsImpl.mkdirSync(clonedEntryPath, { recursive: true });
+        }
+        queue.push(relativePath);
+        continue;
+      }
+
+      if (!sourceStat.isFile()) {
+        throw new Error(`Template source contains an unsupported entry: ${relativePath}`);
+      }
+      if (fsImpl.existsSync(clonedEntryPath)) {
+        const clonedStat = fsImpl.lstatSync(clonedEntryPath);
+        if (clonedStat.isSymbolicLink() || !clonedStat.isFile()) {
+          throw new Error(`Clone path conflicts with template file: ${relativePath}`);
+        }
+        continue;
+      }
+      fsImpl.copyFileSync(sourceEntryPath, clonedEntryPath);
+      restoredFiles.push(relativePath);
+    }
+  }
+  return restoredFiles;
 }
 
 function runNpm(args, cwd, deps = {}) {
@@ -122,14 +169,24 @@ function provisionTemplateSite(options, deps = {}) {
   const sourcePath = path.resolve(options.sourcePath || '');
   const outputDirectory = path.resolve(options.outputDirectory || '');
   const siteName = String(options.siteName || '').trim();
+  const sourceNpmConfigPath = path.join(sourcePath, '.npmrc');
   if (!options.sourcePath || !options.outputDirectory || !siteName) {
     return { ok: false, step: 'validation', error: 'sourcePath, outputDirectory, and siteName are required' };
   }
   if (!fsImpl.existsSync(path.join(sourcePath, 'powerpages.config.json')) ||
       !fsImpl.existsSync(path.join(sourcePath, 'package.json')) ||
-      !fsImpl.existsSync(path.join(sourcePath, '.npmrc')) ||
+      !fsImpl.existsSync(sourceNpmConfigPath) ||
       !fsImpl.existsSync(path.join(sourcePath, '.powerpages-site'))) {
     return { ok: false, step: 'validation', error: 'sourcePath is not a downloaded Power Pages code site' };
+  }
+  let sourceNpmConfigStat;
+  try {
+    sourceNpmConfigStat = fsImpl.lstatSync(sourceNpmConfigPath);
+  } catch (err) {
+    return { ok: false, step: 'validation', error: `Could not inspect sourcePath .npmrc: ${err.message}` };
+  }
+  if (sourceNpmConfigStat.isSymbolicLink() || !sourceNpmConfigStat.isFile()) {
+    return { ok: false, step: 'validation', error: 'sourcePath .npmrc must be a regular file' };
   }
   if (
     sourcePath === outputDirectory ||
@@ -183,13 +240,19 @@ function provisionTemplateSite(options, deps = {}) {
   } catch (err) {
     return { ok: false, step: 'clone-output', clonedPath, error: err.message };
   }
-  if (!fsImpl.existsSync(path.join(clonedPath, '.npmrc'))) {
+  try {
+    // `pac pages clone` reconstructs a known code-site file set and can omit
+    // valid project extras such as .npmrc, tests, and imported JSON contracts.
+    // Restore only missing source files so the clone's new website identity and
+    // any files rewritten by PAC remain authoritative.
+    copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl);
+  } catch (err) {
     return {
       ok: false,
       step: 'clone-output',
       clonedPath,
       ...clonedIdentity,
-      error: `Cloned site is missing ${path.join(clonedPath, '.npmrc')}`,
+      error: `Could not restore template project files: ${err.message}`,
     };
   }
 
@@ -267,6 +330,7 @@ if (require.main === module) main();
 
 module.exports = {
   commandError,
+  copyMissingTemplateFiles,
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
