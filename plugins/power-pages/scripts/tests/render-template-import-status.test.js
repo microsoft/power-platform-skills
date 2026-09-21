@@ -64,14 +64,15 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /progressFill/);
   assert.match(html, /pillProgress/);
   assert.match(html, /phase-step active/);
-  assert.match(html, /Supporting solution/);
+  assert.match(html, /Installing solutions/);
   assert.match(html, /Creating site/);
   assert.match(html, /Seeding data/);
   assert.match(html, /Activating site/);
   assert.match(html, /phaseForStatus/);
   assert.match(html, /renderPhase/);
   assert.match(html, /status\.phase/);
-  assert.match(html, /phaseSolution\.textContent = 'Solution ready'/);
+  assert.match(html, /phaseSolution\.textContent = 'Solutions installed'/);
+  assert.match(html, /'Installing ' \+ TEMPLATE_NAME \+ ' solutions'/);
   assert.match(html, /phaseSite\.textContent = 'Created site'/);
   assert.match(html, /'Creating ' \+ TEMPLATE_NAME \+ ' template site'/);
   assert.match(html, /'Seeding ' \+ TEMPLATE_NAME \+ ' template data'/);

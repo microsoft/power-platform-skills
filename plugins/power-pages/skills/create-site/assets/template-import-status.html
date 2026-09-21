@@ -165,7 +165,7 @@
           <span class="progress-label-text" id="progressLabel">Starting template setup...</span>
         </div>
         <div class="phase-steps" aria-label="Template setup phases">
-          <div class="phase-step active" id="phaseSolution">Supporting solution</div>
+          <div class="phase-step active" id="phaseSolution">Installing solutions</div>
           <div class="phase-step" id="phaseSite">Creating site</div>
           <div class="phase-step" id="phaseSeed">Seeding data</div>
           <div class="phase-step" id="phaseActivation">Activating site</div>
@@ -278,20 +278,20 @@
         phaseSite.className = 'phase-step';
         phaseSeed.className = 'phase-step';
         phaseActivation.className = 'phase-step';
-        phaseSolution.textContent = 'Supporting solution';
+        phaseSolution.textContent = 'Installing solutions';
         phaseSite.textContent = 'Creating site';
         phaseSeed.textContent = 'Seeding data';
         phaseActivation.textContent = 'Activating site';
         if (phase === 'site') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Solution ready';
+          phaseSolution.textContent = 'Solutions installed';
           phaseSite.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Creating ' + TEMPLATE_NAME + ' template site';
           return;
         }
         if (phase === 'seed') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Solution ready';
+          phaseSolution.textContent = 'Solutions installed';
           phaseSite.classList.add('done');
           phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('active');
@@ -300,13 +300,13 @@
         }
         if (phase === 'solutionDone') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Solution ready';
-          if (mainHeading) mainHeading.textContent = 'Supporting solution is ready';
+          phaseSolution.textContent = 'Solutions installed';
+          if (mainHeading) mainHeading.textContent = 'Template solutions are installed';
           return;
         }
         if (phase === 'activation') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Solution ready';
+          phaseSolution.textContent = 'Solutions installed';
           phaseSite.classList.add('done');
           phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('done');
@@ -317,7 +317,7 @@
         }
         if (phase === 'done') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Solution ready';
+          phaseSolution.textContent = 'Solutions installed';
           phaseSite.classList.add('done');
           phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('done');
@@ -328,7 +328,7 @@
           return;
         }
         phaseSolution.classList.add('active');
-        if (mainHeading) mainHeading.textContent = 'Preparing ' + TEMPLATE_NAME + ' supporting solution';
+        if (mainHeading) mainHeading.textContent = 'Installing ' + TEMPLATE_NAME + ' solutions';
       }
 
       function showStatus(index) {
