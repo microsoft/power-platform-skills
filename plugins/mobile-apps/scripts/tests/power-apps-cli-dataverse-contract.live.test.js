@@ -11,7 +11,7 @@ const { verifyDataverseServices } = require('../verify-dataverse-services');
 
 const environmentId = process.env.POWER_APPS_LIVE_DATAVERSE_ENVIRONMENT_ID;
 const environmentUrl = process.env.POWER_APPS_LIVE_DATAVERSE_URL;
-const defaultCli = path.resolve(__dirname, '..', '..', 'template', 'node_modules', '.bin', 'power-apps');
+const defaultCli = path.resolve(__dirname, '..', '..', 'template', 'node_modules', '.bin', 'pa');
 const cliBin = process.env.POWER_APPS_LIVE_CLI_BIN || defaultCli;
 const skipReason = environmentId && environmentUrl && fs.existsSync(cliBin)
   ? false
@@ -21,7 +21,10 @@ function runCli(cwd, args) {
   const result = spawnSync(
     cliBin,
     args,
-    { cwd, encoding: 'utf8', timeout: 90000, killSignal: 'SIGKILL' },
+    {
+      cwd, encoding: 'utf8', timeout: 90000, killSignal: 'SIGKILL',
+      env: { ...process.env, PA_CLI_TELEMETRY: '0' },
+    },
   );
   assert.equal(
     result.status,
@@ -31,11 +34,11 @@ function runCli(cwd, args) {
   return result;
 }
 
-test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
+test('pinned grouped pa CLI initializes MobileApp and emits a verifiable Dataverse service', {
   skip: skipReason,
   timeout: 210000,
 }, (testContext) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'power-apps-dataverse-contract-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pa-dataverse-contract-'));
   testContext.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const templatePackage = JSON.parse(fs.readFileSync(path.resolve(
     __dirname,
@@ -49,7 +52,7 @@ test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
   assert.equal(runCli(root, ['--version']).stdout.trim(), version);
 
   runCli(root, [
-    'init',
+    'app', 'init',
     '--non-interactive',
     '--environment-id',
     environmentId,
@@ -65,14 +68,18 @@ test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
     'http://localhost:8081',
     '--json',
   ]);
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8'));
+  assert.equal(config.appType, 'MobileApp');
+  assert.equal(config.environmentId, environmentId);
+  assert.ok(!config.appId, 'Initialization must not publish a remote app');
   runCli(root, [
-    'add-data-source',
+    'app', 'add', 'data-source',
     '--non-interactive',
-    '--api-id',
+    '--connector',
     'dataverse',
     '--org-url',
     environmentUrl,
-    '--resource-name',
+    '--table',
     'systemuser',
     '--json',
   ]);

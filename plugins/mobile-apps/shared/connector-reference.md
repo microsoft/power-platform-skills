@@ -51,9 +51,10 @@ npx pa app add data-source --connector <apiId> --connection-id <connectionId> --
 npx pa app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>' --non-interactive
 ```
 
-**Dataverse is different** — never needs a connection ID:
+**Dataverse is different** — never needs a connection ID, but non-interactive
+generation requires the Dataverse URL resolved for the configured environment:
 ```bash
-npx pa app add data-source --connector dataverse --table <table-logical-name> --non-interactive
+npx pa app add data-source --connector dataverse --org-url <environmentUrl> --table <table-logical-name> --non-interactive
 ```
 
 ## Common connector apiId values

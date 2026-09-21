@@ -1591,7 +1591,7 @@ The publish checkpoint is retained across schema/PublishXml failure and
 deleted only after successful publish, so a rerun retries pending publication
 even when schema writes are already idempotent.
 It creates Tier 0 → N tables, applies extensions, runs
-`npx pa app add data-source --connector dataverse --table <name> --non-interactive`
+`npx pa app add data-source --connector dataverse --org-url <envUrl> --table <name> --non-interactive`
 per service-required table from the app root,
 type-checks, and returns. Real matched A/B runs are still required to quantify
 the end-to-end time saved; do not present local manifest timing as a guaranteed

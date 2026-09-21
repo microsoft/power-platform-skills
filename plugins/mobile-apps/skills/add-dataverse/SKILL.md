@@ -1029,7 +1029,7 @@ sequential outside BATCH-METADATA.
 For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx pa app add data-source --connector dataverse --table <table-logical-name> --non-interactive
+npx pa app add data-source --connector dataverse --org-url <envUrl> --table <table-logical-name> --non-interactive
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.

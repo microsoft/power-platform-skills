@@ -47,6 +47,29 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
   assert.doesNotMatch(initialize, /spawnSync|node <<'NODE'/);
 });
 
+test('grouped Dataverse generation retains the URL required by the pinned CLI', () => {
+  const pluginRoot = path.resolve(__dirname, '../..');
+  for (const file of [
+    'shared/connector-reference.md',
+    'skills/add-dataverse/SKILL.md',
+    'skills/create-mobile-app/SKILL.md',
+    'skills/setup-datamodel/SKILL.md',
+    'agents/data-model-architect.md',
+    'hooks/validate-connector-first.js',
+  ]) {
+    const content = fs.readFileSync(path.join(pluginRoot, file), 'utf8');
+    const commands = [...content.matchAll(/npx pa app add data-source --connector dataverse[^`\r\n]*/g)];
+    assert.ok(commands.length > 0, `Expected a Dataverse command in ${file}`);
+    for (const [command] of commands) {
+      assert.match(command, /--org-url <[^>]+>/, file);
+      assert.match(command, /--table <[^>]+>/, file);
+      assert.match(command, /--non-interactive/, file);
+    }
+  }
+  const shared = fs.readFileSync(path.join(pluginRoot, 'shared/shared-instructions.md'), 'utf8');
+  assert.match(shared, /still requires the resolved Dataverse URL in non-interactive mode/);
+});
+
 test('scaffold changed-file validation separates preparation and generator ownership', () => {
   const preparation = skill.slice(
     skill.indexOf('### Step 5 — Prepare existing template'),

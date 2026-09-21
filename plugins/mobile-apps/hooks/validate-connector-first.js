@@ -48,7 +48,7 @@ const VIOLATIONS = [
   },
   {
     rx: /fetch\(\s*['"`]https:\/\/[^'"`]+\.crm(?:\d+)?\.dynamics\.com\b/i,
-    reason: 'Direct Dataverse REST fetch is forbidden. Use the Dataverse generated service via `npx pa app add data-source --connector dataverse --table <table-logical-name> --non-interactive` from the app root.',
+    reason: 'Direct Dataverse REST fetch is forbidden. Use the Dataverse generated service via `npx pa app add data-source --connector dataverse --org-url <environment-url> --table <table-logical-name> --non-interactive` from the app root.',
   },
 ];
 
