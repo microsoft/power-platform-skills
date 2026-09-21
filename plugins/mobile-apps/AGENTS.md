@@ -85,7 +85,9 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 16. **Startup diagnosis precedes runtime monitoring when necessary** —
     `/debug-app startup` can inspect a failed install, pre-start command, or QR
     opening without a loaded app. `scripts/inspect-startup.js` is local/read-only
-    and never authorizes repair. The bounded workflow in
+    and never authorizes repair or verifies startup. Clean metadata is not an
+    exhaustive diagnosis; unexplained symptoms require scoped investigation of
+    the original failure, not a guessed reinstall. The bounded workflow in
     [`skills/debug-app/references/startup-diagnostics.md`](skills/debug-app/references/startup-diagnostics.md)
     owns explicit same-lock restoration/restart approval and original-symptom
     verification. Upgrades remain with a separate available upgrade workflow;

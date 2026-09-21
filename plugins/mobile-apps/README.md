@@ -278,6 +278,11 @@ is not an app fix: the original startup or device symptom must be verified.
 `--no-fix` performs inspection only. Creation offers this same startup path if
 its `npm run dev` launch fails; it does not start indefinite runtime monitoring.
 
+The inspector checks static metadata, not every possible startup cause. When
+those checks do not explain the symptom, diagnosis follows the original error
+into relevant app scripts/configuration or reports the missing evidence. Clean
+metadata alone never means the app is healthy.
+
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |

@@ -45,11 +45,26 @@ node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "<working_dir>"
 
 It reads JSON metadata and resolves host configuration entry points without
 importing them. It performs no network calls, writes, installs, or lifecycle work.
+Its `validationScope: static-metadata-only` and `startupVerified: false` are
+deliberate: `status: inspected`, exit code 0, matching versions, and resolved
+exports mean only that those checks completed, **not that startup is healthy**.
+This is a source of evidence, not an exhaustive classifier or a repair checklist.
+An observed failure takes precedence over clean metadata. Do not force the
+symptom into a known category or repair an incidental finding just because
+the inspector reports it.
+
 For a specific failed import, inspect that exact package subpath as well:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/inspect-startup.js" \
-  --working-dir "<working_dir>" --entry-point "<failed-package-or-subpath>"
+node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "<working_dir>" --entry-point "<failed-package-or-subpath>"
+```
+
+**Windows / PowerShell:** substitute the resolved plugin root, and pass the native
+absolute working directory as one quoted argument (for example, `C:\Apps\Demo App`).
+Do not rewrite it to a POSIX path or use Bash `\` line continuation:
+
+```powershell
+node "<plugin_root>\scripts\inspect-startup.js" --working-dir "<working_dir>" --entry-point "<failed-package-or-subpath>"
 ```
 
 Inspect only relevant findings:
@@ -95,6 +110,27 @@ checks, approved operation, and verification outcome.
 | Device connectivity / QR opening | Metro is live but the native client cannot reach/open it. Verify the selected PID/port and latest native URL/QR belong to the same session; ask which player/platform and the visible device error. Check user-confirmed LAN/VPN/firewall reachability without disabling protections or switching to a tunnel automatically. Never reinstall solely because a device has not connected. |
 | Native compatibility | JavaScript is installed but the running native player/build lacks a required module or supported API. Same-lock restoration cannot add native code to the binary; explain the required supported player/template path. No prebuild/native rebuild from this phase. |
 | App defect / potential package defect | First exclude installation, runtime compatibility, configuration, and caller misuse. Use D2's ownership gate before calling a Microsoft package defective. A package stack frame, export-resolution failure, or two failed attempts alone is insufficient proof. |
+| Unclassified startup failure | The symptom is real but the inspector or categories do not explain it. Follow the evidence-led investigation below; do not assume a broken installation or report success from clean metadata. |
+
+### When inspection does not explain the symptom
+
+1. Return to the original failing command and its bounded error excerpt. Identify
+   the first failing lifecycle stage from the manifest; read only its relevant
+   app-owned script, configuration, or referenced file. Do not execute config
+   merely to inspect it.
+2. Form a hypothesis from that evidence, then perform a small read-only check
+   that can confirm or reject it. For example, clean dependency metadata cannot
+   detect an app-owned pre-start validator referencing a nonexistent launch file.
+   Read the validator/config and check that exact path before considering any
+   dependency operation.
+3. If the cause is app-owned, use the normal source-edit/validation boundaries.
+   Keep `--no-fix`, restoration approval, process-control approval, and the
+   existing timeout/retry limits. This path is not permission to bypass them,
+   add new inspector heuristics on the fly, or patch package code.
+4. If evidence is insufficient, return `blocked` with the specific missing
+   evidence and next diagnostic step. Keep the root cause unconfirmed rather
+   than guessing a package defect. If a fix is made, S4 still requires verification
+   of the original symptom; unchanged inspector output cannot prove recovery.
 
 Do not route ordinary setup failures directly to `/report-issue`.
 For a confirmed Microsoft package defect, preserve host/MSAL source: no
@@ -134,10 +170,23 @@ Before mutation, show:
 Ask **Restore locked dependencies** / **Inspect only** / **Cancel**. On explicit
 approval, record hashes of the manifest and effective lock, then run from that root:
 
+Bash / Git Bash:
+
 ```bash
 cd "<working_dir>" || exit 1
 npm ci --ignore-scripts --no-audit --no-fund
 ```
+
+PowerShell (including Windows PowerShell 5.1):
+
+```powershell
+Set-Location -LiteralPath "<working_dir>" -ErrorAction Stop
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { throw "Locked dependency restoration failed (exit $LASTEXITCODE)." }
+```
+
+Use the syntax of the actual shell; do not pass Bash `||` to Windows PowerShell
+5.1. Quoting the root and using `-LiteralPath` preserve spaces and literal brackets.
 
 This delegates full lock consistency checking to npm without running dependency
 lifecycle scripts. If the app requires install/postinstall setup, identify the
@@ -161,6 +210,8 @@ to kill another app's server, clear caches by default, or bypass `predev`.
 
 - Use the canonical `npm run dev` from the same app root so schema and type-check
   hooks still execute. Reuse the approved port options; do not assume 8081.
+  In PowerShell use `npm.cmd run dev` after `Set-Location -LiteralPath` succeeds;
+  this runs the same lifecycle without depending on PowerShell script policy.
 - If the agent starts it, use a persistent supported background terminal,
   inspect initial output, and verify the new log PID/port identity through
   Phase 0.0. If the host cannot keep a server alive, ask the user to launch it.

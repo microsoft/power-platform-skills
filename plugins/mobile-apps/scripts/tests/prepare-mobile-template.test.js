@@ -31,8 +31,8 @@ function tempDirectory(name) {
   return directory;
 }
 
-function copyTemplate() {
-  const projectRoot = tempDirectory('mobile-template');
+function copyTemplate(relativeDirectory = '') {
+  const projectRoot = path.join(tempDirectory('mobile-template'), relativeDirectory);
   fs.cpSync(templateRoot, projectRoot, { recursive: true });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
@@ -90,6 +90,29 @@ function removeGuidance(projectRoot) {
 }
 
 const guidanceOptions = { displayName: 'Guidance App', slug: 'guidance-app' };
+
+test('preparation CLI copies POSIX-relative guidance beneath a native root with spaces', () => {
+  const projectRoot = copyTemplate("app's folder [test]");
+  removeGuidance(projectRoot);
+  fs.rmdirSync(path.join(projectRoot, '.github'));
+  assert.ok(path.isAbsolute(projectRoot));
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '../prepare-mobile-template.js'),
+    '--working-dir', projectRoot,
+    '--display-name', 'Native Path Probe',
+    '--slug', 'native-path-probe',
+  ], { cwd: path.dirname(projectRoot), encoding: 'utf8', timeout: 10000 });
+  assert.strictEqual(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepStrictEqual(report.copiedGuidanceFiles, guidanceFiles);
+  for (const relativePath of guidanceFiles) {
+    assert.ok(report.writtenFiles.includes(relativePath));
+    assert.deepStrictEqual(
+      fs.readFileSync(path.join(projectRoot, ...relativePath.split('/'))),
+      fs.readFileSync(path.join(templateRoot, relativePath)),
+    );
+  }
+});
 
 test('preparation adds only missing guidance and reports exact writer ownership', () => {
   const projectRoot = copyTemplate();

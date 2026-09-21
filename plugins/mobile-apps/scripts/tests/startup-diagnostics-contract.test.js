@@ -27,6 +27,31 @@ test('startup diagnosis is discoverable and does not require installed dependenc
   assert.match(startup, /missing `node_modules`, Metro config, generated files/);
   assert.match(startup, /findings, not reasons to refuse diagnosis/);
   assert.match(debug, /targeted compatibility inspection below instead of\nthe shared blanket version check/);
+  assert.match(debug, /App root containing `package\.json`\. Startup diagnosis accepts missing Metro config/);
+  assert.doesNotMatch(debug, /App root containing `package\.json` and `metro\.config\.js`/);
+});
+
+test('unclassified failures require evidence beyond successful metadata inspection', () => {
+  assert.match(startup, /not an exhaustive classifier or a repair checklist/);
+  assert.match(startup, /observed failure takes precedence over clean metadata/);
+  assert.match(startup, /`startupVerified: false`/);
+  assert.match(startup, /\| Unclassified startup failure \|/);
+  const fallback = section(startup, '### When inspection does not explain', 'Do not route ordinary setup');
+  assert.match(fallback, /original failing command/);
+  assert.match(fallback, /small read-only check/);
+  assert.match(fallback, /Keep `--no-fix`, restoration approval, process-control approval/);
+  assert.match(fallback, /root cause unconfirmed/);
+  assert.match(fallback, /unchanged inspector output cannot prove recovery/);
+});
+
+test('startup commands distinguish PowerShell from Bash without rewriting native roots', () => {
+  assert.match(startup, /Do not rewrite it to a POSIX path/);
+  assert.doesNotMatch(startup, /inspect-startup\.js"[^\n]*\\\n/);
+  assert.match(startup, /```powershell\nnode "<plugin_root>\\scripts\\inspect-startup\.js"/);
+  assert.match(startup, /Set-Location -LiteralPath "<working_dir>" -ErrorAction Stop/);
+  assert.match(startup, /npm\.cmd ci --ignore-scripts --no-audit --no-fund/);
+  assert.match(startup, /\$LASTEXITCODE -ne 0/);
+  assert.match(startup, /In PowerShell use `npm\.cmd run dev`/);
 });
 
 test('healthy runtime sessions and read-only subcommands bypass setup mutations', () => {

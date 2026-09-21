@@ -42,7 +42,7 @@ Options may follow the default command, a symptom, or `status`:
 
 | Option | Meaning | Default |
 |---|---|---|
-| `--working-dir <path>` | App root containing `package.json` and `metro.config.js`. Relative paths resolve from the current shell directory. | Current shell directory |
+| `--working-dir <path>` | App root containing `package.json`. Startup diagnosis accepts missing Metro config or dependencies; runtime monitoring requires a configured, live Metro session. Relative paths resolve from the current shell directory. | Current shell directory |
 | `--port <1-65535>` | Monitor only the valid Metro session on this port. | Any port |
 | `--platform <ios\|android>` | Consider only sessions whose recent log identifies this platform. | Any platform |
 | `--cycles <1-50>` | Exit after this many consecutive clean observation intervals. | `3` |
