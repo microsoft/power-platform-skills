@@ -271,16 +271,11 @@ test("readAiAgent ignores falsey known-agent env flags", () => {
   assert.deepEqual(result, { aiAgentName: "", aiAgentVersion: "" });
 });
 
-test("readPacCliVersion invokes pac help and parses its version banner", () => {
+test("readPacCliVersion parses semver from pac --version output", () => {
   agentInfo._resetCache();
-  let invocation;
   const result = agentInfo.readPacCliVersion({
-    _exec: (command, args) => {
-      invocation = { command, args };
-      return "Microsoft PowerPlatform CLI Version: 1.36.0";
-    },
+    _exec: () => "Microsoft PowerPlatform CLI Version: 1.36.0",
   });
-  assert.deepEqual(invocation, { command: "pac", args: ["help"] });
   assert.equal(result, "1.36.0");
 });
 
@@ -322,11 +317,14 @@ test("readPacCliVersion respects _exec=false short-circuit", () => {
   assert.equal(result, "");
 });
 
-test("readPacCliVersion fails closed when pac help exits non-zero", () => {
+test("readPacCliVersion parses version from err.stdout when pac exits non-zero (PAC 2.x behavior)", () => {
+  // PAC 2.x prints the version banner to stdout but exits with status 1
+  // because it treats `--version` as an unknown command. execFileSync
+  // throws on non-zero exit; we must read err.stdout for the banner.
   agentInfo._resetCache();
   const result = agentInfo.readPacCliVersion({
     _exec: () => {
-      const e = new Error("Command failed: pac help");
+      const e = new Error("Command failed: pac --version");
       e.status = 1;
       e.stdout =
         "Microsoft PowerPlatform CLI\n" +
@@ -335,7 +333,7 @@ test("readPacCliVersion fails closed when pac help exits non-zero", () => {
       throw e;
     },
   });
-  assert.equal(result, "");
+  assert.equal(result, "2.7.4");
 });
 
 test("readPacCliVersion prefers PAC version line over .NET Framework version", () => {
