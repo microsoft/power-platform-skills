@@ -55,6 +55,11 @@ provisioning from this skill.
 Execute Sections 1–2 of `push-flow-authoring.md`. Run the `flow-authoring`
 local prerequisite probe first. The mobile plugin declares
 no automatic installation dependency on the separate `power-automate` plugin.
+If that probe reports a missing local CLI, follow the canonical interactive
+installation loop: show official guidance, invoke `AskUserQuestion` to wait
+for installation or cancellation, and rerun the complete probe. Do not return
+a terminal blocker or end the session while the user is installing `az`, PAC,
+or another required CLI.
 If FlowAgent is unavailable, give the documented manual
 install/restart/setup steps, wait for the user to complete them, and rerun the
 same local and `/mcp` checks. Prove

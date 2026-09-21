@@ -108,14 +108,25 @@ not prove that gcloud CLI is missing.
    supported package-manager path and the user separately approves the exact
    machine-level command. Never install a package manager, use `sudo`, add an
    OS repository, or run a downloaded installer implicitly.
-3. Otherwise give the official manual instructions and stop at a user action
-   boundary.
-4. Wait for explicit user confirmation that installation/login/setup/restart
-   is complete.
+3. Otherwise give the official manual instructions and immediately invoke
+   `AskUserQuestion` with a confirmation such as **Installation is complete**
+   plus **Cancel this setup**. A missing executable is a resumable user-action
+   gate, not a terminal `BLOCKED` result.
+4. Keep the current skill invocation open while waiting for the user's answer.
+   Do not return, end the session, or hand the user a command to run later
+   unless they explicitly cancel. For several missing executables, guide the
+   installations one at a time and then rerun the complete stage probe.
 5. Rerun the **same** local, `/mcp`, identity, or context probe. Confirmation
    is not proof.
-6. Continue from the blocked stage only after the recheck passes. Preserve
-   already proved upstream stages and immutable decisions.
+6. If the executable is still missing, show the bounded failed recheck and
+   invoke `AskUserQuestion` again with **I have restarted and installation is
+   complete**, **Show installation guidance again**, and **Cancel this setup**.
+   Repeat the confirmation/recheck loop without a fixed retry limit because
+   installation and host restart are user-paced.
+7. Continue from the blocked stage only after the recheck passes. Preserve
+   already proved upstream stages and immutable decisions. Return a blocker
+   only when the user cancels or the recheck proves a non-installation failure
+   that requires a different owner.
 
 For Copilot CLI MCP recovery, use:
 

@@ -65,9 +65,14 @@ and contexts through read-only calls. Keep these failure classes distinct:
   `transient-readback`.
 
 Do not recommend installation for an authenticated IAM/API/policy failure.
-After manual install, login, Azure MCP restart, or context repair, wait for the user
-when necessary and rerun the exact failed probe before planning. Do not replay
-a mutation after an uncertain response; first reread the affected resource.
+After manual install, login, Azure MCP restart, or context repair, use
+`AskUserQuestion` to wait inside the current skill invocation and rerun the
+exact failed probe before planning. Missing `gcloud` or `az` is a resumable
+installation gate: do not return a terminal blocker or require the user to
+start the skill again unless they explicitly cancel. If a CLI is still absent
+after confirmation, offer restart-complete, show-guidance, and cancel choices,
+then recheck without a fixed retry limit. Do not replay a mutation after an
+uncertain response; first reread the affected resource.
 Google authentication is user-owned: direct the user to `gcloud auth login`
 when no active account exists, never run that interactive command through
 Bash, and rerun the allowlisted `config list account` probe afterward.

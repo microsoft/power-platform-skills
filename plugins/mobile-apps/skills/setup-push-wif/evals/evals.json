@@ -110,7 +110,14 @@
       "id": 68,
       "coverage": "missing-gcloud-manual-install-wait",
       "prompt": "Set up WIF. gcloud is not installed, and I choose to install it manually.",
-      "expected_output": "The skill classifies local-runtime-missing, gives official Google Cloud CLI installation guidance, stops and waits for confirmation, then reruns the complete WIF local probe and requires gcloud --version to succeed. If PATH changed it requires restart and another recheck before any cloud inventory.",
+      "expected_output": "The skill classifies local-runtime-missing, gives official Google Cloud CLI installation guidance, and uses AskUserQuestion to keep the current invocation open until I confirm installation or cancel. It does not return a blocker or tell me to rerun the skill. It then reruns the complete WIF local probe and requires gcloud --version to succeed; if PATH changed it loops through restart confirmation and another recheck before cloud inventory.",
+      "files": []
+    },
+    {
+      "id": 78,
+      "coverage": "missing-az-manual-install-wait",
+      "prompt": "Set up WIF. Azure CLI is missing, and I will install it manually.",
+      "expected_output": "The skill classifies local-runtime-missing for az, gives official Azure CLI installation guidance, and waits through AskUserQuestion in the current invocation until installation is confirmed or I cancel. It reruns the complete WIF probe, loops through restart confirmation if az is still unavailable, and does not end the session merely because manual installation is required.",
       "files": []
     },
     {

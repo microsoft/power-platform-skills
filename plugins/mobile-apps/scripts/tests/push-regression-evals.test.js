@@ -23,7 +23,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 77 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 79 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -343,18 +343,22 @@ test('push owners share stage-specific readiness and evidence-based recovery', (
     assert.match(readiness, new RegExp(`\\\`${code}\\\``));
   }
   assert.match(wifSkill, /--stage wif/);
-  assert.match(wifSkill, /wait for confirmation, and rerun the complete WIF local probe/);
+  assert.match(wifSkill, /choosing manual installation must not end the skill/);
+  assert.match(wifSkill, /Only an explicit cancellation may turn a missing-CLI installation gate into a\s+terminal blocker/);
   assert.match(wifSkill, /installation or `\/mcp` recovery is not a fix for\s+an authenticated provider denial/);
   assert.match(wifReference, /Do not recommend installation for an authenticated IAM\/API\/policy failure/);
+  assert.match(wifReference, /do not return a terminal blocker or require the user to\s+start the skill again/);
   assert.match(flowSkill, /Run the `flow-authoring`\s+local prerequisite probe first/);
+  assert.match(flowSkill, /Do not return\s+a terminal blocker or end the session while the user is installing/);
   assert.match(authoring, /--stage flow-authoring/);
+  assert.match(authoring, /Keep the current skill invocation open\s+while the user installs the tool/);
   assert.match(authoring, /Confirmation alone is not proof/);
   assert.match(appleSkill, /--stage ios-build/);
   assert.doesNotMatch(appleSkill, /combined worker mode|WORKER_RESULT|push-ios-prerequisites-worker/);
   assert.match(apnsSkill, /has no MCP, Firebase CLI, gcloud, Azure/);
   assert.match(apnsSkill, /do not diagnose that as a missing APNs automation tool/);
-  for (const id of [68, 69, 70, 71, 72]) assert.ok(wifEvals.find((item) => item.id === id));
-  for (const id of [73, 74, 75, 76, 77]) assert.ok(flowEvals.find((item) => item.id === id));
+  for (const id of [68, 69, 70, 71, 72, 78]) assert.ok(wifEvals.find((item) => item.id === id));
+  for (const id of [73, 74, 75, 76, 77, 79]) assert.ok(flowEvals.find((item) => item.id === id));
 });
 
 test('WIF owner plans and executes the exact approved diff serially', () => {

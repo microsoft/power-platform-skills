@@ -34,8 +34,15 @@ node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
 
 If Node/npm/npx, local `power-apps`, PAC, or the narrow Azure CLI prerequisite
 is missing or unsupported, report that exact local-tool result. Give official
-manual setup guidance and wait for completion; do not silently install an npm
-package or alter account context. Rerun the same probe before continuing.
+manual setup guidance and immediately invoke `AskUserQuestion` with
+**Installation is complete** and **Cancel this setup**; do not silently install
+an npm package or alter account context. Keep the current skill invocation open
+while the user installs the tool. Do not return a terminal blocker or tell the
+user to rerun the skill later merely because installation is manual. Rerun the
+complete `flow-authoring` probe before continuing. If the same executable is
+still missing, ask again with restart-complete, show-guidance, and cancel
+choices and repeat without a fixed retry limit. Only explicit cancellation or
+a reclassified non-installation failure ends this recovery loop.
 
 The mobile plugin does not automatically install the separate
 `power-automate@power-platform-skills` plugin. If FlowAgent tools are missing,

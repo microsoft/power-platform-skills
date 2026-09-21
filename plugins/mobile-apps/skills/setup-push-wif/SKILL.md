@@ -68,6 +68,17 @@ If `gcloud` is missing, explain that it is a machine-level prerequisite and use
 2. **I will install it manually**
 3. **Use the manual Power Automate authentication option instead**
 
+If `az` is missing, use the same interactive pattern with:
+
+1. **I will install Azure CLI manually**
+2. **Use the manual Power Automate authentication option instead**
+
+For either CLI, choosing manual installation must not end the skill. Show the
+official installation guidance, then immediately wait in `AskUserQuestion` for
+**Installation is complete** or **Cancel this setup**. Do not return
+`BLOCKED`, end the session, or tell the user to rerun the skill later merely
+because installation is manual.
+
 For **Install Google Cloud CLI for me**, show the exact official installation
 command and its machine-level impact, then obtain a separate explicit
 confirmation before running it. Use only a supported package manager already
@@ -87,7 +98,11 @@ the user to complete it. After installation, require a fresh
 `gcloud --version`; if PATH changed, ask the user to restart the terminal or
 host, wait for confirmation, and rerun the complete WIF local probe before
 continuing. Apply the same wait-and-recheck rule when the user manually installs
-or upgrades Node, npm/npx, or Azure CLI.
+or upgrades Node, npm/npx, or Azure CLI. If the recheck still reports the same
+CLI missing, use `AskUserQuestion` again with restart-complete, show-guidance,
+and cancel choices; this user-paced installation loop has no fixed retry cap.
+Only an explicit cancellation may turn a missing-CLI installation gate into a
+terminal blocker.
 
 Before any cloud read-back, require the Azure MCP surfaces, a successful
 `gcloud --version`, and a confirmed active Google account. Authentication or

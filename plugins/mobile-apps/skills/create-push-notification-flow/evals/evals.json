@@ -322,6 +322,13 @@
       "prompt": "FlowAgent get_flow returns an authenticated 403 for the exact flow.",
       "expected_output": "The skill classifies permission-denied, reports the bounded provider error and required least-privilege access, and stops without reinstalling the plugin, restarting MCP, selecting a similarly named flow, or falling back to portal or shell flow APIs.",
       "files": []
+    },
+    {
+      "id": 79,
+      "coverage": "flow-missing-az-manual-install-wait",
+      "prompt": "Create the push flows. The flow-authoring prerequisite probe says Azure CLI is missing, and I choose manual installation.",
+      "expected_output": "The skill gives official Azure CLI installation guidance and uses AskUserQuestion to keep the current invocation open until I confirm installation or cancel. It does not terminate with a blocker or tell me to rerun the skill. It reruns the complete flow-authoring probe and repeats the restart-confirmation loop without a fixed retry cap until az is proved available or I cancel.",
+      "files": []
     }
   ]
 }
