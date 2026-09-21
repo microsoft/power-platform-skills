@@ -2757,6 +2757,22 @@ function validateAppSpec(spec, opts = {}) {
           errors.push(`sampleData['${k}'] must be an array of records`);
           continue;
         }
+        // Every row must be a real record object. The seeder spreads each row into a column map, and
+        // JS spreads a non-object into something plausible rather than failing, so these reached
+        // Dataverse as garbage instead of being rejected here (MEASURED):
+        //   null    → TypeError at Object.keys — a raw crash, not a diagnosable spec error
+        //   'abc'   → { "0":"a", "1":"b", "2":"c" }  — index-keyed "columns"
+        //   42/true → {}                             — an empty record, silently seeded
+        //   ['x']   → { "0":"x" }                    — same index-keyed shape
+        // Caught at the gate because the sample-data phase runs AFTER tables, forms and views are
+        // deployed: without this, a typo'd row fails the build halfway through, leaving artifacts
+        // behind. An array is rejected explicitly because `typeof [] === 'object'`.
+        v.forEach((rec, i) => {
+          if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) {
+            errors.push(`sampleData['${k}'][${i}] must be an object mapping column names to values, got `
+              + `${rec === null ? 'null' : Array.isArray(rec) ? 'an array' : typeof rec}`);
+          }
+        });
         // #4: catch Choice/MultiChoice sample values that are NOT a declared option label. Unknown
         // labels otherwise pass through resolveChoiceValue() unchanged and reach Dataverse as a raw
         // string, which either 400s late in the build or (for a MultiChoice) is silently wrong — a

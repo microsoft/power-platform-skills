@@ -45,8 +45,24 @@ function runPac(args) {
 }
 
 // Extract the "Page ID: <guid>" pac prints on a successful upload.
+// A page id is DURABLE IDENTITY — it is stored in the manifest and drives every later update — so
+// only a complete, canonical GUID is accepted.
+//
+// The old pattern was `[0-9a-fA-F-]{36}`, which is 36 characters from an alphabet that includes
+// `-`. It therefore accepted a row of dashes, any mis-grouped hex, and — worst — an OVERLONG token,
+// because it matched the first 36 characters and silently discarded the rest, turning a malformed
+// id into a plausible one. MEASURED on the merged code: all three of
+//   'Page ID: ------------------------------------'
+//   'Page ID: 111111112222333344445555555555555555'
+//   'Page ID: 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35f'  (37 chars -> truncated to 36)
+// were accepted as identity.
+//
+// The group structure (8-4-4-4-12) is enforced, and the trailing boundary rejects a longer run so a
+// too-long token is REFUSED rather than trimmed. Returning null is the safe outcome: the caller
+// treats a zero exit with no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
+const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 function parsePageId(out) {
-  const m = /Page ID:\s*([0-9a-fA-F-]{36})/.exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![0-9a-fA-F-])').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -105,8 +121,15 @@ function parseList(out) {
 // Returns the integer, or null when the summary line is absent (unknown format). parseList skips
 // the "Found …" line as metadata; this reads its N so classifyListOutput can prove the listing is
 // COMPLETE (parsed page count == summary N).
+//
+// Matched as a STANDALONE LINE, not anywhere in the output. Scanning the whole text let a page
+// NAME supply the summary: pac prints names in a fixed-width table, so a page called
+//   "Found 1 generated page"
+// made a listing with NO real summary line read as authoritative — and an authoritative-looking
+// but TRUNCATED listing is exactly what drives a duplicate CREATE. A table row always begins with
+// the page GUID, so requiring the line to START with "Found" cannot be spoofed by a name.
 function parseListCount(stdout) {
-  const m = /found\s+(\d+)\s+(?:generated\s+)?page/i.exec(String(stdout || ''));
+  const m = /^[^\S\r\n]*found\s+(\d+)\s+(?:generated\s+)?page/im.exec(String(stdout || ''));
   return m ? Number(m[1]) : null;
 }
 
@@ -145,7 +168,49 @@ function makeGenpageCli(env, deps = {}) {
   const run = deps.run || runPac;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const attempts = deps.attempts || 3; // pac genpage upload/list flake intermittently (transient help-dump exits)
-  const lastLine = (r) => String(r.stderr || r.stdout || '').trim().split('\n').filter(Boolean).pop() || '';
+  // The DIAGNOSTIC pac actually produced, not merely its last line.
+  //
+  // MEASURED shape of a real failure (`pac model genpage download` with no --app-id):
+  //   Microsoft PowerPlatform CLI
+  //   Version: 0.1.0-dev (.NET 10.0.12)
+  //   Online documentation: https://aka.ms/PowerPlatformCLI
+  //   Feedback, Suggestions, Issues: https://github.com/...
+  //
+  //   Error: A required argument --app-id is missing.
+  //
+  //   Usage: pac model genpage download [--environment] --app-id [--page-id] [--output-directory]
+  //     --environment    Specifies the target Dataverse. ...
+  //     --output-directory  Directory to save pulled pages. ... (alias: -o)
+  //
+  // pac prints a banner, then the error, then a full help dump — so the LAST non-empty line is a
+  // flag description and the real cause is in the middle. Reporting that line told the caller
+  // nothing and actively hid the answer.
+  //
+  // Preference order: explicit `Error:` lines, else any line that is not banner/usage/flag-help,
+  // else fall back to the last line so an unrecognized format still says SOMETHING.
+  const BANNER_RE = /^(?:Microsoft PowerPlatform CLI|Version:|Online documentation:|Feedback, Suggestions, Issues:|Usage:)/i;
+  const FLAG_HELP_RE = /^\s+-{1,2}\S/; // an indented "  --flag   description" row from the help dump
+  const pacDiagnostic = (r) => {
+    const raw = `${String(r && r.stderr || '')}\n${String(r && r.stdout || '')}`;
+    const lines = raw.split(/\r?\n/).map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
+    if (!lines.length) return `pac exited ${r && r.status}` + ' with no output';
+    const errors = lines.filter((l) => /^\s*Error:/i.test(l));
+    const meaningful = errors.length ? errors : lines.filter((l) => !BANNER_RE.test(l.trim()) && !FLAG_HELP_RE.test(l));
+    const picked = (meaningful.length ? meaningful : lines).slice(0, 4).map((l) => l.trim());
+    return picked.join(' | ');
+  };
+
+  // A failure pac will produce again for the SAME inputs, however many times it is asked. Retrying
+  // one cannot help: it burns the caller's time and buries the real message under "after 3
+  // attempt(s)". These are argument/parse/missing-file faults — the transient flakes the retry
+  // exists for are network and service errors, which look nothing like this.
+  const DETERMINISTIC_RE = new RegExp([
+    'required argument', 'unknown argument', 'unrecognized (?:command|option)',
+    'not a valid command', 'parse failed on', 'was it quote wrapped',
+    'could not be found', 'does not exist', 'no such file', 'is not a valid',
+  ].join('|'), 'i');
+  const isDeterministic = (text) => DETERMINISTIC_RE.test(String(text || ''));
+
 
   // List the pages already in the app (parsed from its sitemap by pac). Returns [{ pageId, name }].
   async function listPages(appId) {
@@ -172,7 +237,7 @@ function makeGenpageCli(env, deps = {}) {
         // help-dump exits don't look like empty apps. Fail-closed: never return ok:true for this.
         lastErr = 'unrecognized/incomplete `pac genpage list` output (zero exit, no valid page listing or a count mismatch) — refusing to treat as empty';
       } else {
-        lastErr = lastLine(r);
+        lastErr = pacDiagnostic(r);
       }
       if (i < attempts - 1) await sleep(500 * (i + 1));
     }
@@ -198,7 +263,7 @@ function makeGenpageCli(env, deps = {}) {
         }
         lastErr = 'unrecognized/incomplete env-wide `pac genpage list` output (zero exit, no valid listing or a count mismatch) — refusing to treat as empty';
       } else {
-        lastErr = lastLine(r);
+        lastErr = pacDiagnostic(r);
       }
       if (i < attempts - 1) await sleep(500 * (i + 1));
     }
@@ -308,9 +373,9 @@ function makeGenpageCli(env, deps = {}) {
               }
               return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
             }
-            lastErr = `returned no Page ID: ${lastLine(r)}`;
+            lastErr = `returned no Page ID: ${pacDiagnostic(r)}`;
           } else {
-            lastErr = lastLine(r);
+            lastErr = pacDiagnostic(r);
           }
           // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
           // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
@@ -337,9 +402,17 @@ function makeGenpageCli(env, deps = {}) {
               );
             }
           }
+          // A DETERMINISTIC failure will repeat for the same inputs, so retrying it only burns the
+          // caller's time and buries the real message under "after 3 attempt(s)". Break out and
+          // report it immediately.
+          //
+          // Placed AFTER the uncertain-create reconciliation on purpose: if the create actually
+          // landed, `pid` has just been adopted and the next attempt is a DIFFERENT command (an
+          // update by id), so the previous command's argument fault says nothing about it.
+          if (!pid && isDeterministic(lastErr)) break;
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
-        throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}' after ${attempts} attempt(s): ${lastErr}`);
+        throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`);
       } finally {
         // Best-effort cleanup on EVERY exit path (success return, retry-exhaustion throw, mid-loop
         // throws). A cleanup failure (e.g. a transient Windows file lock) must NEVER mask the upload's
@@ -371,7 +444,7 @@ function makeGenpageCli(env, deps = {}) {
       const args = ['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir];
       if (pageIds && pageIds.length) args.push('--page-id', pageIds.join(','));
       const r = await run(args);
-      if (r.status !== 0) throw new Error(`pac genpage download failed: ${lastLine(r)}`);
+      if (r.status !== 0) throw new Error(`pac genpage download failed: ${pacDiagnostic(r)}`);
       return true;
     },
   };

@@ -1312,3 +1312,38 @@ test('#583 a persona may record deliberate exclusions, and a malformed one is re
       `${JSON.stringify(bad)} must be rejected — a blank exclusion documents nothing`);
   }
 });
+
+// --- a sample ROW must be a real record object ---------------------------------------------------
+// The seeder spreads each row into a column map, and JS spreads a non-object into something
+// plausible rather than failing, so these reached Dataverse as garbage instead of being rejected
+// (MEASURED): null throws a raw TypeError; "abc" becomes { "0":"a","1":"b","2":"c" }; 42 and true
+// become {}; ["x"] becomes { "0":"x" }. The sample-data phase runs AFTER tables, forms and views
+// are deployed, so without this gate a typo halts the build halfway and leaves artifacts behind.
+test('a non-object sample row is rejected at the gate, with its index and type named', () => {
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'c', publisherPrefix: 'co' },
+    app: { name: 'C' },
+    entities: [{ schemaName: 'co_order', primaryAttribute: { schemaName: 'co_name' }, columns: [] }],
+    sampleData: { co_order: [null, 'abc', 42, true, ['x']] },
+  };
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  const hits = (v.errors || []).filter((e) => /sampleData\['co_order'\]\[\d+\]/.test(e));
+  assert.strictEqual(hits.length, 5, `every bad row must be named; got ${JSON.stringify(v.errors)}`);
+  assert.ok(hits.some((e) => /\[0\].*got null/.test(e)), 'null is named as null, not as object');
+  assert.ok(hits.some((e) => /\[1\].*got string/.test(e)));
+  assert.ok(hits.some((e) => /\[4\].*got an array/.test(e)), 'typeof [] is object, so it needs its own wording');
+});
+
+test('ordinary sample rows still validate (the gate must not reject real data)', () => {
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'c', publisherPrefix: 'co' },
+    app: { name: 'C' },
+    entities: [{ schemaName: 'co_order', primaryAttribute: { schemaName: 'co_name' }, columns: [] }],
+    sampleData: { co_order: [{ co_name: 'First' }, { co_name: 'Second' }] },
+  };
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  const hits = (v.errors || []).filter((e) => /sampleData/.test(e));
+  assert.deepStrictEqual(hits, [], `valid rows must pass; got ${JSON.stringify(hits)}`);
+});
