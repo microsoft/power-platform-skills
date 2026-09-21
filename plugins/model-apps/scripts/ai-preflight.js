@@ -127,12 +127,12 @@ async function main() {
 
   let report;
   try {
-    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
     const httpClient = createAzHttpClient(env);
-    const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
     // Keep SDK construction inside the protected region too: a constructor failure happens after the
     // temp directory exists, so the finally must own both construction and init to avoid leaks.
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);
 

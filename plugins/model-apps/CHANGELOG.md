@@ -12,6 +12,11 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **The vendored SDK moves to injected storage, and the plugin takes it up.** The SDK removed
+  `workspacePath`; every call site now builds a store with `createNodeWorkspaceStorage(...)`. Nothing
+  changes for authors — this is an internal uptake — but it is a breaking change for anything calling
+  these scripts as a library.
+
 - **Richer form layouts: multi-column tabs, cell spans, and per-container visibility.** A tab can
   now hold several form-columns (`tabs[].columns[]` with a `width`), a field entry can set
   `colspan`/`rowspan`, and `expanded`/`visible`/`showLabel` are author-controlled. Layout keys are
@@ -32,6 +37,13 @@ downloads that round-trip Choice columns.
   taking the first declared one.
 
 ### Fixed
+
+- **A business rule's `dataType` now reaches Dataverse as a real type.** The new SDK forwards the
+  type hint verbatim instead of ignoring it, and the plugin was sending the App Spec's word
+  (`Money`, `Picklist`, and `String` by default) where Dataverse expects a numeric
+  `WorkflowAttributeType`. Live-measured: the platform **accepts** the bad value rather than
+  rejecting it, so affected rules deployed and activated with a wrongly-typed condition. Rebuild any
+  app with `businessRules[]` that was built against the previous release.
 
 - **Editing a form with an explicit layout reshapes it, instead of flattening it** ([#575]). Every
   field was appended to the first section of the first tab, nothing was ever created or resized, and

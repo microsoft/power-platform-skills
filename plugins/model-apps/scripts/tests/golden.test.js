@@ -33,7 +33,7 @@ for (const name of ['project-tracker', 'support-desk']) {
 }
 
 test('sitemap-XML golden: area + subarea icons', async () => {
-  const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
   const os = require('node:os');
   const spec = {
     solution: { uniqueName: 'GoldA', publisherPrefix: 'new' },
@@ -83,9 +83,9 @@ test('sitemap-XML golden: area + subarea icons', async () => {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+  const art = await sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await sdk.pushArtifact('app', art.id);
   fs.rmSync(ws, { recursive: true, force: true });
   assertGolden('sitemap.icons.xml', xml + '\n');

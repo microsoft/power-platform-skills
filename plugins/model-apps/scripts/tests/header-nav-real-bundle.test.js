@@ -31,8 +31,8 @@ const dirs = [];
 
 // The setting write is an upsert keyed by (settingdefinitionid, parentappmoduleid), so the SDK first
 // looks the definition up and probes for an existing row. Answer both, then record the write.
-function sdkWithCapture({ existingRow = null } = {}) {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWithCapture({ existingRow = null } = {}) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hdrnav-'));
   dirs.push(dir);
   const writes = [];
@@ -52,8 +52,8 @@ function sdkWithCapture({ existingRow = null } = {}) {
     put: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, writes };
 }
 
@@ -65,7 +65,7 @@ const settingValueOf = (writes) => {
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 test('REAL BUNDLE: enabling the header/navigation refresh writes the tri-state ON value "2"', async () => {
-  const { sdk, writes } = sdkWithCapture();
+  const { sdk, writes } = await sdkWithCapture();
   const outcome = await sdk.setHeaderAndNavigationRefresh(APP_ID, true);
   assert.ok(['created', 'updated', 'unchanged'].includes(outcome), `unexpected outcome: ${JSON.stringify(outcome)}`);
   const value = settingValueOf(writes);
@@ -75,12 +75,12 @@ test('REAL BUNDLE: enabling the header/navigation refresh writes the tri-state O
 });
 
 test('REAL BUNDLE: disabling writes "1", and ON/OFF are not the same value', async () => {
-  const { sdk, writes } = sdkWithCapture();
+  const { sdk, writes } = await sdkWithCapture();
   await sdk.setHeaderAndNavigationRefresh(APP_ID, false);
   const off = settingValueOf(writes);
   assert.strictEqual(off, '1', 'OFF is "1"');
 
-  const on = sdkWithCapture();
+  const on = await sdkWithCapture();
   await on.sdk.setHeaderAndNavigationRefresh(APP_ID, true);
   // The guard that matters if the constants are ever swapped or collapsed: if ON and OFF serialized
   // identically, every single-value assertion above could still pass on one branch.
@@ -90,7 +90,7 @@ test('REAL BUNDLE: disabling writes "1", and ON/OFF are not the same value', asy
 test('REAL BUNDLE: the setting row is bound to the app module id', async () => {
   // The row is keyed by (settingdefinitionid, parentappmoduleid). Binding the wrong id would write a
   // real row that simply governs nothing — a silent no-op with a success return.
-  const { sdk, writes } = sdkWithCapture();
+  const { sdk, writes } = await sdkWithCapture();
   await sdk.setHeaderAndNavigationRefresh(APP_ID, true);
   const body = writes.find((w) => w.body && typeof w.body.value === 'string')?.body || {};
   const bind = JSON.stringify(body);
@@ -104,7 +104,7 @@ test('REAL BUNDLE: a non-boolean is rejected rather than coerced', async () => {
   //
   // Wrapped in an async thunk because the SDK validates SYNCHRONOUSLY — it throws before returning a
   // promise, which `assert.rejects` alone does not treat as a rejection.
-  const { sdk } = sdkWithCapture();
+  const { sdk } = await sdkWithCapture();
   for (const bad of ['true', 'false', 1, 0, null]) {
     await assert.rejects(
       async () => sdk.setHeaderAndNavigationRefresh(APP_ID, bad),
@@ -112,7 +112,7 @@ test('REAL BUNDLE: a non-boolean is rejected rather than coerced', async () => {
     );
   }
   // And the happy path still works, so the guard is not simply rejecting everything.
-  const ok = sdkWithCapture();
+  const ok = await sdkWithCapture();
   await ok.sdk.setHeaderAndNavigationRefresh(APP_ID, true);
   assert.strictEqual(settingValueOf(ok.writes), '2');
 });
@@ -125,8 +125,8 @@ test('REAL BUNDLE: a NEW app gets the header/navigation refresh ON by default', 
   // author who wants the classic header/navigation needs an ACTIVE off-write — which is why the
   // build honours `false` instead of skipping it. If a future SDK flips this default, this test is
   // what tells us before a user's app silently changes appearance.
-  const { sdk, writes } = sdkWithCapture();
-  const app = sdk.createArtifact('app', { name: 'Default App', uniqueName: 'cr_defaultapp', iconWebResourceId: APP_ICON_ID });
+  const { sdk, writes } = await sdkWithCapture();
+  const app = await sdk.createArtifact('app', { name: 'Default App', uniqueName: 'cr_defaultapp', iconWebResourceId: APP_ICON_ID });
   assert.strictEqual(app.headerAndNavigationRefresh, true,
     'the SDK defaults the app artifact field to true');
 
@@ -140,8 +140,8 @@ test('REAL BUNDLE: a NEW app gets the header/navigation refresh ON by default', 
 test('REAL BUNDLE: setting headerAndNavigationRefresh false on the app writes the OFF value', async () => {
   // The opt-out path. '1' is OFF for this tri-state; if this ever wrote '2' or nothing, an author
   // asking for the classic experience would silently get the new one.
-  const { sdk, writes } = sdkWithCapture();
-  const app = sdk.createArtifact('app', { name: 'Off App', uniqueName: 'cr_offapp', headerAndNavigationRefresh: false, iconWebResourceId: APP_ICON_ID });
+  const { sdk, writes } = await sdkWithCapture();
+  const app = await sdk.createArtifact('app', { name: 'Off App', uniqueName: 'cr_offapp', headerAndNavigationRefresh: false, iconWebResourceId: APP_ICON_ID });
   assert.strictEqual(app.headerAndNavigationRefresh, false, 'the explicit false survives onto the artifact');
 
   await sdk.pushArtifact('app', app.id);

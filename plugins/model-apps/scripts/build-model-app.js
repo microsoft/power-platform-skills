@@ -46,34 +46,53 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (findTables/findColumns/fetchEntityMetadata) and every artifact
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
-function makeSdk(env, spec, workspaceDir, languageCode) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, spec, workspaceDir, languageCode) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir, // unused (no workspace ops)
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: spec.solution && spec.solution.uniqueName,
-    // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
-    // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
-    // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
-    ...(languageCode ? { languageCode } : {}),
-  });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const provisionSdk = createMakerSdk({
-    workspacePath: workspaceDir,
-    instanceUrl: env,
-    httpClient,
-    // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
-    // language disagrees with the SDK performing it (for language-sensitive registrations), so two
-    // instances at different LCIDs would make every push of a fetched artifact fail.
-    ...(languageCode ? { languageCode } : {}),
-  });
-  provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
+  // Everything fallible after the directory exists runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands the throwaway workspace for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left both constructions
+  // outside the net. Matches provision-solution.js and ai-preflight.js, which already keep
+  // construction inside their protected region for this exact reason.
+  //
+  // `workspaceDir` is deliberately NOT removed — it is the caller's durable workspace, not a
+  // throwaway, so a failed run must leave it exactly as it found it.
+  let sdk;
+  let provisionSdk;
+  try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: spec.solution && spec.solution.uniqueName,
+      // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
+      // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
+      // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
+      ...(languageCode ? { languageCode } : {}),
+    });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    provisionSdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      instanceUrl: env,
+      httpClient,
+      // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
+      // language disagrees with the SDK performing it (for language-sensitive registrations), so two
+      // instances at different LCIDs would make every push of a fetched artifact fail.
+      ...(languageCode ? { languageCode } : {}),
+    });
+    await provisionSdk.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
   // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
   // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
@@ -582,7 +601,7 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply

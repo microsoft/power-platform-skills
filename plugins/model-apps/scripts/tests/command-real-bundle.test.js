@@ -28,14 +28,29 @@ const fs = require('node:fs');
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const dirs = [];
 
-function sdkWithCapture() {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWithCapture() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-'));
   dirs.push(dir);
   const writes = [];
   let minted = 0;
   const httpClient = {
-    get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+    // ⚠ EntityDefinitions must resolve. The SDK now REFUSES to write an app action whose
+    // `ContextEntity` bind cannot be set (`COMMAND_CONTEXT_ENTITY_UNRESOLVED`): a row written
+    // without it is created but permanently unreadable, because `commandApi.get` filters on
+    // `_contextentity_value`. A harness that serves `{ value: [] }` for everything therefore no
+    // longer models a working environment — it models a broken one, and every command test would
+    // fail on the guard rather than on what it means to assert.
+    get: async (url) => {
+      if (/EntityDefinitions/i.test(String(url))) {
+        return {
+          status: 200,
+          headers: {},
+          body: { MetadataId: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', LogicalName: 'account', value: [{ MetadataId: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', LogicalName: 'account' }] },
+        };
+      }
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
     post: async (url, body) => {
       writes.push({ verb: 'post', url: String(url), body });
       minted += 1;
@@ -46,8 +61,8 @@ function sdkWithCapture() {
     put: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, writes };
 }
 
@@ -62,8 +77,8 @@ function commandDef(controls, location = 'MainGrid') {
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 test('REAL BUNDLE: a custom button with a JavaScript on-click reaches the wire', async () => {
-  const { sdk, writes } = sdkWithCapture();
-  const art = sdk.createArtifact('command', commandDef([{
+  const { sdk, writes } = await sdkWithCapture();
+  const art = await sdk.createArtifact('command', commandDef([{
     id: 'cr_hello',
     type: 'Button',
     label: 'Say Hello',
@@ -92,8 +107,8 @@ test('REAL BUNDLE: Button, FlyoutAnchor and SplitButton all emit writes', async 
   // "Custom buttons are supported" is otherwise a claim with no executable meaning, and a re-vendor
   // could narrow the accepted set without any existing test noticing.
   for (const type of ['Button', 'FlyoutAnchor', 'SplitButton']) {
-    const { sdk, writes } = sdkWithCapture();
-    const art = sdk.createArtifact('command', commandDef([{ id: `cr_${type.toLowerCase()}`, type, label: type }]));
+    const { sdk, writes } = await sdkWithCapture();
+    const art = await sdk.createArtifact('command', commandDef([{ id: `cr_${type.toLowerCase()}`, type, label: type }]));
     const pushed = await sdk.pushArtifact('command', art.id);
     assert.strictEqual(pushed.saved, true, `${type} pushes cleanly`);
     assert.ok(writes.length > 0, `${type} actually emitted writes rather than silently no-op'ing`);
@@ -104,8 +119,8 @@ test('REAL BUNDLE: hidden/disabled reach the wire as real booleans, not rules or
   // The limit worth recording: `hidden: true` is a fixed state, not a rule. Rule-evaluated
   // visibility on modern commands is Power Fx + a component library and cannot be authored
   // headlessly, so an author must not expect "hide when status = closed" to be expressible here.
-  const { sdk, writes } = sdkWithCapture();
-  const art = sdk.createArtifact('command', commandDef([
+  const { sdk, writes } = await sdkWithCapture();
+  const art = await sdk.createArtifact('command', commandDef([
     { id: 'cr_static', type: 'Button', label: 'Static', hidden: true, disabled: true },
   ]));
   const pushed = await sdk.pushArtifact('command', art.id);

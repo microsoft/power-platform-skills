@@ -366,7 +366,7 @@ function realSdk({ get } = {}) {
     return { status: 204, headers: {}, body: {} };
   };
   const sdk = require(BUNDLE).createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: require(BUNDLE).createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: get || (async (url) => { requests.push({ verb: 'get', url }); return { status: 200, headers: {}, body: { value: [] } }; }),
