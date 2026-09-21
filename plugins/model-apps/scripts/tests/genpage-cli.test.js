@@ -804,3 +804,77 @@ test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
     'the POSIX path spawns pac directly, so nothing may be rewritten');
 });
+
+// --- review follow-up: a TRANSIENT message must NOT be mistaken for a deterministic one --------
+// The first version matched the bare phrases "does not exist" and "could not be found", so a
+// service message like "The resource does not exist yet; please retry." aborted the retry loop —
+// losing a retry that would have SUCCEEDED. A lost retry fails a build; a needless retry costs
+// about a second, and that asymmetry is what decides the trade.
+const runRetryCase = async (stderr) => {
+  let attempts = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      attempts += 1;
+      return { status: 1, stdout: '', stderr };
+    },
+    sleep: async () => {},
+  });
+  try { await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }); } catch { /* expected */ }
+  return attempts;
+};
+
+test('a transient message containing "does not exist" is still RETRIED', async () => {
+  for (const msg of [
+    'The resource does not exist yet; please retry.',
+    'Error: The specified environment does not exist.',
+    'Error: The app module could not be found.',
+    'The service is temporarily unavailable. Please try again.',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const attempts = await runRetryCase(msg);
+    assert.strictEqual(attempts, 3, `"${msg}" must be retried; attempted ${attempts} time(s)`);
+  }
+});
+
+// The real pac wording for a missing file, MEASURED, carries argument AND file context — which is
+// what makes it unambiguously deterministic where a bare phrase is not.
+test('a REAL pac argument/file fault is still short-circuited', async () => {
+  for (const msg of [
+    'Error: A required argument --app-id is missing.',
+    "Error: The value passed to '--code-file' is invalid. The file 'D:\\nope\\absent.tsx' could not be found.",
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const attempts = await runRetryCase(msg);
+    assert.strictEqual(attempts, 1, `"${msg}" cannot succeed on a retry; attempted ${attempts} time(s)`);
+  }
+});
+
+// --- review follow-up: the diagnostic fallback must not report only the banner -----------------
+// `FLAG_HELP_RE` drops the help dump, but pac can print the ONLY diagnostic in that same indented
+// shape. With no `Error:` line, the filtered set was empty and the fallback took the FIRST four
+// lines — the banner — discarding the one line that said anything.
+test('a flag-SHAPED sole diagnostic survives instead of being replaced by the banner', async () => {
+  const out = [
+    'Microsoft PowerPlatform CLI',
+    'Version: 0.1.0-dev (.NET 10.0.12)',
+    'Online documentation: https://aka.ms/PowerPlatformCLI',
+    'Feedback, Suggestions, Issues: https://github.com/microsoft/powerplatform-build-tools/discussions',
+    '  --output-directory does not exist: C:\\missing',
+  ].join('\n');
+  let thrown = null;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      return { status: 1, stdout: out, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  try { await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }); }
+  catch (e) { thrown = e; }
+  assert.ok(thrown);
+  assert.match(thrown.message, /output-directory does not exist/,
+    `the only real line must survive; got ${thrown.message}`);
+  assert.ok(!/Microsoft PowerPlatform CLI/.test(thrown.message),
+    `the banner must not be reported as the diagnostic; got ${thrown.message}`);
+});

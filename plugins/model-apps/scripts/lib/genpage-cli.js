@@ -198,27 +198,46 @@ function makeGenpageCli(env, deps = {}) {
   // nothing and actively hid the answer.
   //
   // Preference order: explicit `Error:` lines, else any line that is not banner/usage/flag-help,
-  // else fall back to the last line so an unrecognized format still says SOMETHING.
-  const BANNER_RE = /^(?:Microsoft PowerPlatform CLI|Version:|Online documentation:|Feedback, Suggestions, Issues:|Usage:)/i;
+  // else any non-banner line even if flag-SHAPED, else the last few lines so an unrecognized format
+  // still says SOMETHING.
+  //
+  // That third step matters: `FLAG_HELP_RE` exists to drop the help dump, but pac can print the ONLY
+  // diagnostic in the same indented shape — e.g. `  --output-directory does not exist: C:\missing`.
+  // Dropping it left just the four banner lines, which say nothing at all. Falling back to the LAST
+  // lines rather than the first, for the same reason: the banner is always first.
+  const BANNER_RE = /^(?:Microsoft PowerPlatform CLI|Version:|Online documentation:|Feedback, Suggestions, Issues:|Usage:|Connected as)/i;
   const FLAG_HELP_RE = /^\s+-{1,2}\S/; // an indented "  --flag   description" row from the help dump
   const pacDiagnostic = (r) => {
     const raw = `${String(r && r.stderr || '')}\n${String(r && r.stdout || '')}`;
     const lines = raw.split(/\r?\n/).map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
     if (!lines.length) return `pac exited ${r && r.status}` + ' with no output';
     const errors = lines.filter((l) => /^\s*Error:/i.test(l));
-    const meaningful = errors.length ? errors : lines.filter((l) => !BANNER_RE.test(l.trim()) && !FLAG_HELP_RE.test(l));
-    const picked = (meaningful.length ? meaningful : lines).slice(0, 4).map((l) => l.trim());
-    return picked.join(' | ');
+    const notBanner = lines.filter((l) => !BANNER_RE.test(l.trim()));
+    const picked = errors.length ? errors.slice(0, 4)
+      : (notBanner.filter((l) => !FLAG_HELP_RE.test(l)).slice(0, 4).length
+        ? notBanner.filter((l) => !FLAG_HELP_RE.test(l)).slice(0, 4)
+        : (notBanner.length ? notBanner.slice(0, 4) : lines.slice(-4)));
+    return picked.map((l) => l.trim()).join(' | ');
   };
 
   // A failure pac will produce again for the SAME inputs, however many times it is asked. Retrying
   // one cannot help: it burns the caller's time and buries the real message under "after 3
-  // attempt(s)". These are argument/parse/missing-file faults — the transient flakes the retry
-  // exists for are network and service errors, which look nothing like this.
+  // attempt(s)".
+  //
+  // Every pattern carries ARGUMENT or FILE context, deliberately. Bare phrases like "does not exist"
+  // and "could not be found" were too loose — a transient service message such as
+  //   "The resource does not exist yet; please retry."
+  // matched them and cost a retry that would have succeeded. A lost retry fails a build; a needless
+  // retry costs about a second, so the asymmetry decides the trade: match only what is unambiguous.
+  //
+  // The rich forms are MEASURED from a real pac build, e.g. a missing --code-file:
+  //   Error: The value passed to '--code-file' is invalid. The file 'D:\nope\absent.tsx' could not be found.
   const DETERMINISTIC_RE = new RegExp([
     'required argument', 'unknown argument', 'unrecognized (?:command|option)',
     'not a valid command', 'parse failed on', 'was it quote wrapped',
-    'could not be found', 'does not exist', 'no such file', 'is not a valid',
+    'no such file', 'file not found',
+    "the value passed to '[^']*' is invalid",
+    "the file '[^']*' could not be found",
   ].join('|'), 'i');
   const isDeterministic = (text) => DETERMINISTIC_RE.test(String(text || ''));
 
