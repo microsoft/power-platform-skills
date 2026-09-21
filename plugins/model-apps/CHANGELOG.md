@@ -59,14 +59,24 @@ downloads that round-trip Choice columns.
 - **A section emptied by a layout move is reclaimed** instead of surviving as a blank twin.
 - **A field added or moved on an existing form packs to the section's grid**, so the same spec no
   longer produces a different form depending on whether the form already existed.
-- **Cell spans converge on an existing form, and are clamped where they are written.** A declared
-  span reaches the deployed cell; an undeclared one is still never sent, so a cell widened by hand
-  survives. `rowspan` is rejected unless it is the last field in its section ([#581]).
+- **Cell spans converge on an existing form, and are clamped against the grid that is really
+  deployed.** A declared span reaches the deployed cell; an undeclared one is still never sent, so a
+  cell widened by hand survives. Clamping used the grid the spec compiled to rather than the live
+  one, so an auto layout could narrow a maker's four-column cell to one; and narrowing a section
+  left an over-wide cell behind, unchanged on the next apply too. `rowspan` is rejected unless it is
+  the last field in its section ([#581]).
+- **A section containing a row-spanning cell is left alone instead of reflowed.** The cell beneath a
+  `rowspan` reserves that slot, and re-flowing by reading order moved the next field into it. The
+  refusal is reported, and `--verify` still reports the section if it genuinely overflows.
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
 - **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
   row was not re-packed, leaving three columns of content in a two-column section. Displaced fields
   move down rather than to the bottom of the section; a span that still fits writes nothing.
+- **`--verify` no longer lets a too-narrow section excuse its own span.** The expected span was
+  computed from the width that deployed, so `columns: 4, colspan: 4` arriving as `columns: 1,
+  colspan: 1` verified PASS. Spans are judged against the authored width, and the width itself is
+  now checked separately.
 - **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
   containers and deliberately does not rename them (form scripts and business rules reference
   section names), but verify looked them up by the authored name — so a section it had just reused

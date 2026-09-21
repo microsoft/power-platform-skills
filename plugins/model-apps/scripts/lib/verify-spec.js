@@ -336,11 +336,22 @@ async function verifySpec(spec, read, opts = {}) {
               return;
             }
             claimedSections.add(secHit.index);
+            // The AUTHORED grid width — the expectation. Absent means the author stated none, so the
+            // deployed width is not compared and a span is checked against its raw authored value.
+            const wantCols = Number(sec.columns);
+            const haveWantCols = Number.isFinite(wantCols) && wantCols >= 1;
+            // GRID WIDTH. Checked independently, because the span comparison below derives its
+            // expectation from the AUTHORED width: without this, a section deployed narrower than
+            // asked would go unreported AND would quietly lower the span expectation to match
+            // itself.
+            const secCols = Number(secHit.item.columns);
+            if (haveWantCols && Number.isFinite(secCols) && secCols !== wantCols) {
+              problems.push(`section '${secName}' is deployed ${secCols} column(s) wide, the spec declares ${wantCols}`);
+            }
             // OCCUPANCY: no deployed row may carry more columns of content than its section has.
             // This is the shape defect the reconcile fixes (a field packed into a full row, or a
             // widened span overflowing one), and a field-to-section check alone cannot see it.
             // Skipped when the deployed section declares no width — unknown is not "one".
-            const secCols = Number(secHit.item.columns);
             if (Number.isFinite(secCols) && secCols >= 1) {
               for (const [ri, drow] of (secHit.item.rows || []).entries()) {
                 const used = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
@@ -364,21 +375,19 @@ async function verifySpec(spec, read, opts = {}) {
               for (const key of ['colspan', 'rowspan']) {
                 const declared = Number(entry[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
-                // Compare the EFFECTIVE span, not the raw authored one. The compiler clamps a span
-                // to the section width by design — `colspan: 4` in a one-column section deploys as
-                // 1 — so comparing the raw value failed a layout that was built exactly as
-                // documented. Live-reproduced: "field 'x' has colspan 1, the spec declares 4"
-                // against a correctly clamped cell.
+                // Compare the EFFECTIVE span, clamped against the AUTHORED grid width — never the
+                // deployed one. Deriving the expectation from what was deployed let a section that
+                // came out too narrow LOWER ITS OWN EXPECTATION and excuse a wrong span: authored
+                // `columns: 4, colspan: 4` deployed as `columns: 1, colspan: 1` verified PASS. The
+                // deployed width is now reported separately above, so both faults are visible.
                 //
                 // Only `colspan` is bounded by the grid; `rowspan` has no such limit, so it is
                 // compared as authored.
-                const want = key === 'colspan' && Number.isFinite(secCols) && secCols >= 1
-                  ? Math.min(declared, secCols)
-                  : declared;
+                const want = key === 'colspan' && haveWantCols ? Math.min(declared, wantCols) : declared;
                 const got = Number(dc[key]) || 1;
                 if (got !== want) {
                   problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${declared}`
-                    + (want !== declared ? ` (clamped to ${want} by the ${secCols}-column section)` : ''));
+                    + (want !== declared ? ` (clamped to ${want} by the ${wantCols}-column section)` : ''));
                 }
               }
             }

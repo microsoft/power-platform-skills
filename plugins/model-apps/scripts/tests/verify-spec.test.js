@@ -1473,12 +1473,15 @@ const shapeXml = ({ cells, columns = '11' }) =>
   `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
   + `<column width="100%"><sections><section name="sec_left" columns="${columns}">`
   + `<labels><label description="L" languagecode="1033"/></labels><rows><row>`
-  + cells.map((c) => `<cell colspan="${c.span}"><control datafieldname="${c.f}" /></cell>`).join('')
+  + cells.map((c) => `<cell colspan="${c.span}"${c.rows ? ` rowspan="${c.rows}"` : ''}><control datafieldname="${c.f}" /></cell>`).join('')
   + `</row></rows></section></sections></column>`
   + `</columns></tab></tabs></form>`;
-const shapeSpec = (fields) => (spec) => {
+// `cols` defaults to 2 to match `shapeXml`'s default ratio "11". A test that deploys a different
+// grid must declare the SAME width here, or it is exercising the grid-width mismatch check rather
+// than whatever it meant to test.
+const shapeSpec = (fields, cols = 2) => (spec) => {
   spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
-    { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 2, fields }] }] }];
+    { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: cols, fields }] }] }];
 };
 
 test('verify FAILS when a deployed row carries more content than its grid', async () => {
@@ -1503,8 +1506,46 @@ test('verify FAILS when an AUTHORED span does not match the deployed one', async
 test('verify TOLERATES a deployed span the spec never declared', async () => {
   const chk = await topoCheck(
     shapeXml({ cells: [{ f: 'new_name', span: 2 }], columns: '1111' }),
-    shapeSpec(['new_name']));
+    shapeSpec(['new_name'], 4));
   assert.strictEqual(chk.present, true, `an undeclared span must not fail; got ${chk && chk.detail}`);
+});
+
+// --- review follow-up: a section deployed NARROWER than authored must not excuse its own span ----
+// The expected span was clamped against the DEPLOYED width, so a section that came out too narrow
+// lowered its own expectation: authored `columns: 4, colspan: 4` deployed as `columns: 1,
+// colspan: 1` verified PASS. Both faults are now reported.
+test('verify FAILS when a section is deployed narrower than authored', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1 }], columns: '1' }),
+    shapeSpec([{ name: 'new_name', colspan: 4 }], 4));
+  assert.strictEqual(chk.present, false,
+    `a section narrower than authored must not excuse its own span; got ${chk && chk.detail}`);
+  assert.match(chk.detail, /deployed 1 column\(s\) wide, the spec declares 4/,
+    `the width fault must be named; got ${chk.detail}`);
+  assert.match(chk.detail, /has colspan 1, the spec declares 4/,
+    `and the span must still be judged against the AUTHORED width; got ${chk.detail}`);
+});
+
+// --- review follow-up: `rowspan` is NOT bounded by the grid ------------------------------------
+// The clamp deliberately tests `key === 'colspan'`. Dropping that guard — clamping both spans
+// against the section width — survived the whole suite, because nothing declared a rowspan at all.
+// A 3-row-tall cell in a 2-column section is perfectly legal: rows are unbounded.
+test('verify TOLERATES a rowspan larger than the section is wide', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1, rows: 3 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 1, rowspan: 3 }]));
+  assert.strictEqual(chk.present, true,
+    `rowspan must be compared as authored, never clamped by the column count; got ${chk && chk.detail}`);
+});
+
+// And the counterpart, so "tolerates" above cannot be satisfied by ignoring rowspan entirely.
+test('verify FAILS when a declared rowspan did not deploy', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 1, rowspan: 3 }]));
+  assert.strictEqual(chk.present, false, 'a declared rowspan that did not deploy must fail');
+  assert.match(chk.detail, /rowspan 1, the spec declares 3/,
+    `the rowspan fault must be named exactly; got ${chk.detail}`);
 });
 
 // A section that declares no width cannot be checked for overflow — unknown is not "one column".

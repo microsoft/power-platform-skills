@@ -475,6 +475,24 @@ function compileFormIntent(spec, formSpec, opts) {
   // engine-only `__`-prefixed keys on the returned def are never sent (createFormShell hand-picks
   // the fields it passes to createArtifact), so that is where positioning intent belongs.
   const positions = {};
+  // RAW authored spans, by logical name: { <logical>: { colspan?, rowspan? } }.
+  //
+  // The cells carry the span already CLAMPED to the section the compiler laid out, which is right
+  // for the create path. It is wrong for reconcile on an existing form: an AUTO layout compiles a
+  // synthetic one-column section, but reconcile deliberately KEEPS the deployed section's geometry —
+  // so applying the synthetic clamp narrowed a maker's four-column cell to 1. The raw value has to
+  // survive compilation for the reconcile to re-clamp against the section it actually writes into.
+  //
+  // Kept off the cells, like `positions`, because a cell is pushed verbatim to the SDK and this is
+  // not part of its model.
+  const rawSpans = {};
+  const recordRawSpan = function (opt) {
+    if (!opt || !opt.name) return;
+    const out = {};
+    if (typeof opt.colspan === 'number') out.colspan = opt.colspan;
+    if (typeof opt.rowspan === 'number') out.rowspan = opt.rowspan;
+    if (Object.keys(out).length) rawSpans[opt.name] = out;
+  };
   const recordPosition = function (opt) {
     if (opt && opt.after && opt.name && opt.after !== opt.name) positions[opt.name] = opt.after;
   };
@@ -520,6 +538,7 @@ function compileFormIntent(spec, formSpec, opts) {
                 const inline = normalizeFieldEntry(fl);
                 const opt = optionsFor(inline.name, inline);
                 recordPosition(opt);
+                recordRawSpan(opt);
                 return fieldCellIntent(inline.name, { isRequired: requiredFor(inline.name), readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan });
               });
               const secCols = Math.min(s.columns || 1, maxCols);
@@ -549,6 +568,7 @@ function compileFormIntent(spec, formSpec, opts) {
     const autoCell = function (logical, extra) {
       const opt = optionsFor(logical, null);
       recordPosition(opt);
+      recordRawSpan(opt);
       return fieldCellIntent(logical, Object.assign({ readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan }, extra || {}));
     };
     if (entity) {
@@ -612,6 +632,9 @@ function compileFormIntent(spec, formSpec, opts) {
   // precedence rule should hold in the code that implements it, not only in the gate in front of it.
   for (const key of Object.keys(formOptions)) {
     if (!Object.prototype.hasOwnProperty.call(positions, key)) recordPosition(formOptions[key]);
+    // Same catch-all for spans: a form-level `fieldOptions` entry whose field was not placed
+    // inline still carries authored intent the reconcile may need.
+    if (!Object.prototype.hasOwnProperty.call(rawSpans, key)) recordRawSpan(formOptions[key]);
   }
 
   // Notes section (opt-in: formSpec.notes or entity.hasNotes) — Main forms only.
@@ -649,6 +672,8 @@ function compileFormIntent(spec, formSpec, opts) {
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).
     __fieldPositions: positions,
+    // RAW authored spans, for reconcile to re-clamp against the section it actually writes into.
+    __fieldSpans: rawSpans,
     // Whether an EXPLICIT layout may prune deployed fields it does not list. Defaults to true (the
     // long-standing behaviour: an explicit layout is the complete desired state). `prune: false`
     // lets an author reorder or restyle a SUBSET of the fields without having to re-declare the

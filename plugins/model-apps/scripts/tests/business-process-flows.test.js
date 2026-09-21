@@ -293,10 +293,11 @@ test('every BPF query in build, verify and teardown goes through bpfFilter', () 
 
 // --- 3. real bundle -----------------------------------------------------------------------------
 
-async function realSdk() {
+async function realSdk({ postEtag = true, readBackEtag = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-'));
   dirs.push(dir);
   const writes = [];
+  const reads = [];
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const sdk = createMakerSdk({
     workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
@@ -311,10 +312,11 @@ async function realSdk() {
       // `{ value: [...] }`. Both shapes are produced here so the token lookup works whichever the
       // SDK uses.
       get: async (url) => {
+        reads.push(String(url));
         const m = /\/workflows\(([^)]+)\)/i.exec(String(url));
         if (m) {
-          return { status: 200, headers: { etag: 'W/"1001"' },
-            body: { workflowid: m[1].replace(/'/g, ''), '@odata.etag': 'W/"1001"', statecode: 0, statuscode: 1 } };
+          return { status: 200, headers: readBackEtag ? { etag: 'W/"1001"' } : {},
+            body: { workflowid: m[1].replace(/'/g, ''), ...(readBackEtag ? { '@odata.etag': 'W/"1001"' } : {}), statecode: 0, statuscode: 1 } };
         }
         if (/\/workflows/i.test(String(url))) {
           return { status: 200, headers: {}, body: { value: [] } };
@@ -323,6 +325,19 @@ async function realSdk() {
       },
       post: async (url, body) => {
         writes.push({ verb: 'POST', url: String(url), body });
+        // A real Dataverse POST sent with `Prefer: return=minimal` answers 204 with NO body and
+        // only an `OData-EntityId` header — no etag anywhere. That is precisely the case the
+        // read-back exists for, so `postEtag: false` models it. With the etag handed back on the
+        // create, the read-back helper is never called and a mutation that makes it always throw
+        // survives the whole suite.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
+        if (!postEtag) {
+          return {
+            status: 204,
+            headers: { 'odata-entityid': 'https://contoso.crm.dynamics.com/api/data/v9.2/workflows(44444444-4444-4444-4444-444444444444)' },
+            body: undefined,
+          };
+        }
         return {
           status: 200,
           headers: { etag: 'W/"1001"', 'odata-entityid': 'https://contoso.crm.dynamics.com/api/data/v9.2/workflows(44444444-4444-4444-4444-444444444444)' },
@@ -335,7 +350,7 @@ async function realSdk() {
     },
   });
   await sdk.initWorkspace();
-  return { sdk, writes };
+  return { sdk, writes, reads };
 }
 
 test('REAL BUNDLE: a BPF is authored through the generic artifact lifecycle', async () => {
@@ -378,6 +393,39 @@ test('REAL BUNDLE: the wire payload is a category-4 BusinessFlow definition carr
   assert.match(xaml, /StageStep\d+: Resolve/);
   assert.ok(xaml.includes('new_subject'), 'the bound column reached the compiled process');
   assert.ok(xaml.includes('new_notes'), 'the second bound column reached the compiled process');
+});
+
+// --- review follow-up: the concurrency-token READ-BACK must actually be exercised ---------------
+// Every fixture above reaches a token before the read-back is needed, so a mutation making that
+// helper always throw survived the entire suite. Measured order inside the bundle's bpf create:
+//     token = <activation etag> ?? <etag on the POST response> ?? await <read the record back>
+// so BOTH earlier sources have to be absent. An ACTIVE flow is activated by a PATCH whose response
+// carries an etag, which is why the Draft path is used here; and a real create sent with
+// `Prefer: return=minimal` answers 204 with no body and only `OData-EntityId`, so no etag either.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
+test('REAL BUNDLE: a create that yields no etag is recovered by reading the record back', async () => {
+  const { sdk, reads } = await realSdk({ postEtag: false });
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
+  const pushed = await sdk.pushArtifact('bpf', art.id);
+  assert.strictEqual(pushed.saved, true,
+    'a tokenless create must be recovered by the read-back, not refused with BPF_CREATE_NO_TOKEN');
+  assert.ok(reads.some((u) => /\/workflows\([^)]+\)/i.test(u)),
+    `the record must be read back to obtain the token; reads were ${JSON.stringify(reads)}`);
+});
+
+// The fail-closed counterpart: when the read-back ALSO yields nothing there is no token at all, and
+// pushing blind would silently clobber a concurrent edit. It must refuse — and say the flow exists,
+// because it does, and a caller who retries a create would author a duplicate.
+test('REAL BUNDLE: a create with no token from any source is refused, not pushed blind', async () => {
+  const { sdk } = await realSdk({ postEtag: false, readBackEtag: false });
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
+  await assert.rejects(
+    () => sdk.pushArtifact('bpf', art.id),
+    (e) => {
+      assert.strictEqual(e.code, 'BPF_CREATE_NO_TOKEN', `unexpected code ${e && e.code}: ${e && e.message}`);
+      assert.match(String(e.message), /EXISTS/i, 'the message must say the flow was created');
+      return true;
+    });
 });
 
 test('REAL BUNDLE: an Active flow is activated in the same push (statecode 1 / statuscode 2)', async () => {

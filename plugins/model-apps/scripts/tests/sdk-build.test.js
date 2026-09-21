@@ -4702,3 +4702,188 @@ test('form topology: shrinking a section grid repacks the rows that no longer fi
   const names = (sec.rows || []).flatMap((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
   assert.deepStrictEqual(names, ['new_name', 'new_tier', 'new_code'], 'no field may be lost by the reflow');
 });
+
+// --- review follow-up: clamp against the section actually WRITTEN INTO ---------------------------
+// An AUTO layout compiles a synthetic ONE-column section, but reconcile deliberately keeps the
+// DEPLOYED geometry. Applying the synthetic clamp narrowed a maker-widened cell: a live 4-column
+// section holding a colspan-3 cell, with `fieldOptions: { new_name: { colspan: 4 } }`, was written
+// down to 1. The authored span is now carried past compilation and re-clamped against the live
+// section.
+test('form topology: an auto layout clamps against the LIVE section, not the synthetic one-column intent', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { colspan: 4 } } }];
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [{ id: 'c1', colspan: 3, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const cell = (finalForm.tabs[0].columns[0].sections[0].rows || [])
+    .flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.ok(cell, `the field must still be on the form; got ${JSON.stringify(finalForm.tabs[0].columns[0].sections[0].rows)}`);
+  assert.strictEqual(cell.colspan, 4,
+    'the live section is 4 columns wide, so the authored 4 needs no clamp at all');
+});
+
+// The counterpart, and the one that matters most: with NO authored span, a maker-widened cell must
+// be left ALONE. This is the assertion whose absence let a mutant emit colspan 1 for every
+// one-column layout cell and survive the whole suite.
+test('form topology: an auto rebuild does not touch a maker-widened cell it was never told about', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer' }];
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [{ id: 'c1', colspan: 3, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const cell = (finalForm.tabs[0].columns[0].sections[0].rows || [])
+    .flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.strictEqual(cell.colspan, 3, 'an undeclared span is no opinion — the maker keeps their 3');
+  assert.strictEqual(cell.id, 'c1', 'and it is the SAME cell, not a recreated one');
+  // No span write may be issued at all.
+  const spanWrites = find(calls, 'updateElement').filter((c) => c.args[3]
+    && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.deepStrictEqual(spanWrites, [],
+    `no span may be written when none was authored; saw ${JSON.stringify(spanWrites.map((c) => [c.args[2], c.args[3]]))}`);
+});
+
+// --- review follow-up: narrowing must clamp a stale WIDE cell, not just reflow rows -------------
+// `rowsFromCells` can change a cell SPAN without changing field names or row membership, and the
+// no-op check compared only field-name arrays — so it discarded exactly that change. A section
+// narrowed to 1 kept a colspan-4 cell, and a second apply issued no corrective write.
+test('form topology: narrowing a grid clamps a stale wide cell, and converges on the second apply', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [{ id: 'c1', colspan: 4, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  assert.strictEqual(sec.columns, 1, 'the grid narrows');
+  const cell = (sec.rows || []).flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.strictEqual(cell.colspan, 1,
+    `a stale colspan 4 cannot survive in a 1-column section; got ${JSON.stringify(sec.rows)}`);
+  assert.strictEqual(cell.id, 'c1', 'the cell is clamped in place, not recreated');
+
+  // Converged state is a fixed point.
+  const before = calls.length;
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const second = calls.slice(before);
+  const layoutWrites = find(second, 'updateElement').filter((c) => /\/(rows|cells)\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && (Array.isArray(c.args[3].cells) || c.args[3].colspan !== undefined));
+  assert.deepStrictEqual(layoutWrites, [],
+    `a second apply must issue no corrective layout write; saw ${JSON.stringify(layoutWrites.map((c) => [c.args[2], c.args[3]]))}`);
+});
+
+// --- review follow-up: WIDENING a grid must not reflow rows the author never touched ------------
+// The narrowing predicate is deliberately `<`, not `!==`. A mutant that reflowed on WIDENING too
+// survived the whole suite, because nothing asserted that a widened section is left alone.
+test('form topology: WIDENING a section grid leaves its existing rows untouched', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_code', displayName: 'Code', type: 'Text' });
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 4, fields: ['new_name', 'new_tier', 'new_code'] },
+  ] }]);
+  // Deployed as a 2-column section: three cells across two rows. Widening to 4 COULD densify them
+  // into one row, but the author asked for a width change, not a re-layout.
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [cell('c1', 'new_name'), cell('c2', 'new_tier')] }, { cells: [cell('c3', 'new_code')] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  assert.strictEqual(sec.columns, 4, 'the grid widens');
+  const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(shape, [['new_name', 'new_tier'], ['new_code']],
+    `widening must not reflow rows that already fitted; got ${JSON.stringify(shape)}`);
+});
+
+// --- review follow-up: a spacer under a rowspan has positional meaning --------------------------
+// Reading-order flattening destroys a vertical reservation. Live shape, narrowed 4 -> 2:
+//   [A rowspan=2] [spacer, B] [C, D]   became   [A rowspan=2, spacer] [B, C] [D]
+// i.e. B took the slot the spacer was holding under A. `rowsFromCells` models WIDTH only, so it
+// cannot express that reservation — and the authored-rowspan restriction does not help, because
+// the span belongs to the fetched MAKER form, not to the spec. Refusing is the recoverable
+// outcome; silently rearranging a maker's form is not.
+test('form topology: a section containing a rowspan is NOT reflowed when the grid narrows', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push(
+    { schemaName: 'new_code', displayName: 'Code', type: 'Text' },
+    { schemaName: 'new_note', displayName: 'Note', type: 'Text' },
+  );
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', 'new_tier', 'new_code', 'new_note'] },
+  ] }]);
+  // Deployed 4-wide, with a vertical reservation: the spacer sits UNDER the row-spanning cell.
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [
+          { cells: [{ id: 'cA', rowspan: 2, control: { fieldName: 'new_name' } }] },
+          { cells: [{ id: 'cSpacer' }, cell('cB', 'new_tier')] },
+          { cells: [cell('cC', 'new_code'), cell('cD', 'new_note')] },
+        ] },
+    ] }] }], bag: { a: [], c: [] } };
+  const warnings = [];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(String(m)) });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => (c.control && c.control.fieldName) || '(spacer)'));
+  assert.deepStrictEqual(shape,
+    [['new_name'], ['(spacer)', 'new_tier'], ['new_code', 'new_note']],
+    `the maker arrangement must be preserved intact; got ${JSON.stringify(shape)}`);
+  assert.ok(warnings.some((w) => /row-spanning cell/.test(w)),
+    `the refusal must be reported, not silent; saw ${JSON.stringify(warnings)}`);
+});
+
+// The control: without a rowspan, the same narrowing DOES reflow — so the guard is specific to the
+// vertical reservation rather than a blanket refusal.
+test('form topology: the rowspan guard does not block an ordinary narrowing', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_code', displayName: 'Code', type: 'Text' });
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier', 'new_code'] },
+  ] }]);
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [cell('c1', 'new_name'), cell('c2', 'new_tier'), cell('c3', 'new_code')] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  for (const [ri, r] of (sec.rows || []).entries()) {
+    const used = (r.cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(used <= 1, `row ${ri} must fit the 1-column grid; got ${JSON.stringify(r.cells)}`);
+  }
+});

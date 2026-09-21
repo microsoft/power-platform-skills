@@ -2016,15 +2016,42 @@ async function runSdkBuild(spec, opts = {}) {
     const form = await provision.getArtifact('form', formId) || {};
     const section = sectionAt(form, sectionPointer);
     if (!section) return;
-    const cells = (section.rows || []).flatMap((r) => (r && r.cells) || []);
+    const liveRows = section.rows || [];
+    // A ROWSPAN makes a row's cells positionally meaningful: the cell beneath a vertically spanning
+    // one is a SPACER reserving the covered slot, and reading-order flattening moves it beside the
+    // spanning cell instead of under it. Live shape, narrowed 4 -> 2, before this guard:
+    //     [A rowspan=2] [spacer, B] [C, D]   became   [A rowspan=2, spacer] [B, C] [D]
+    // i.e. B took the reserved position. `rowsFromCells` models width only, so it cannot express
+    // that reservation — and the authored-rowspan restriction does not help, because the span
+    // belongs to the fetched MAKER form, not to the spec.
+    //
+    // REFUSE rather than guess. Leaving a maker's valid arrangement alone is the recoverable
+    // outcome; silently rearranging their form is not. The occupancy check in `--verify` still
+    // reports the section if it genuinely overflows, so the condition stays visible.
+    const hasRowspan = liveRows.some((r) => ((r && r.cells) || []).some((c) => (Number(c.rowspan) || 1) > 1));
+    if (hasRowspan) {
+      if (typeof opts.warn === 'function') {
+        opts.warn(`form section at ${sectionPointer} contains a row-spanning cell, so its rows were left `
+          + `as they are rather than reflowed to ${width} column(s) — a spacer under a rowspan has `
+          + 'positional meaning this reflow cannot preserve. Adjust the layout in the maker if it no longer fits.');
+      }
+      return;
+    }
+    const cells = liveRows.flatMap((r) => (r && r.cells) || []);
     if (!cells.length) return;
     const packed = rowsFromCells(cells, width);
-    const live = section.rows || [];
-    // Nothing to do when the existing rows already match the packing the new width implies.
-    const same = packed.length === live.length
-      && packed.every((r, i) => JSON.stringify((r.cells || []).map((c) => c.control && c.control.fieldName))
-        === JSON.stringify(((live[i] || {}).cells || []).map((c) => c.control && c.control.fieldName)));
-    if (same) return;
+    const live = liveRows;
+    // Nothing to do only when the existing rows match the packing the new width implies — INCLUDING
+    // each cell's span. Comparing field names alone discarded exactly the change this exists to make:
+    // `rowsFromCells` clamps a too-wide cell without moving it, so a section narrowed to 1 while
+    // holding a colspan-4 cell had identical row membership and was judged unchanged. The stale
+    // width then survived, and a second apply issued no corrective write either.
+    const shapeOf = (rows) => JSON.stringify((rows || []).map((r) => ((r && r.cells) || []).map((c) => [
+      c.control && c.control.fieldName,
+      Number(c.colspan) || 1,
+      Number(c.rowspan) || 1,
+    ])));
+    if (shapeOf(packed) === shapeOf(live)) return;
     for (let i = 0; i < packed.length; i += 1) {
       if (i < live.length) {
         await provision.updateElement('form', formId, `${sectionPointer}/rows/${i}`, { cells: packed[i].cells });
@@ -2041,14 +2068,28 @@ async function runSdkBuild(spec, opts = {}) {
   // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
   // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
   // changes nothing issues no writes.
-  const convergeCellSpans = async (formId, form, location, wantCell) => {
+  const convergeCellSpans = async (formId, form, location, wantCell, rawSpan) => {
     if (!location || !wantCell) return;
     const live = cellAt(form, location);
     if (!live) return;
+    // Clamp against the section this write actually lands in, NOT the one the compiler laid out.
+    //
+    // The compiled cell already carries a span clamped to the compiler's own section, which is
+    // correct for a fresh form. On an existing form it can be wrong: an AUTO layout compiles a
+    // synthetic ONE-column section while reconcile deliberately keeps the deployed geometry, so the
+    // synthetic clamp narrowed a maker's four-column cell to 1. `rawSpan` is the authored value
+    // carried past compilation for exactly this; without it the intent is already gone.
+    const liveSection = sectionAt(form, location.sectionPointer) || {};
+    const liveCols = Math.max(1, Math.min(4, Number(liveSection.columns) || 1));
     const patch = {};
     for (const key of ['colspan', 'rowspan']) {
-      const want = wantCell[key];
-      if (want === undefined) continue; // no opinion — never overwrite a maker's hand-set span
+      const raw = rawSpan && typeof rawSpan[key] === 'number' ? rawSpan[key] : undefined;
+      const compiled = wantCell[key];
+      if (raw === undefined && compiled === undefined) continue; // no opinion — never overwrite a maker's span
+      // Only `colspan` is bounded by the grid; a `rowspan` has no such limit.
+      const want = key === 'colspan'
+        ? Math.min(raw === undefined ? compiled : raw, liveCols)
+        : (raw === undefined ? compiled : raw);
       const current = live[key] === undefined ? 1 : live[key];
       if (current !== want) patch[key] = want;
     }
@@ -2128,7 +2169,7 @@ async function runSdkBuild(spec, opts = {}) {
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
   };
 
-  const placeFieldInSection = async (formId, logical, wantCell, target, vacated) => {
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2153,7 +2194,7 @@ async function runSdkBuild(spec, opts = {}) {
     // cell is staying, converge here; when it is moving, converge in the DESTINATION after the move.
     const staying = !targetPointer || existing.sectionPointer === targetPointer;
     if (staying) {
-      await convergeCellSpans(formId, form, existing, wantCell);
+      await convergeCellSpans(formId, form, existing, wantCell, rawSpan);
       // Already on the form and already in the right section (or we have no opinion) — leave it be,
       // so a rebuild converges instead of reshuffling the form on every run.
       return;
@@ -2209,7 +2250,7 @@ async function runSdkBuild(spec, opts = {}) {
     // possible stranded-row removal) invalidated every pointer computed above.
     const settledForm = await provision.getArtifact('form', formId) || {};
     const settled = findFieldCellLocation(settledForm, logical);
-    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell);
+    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
   };
 
   const reconcileForm = async (formId, def) => {
@@ -2240,8 +2281,13 @@ async function runSdkBuild(spec, opts = {}) {
       declaredSection = declaredSectionByField(def.tabs);
       sectionTargets = await reconcileFormTopology(formId, def);
     }
+    // RAW authored spans, kept off the compiled cells because a cell is pushed verbatim to the SDK.
+    // Reconcile re-clamps them against the section it actually writes into: the compiled span is
+    // clamped to the COMPILER's section, which for an auto layout is a synthetic one-column stand-in
+    // that reconcile never deploys.
+    const rawSpans = def.__fieldSpans || {};
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical]);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.

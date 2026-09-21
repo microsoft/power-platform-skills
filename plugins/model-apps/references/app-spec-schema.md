@@ -715,6 +715,13 @@ requires emitting an empty *spacer* cell to occupy the reserved slot, which the 
 correctly; the compiler does not emit one yet. The restriction can be lifted once it does — tracked
 in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
 
+A **deployed** `rowspan` — one a maker added by hand, which the authored restriction above cannot
+prevent — makes the rows of that section positionally meaningful in the same way. So when a section
+narrows, a section that contains one is **left exactly as it is** rather than re-flowed, and the
+refusal is reported. Re-flowing reads the cells in order and cannot tell a reserved slot from an
+empty one, which would move the next field into it. `--verify` still reports the section if it
+genuinely overflows its grid, so the condition stays visible.
+
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a
 section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, and a field sitting in
