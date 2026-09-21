@@ -77,6 +77,24 @@ test('poll-async-operation leaves progress indeterminate while import is running
   assert.equal('progressPercent' in status, false);
 });
 
+test('poll-async-operation writes a terminal status when the initial token is unavailable', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poll-async-operation-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const statusFile = path.join(dir, 'status.json');
+  fs.writeFileSync(statusFile, JSON.stringify({ state: 'running', message: 'Waiting for Dataverse import status' }));
+
+  const result = await pollAsyncOperation({
+    asyncJobId: '00000000-0000-0000-0000-000000000000',
+    envUrl: 'https://org.crm.dynamics.com',
+    statusFile,
+  }, { getAuthToken: () => null });
+
+  assert.match(result.error, /Azure CLI token not available/);
+  const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+  assert.equal(status.state, 'failed');
+  assert.equal(status.message, 'Template import status check failed. Check the agent terminal.');
+});
+
 test('poll-async-operation normalizes envUrl and braced async operation ids', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poll-async-operation-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

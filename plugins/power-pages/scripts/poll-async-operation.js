@@ -118,7 +118,12 @@ async function pollAsyncOperation(rawArgs, deps = {}) {
 
   token = getToken(tokenResource);
   if (!token) {
-    return { error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` };
+    const error = `Azure CLI token not available for ${tokenResource}. Run "az login" first.`;
+    writeStatus(rawArgs.statusFile, {
+      state: 'failed',
+      message: 'Template import status check failed. Check the agent terminal.',
+    });
+    return { error };
   }
 
   let lastHttpStatus = null;
