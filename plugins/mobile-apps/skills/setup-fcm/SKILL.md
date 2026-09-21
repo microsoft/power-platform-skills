@@ -18,6 +18,9 @@ validation, handoff fields, and the manual APNs boundary.
 **Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
 use the `/setup-fcm` row as a hard preflight for Firebase MCP availability.
 
+**Push tool readiness: [push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use its stable failure categories and confirmation/recheck protocol.
+
 # Setup FCM
 
 Configure the Firebase project, native app registrations, and validated client
@@ -25,9 +28,21 @@ SDK files without storing server credentials.
 
 ## MCP readiness gate
 
-Before any Firebase read or mutation, verify every `/setup-fcm` tool in the
-official-MCP readiness table. If `firebase` is missing, disconnected, or
-incomplete, STOP and give these Copilot CLI steps in this exact order:
+Before any Firebase read or mutation, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage firebase-client
+```
+
+If Node/npm/npx is missing or unsupported, classify the exact local issue,
+give only the relevant official installation/upgrade guidance, wait for the
+user to confirm completion, and rerun the same probe. Do not ask the user to
+install a standalone Firebase CLI, Google Cloud CLI, or gcloud MCP.
+
+Then verify every `/setup-fcm` tool in the official-MCP readiness table. If
+`firebase` is missing, disconnected, or incomplete, classify that exact MCP
+state and give these Copilot CLI steps in this exact order:
 
 ```text
 /mcp
@@ -37,8 +52,19 @@ incomplete, STOP and give these Copilot CLI steps in this exact order:
 ```
 
 Require the second `/mcp` check to show `firebase` connected with the required
-tools before continuing. Do not run `firebase-tools`, raw REST, or browser
-automation as fallback.
+tools before continuing. If restart is required, wait for the user to confirm
+it completed, then recheck `/mcp`; confirmation alone is not readiness proof.
+Do not run `firebase-tools`, raw REST, gcloud, or browser automation as
+fallback.
+
+Once the server and tool surface are ready, classify failures from actual MCP
+error evidence through `push-tool-readiness.md`. Route missing/stale
+authentication through `firebase_login`, wrong accounts through the Firebase
+environment account switch, and active-project drift through
+`firebase_update_environment` plus exact read-back. Permission, API/service,
+billing/policy, propagation, and transient read-back failures are not MCP
+installation failures. Never tell the user to install gcloud merely because a
+Firebase project read mentions Google Cloud Resource Manager.
 
 ## Workflow
 
@@ -63,7 +89,11 @@ automation as fallback.
    `mcp__firebase__firebase_login`. Display both the login URL and Session ID
    and require the user to compare the browser Session ID. Do not record Google
    account details, login URLs, Session IDs, or authorization codes.
-5. List/select/create and then read back the exact project. Activate it with
+5. List/select/create and then read back the exact project. Classify every
+   failed list/get/create/update call through the shared readiness taxonomy
+   before proposing recovery. Retry only bounded idempotent reads; never replay
+   `firebase_create_project` because a read-back was delayed or transient.
+   Activate it with
    one `mcp__firebase__firebase_update_environment` call containing both the
    exact project root as `project_dir` and the selected ID as `active_project`.
    Immediately rerun `firebase_get_environment`; continue only when both values

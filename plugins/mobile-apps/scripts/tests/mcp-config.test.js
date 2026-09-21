@@ -18,6 +18,7 @@ const {
   GCLOUD_PACKAGE,
   GCLOUD_VERSION,
   MICROSOFT_LEARN_URL,
+  OFFICIAL_SERVER_REQUIREMENTS,
   buildOfficialMcpInvocation,
   getGcloudAllowlistPath,
 } = require('../lib/official-mcp-servers');
@@ -57,6 +58,19 @@ test('validate-mcp-config CLI exits successfully', () => {
 });
 
 test('official MCP invocation plans stay pinned and capability-bounded', () => {
+  assert.deepEqual(OFFICIAL_SERVER_REQUIREMENTS.firebase, {
+    package: `${FIREBASE_PACKAGE}@${FIREBASE_VERSION}`,
+    tools: FIREBASE_ALLOWED_TOOLS,
+  });
+  assert.deepEqual(OFFICIAL_SERVER_REQUIREMENTS.gcloud, {
+    package: `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
+    tools: ['run_gcloud_command'],
+  });
+  assert.deepEqual(OFFICIAL_SERVER_REQUIREMENTS.azure, {
+    package: `${AZURE_PACKAGE}@${AZURE_VERSION}`,
+    tools: AZURE_NAMESPACES,
+  });
+
   const firebase = buildOfficialMcpInvocation('firebase', pluginRoot);
   assert.equal(firebase.command, process.platform === 'win32' ? 'npx.cmd' : 'npx');
   assert.deepEqual(firebase.args, [

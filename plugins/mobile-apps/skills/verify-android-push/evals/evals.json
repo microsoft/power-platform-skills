@@ -84,6 +84,13 @@
       "prompt": "The producer created a Queued outbox row, but the sender has no runtime run and its callback-expander job has not started. Diagnose the Android device and FCM payload.",
       "expected_output": "The skill classifies the queued sender callback as an upstream Dataverse backlog, avoids blaming the device or payload and avoids repeated sends, then starts physical observation only after a sender runtime run reaches a terminal delivery action.",
       "files": []
+    },
+    {
+      "id": 13,
+      "coverage": "android-readiness-and-flowagent-classification",
+      "prompt": "Verify Android push, but apksigner is missing and FlowAgent later reports an authenticated connector failure.",
+      "expected_output": "The skill first classifies the missing Android SDK tool through the android-verify local probe, waits for manual installation and requires a successful recheck. It later classifies the connector failure separately and does not reinstall FlowAgent or conflate either issue with device delivery.",
+      "files": []
     }
   ]
 }

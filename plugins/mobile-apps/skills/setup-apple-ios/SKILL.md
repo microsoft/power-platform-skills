@@ -11,6 +11,10 @@ model: sonnet
 **Manual signing/provisioning guide: [apple-ios-signing-provisioning.md](${PLUGIN_ROOT}/shared/references/apple-ios-signing-provisioning.md)** —
 read and follow in full.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use the `ios-build` local probe in direct mode.
+
 # Set up Apple iOS manually
 
 Guide the user through Apple Developer and local macOS/Xcode setup for one exact
@@ -78,23 +82,36 @@ bundle, and mode scope. Never ask the user to type a confirmation phrase.
 
 **Telemetry checkpoint: `configure_apple_ios_identity`**
 
-1. In direct mode, read `memory-bank.md`, `native-app-plan.md`,
+1. In direct mode, run:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+     --stage ios-build
+   ```
+
+   If macOS, Node/npm/npx, or `xcodebuild` readiness fails, provide official
+   manual guidance, wait for the user to complete installation, Xcode
+   selection, or PATH repair, and rerun the same probe. Do not inspect
+   keychains, signing identities, certificates, profiles, devices, or
+   credentials. In combined worker mode, keep preflight inert and consume only
+   the parent-confirmed Apple/Xcode readiness envelope.
+2. In direct mode, read `memory-bank.md`, `native-app-plan.md`,
    `package.json`, `app.config.js`, and the `/setup-fcm` handoff. In combined
    orchestrated mode, do not parse memory or source decisions from it; consume
    the parent envelope, verify the memory hash from raw bytes, and read only
    the bounded local non-secret files needed to validate that envelope.
-2. Require macOS plus a physical registered-device development and/or ad-hoc
+3. Require macOS plus a physical registered-device development and/or ad-hoc
    intent. Simulator, TestFlight, App Store, enterprise, and store distribution
    are out of scope.
-3. Run `npx expo config --type public --json` only to evaluate local,
+4. Run `npx expo config --type public --json` only to evaluate local,
    non-secret app configuration. Resolve the exact `ios.bundleIdentifier`.
-4. Require it to exactly equal the bundle identifier and selected Firebase iOS
+5. Require it to exactly equal the bundle identifier and selected Firebase iOS
    app identity recorded by `/setup-fcm`. Do not select or register Firebase
    apps here.
-5. Resolve the approved 10-character uppercase Apple Team ID from the plan or
+6. Resolve the approved 10-character uppercase Apple Team ID from the plan or
    existing safe memory state. A Team selected by default in Xcode or Apple
    Developer is not an identity source.
-6. Display only app display name, Team ID, bundle ID, and supported modes.
+7. Display only app display name, Team ID, bundle ID, and supported modes.
 
 Stop before portal changes if Team or bundle identity is missing, malformed, or
 conflicting. Route Firebase/Expo drift to `/setup-fcm` or the owning plan step;

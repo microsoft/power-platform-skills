@@ -217,6 +217,34 @@
       "prompt": "Add push with WIF and create a new dedicated sender registration.",
       "expected_output": "Only the explicit create-dedicated-registration choice may use null-client-ID inventory and the identity-bootstrap-plan -> identity-bootstrap -> sender-auth-plan -> sender-auth sequence with two approvals.",
       "files": []
+    },
+    {
+      "id": 35,
+      "coverage": "configure-app-stage-lazy-readiness",
+      "prompt": "Configure push in the app only; do not create delivery flows or build a device package.",
+      "expected_output": "The parent checks only Firebase client readiness and runtime prerequisites. It does not require gcloud, Azure MCP, FlowAgent, Android SDK tools, Xcode, signing, or a physical device, and it preserves later stages as pending.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "coverage": "delivery-flow-readiness-order",
+      "prompt": "Add push through delivery flows using WIF, but do not build yet.",
+      "expected_output": "The parent completes Firebase readiness first, then invokes the WIF owner for its local/MCP/account/context checks, then invokes the FlowAgent owner for plugin/MCP/environment checks. It does not probe Android or iOS build tools and preserves each successful upstream stage.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "coverage": "selected-platform-build-readiness",
+      "prompt": "Build push for Android only after the delivery flows are ready.",
+      "expected_output": "The parent checks only Android build prerequisites and invokes build-android. It does not require macOS, Xcode, Apple/APNs setup, or an iOS device, and an Android tool blocker does not erase completed Firebase, runtime, WIF, or flow stages.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "coverage": "worker-preflight-stays-inert",
+      "prompt": "Use worker preflight to discover whether Firebase, gcloud, Azure, and FlowAgent are installed and authenticated.",
+      "expected_output": "The parent rejects tool discovery inside worker preflight. Owner skills establish local/MCP/auth/context readiness before dispatch; worker preflight remains a no-read, no-network, no-write capability handshake.",
+      "files": []
     }
   ]
 }

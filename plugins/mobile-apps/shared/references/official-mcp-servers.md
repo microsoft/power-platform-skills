@@ -81,6 +81,11 @@ the latest non-prerelease GA version (`2.0.5`) instead of the prerelease
 
 ## Workflow readiness gates and `/mcp` recovery
 
+Read [push-tool-readiness.md](./push-tool-readiness.md) first. It is canonical
+for stage-specific local checks, stable failure categories, bounded read
+retries, installation/login/restart waiting, and exact rechecks. This file
+defines only the official MCP package and capability boundaries.
+
 These push workflows require the listed official MCP server/tool surfaces
 before any cloud mutation or read-back. If a required server is missing,
 disconnected, or missing a required tool, give these
@@ -101,6 +106,12 @@ fails, it may use the official authenticated `gcloud` CLI through
 `scripts/run-allowlisted-gcloud.js`. Never call `gcloud` directly for
 provisioning, add commands outside the checked-in allowlist during an active
 provisioning run, or extend this exception to Firebase or Azure.
+
+Do not use this recovery sequence for an authenticated MCP call that returned
+an IAM, disabled-API, billing, organization-policy, VPC Service Controls,
+project-state, propagation, or transient provider error. Classify that evidence
+through `push-tool-readiness.md`. Installation or restart is appropriate only
+when the server/package/tool surface itself is missing or disconnected.
 
 | Workflow | Required server(s) | Required tool(s) that must be visible before the workflow continues |
 |---|---|---|

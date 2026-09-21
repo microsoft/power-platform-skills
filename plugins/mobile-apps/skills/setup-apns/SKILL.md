@@ -12,6 +12,9 @@ model: sonnet
 
 **Manual Apple identity handoff: [apple-ios-signing-provisioning.md](${PLUGIN_ROOT}/shared/references/apple-ios-signing-provisioning.md)**.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)**.
+
 # Set up APNs manually through Firebase
 
 Guide the user through choosing either an APNs authentication key (`.p8`) or an
@@ -19,6 +22,13 @@ APNs certificate (`.p12`), preparing it in Apple-controlled interfaces, and
 uploading it manually in Firebase Console. FCM on iOS depends on Firebase
 Messaging mapping the APNs device token to an FCM registration token;
 `expo-notifications` alone is insufficient.
+
+This manual credential-upload stage has no MCP, Firebase CLI, gcloud, Azure,
+or third-party Apple-tool installation prerequisite. It consumes the exact
+validated Firebase iOS app handoff and the Apple/Xcode readiness established
+by `/setup-apple-ios`, then waits for the user to complete the Firebase Console
+upload. If either upstream handoff is missing or drifted, return to its owner;
+do not diagnose that as a missing APNs automation tool.
 
 ## Internal orchestrated worker mode
 

@@ -82,6 +82,12 @@ Push-notification cloud setup is **official MCP-first**. For `/setup-fcm`,
 `/setup-push-wif`, `/create-push-notification-flow`, `/verify-ios-push`, and
 the cross-skill push orchestration around them, use these boundaries:
 
+Read `shared/references/push-tool-readiness.md` for the canonical
+stage-specific prerequisite matrix and failure taxonomy. Do not infer that a
+CLI or MCP server is missing from an authenticated IAM, API, policy, project,
+or transient read-back failure. Manual installation/login/restart paths must
+wait for the user and rerun the exact failed probe before resuming.
+
 **Pinned bootstrap baselines for the documented MCP path:** Firebase MCP
 package `firebase-tools` **15.27.0** (with `15.28.1` still main/unpublished on npm),
 gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.

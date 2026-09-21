@@ -20,6 +20,10 @@ do not author the Power Automate HTTP sequence here.
 **Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
 use the `/setup-push-wif` row as a hard preflight.
 
+**Push tool readiness: [push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use its local probe, stable failure categories, bounded retry rules, and
+confirmation/recheck protocol.
+
 # Set up push sender WIF
 
 Provision or prove:
@@ -112,8 +116,17 @@ project-relative paths: require `senderAuthPath`, `changedFiles`, and
 
 ## Google tool readiness gate
 
+Before MCP recovery or cloud read-back, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" --stage wif
+```
+
 The official gcloud MCP requires Node.js 20+ and an installed `gcloud`
-executable. Before MCP recovery, run `node --version` and `gcloud --version`.
+executable. The WIF workflow also uses the narrow documented `az` gaps for
+Entra and secret-safe Key Vault operations. Branch on the probe's exact
+`local-runtime-missing` or `local-runtime-unsupported` result rather than
+assuming an authentication or IAM error means a tool is absent.
 
 If `gcloud` is missing, explain that it is a machine-level prerequisite and use
 `AskUserQuestion` with these choices:
@@ -147,7 +160,9 @@ downloaded installer without separate explicit approval. If no supported
 package manager is available, give the official installation URL and wait for
 the user to complete it. After installation, require a fresh
 `gcloud --version`; if PATH changed, ask the user to restart the terminal or
-host before continuing.
+host, wait for confirmation, and rerun the complete WIF local probe before
+continuing. Apply the same wait-and-recheck rule when the user manually installs
+or upgrades Node, npm/npx, or Azure CLI.
 
 Before any cloud read-back, require the Azure MCP surfaces and prefer the
 official gcloud MCP surface. If gcloud MCP is unavailable after `gcloud`
@@ -165,6 +180,16 @@ Continue only after explicit approval, `gcloud --version` succeeds, the active
 Google account is confirmed, and every Google operation is routed through
 `scripts/run-allowlisted-gcloud.js`. If Azure MCP is unavailable, stop; it has
 no general CLI fallback.
+
+After local and MCP readiness succeeds, prove the active Google and Azure
+identities and pinned project/tenant/subscription through read-only calls.
+Classify no session as `not-authenticated`, a different identity as
+`wrong-account`, and missing/drifted project or subscription as an active
+context failure. IAM, API enablement, billing/policy, and propagation failures
+must retain those categories; installation or `/mcp` recovery is not a fix for
+an authenticated provider denial. Retry only bounded idempotent inventory
+reads. Never replay identity, credential, API, IAM, or WIF mutations after an
+uncertain response without first rereading live state.
 
 The supported boundary is pinned `@google-cloud/gcloud-mcp@0.5.3` or the
 guarded official CLI fallback, plus `@azure/mcp@2.0.5`:

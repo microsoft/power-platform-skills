@@ -287,6 +287,41 @@
       "prompt": "Create a new registration just for the push sender instead of reusing either existing registration.",
       "expected_output": "The skill selects create-dedicated-registration and preserves the separately approved identity-bootstrap, safe Key Vault credential write, fresh claim-driven remaining plan, second approval, and final version-2 sender-auth proof.",
       "files": []
+    },
+    {
+      "id": 73,
+      "coverage": "flowagent-plugin-install-wait",
+      "prompt": "Create the push flows, but the power-automate plugin and FlowAgent are not installed.",
+      "expected_output": "The skill classifies plugin-missing, gives the exact marketplace add, plugin install, restart, and setup steps, stops for the user action, then requires a fresh /mcp result showing flowagent connected with the required tools before continuing.",
+      "files": []
+    },
+    {
+      "id": 74,
+      "coverage": "flowagent-disconnected",
+      "prompt": "The Power Automate plugin is installed, but /mcp shows flowagent disconnected.",
+      "expected_output": "The skill classifies mcp-server-disconnected rather than reinstalling the plugin, runs /setup -> /restart -> /mcp, waits for completion, and continues only after the exact FlowAgent tools are visible.",
+      "files": []
+    },
+    {
+      "id": 75,
+      "coverage": "flowagent-environment-mismatch",
+      "prompt": "FlowAgent is connected and authenticated, but its current environment differs from power.config.json and PAC.",
+      "expected_output": "The skill classifies active-context-mismatch, stops before flow or Dataverse mutation, sets and rereads the exact intended FlowAgent environment, and requires Power Apps, PAC, Azure, config, and FlowAgent tenant/URL agreement. It does not reinstall FlowAgent.",
+      "files": []
+    },
+    {
+      "id": 76,
+      "coverage": "flow-connection-disconnected",
+      "prompt": "FlowAgent is ready, but test_connection reports the sender flow's Dataverse or Key Vault connection disconnected.",
+      "expected_output": "The skill classifies the connection-specific blocker, routes the user to repair that exact connection, waits when interactive authentication is required, and reruns test_connection before mutation or publication. It does not run plugin installation or generic MCP repair.",
+      "files": []
+    },
+    {
+      "id": 77,
+      "coverage": "flow-api-permission-not-install",
+      "prompt": "FlowAgent get_flow returns an authenticated 403 for the exact flow.",
+      "expected_output": "The skill classifies permission-denied, reports the bounded provider error and required least-privilege access, and stops without reinstalling the plugin, restarting MCP, selecting a similarly named flow, or falling back to portal or shell flow APIs.",
+      "files": []
     }
   ]
 }

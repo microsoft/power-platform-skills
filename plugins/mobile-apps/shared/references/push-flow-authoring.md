@@ -19,11 +19,30 @@ manually by the customer in the plugin-created Power Automate sender.
 FlowAgent tool names below omit client prefixes. Claude Code exposes
 `mcp__flowagent__<tool>` and Copilot CLI exposes `flowagent-<tool>`.
 
+Read [push-tool-readiness.md](./push-tool-readiness.md) before bootstrapping.
+It defines the `flow-authoring` local probe, stable failure categories, and the
+mandatory confirmation/recheck protocol.
+
 ## 1. Bootstrap FlowAgent
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage flow-authoring
+```
+
+If Node/npm/npx, local `power-apps`, PAC, or the narrow Azure CLI prerequisite
+is missing or unsupported, report that exact local-tool result. Give official
+manual setup guidance and wait for completion; do not silently install an npm
+package or alter account context. Rerun the same probe before continuing.
 
 The mobile plugin does not automatically install the separate
 `power-automate@power-platform-skills` plugin. If FlowAgent tools are missing,
-give these supported Copilot CLI setup steps exactly and stop:
+first distinguish an absent plugin from an installed but disconnected server
+or a connected server missing an exact required tool. For an absent plugin,
+give these supported Copilot CLI setup steps exactly and stop at the user
+action boundary:
 
 ```text
 /plugin marketplace add microsoft/power-platform-skills
@@ -32,9 +51,25 @@ give these supported Copilot CLI setup steps exactly and stop:
 /setup
 ```
 
-After restart/setup, require `/mcp` to show `flowagent` connected. If installed
-but disconnected, rerun `/setup`, `/restart`, and `/mcp`. Never use guessed
+After the user confirms restart/setup completed, require `/mcp` to show
+`flowagent` connected and every tool required by the requested operation. If
+installed but disconnected, rerun `/setup`, `/restart`, and `/mcp`, wait for
+completion, and recheck. Confirmation alone is not proof. Never use guessed
 definitions, portal automation, shell flow commands, or a cloned FlowAgent CLI.
+
+After tool readiness, classify FlowAgent failures from evidence:
+
+- no authenticated session -> `not-authenticated`;
+- wrong environment/tenant -> `active-context-mismatch`;
+- missing or disconnected connection reference -> connector recovery;
+- 401/403 or named permission -> `permission-denied`;
+- disabled/unavailable provider API -> `api-disabled` or
+  `service-unavailable`;
+- 429/5xx/deadline on read-back -> bounded `transient-readback`;
+- otherwise -> `unknown-safe-blocker`.
+
+Do not rerun plugin installation or MCP setup for those authenticated API
+failures. Retry only idempotent reads; reread state before any mutation retry.
 
 ## 2. Prove one environment
 
@@ -60,6 +95,11 @@ Call `resolve_environment` for `power.config.json.environmentId`,
 environment ID, Dataverse URL, and tenant across config, resolver, Power Apps,
 PAC, Azure, and FlowAgent. Show a compact source/value table. Stop before
 Dataverse or flow mutation on any conflict or unproved value.
+
+After any login or context repair, wait for the user when the owning tool
+requires interaction, then rerun the exact identity/environment probe and the
+FlowAgent `get_current_env` read-back. Never treat user confirmation as tenant
+or environment proof.
 
 ## 3. Resolve handoffs and outbox metadata
 

@@ -23,7 +23,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 67 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 77 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -288,6 +288,73 @@ test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
   assert.match(wifReference, /no safe[\s\S]*metadata-only route/i);
 });
 
+test('push owners share stage-specific readiness and evidence-based recovery', () => {
+  const readiness = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-tool-readiness.md'),
+    'utf8',
+  );
+  const wifSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
+    'utf8',
+  );
+  const wifReference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-wif-provisioning.md'),
+    'utf8',
+  );
+  const flowSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const authoring = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-authoring.md'),
+    'utf8',
+  );
+  const wifEvals = JSON.parse(fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/evals/evals.json'),
+    'utf8',
+  )).evals;
+  const flowEvals = JSON.parse(fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/evals/evals.json'),
+    'utf8',
+  )).evals;
+  const appleSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
+    'utf8',
+  );
+  const apnsSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'),
+    'utf8',
+  );
+
+  for (const code of [
+    'local-runtime-missing',
+    'mcp-server-disconnected',
+    'plugin-missing',
+    'not-authenticated',
+    'active-context-mismatch',
+    'permission-denied',
+    'api-disabled',
+    'billing-policy-blocked',
+    'transient-readback',
+    'unknown-safe-blocker',
+  ]) {
+    assert.match(readiness, new RegExp(`\\\`${code}\\\``));
+  }
+  assert.match(wifSkill, /--stage wif/);
+  assert.match(wifSkill, /wait for confirmation, and rerun the complete WIF local probe/);
+  assert.match(wifSkill, /installation or `\/mcp` recovery is not a fix for\s+an authenticated provider denial/);
+  assert.match(wifReference, /Do not recommend installation for an authenticated IAM\/API\/policy failure/);
+  assert.match(flowSkill, /Run the `flow-authoring`\s+local prerequisite probe first/);
+  assert.match(authoring, /--stage flow-authoring/);
+  assert.match(authoring, /Confirmation alone is not proof/);
+  assert.match(appleSkill, /--stage ios-build/);
+  assert.match(appleSkill, /combined worker mode, keep preflight inert/);
+  assert.match(apnsSkill, /has no MCP, Firebase CLI, gcloud, Azure/);
+  assert.match(apnsSkill, /do not diagnose that as a missing APNs automation tool/);
+  for (const id of [68, 69, 70, 71, 72]) assert.ok(wifEvals.find((item) => item.id === id));
+  for (const id of [73, 74, 75, 76, 77]) assert.ok(flowEvals.find((item) => item.id === id));
+});
+
 test('WIF worker plans read-only and executes only the unchanged approved diff', () => {
   const fs = require('node:fs');
   const worker = fs.readFileSync(
@@ -497,7 +564,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    Array.from({ length: 34 }, (_, index) => index + 1),
+    Array.from({ length: 38 }, (_, index) => index + 1),
   );
 
   const skill = require('node:fs').readFileSync(

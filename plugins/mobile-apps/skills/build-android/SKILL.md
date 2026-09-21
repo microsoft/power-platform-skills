@@ -8,6 +8,10 @@ model: sonnet
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+run its `android-build` probe before validation or build handoff.
+
 # Build Android
 
 Build a v1 signed `.apk` for manual installation on a physical Android device.
@@ -169,6 +173,19 @@ memory rows, and rerun `validate-android-wrap-build.js`; `status: ready` is
 required.
 
 ## Phase 4 — Validation and bundle
+
+Run the local readiness probe first:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage android-build
+```
+
+If Node/npm/npx, trusted Android SDK Build-Tools, or `unzip` is missing, report
+the exact stable local-tool category and official installation guidance. Wait
+for the user to complete manual installation or PATH repair, then rerun the
+same probe. Do not accept confirmation as proof and do not request signing
+credentials.
 
 Run:
 

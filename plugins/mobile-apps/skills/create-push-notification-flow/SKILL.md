@@ -23,6 +23,10 @@ smoke-test gates.
 
 **Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)**.
 
+**Push tool readiness: [push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use the flow-authoring probe, stable failure categories, and wait/recheck
+protocol before FlowAgent work.
+
 # Create Push Notification Flow
 
 For a plugin-managed sender, create two separate FlowAgent-authored flows:
@@ -48,14 +52,22 @@ provisioning from this skill.
 
 ### 1. Bootstrap and prove the environment
 
-Execute Sections 1–2 of `push-flow-authoring.md`. The mobile plugin declares
+Execute Sections 1–2 of `push-flow-authoring.md`. Run the `flow-authoring`
+local prerequisite probe first. The mobile plugin declares
 no automatic installation dependency on the separate `power-automate` plugin.
 If FlowAgent is unavailable, give the documented manual
-install/restart/setup steps and stop. Prove
+install/restart/setup steps, wait for the user to complete them, and rerun the
+same local and `/mcp` checks. Prove
 `power.config.json`, `npx power-apps`, PAC, Azure, and FlowAgent target the same
 environment/URL/tenant before any mutation. FlowAgent is the only flow mutation
 path; do not use portal automation, shell flow commands, or guessed
 definitions.
+
+Classify missing plugin, missing/disconnected server, missing tool,
+authentication, environment mismatch, disconnected connection,
+permission/API, and transient read-back failures separately. Do not suggest
+installing the plugin or a CLI for an authenticated environment, connector, or
+provider denial.
 
 ### 2. Prove Firebase and select sender authentication
 

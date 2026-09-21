@@ -39,6 +39,20 @@ const AZURE_NAMESPACES = Object.freeze([
 ]);
 
 const OFFICIAL_SERVER_IDS = Object.freeze(['firebase', 'gcloud', 'azure']);
+const OFFICIAL_SERVER_REQUIREMENTS = Object.freeze({
+  firebase: Object.freeze({
+    package: `${FIREBASE_PACKAGE}@${FIREBASE_VERSION}`,
+    tools: FIREBASE_ALLOWED_TOOLS,
+  }),
+  gcloud: Object.freeze({
+    package: `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
+    tools: Object.freeze(['run_gcloud_command']),
+  }),
+  azure: Object.freeze({
+    package: `${AZURE_PACKAGE}@${AZURE_VERSION}`,
+    tools: AZURE_NAMESPACES,
+  }),
+});
 
 function resolvePluginRoot(candidate = PLUGIN_ROOT) {
   return path.resolve(candidate);
@@ -124,6 +138,7 @@ module.exports = {
   MCP_SCHEMA_URL,
   MICROSOFT_LEARN_URL,
   OFFICIAL_SERVER_IDS,
+  OFFICIAL_SERVER_REQUIREMENTS,
   PLUGIN_ROOT,
   buildOfficialMcpInvocation,
   getGcloudAllowlistPath,

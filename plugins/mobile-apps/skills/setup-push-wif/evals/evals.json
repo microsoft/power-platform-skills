@@ -105,6 +105,41 @@
       "prompt": "The parent approved use-existing-registration, but the worker found it easier to create a new registration.",
       "expected_output": "The worker rejects registration-mode drift and returns NEEDS_CONTEXT or BLOCKED without creating an application, changing the client ID, or writing sender-auth.json.",
       "files": []
+    },
+    {
+      "id": 68,
+      "coverage": "missing-gcloud-manual-install-wait",
+      "prompt": "Set up WIF. gcloud is not installed, and I choose to install it manually.",
+      "expected_output": "The skill classifies local-runtime-missing, gives official Google Cloud CLI installation guidance, stops and waits for confirmation, then reruns the complete WIF local probe and requires gcloud --version to succeed. If PATH changed it requires restart and another recheck before any cloud inventory.",
+      "files": []
+    },
+    {
+      "id": 69,
+      "coverage": "wrong-google-account",
+      "prompt": "gcloud and gcloud MCP are available, but the active Google account cannot access the selected Firebase project.",
+      "expected_output": "The skill distinguishes wrong-account or permission-denied from missing tooling by reading the active identity and project access. It asks the user to authenticate/select the intended account or obtain least-privilege access, reruns the same read-only probes, and does not reinstall gcloud or replay mutations.",
+      "files": []
+    },
+    {
+      "id": 70,
+      "coverage": "azure-mcp-required",
+      "prompt": "Google tooling is ready, but Azure MCP is disconnected. Use az for all Azure inventory and continue.",
+      "expected_output": "The skill classifies mcp-server-disconnected, runs the documented MCP recovery and wait/recheck sequence, and remains blocked until Azure subscription/group/role surfaces are connected. It keeps az limited to documented Entra and secret-safe Key Vault gaps and refuses a general Azure CLI fallback.",
+      "files": []
+    },
+    {
+      "id": 71,
+      "coverage": "wif-iam-not-install",
+      "prompt": "The authenticated Google principal gets PERMISSION_DENIED while reading or updating the workload identity pool IAM policy.",
+      "expected_output": "The skill classifies permission-denied, reports the bounded missing permission or denied operation, proposes least-privilege access or an approved repair, and does not suggest installing or restarting gcloud/MCP.",
+      "files": []
+    },
+    {
+      "id": 72,
+      "coverage": "wif-api-enablement-separate",
+      "prompt": "WIF inventory proves IAM Credentials API is disabled while every required tool and account is ready.",
+      "expected_output": "The skill classifies api-disabled and places the exact API enablement in the explicit mutation approval list. It does not enable the API during read-only planning, call it a tooling failure, or broaden the approved plan.",
+      "files": []
     }
   ]
 }

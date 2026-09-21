@@ -36,11 +36,12 @@ test('verify-ios-push evals cover the approved physical-device matrix', () => {
       'changed-ios-input',
       'changed-ios-ipa',
       'valid-lightweight-ios-handoff',
+      'ios-readiness-and-flowagent-classification',
     ],
   );
   assert.deepStrictEqual(
     document.evals.map(({ id }) => id),
-    Array.from({ length: 15 }, (_, index) => index + 1),
+    Array.from({ length: 16 }, (_, index) => index + 1),
   );
   for (const evaluation of document.evals) {
     assert.ok(evaluation.prompt.trim(), `${evaluation.coverage} needs a prompt`);
@@ -86,6 +87,8 @@ test('verify-ios-push is public, FlowAgent-readback based, and cannot reauthor f
   );
   assert.match(skill, /both published and read back as `Started`/);
   assert.match(skill, /Reuse the live-send gates from `\/create-push-notification-flow`/);
+  assert.match(skill, /--stage ios-verify/);
+  assert.match(skill, /do not treat an authenticated flow API or connector\s+failure as a plugin-install problem/);
 });
 
 test('verify-ios-push rejects non-device proof and requires every physical case', () => {

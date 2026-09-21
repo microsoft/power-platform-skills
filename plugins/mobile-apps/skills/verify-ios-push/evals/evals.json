@@ -105,6 +105,13 @@
       "prompt": "validate-ios-build-handoff.js reports valid immediately before installation confirmation and again immediately before the live verification sequence. The IPA hash, pre-build declared-input snapshot, app/Firebase/auth/build identities, and freshness window are unchanged, and no mutation can occur during the uninterrupted sequence.",
       "expected_output": "The skill accepts proof of pre/post-build project-input continuity plus the selected fresh IPA identity/freshness, does not rerun the validator before every individual send unless mutation could occur, clearly states that signing, certificate, provisioning-profile, entitlement, embedded-profile, IPA-signature, and cryptographic input-digest embedding attestation were not performed, and proceeds with the complete physical A-H matrix.",
       "files": []
+    },
+    {
+      "id": 16,
+      "coverage": "ios-readiness-and-flowagent-classification",
+      "prompt": "Verify an already-built iOS IPA, but PAC is missing and FlowAgent is installed but disconnected.",
+      "expected_output": "The skill classifies the missing local PAC prerequisite through the ios-verify probe, waits for manual repair, and requires a successful recheck without unnecessarily requiring Xcode for the verification stage. It then classifies FlowAgent as mcp-server-disconnected, waits through setup/restart, and requires a fresh connected-tool recheck before flow read-back.",
+      "files": []
     }
   ]
 }

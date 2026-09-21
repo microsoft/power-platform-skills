@@ -20,6 +20,15 @@ model: opus
 
 **Sender-auth contract: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+run its `ios-verify` probe before build-handoff or FlowAgent checks.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage ios-verify
+```
+
 # Verify iOS Push
 
 Verify the already-built client and already-published flows. This workflow does
@@ -164,6 +173,13 @@ and it does not cryptographically embed the input digest in the IPA. Never
 inspect the IPA archive, signing assets, or embedded profiles to strengthen it.
 
 ## 2. Prove the published producer and sender
+
+Before FlowAgent read-back, run the `ios-verify` local probe. If a required
+local tool was installed or repaired manually, wait for user confirmation and
+require the probe to pass. Then apply the FlowAgent
+plugin/server/tool/auth/environment/connection classifications from
+`push-tool-readiness.md`; do not treat an authenticated flow API or connector
+failure as a plugin-install problem.
 
 Bootstrap FlowAgent exactly as documented by
 `/create-push-notification-flow`. If unavailable or disconnected, stop with

@@ -268,6 +268,55 @@
       "prompt": "Firebase project creation succeeded, but the new project is missing from the first firebase_list_projects response.",
       "expected_output": "The skill treats the missing first read-back as expected propagation delay, not creation failure. It does not replay firebase_create_project or proceed to project activation, app registration, or SDK config retrieval. It polls the full paginated project list every 5 seconds for up to 60 seconds, continues immediately when the exact project ID appears, and otherwise stops with a resumable project-propagation-timeout result.",
       "files": []
+    },
+    {
+      "id": 34,
+      "coverage": "firebase-mcp-disconnected",
+      "prompt": "Set up FCM, but /mcp shows the Firebase server installed and disconnected.",
+      "expected_output": "The skill classifies mcp-server-disconnected, gives /mcp -> /setup -> /restart -> /mcp, waits for restart completion, and continues only after the second /mcp proves Firebase connected with every required tool. It does not install gcloud or use Firebase CLI fallback.",
+      "files": []
+    },
+    {
+      "id": 35,
+      "coverage": "firebase-local-runtime-missing",
+      "prompt": "Set up FCM, but the Firebase MCP launcher cannot start because npm or npx is unavailable.",
+      "expected_output": "The skill runs the firebase-client local probe, classifies the exact missing local runtime, gives only the relevant Node/npm installation guidance, waits for manual completion, and reruns the same probe before MCP recovery. It does not ask for a standalone Firebase CLI or gcloud.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "coverage": "resource-manager-permission-denied",
+      "prompt": "firebase_get_project fails while requesting Google Cloud Resource Manager with PERMISSION_DENIED for resourcemanager.projects.get.",
+      "expected_output": "The skill identifies an authenticated permission-denied Firebase project read-back, reports the exact missing permission with least-privilege guidance, and stops before app/config work. It does not claim gcloud CLI or gcloud MCP is missing, does not run the generic MCP repair sequence, and does not recommend Owner or Editor.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "coverage": "firebase-api-disabled",
+      "prompt": "firebase_get_project reports that the required Firebase or Resource Manager API has never been used or is disabled.",
+      "expected_output": "The skill classifies api-disabled, identifies the exact named service, treats enablement as a separate administrator-approved action, and reruns the project read only after repair. It does not reinstall Firebase MCP, install gcloud, or replay project creation.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "coverage": "firebase-policy-blocked",
+      "prompt": "Firebase project read-back is denied by organization policy or VPC Service Controls.",
+      "expected_output": "The skill classifies billing-policy-blocked, reports the bounded administrator-owned policy evidence, preserves the selected project for resume, and does not suggest installation, login churn, broad IAM roles, or project recreation.",
+      "files": []
+    },
+    {
+      "id": 39,
+      "coverage": "firebase-transient-readback",
+      "prompt": "firebase_get_project returns a temporary 503 after the active project was read back correctly.",
+      "expected_output": "The skill classifies transient-readback, retries only the same idempotent get_project call with bounded delay, preserves the active project, and stops resumably if the retry window expires. It never replays project creation or app creation.",
+      "files": []
+    },
+    {
+      "id": 40,
+      "coverage": "firebase-resource-manager-not-gcloud",
+      "prompt": "Setup says Firebase MCP could not read the project through Google Cloud Resource Manager. Tell me whether I need to install gcloud.",
+      "expected_output": "The skill explains that setup-fcm uses Firebase MCP credentials and that a Resource Manager mention alone does not require gcloud CLI or gcloud MCP. It checks Firebase MCP connection/tools, Firebase authentication/account, active project, permission/API/policy evidence, and safe transient retry in that order.",
+      "files": []
     }
   ]
 }

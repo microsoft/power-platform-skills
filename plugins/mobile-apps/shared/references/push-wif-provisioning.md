@@ -5,7 +5,8 @@ workflow for:
 
 `selected same-tenant Entra registration -> Google STS -> dedicated sender service account -> FCM`
 
-Read `official-mcp-servers.md`, `sender-auth-contract.md`, and this reference
+Read `official-mcp-servers.md`, `push-tool-readiness.md`,
+`sender-auth-contract.md`, and this reference
 before any cloud operation. Never create or download a Google service-account
 key.
 
@@ -279,6 +280,29 @@ returns the same single worker result; it must not write memory.
   secret-safe Key Vault metadata/write operations. Never replace covered Azure
   MCP reads with `az`. Do not call `gcloud` directly; the guarded wrapper is
   the only CLI fallback.
+
+Before inventory, require the `wif` local probe and the exact Azure/gcloud MCP
+readiness described by `push-tool-readiness.md`. Then prove active identities
+and contexts through read-only calls. Keep these failure classes distinct:
+
+- missing/unsupported Node, npm/npx, gcloud, or narrow Azure CLI support is a
+  local-tool problem;
+- missing/disconnected/incomplete Azure or gcloud MCP is an MCP problem;
+- no valid Google/Azure session is `not-authenticated`;
+- a different account, tenant, subscription, or project is
+  `wrong-account`/`active-context-mismatch`;
+- IAM denial is `permission-denied`;
+- a required disabled API is `api-disabled` and remains a separate approved
+  mutation;
+- billing, organization policy, location constraints, or VPC Service Controls
+  are `billing-policy-blocked`;
+- 429/5xx/deadline failures on idempotent inventory are bounded
+  `transient-readback`.
+
+Do not recommend installation for an authenticated IAM/API/policy failure.
+After manual install, login, MCP restart, or context repair, wait for the user
+when necessary and rerun the exact failed probe before planning. Do not replay
+a mutation after an uncertain response; first reread the affected resource.
 
 Never print, echo, persist, or place in argv, files, flow definitions,
 `memory-bank.md`, or captured output any client secret, JWT, access token,

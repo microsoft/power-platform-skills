@@ -4,6 +4,10 @@ This is the canonical workflow for Firebase MCP authentication, project
 selection/provisioning, native app identity, client SDK configuration, and the
 manual APNs upload boundary.
 
+Read [push-tool-readiness.md](./push-tool-readiness.md) before this workflow.
+It defines the local/MCP readiness checks, stable failure categories, bounded
+read retry rules, and confirmation/recheck protocol used below.
+
 ## Contents
 
 1. [Verify Firebase MCP authentication](#1-verify-firebase-mcp-authentication)
@@ -74,6 +78,22 @@ codes in `memory-bank.md`.
 `gcloud` / ADC checks are **not required** for Firebase project/app/config work
 owned by Firebase MCP. Keep separate Google Cloud CLI identity checks in other
 owner workflows only when they explicitly need local `gcloud` continuity.
+
+If `firebase_get_environment` fails, classify the observed error before
+recovery:
+
+- no Firebase MCP server/tool surface is an MCP readiness failure;
+- no valid Firebase user/session is `not-authenticated` and routes to
+  `firebase_login`;
+- a different valid user is `wrong-account` and routes to the explicit
+  Firebase environment account switch;
+- a transport/429/5xx read failure is a bounded `transient-readback`;
+- an IAM, API, billing, organization-policy, or VPC Service Controls error is
+  an owner/administrator blocker, not an installation failure.
+
+After login, account switching, MCP restart, or any manual repair, wait for the
+user when required and rerun `firebase_get_environment`. A confirmation or
+successful browser page is not proof until the MCP read-back succeeds.
 
 ## 2. List, select, and activate a Firebase project
 
@@ -189,7 +209,13 @@ an existing GCP project that needs Firebase enabled, use
 emulate the path with CLI commands.
 
 On permission, billing, organization-policy, auth, or ownership failures,
-report the exact MCP error and STOP.
+classify and report the bounded MCP error and STOP. When a permission name is
+present (for example `resourcemanager.projects.get`,
+`firebase.projects.get`, or `serviceusage.services.get/list`), report that
+exact missing permission and recommend least privilege. Do not automatically
+grant or recommend broad Owner/Editor access. If an error explicitly names a
+disabled API, enabling it is a separate administrator-approved action; do not
+mislabel it as missing Firebase MCP or gcloud.
 
 ### Wait for project propagation after creation
 
@@ -231,7 +257,24 @@ After selecting or creating/upgrading a project:
    `projectId`.
 
 If the project is missing, the active project drifts, or the authenticated user
-is wrong, STOP before app registration or SDK config retrieval.
+is wrong, STOP before app registration or SDK config retrieval. A
+`firebase_get_project` failure that mentions Google Cloud Resource Manager
+does not by itself mean gcloud CLI or gcloud MCP is absent. Classify it from
+the actual status/code/message:
+
+- unauthenticated or stale Firebase credentials -> Firebase login/re-auth;
+- inaccessible/deleted/wrong project -> active-context repair;
+- 401/403 or named permission -> `permission-denied`;
+- explicitly disabled Firebase, Resource Manager, or Service Usage API ->
+  `api-disabled`;
+- billing, organization policy, location policy, or VPC Service Controls ->
+  `billing-policy-blocked`;
+- 429/5xx/deadline/transport failure -> retry the same read with bounded delay
+  as `transient-readback`;
+- otherwise -> `unknown-safe-blocker` with the sanitized MCP error.
+
+Do not call gcloud, install gcloud, replay project creation, register apps, or
+retrieve configs while this read-back is unresolved.
 
 ## 5. List, register, and re-read native Firebase apps
 

@@ -17,6 +17,10 @@ follow exactly for in-app, custom-scheme, HTTPS, and push navigation.
 [push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)** —
 use these canonical stages, resume rules, and per-platform reporting states.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use its stage matrix, failure categories, and confirmation/recheck protocol.
+
 # Add Push Notifications
 
 Orchestrate the canonical independent, resumable lifecycle:
@@ -89,6 +93,19 @@ actions.
 
 Record the inferred/defaulted stopping point for this run without prompting.
 Do not ask the user to choose or remember the individual owner commands.
+
+Build a stage-lazy readiness schedule from that stopping point:
+
+- **Configure app:** Firebase client readiness only.
+- **Create delivery flows:** Firebase, then only the selected sender-auth
+  owner (WIF when selected), then FlowAgent.
+- **Build for device:** the above plus only the selected platform build owner.
+- **Verify end to end:** the above plus only the selected platform's build,
+  FlowAgent read-back, and physical-device prerequisites.
+
+Do not run WIF, FlowAgent, Android, iOS, or device probes before their stage is
+eligible. A later missing prerequisite does not invalidate a completed
+Firebase/runtime stage.
 
 In the same main-context decision pass, resolve everything knowable before
 worker dispatch. Workers have no authority to ask, infer, or broaden these
@@ -202,8 +219,10 @@ matches require an immutable Firebase app-ID choice independently for Android
 and iOS, followed by a fresh exact-identity read-back. New client integrations
 still go through `/setup-fcm`; never skip it based only on an existing Firebase
 project or similarly named Firebase app. If `/setup-fcm` cannot prove the
-Firebase MCP path, stop and repair that owner workflow rather than falling back
-to CLI or console automation here.
+Firebase MCP path, preserve its stable readiness/failure category and stop at
+that owner workflow rather than falling back to CLI or console automation
+here. A Resource Manager error from Firebase MCP is not evidence that gcloud
+is missing.
 
 `/setup-fcm` is the serial foundation even though that owner now internally
 fans out Android and iOS client work. Invoke it at most once for the selected
@@ -235,6 +254,13 @@ portal state. It does not automate Apple setup or emit a proof artifact.
 The parent owns all questions, dispatch, joins, validation, memory merge, and
 downstream routing. Workers never write `memory-bank.md`, never ask the user,
 never invoke another owner, and never expand their exclusive file set.
+
+Before WIF planning becomes eligible, have `/setup-push-wif` establish its
+local/MCP/account/context readiness and collect any install, fallback, restart,
+or login decisions in the main context. Before FlowAgent authoring becomes
+eligible, have `/create-push-notification-flow` establish its local/plugin/MCP/
+environment readiness. Worker `preflight` stays inert and must not be used to
+discover tools, authenticate, or test cloud access.
 
 #### 4.1 Determine incomplete eligible tracks
 

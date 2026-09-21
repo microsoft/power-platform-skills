@@ -5,6 +5,11 @@ notifications. The stages are independent and resumable for Android and iOS.
 Completion on one platform never proves completion on the other, and completing
 an earlier stage never proves a later stage.
 
+Use [push-tool-readiness.md](./push-tool-readiness.md) to check only the
+prerequisites for the next selected lifecycle stage. A downstream missing tool,
+MCP server, account, build environment, or physical device does not invalidate
+an already proved upstream stage.
+
 ## Guided entry point
 
 `/add-push-notifications` is the default user-facing command. It inspects the

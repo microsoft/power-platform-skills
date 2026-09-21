@@ -104,6 +104,10 @@ test('add-push owns runtime integration and orchestrates platform owners', () =>
   assert.match(skill, /manual Apple Developer\/Xcode guidance/);
   assert.match(skill, /does not automate Apple setup or emit a proof artifact/);
   assert.match(skill, /cloud\s+provisioning, flow mutation, wrapped builds/);
+  assert.match(skill, /Build a stage-lazy readiness schedule/);
+  assert.match(skill, /\*\*Configure app:\*\* Firebase client readiness only/);
+  assert.match(skill, /Resource Manager error from Firebase MCP is not evidence that gcloud\s+is missing/);
+  assert.match(skill, /Worker `preflight` stays inert/);
 });
 
 test('build and physical verification boundaries remain non-overlapping', () => {
@@ -140,7 +144,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 34 }, (_, index) => index + 1),
+    Array.from({ length: 38 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /invokes build-android/);
   assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
@@ -185,10 +189,15 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[32].expected_output, /does not dispatch identity-bootstrap/);
   assert.strictEqual(addPush.evals[33].coverage, 'create-new-only-bootstrap');
   assert.match(addPush.evals[33].expected_output, /Only the explicit create-dedicated-registration choice/);
+  assert.strictEqual(addPush.evals[34].coverage, 'configure-app-stage-lazy-readiness');
+  assert.match(addPush.evals[34].expected_output, /does not require gcloud/);
+  assert.strictEqual(addPush.evals[35].coverage, 'delivery-flow-readiness-order');
+  assert.strictEqual(addPush.evals[36].coverage, 'selected-platform-build-readiness');
+  assert.strictEqual(addPush.evals[37].coverage, 'worker-preflight-stays-inert');
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),
-    Array.from({ length: 15 }, (_, index) => index + 1),
+    Array.from({ length: 16 }, (_, index) => index + 1),
   );
   assert.strictEqual(verifyIos.evals[8].coverage, 'manual-auth-downstream');
   assert.match(verifyIos.evals[8].prompt, /exact manual Power Automate sender flow ID/);
@@ -196,6 +205,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.strictEqual(verifyIos.evals[9].coverage, 'unsupported-custom-endpoint');
   assert.strictEqual(verifyIos.evals[10].coverage, 'missing-ios-build-handoff');
   assert.strictEqual(verifyIos.evals[14].coverage, 'valid-lightweight-ios-handoff');
+  assert.strictEqual(verifyIos.evals[15].coverage, 'ios-readiness-and-flowagent-classification');
 });
 
 test('manual Power Automate sender handoff stays aligned with flow authoring', () => {

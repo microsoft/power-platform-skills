@@ -4,6 +4,13 @@ Use this protocol for platform-specific physical push verification skills.
 Platform references add permission, installation, and app-state cases; they
 must not weaken these common evidence, privacy, or completion rules.
 
+Read [push-tool-readiness.md](./push-tool-readiness.md) before local artifact
+or FlowAgent checks. Use the platform verification probe, then distinguish
+missing local tools and FlowAgent plugin/server/tool failures from
+authentication, environment, connection, permission/API, and transient
+read-back failures. Manual repair pauses and requires the exact probe to pass
+on resume.
+
 ## What physical verification proves
 
 Physical verification joins four independent facts for one test case:

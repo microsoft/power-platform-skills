@@ -12,6 +12,10 @@ model: sonnet
 [push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)** —
 this skill owns only the iOS wrapped-build stage.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+run its `ios-build` probe before validation or build handoff.
+
 # Build iOS
 
 Build a registered-device `.ipa` through the template's supported
@@ -173,6 +177,19 @@ editing and rerun `validate-ios-wrap-build.js`. Exit 0 and `status: ready` are
 required.
 
 ## Phase 4 — Validation and direct build
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage ios-build
+```
+
+If the host is not macOS or Node/npm/npx/`xcodebuild` is missing or
+unsupported, report the exact local-tool category and official manual setup
+guidance. Wait for the user to complete installation, Xcode selection, or PATH
+repair, then rerun the same probe. The probe and recheck never inspect signing
+identities, certificates, profiles, keychains, devices, or credentials.
 
 Run, in order:
 

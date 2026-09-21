@@ -51,6 +51,13 @@ const EXPECTED_COVERAGE = [
   'firebase-worker-executable-contract',
   'conditional-project-creation-questions',
   'new-project-propagation-wait',
+  'firebase-mcp-disconnected',
+  'firebase-local-runtime-missing',
+  'resource-manager-permission-denied',
+  'firebase-api-disabled',
+  'firebase-policy-blocked',
+  'firebase-transient-readback',
+  'firebase-resource-manager-not-gcloud',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -137,6 +144,42 @@ test('new Firebase projects wait for bounded visibility propagation', () => {
   assert.ok(evaluation, 'new-project propagation eval exists');
   assert.match(evaluation.expected_output, /does not replay firebase_create_project/);
   assert.match(evaluation.expected_output, /every 5 seconds for up to 60 seconds/);
+});
+
+test('Firebase readiness distinguishes tooling from Resource Manager failures', () => {
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/firebase-mcp-provisioning.md'),
+    'utf8',
+  );
+  const readiness = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-tool-readiness.md'),
+    'utf8',
+  );
+  const skill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'),
+    'utf8',
+  );
+  const evals = JSON.parse(fs.readFileSync(EVAL_PATH, 'utf8')).evals;
+
+  assert.match(skill, /--stage firebase-client/);
+  assert.match(skill, /Do not ask the user to\s+install a standalone Firebase CLI, Google Cloud CLI, or gcloud MCP/);
+  assert.match(skill, /Never tell the user to install gcloud merely because a\s+Firebase project read mentions Google Cloud Resource Manager/);
+  assert.match(reference, /does not by itself mean gcloud CLI or gcloud MCP is absent/);
+  assert.match(reference, /`resourcemanager\.projects\.get`/);
+  assert.match(reference, /Do not call gcloud, install gcloud, replay project creation/);
+  assert.match(readiness, /a\s+Firebase MCP project read may mention Google Cloud Resource Manager/);
+  assert.match(readiness, /does\s+not prove that gcloud CLI or gcloud MCP is missing/);
+  for (const coverage of [
+    'firebase-mcp-disconnected',
+    'firebase-local-runtime-missing',
+    'resource-manager-permission-denied',
+    'firebase-api-disabled',
+    'firebase-policy-blocked',
+    'firebase-transient-readback',
+    'firebase-resource-manager-not-gcloud',
+  ]) {
+    assert.ok(evals.find((evaluation) => evaluation.coverage === coverage), coverage);
+  }
 });
 
 test('setup-apns guidance scenarios remain contiguous and fixture-free', () => {

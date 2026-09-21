@@ -18,6 +18,15 @@ model: opus
 
 **Sender-auth contract: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
 
+**Push tool readiness:
+[push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+run its `android-verify` probe before build-handoff or FlowAgent checks.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
+  --stage android-verify
+```
+
 # Verify Android Push
 
 Verify an already-built Android client and already-published Power Automate
@@ -195,6 +204,13 @@ This proves configuration and code integration only. It never passes a
 physical delivery case.
 
 ## 3. Read back the exact published flows
+
+Before FlowAgent read-back, rerun the `android-verify` local probe. If a
+required local tool was installed or repaired manually, wait for user
+confirmation and require the probe to pass. Then apply the FlowAgent
+plugin/server/tool/auth/environment/connection classifications from
+`push-tool-readiness.md`; do not treat an authenticated flow API or connector
+failure as a plugin-install problem.
 
 Bootstrap FlowAgent exactly as documented by
 `/create-push-notification-flow`. FlowAgent is the only supported path for flow

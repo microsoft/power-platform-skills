@@ -51,11 +51,12 @@ test('verify-android-push evals cover the physical Android boundary and matrix',
       'full-managed-physical-success',
       'producer-callback-backlog',
       'sender-callback-backlog',
+      'android-readiness-and-flowagent-classification',
     ],
   );
   assert.deepStrictEqual(
     document.evals.map(({ id }) => id),
-    Array.from({ length: 12 }, (_, index) => index + 1),
+    Array.from({ length: 13 }, (_, index) => index + 1),
   );
   for (const evaluation of document.evals) {
     assert.ok(evaluation.prompt.trim(), `${evaluation.coverage} needs a prompt`);
@@ -112,6 +113,8 @@ test('verify-android-push is public and uses FlowAgent without flow mutation', (
   assert.match(skill, /FlowAgent is the only supported path for flow/);
   assert.match(skill, /Do not use the Power Automate portal/);
   assert.match(skill, /Do not call any flow create, update, edit, publish/);
+  assert.match(skill, /--stage android-verify/);
+  assert.match(skill, /do not treat an authenticated flow API or connector\s+failure as a plugin-install problem/);
 });
 
 test('verify-android-push consumes an exact fresh build and active client identity', () => {

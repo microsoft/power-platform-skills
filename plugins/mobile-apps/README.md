@@ -7,6 +7,13 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 - Node.js 24 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
+- Push setup checks prerequisites only when their lifecycle stage is selected.
+  Firebase client setup requires the official Firebase MCP but not gcloud.
+  WIF additionally requires Azure MCP and a working Google Cloud CLI for the
+  preferred gcloud MCP path. Power Automate flow stages require the separately
+  installed `power-automate@power-platform-skills` plugin and connected
+  FlowAgent tools. Manual installation/restart paths pause and recheck the
+  exact prerequisite before resuming.
 - For wrapped Android push delivery: a physical Android 8/API 26+ device and
   the local Wrap/Android SDK toolchain, including `apksigner` for signature
   verification. Direct-test APK signing remains customer-managed; AAB and
@@ -354,6 +361,14 @@ does not solicit arbitrary extra FCM data. When Microsoft-side semantics are
 uncertain, use Microsoft Learn docs rather than guessed contracts.
 
 #### Push notification cloud prerequisites
+
+Prerequisites are checked only when their lifecycle stage becomes eligible.
+The workflow distinguishes missing local tools, MCP connection/tool exposure,
+authentication/account context, IAM, API/service, policy, propagation, and
+transient read-back failures. Manual installation, login, setup, or restart
+pauses until the user confirms completion and the exact failed probe succeeds
+again. In particular, a Firebase project read that mentions Google Cloud
+Resource Manager does not imply that gcloud CLI or gcloud MCP is missing.
 
 - **Required MCP servers:** vendor-official Firebase MCP for Firebase
   project/app work, gcloud MCP for `/setup-push-wif` Google Cloud operations,
