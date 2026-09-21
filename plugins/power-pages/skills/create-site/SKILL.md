@@ -231,11 +231,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 8. For the template path only:
 
    1. Mark **Resolve target environment** as `in_progress`.
-   2. Resolve the target environment and token via the shared auth helpers:
+   2. Resolve the target environment via the shared auth helpers:
       ```bash
       node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
       ```
-      Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error and stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+      Use the returned `environmentUrl` for the remaining template workflow. Downstream preflight, import, seed, and polling helpers acquire Azure tokens internally so credentials are never returned in JSON or carried between tasks. If `ok: false`, surface the error and stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
 <!-- gate: create-site:1.5.confirm-environment | category=consent | cancel-leaves=template-cache -->
 

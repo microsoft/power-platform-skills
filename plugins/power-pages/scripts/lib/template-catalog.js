@@ -46,6 +46,76 @@ function artifactCachePath({ cacheRoot, sha, artifactPath }) {
   return path.join(cacheDirForSha(cacheRoot, sha), artifactPath);
 }
 
+function isPathInside(rootPath, candidatePath) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function ensureSafeCacheDirectory(cacheRoot, directoryPath, fsImpl = fs) {
+  const resolvedCacheRoot = path.resolve(cacheRoot || getDefaultCacheRoot());
+  const resolvedDirectory = path.resolve(directoryPath);
+  if (!isPathInside(resolvedCacheRoot, resolvedDirectory)) {
+    throw new Error(`Template cache directory must stay under the cache root: ${resolvedDirectory}`);
+  }
+
+  fsImpl.mkdirSync(resolvedCacheRoot, { recursive: true });
+  const rootStat = fsImpl.lstatSync(resolvedCacheRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`Template cache root must be a real directory: ${resolvedCacheRoot}`);
+  }
+  const canonicalCacheRoot = fsImpl.realpathSync(resolvedCacheRoot);
+
+  let currentPath = resolvedCacheRoot;
+  const relativeDirectory = path.relative(resolvedCacheRoot, resolvedDirectory);
+  for (const segment of relativeDirectory ? relativeDirectory.split(path.sep) : []) {
+    currentPath = path.join(currentPath, segment);
+    if (!fsImpl.existsSync(currentPath)) {
+      fsImpl.mkdirSync(currentPath);
+    }
+    const currentStat = fsImpl.lstatSync(currentPath);
+    if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
+      throw new Error(`Template cache path must contain only real directories: ${currentPath}`);
+    }
+    const canonicalCurrentPath = fsImpl.realpathSync(currentPath);
+    if (!isPathInside(canonicalCacheRoot, canonicalCurrentPath)) {
+      throw new Error(`Template cache path resolves outside the cache root: ${currentPath}`);
+    }
+  }
+
+  return resolvedDirectory;
+}
+
+function writeCacheFileAtomic(cacheRoot, filePath, content, fsImpl = fs) {
+  const cacheDirectory = ensureSafeCacheDirectory(cacheRoot, path.dirname(filePath), fsImpl);
+  if (fsImpl.existsSync(filePath)) {
+    const existingStat = fsImpl.lstatSync(filePath);
+    if (existingStat.isSymbolicLink() || !existingStat.isFile()) {
+      throw new Error(`Template cache file must be a regular file: ${filePath}`);
+    }
+  }
+
+  // Exclusive creation prevents a pre-planted symlink from redirecting the write.
+  // Rename replaces the cache entry itself, so a destination swapped after the
+  // lstat check is never opened or followed.
+  const temporaryPath = path.join(
+    cacheDirectory,
+    `.${path.basename(filePath)}.partial-${process.pid}-${Date.now()}`
+  );
+  let fileDescriptor;
+  try {
+    fileDescriptor = fsImpl.openSync(temporaryPath, 'wx', 0o600);
+    fsImpl.writeFileSync(fileDescriptor, content, 'utf8');
+    fsImpl.closeSync(fileDescriptor);
+    fileDescriptor = undefined;
+    fsImpl.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fileDescriptor !== undefined) {
+      try { fsImpl.closeSync(fileDescriptor); } catch { /* best-effort */ }
+    }
+    try { fsImpl.rmSync(temporaryPath, { force: true }); } catch { /* best-effort */ }
+  }
+}
+
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -445,10 +515,8 @@ async function fetchCatalog(options = {}, deps = {}) {
       ...catalog,
       templates: catalog.templates.filter(isSpaTemplate),
     };
-    fsImpl.mkdirSync(cacheDir, { recursive: true });
     const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
-    fsImpl.mkdirSync(path.dirname(catalogLocalPath), { recursive: true });
-    fsImpl.writeFileSync(catalogLocalPath, JSON.stringify(catalog, null, 2), 'utf8');
+    writeCacheFileAtomic(cacheRoot, catalogLocalPath, JSON.stringify(catalog, null, 2), fsImpl);
     return {
       ok: true,
       owner,
@@ -522,6 +590,7 @@ async function downloadArtifact(options = {}, deps = {}) {
   if (!artifactPath) throw new Error('artifactPath is required');
   const fsImpl = deps.fs || fs;
   const localPath = artifactCachePath({ cacheRoot, sha, artifactPath });
+  ensureSafeCacheDirectory(cacheRoot, path.dirname(localPath), fsImpl);
   if (fsImpl.existsSync(localPath)) {
     const cachedStat = fsImpl.lstatSync(localPath);
     if (cachedStat.isSymbolicLink() || !cachedStat.isFile()) {
@@ -704,13 +773,23 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   if (pathError) throw new Error(pathError);
   const checkoutRoot = repositoryDirectoryCheckoutRoot({ cacheRoot, sha, directoryPath });
   const localPath = checkoutRoot;
+  ensureSafeCacheDirectory(cacheRoot, path.dirname(checkoutRoot), fsImpl);
   if (fsImpl.existsSync(checkoutRoot)) {
-    const cachedError = validateDirectory(localPath);
-    if (!cachedError) return { localPath, cached: true };
-    fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
+    const checkoutStat = fsImpl.lstatSync(checkoutRoot);
+    if (checkoutStat.isSymbolicLink() || !checkoutStat.isDirectory()) {
+      fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
+    } else {
+      const canonicalCacheRoot = fsImpl.realpathSync(path.resolve(cacheRoot));
+      const canonicalCheckoutRoot = fsImpl.realpathSync(checkoutRoot);
+      if (!isPathInside(canonicalCacheRoot, canonicalCheckoutRoot)) {
+        throw new Error(`Template checkout resolves outside the cache root: ${checkoutRoot}`);
+      }
+      const cachedError = validateDirectory(localPath);
+      if (!cachedError) return { localPath, cached: true };
+      fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
+    }
   }
 
-  fsImpl.mkdirSync(path.dirname(checkoutRoot), { recursive: true });
   const partialRoot = `${checkoutRoot}.partial-${process.pid}-${Date.now()}`;
   fsImpl.rmSync(partialRoot, { recursive: true, force: true });
   try {
@@ -723,6 +802,15 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
     const validationError = validateDirectory(partialPath);
     if (validationError) throw new Error(validationError);
     fsImpl.renameSync(partialPath, checkoutRoot);
+    const checkoutStat = fsImpl.lstatSync(checkoutRoot);
+    if (checkoutStat.isSymbolicLink() || !checkoutStat.isDirectory()) {
+      throw new Error(`Downloaded template checkout must be a real directory: ${checkoutRoot}`);
+    }
+    const canonicalCacheRoot = fsImpl.realpathSync(path.resolve(cacheRoot));
+    const canonicalCheckoutRoot = fsImpl.realpathSync(checkoutRoot);
+    if (!isPathInside(canonicalCacheRoot, canonicalCheckoutRoot)) {
+      throw new Error(`Downloaded template checkout resolves outside the cache root: ${checkoutRoot}`);
+    }
     fsImpl.rmSync(partialRoot, { recursive: true, force: true });
   } catch (err) {
     fsImpl.rmSync(partialRoot, { recursive: true, force: true });

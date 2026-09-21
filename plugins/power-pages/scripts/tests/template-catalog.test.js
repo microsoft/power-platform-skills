@@ -189,6 +189,60 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, SHA, 'templates/manifest.json'), 'utf8')), catalog);
 });
 
+test('fetchCatalog rejects a symlinked catalog cache file without modifying its target', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalogPath = path.join(dir, SHA, 'templates', 'manifest.json');
+  const outsidePath = path.join(dir, 'outside.json');
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.writeFileSync(outsidePath, 'do not overwrite');
+  try {
+    fs.symlinkSync(outsidePath, catalogPath);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/heads/main\n`,
+    requestJson: async () => ({ manifestVersion: '1.0', templates: [VALID_TEMPLATE] }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cache file must be a regular file/);
+  assert.equal(fs.readFileSync(outsidePath, 'utf8'), 'do not overwrite');
+});
+
+test('fetchCatalog rejects symlinked directories inside the catalog cache path', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outsideDir = path.join(dir, 'outside');
+  const templatesPath = path.join(dir, SHA, 'templates');
+  fs.mkdirSync(path.dirname(templatesPath), { recursive: true });
+  fs.mkdirSync(outsideDir);
+  try {
+    fs.symlinkSync(outsideDir, templatesPath, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/heads/main\n`,
+    requestJson: async () => ({ manifestVersion: '1.0', templates: [VALID_TEMPLATE] }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cache path must contain only real directories/);
+  assert.equal(fs.existsSync(path.join(outsideDir, 'manifest.json')), false);
+});
+
 test('fetchCatalog resolves non-derived artifact paths relative to the catalog folder', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -734,6 +788,105 @@ test('downloadTemplateVariant combines variant website code with family solution
   assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 2);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${solutionsPath}`)), true);
+});
+
+test('downloadTemplateVariant replaces a symlinked checkout root instead of trusting its contents', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const variantPath = 'templates/spa/company/variants/react';
+  const solutionsPath = 'templates/spa/company/solutions';
+  const checkoutRoot = repositoryDirectoryCheckoutRoot({
+    cacheRoot: dir,
+    sha: SHA,
+    directoryPath: variantPath,
+  });
+  const outsideDir = path.join(dir, 'outside-variant');
+  fs.mkdirSync(path.join(outsideDir, 'website-code'), { recursive: true });
+  fs.writeFileSync(path.join(outsideDir, 'sentinel.txt'), 'outside');
+  fs.mkdirSync(path.dirname(checkoutRoot), { recursive: true });
+  try {
+    fs.symlinkSync(outsideDir, checkoutRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  let partialRoot;
+  let gitCalls = 0;
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    kind: 'spa',
+    templateId: 'company',
+    variant: 'react',
+    cacheRoot: dir,
+  }, {
+    execFileSync(command, args) {
+      gitCalls++;
+      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('checkout')) {
+        const localWebsiteCode = path.join(partialRoot, ...variantPath.split('/'), 'website-code');
+        fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
+        fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
+        writeUnpackedSolution(
+          path.join(partialRoot, ...solutionsPath.split('/'), 'CompanyPortal'),
+          'CompanyPortal'
+        );
+      }
+      return '';
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.cached, false);
+  assert.ok(gitCalls > 0);
+  assert.equal(fs.readFileSync(path.join(outsideDir, 'sentinel.txt'), 'utf8'), 'outside');
+  assert.equal(fs.lstatSync(checkoutRoot).isSymbolicLink(), false);
+});
+
+test('downloadTemplateVariant rejects a symlinked checkout parent directory', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outsideDir = path.join(dir, 'outside-checkouts');
+  const symlinkedParent = path.join(dir, SHA, '.directory-checkouts', 'templates', 'spa');
+  fs.mkdirSync(path.dirname(symlinkedParent), { recursive: true });
+  fs.mkdirSync(outsideDir);
+  try {
+    fs.symlinkSync(outsideDir, symlinkedParent, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  let gitCalled = false;
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    kind: 'spa',
+    templateId: 'company',
+    variant: 'react',
+    cacheRoot: dir,
+  }, {
+    execFileSync() {
+      gitCalled = true;
+      return '';
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cache path must contain only real directories/);
+  assert.equal(gitCalled, false);
 });
 
 test('downloadTemplateVariant accepts traditional website source with family solution components', (t) => {
