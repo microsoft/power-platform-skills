@@ -19,6 +19,7 @@ const FILE_BLOCK_SIZE_BYTES = 4 * 1024 * 1024;
 const TOKEN_REFRESH_EVERY_REQUESTS = 25;
 const ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.txt', '.csv', '.json', '.docx', '.xlsx']);
 const ODATA_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const DATAVERSE_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function emptySummary() {
   return { ok: true, inserted: 0, failed: 0, skipped: 0, errors: [] };
@@ -84,6 +85,25 @@ function readSeedFile(filePath, deps = {}) {
 function splitReservedFiles(record) {
   const { __files: files = null, ...recordBody } = record;
   return { recordBody, files };
+}
+
+function splitCreateAndStateUpdate(seed, record) {
+  const createRecord = { ...record };
+  const stateUpdate = {};
+  for (const field of ['statecode', 'statuscode']) {
+    if (!Object.prototype.hasOwnProperty.call(createRecord, field)) continue;
+    stateUpdate[field] = createRecord[field];
+    delete createRecord[field];
+  }
+  if (Object.keys(stateUpdate).length === 0) {
+    return { createRecord, stateUpdate: null, recordId: null };
+  }
+
+  const recordId = seed.primaryKey && record[seed.primaryKey];
+  if (typeof recordId !== 'string' || !DATAVERSE_GUID_RE.test(recordId)) {
+    throw new Error('Seed records with statecode or statuscode must declare a primaryKey containing a GUID');
+  }
+  return { createRecord, stateUpdate, recordId };
 }
 
 function isCamelCaseLookupKey(key) {
@@ -232,7 +252,7 @@ function validateFilesContract({ seedDir, seed, record }, deps = {}) {
   }
   if (!seed.primaryKey) return 'Seed file with __files must declare primaryKey';
   const recordId = record[seed.primaryKey];
-  if (typeof recordId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recordId)) {
+  if (typeof recordId !== 'string' || !DATAVERSE_GUID_RE.test(recordId)) {
     return `Record with __files must include GUID primary key ${seed.primaryKey}`;
   }
   for (const [columnName, relativePath] of Object.entries(record.__files)) {
@@ -330,6 +350,24 @@ async function postRecord({ envUrl, tokenProvider, entitySetName, record }, deps
   //   POST /api/data/v9.2/accounts
   // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-entity-web-api
   return postDataverseJson({ envUrl, tokenProvider, apiPath: entitySetName, body: record, includeHeaders: true }, deps);
+}
+
+async function patchRecordState({ envUrl, tokenProvider, entitySetName, recordId, stateUpdate }, deps = {}) {
+  // Some Dataverse tables permit only their default state during create.
+  // KnowledgeArticle, for example, is always created as Draft and must be
+  // transitioned to Published through a separate Update containing only its
+  // state fields. Mixing statecode/statuscode into the POST makes Dataverse
+  // validate the published status reason against the forced Draft state.
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/special-update-operation-behavior
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/knowledgearticle
+  return requestDataverseJson({
+    envUrl,
+    tokenProvider,
+    apiPath: entitySetName,
+    recordId,
+    method: 'PATCH',
+    body: stateUpdate,
+  }, deps);
 }
 
 function defaultBlockId() {
@@ -435,19 +473,50 @@ function postDataverseAction({ envUrl, tokenProvider, actionName, body }, deps =
 }
 
 function postDataverseJson({ envUrl, tokenProvider, apiPath, body, includeHeaders = false }, deps = {}) {
+  return requestDataverseJson({
+    envUrl,
+    tokenProvider,
+    apiPath,
+    method: 'POST',
+    body,
+    includeHeaders,
+  }, deps);
+}
+
+function requestDataverseJson({
+  envUrl,
+  tokenProvider,
+  apiPath,
+  recordId = null,
+  method,
+  body,
+  includeHeaders = false,
+}, deps = {}) {
   const request = deps.makeRequest || makeRequest;
   const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
   if (!ODATA_IDENTIFIER_RE.test(String(apiPath || ''))) {
     throw new Error(`Invalid Dataverse OData operation name: ${apiPath}`);
   }
+  if (method !== 'POST' && method !== 'PATCH') {
+    throw new Error(`Unsupported Dataverse JSON method: ${method}`);
+  }
+  if (recordId !== null && !DATAVERSE_GUID_RE.test(String(recordId))) {
+    throw new Error(`Invalid Dataverse record id: ${recordId}`);
+  }
+  const headers = {
+    Authorization: `Bearer ${tokenProvider()}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (method === 'PATCH') {
+    // The record was just created or was detected as an existing duplicate.
+    // Prevent PATCH from silently upserting a replacement if it disappears.
+    headers['If-Match'] = '*';
+  }
   return request({
-    url: `${trustedEnvUrl}/api/data/v9.2/${apiPath}`,
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${tokenProvider()}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
+    url: `${trustedEnvUrl}/api/data/v9.2/${apiPath}${recordId === null ? '' : `(${recordId})`}`,
+    method,
+    headers,
     body: JSON.stringify(body),
     includeHeaders,
     timeout: 30000,
@@ -506,22 +575,35 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
             summary.errors.push({ ...context, message: validationError });
             continue;
           }
-          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: recordBody }, deps);
-          let shouldUploadFiles = false;
+          const { createRecord, stateUpdate, recordId } = splitCreateAndStateUpdate(seedEntry, recordBody);
+          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: createRecord }, deps);
+          let outcome = null;
           if (res.error) {
             summary.failed += 1;
             summary.errors.push({ ...context, message: res.error });
           } else if (isDuplicateConflict(res)) {
-            summary.skipped += 1;
-            shouldUploadFiles = true;
+            outcome = 'skipped';
           } else if (res.statusCode >= 200 && res.statusCode < 300) {
-            summary.inserted += 1;
-            shouldUploadFiles = true;
+            outcome = 'inserted';
           } else {
             summary.failed += 1;
             summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
           }
-          if (shouldUploadFiles && files) {
+          if (outcome && stateUpdate) {
+            const stateRes = await patchRecordState({
+              envUrl,
+              tokenProvider,
+              entitySetName: seedEntry.entitySetName,
+              recordId,
+              stateUpdate,
+            }, deps);
+            if (stateRes.error || stateRes.statusCode < 200 || stateRes.statusCode >= 300) {
+              throw new Error(stateRes.error || stateRes.body || `State update failed (${stateRes.statusCode})`);
+            }
+          }
+          if (outcome === 'inserted') summary.inserted += 1;
+          if (outcome === 'skipped') summary.skipped += 1;
+          if (outcome && files) {
             await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
           }
         } catch (err) {

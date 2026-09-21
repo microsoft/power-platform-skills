@@ -446,6 +446,111 @@ test('applySeedData posts Dataverse export seed tables and uploads fileExports',
   assert.equal(requests.some((req) => req.url.endsWith('/InitializeFileBlocksUpload')), true);
 });
 
+test('applySeedData creates stateful records before applying the desired state separately', async () => {
+  const articleId = '50000000-0000-4000-8000-000000000001';
+  const fsImpl = {
+    existsSync: () => true,
+    readdirSync: () => ['data.json'],
+    readFileSync: () => JSON.stringify({
+      schemaVersion: 1,
+      tables: {
+        knowledgearticles: {
+          logicalName: 'knowledgearticle',
+          entitySet: 'knowledgearticles',
+          idColumn: 'knowledgearticleid',
+          records: [{
+            knowledgearticleid: articleId,
+            title: 'How to Report a Pothole',
+            statecode: 3,
+            statuscode: 7,
+          }],
+        },
+      },
+    }),
+  };
+  const requests = [];
+
+  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+    token: 'token',
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
+    makeRequest: async (req) => {
+      requests.push(req);
+      if (req.method === 'POST' && Object.hasOwn(JSON.parse(req.body), 'statecode')) {
+        return {
+          statusCode: 400,
+          body: '7 is not a valid status code for state code KnowledgeArticleState.Draft',
+        };
+      }
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    inserted: 1,
+    failed: 0,
+    skipped: 0,
+    errors: [],
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual({
+    method: requests[0].method,
+    url: requests[0].url,
+    body: JSON.parse(requests[0].body),
+  }, {
+    method: 'POST',
+    url: 'https://org.crm.dynamics.com/api/data/v9.2/knowledgearticles',
+    body: {
+      knowledgearticleid: articleId,
+      title: 'How to Report a Pothole',
+    },
+  });
+  assert.deepEqual({
+    method: requests[1].method,
+    url: requests[1].url,
+    body: JSON.parse(requests[1].body),
+    ifMatch: requests[1].headers['If-Match'],
+  }, {
+    method: 'PATCH',
+    url: `https://org.crm.dynamics.com/api/data/v9.2/knowledgearticles(${articleId})`,
+    body: {
+      statecode: 3,
+      statuscode: 7,
+    },
+    ifMatch: '*',
+  });
+});
+
+test('applySeedData rejects stateful records without a GUID primary key before writing', async () => {
+  const fsImpl = {
+    existsSync: () => true,
+    readdirSync: () => ['010-articles.json'],
+    readFileSync: () => JSON.stringify({
+      entitySetName: 'knowledgearticles',
+      records: [{
+        title: 'How to Report a Pothole',
+        statecode: 3,
+        statuscode: 7,
+      }],
+    }),
+  };
+  let requestCount = 0;
+
+  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+    token: 'token',
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
+    makeRequest: async () => {
+      requestCount += 1;
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(result.inserted, 0);
+  assert.equal(result.failed, 1);
+  assert.match(result.errors[0].message, /must declare a primaryKey containing a GUID/);
+  assert.equal(requestCount, 0);
+});
+
 test('applySeedData refreshes tokens across the whole seed run instead of per record', async () => {
   const fsImpl = {
     existsSync: () => true,
