@@ -490,6 +490,20 @@ const CLOUD_TO_API = {
   'China': 'https://api.powerplatform.partner.microsoftonline.cn',
 };
 
+/**
+ * Cloud → Power Apps maker portal host. Used to open a maker-only configuration
+ * page for the user; sovereign clouds do not serve make.powerapps.com, so sending
+ * a government tenant there lands them on a portal their account cannot sign into.
+ * https://learn.microsoft.com/en-us/power-platform/admin/powerapps-us-government
+ */
+const CLOUD_TO_MAKER_HOST = {
+  'Public': 'make.powerapps.com',
+  'UsGov': 'make.gov.powerapps.us',
+  'UsGovHigh': 'make.high.powerapps.us',
+  'UsGovDod': 'make.apps.appsplatform.us',
+  'China': 'make.powerapps.cn',
+};
+
 /** Cloud → Power Pages site URL domain mapping */
 const CLOUD_TO_SITE_DOMAIN = {
   'Public': 'powerappsportals.com',
@@ -521,5 +535,6 @@ module.exports = {
   parseEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
+  CLOUD_TO_MAKER_HOST,
   CLOUD_TO_SITE_DOMAIN,
 };

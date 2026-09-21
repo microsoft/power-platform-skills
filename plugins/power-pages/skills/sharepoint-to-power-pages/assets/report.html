@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"/>
+<title>__TITLE__</title>
+<style>
+:root{
+  --bg:#faf9f8;--surface:#fff;--surface2:#f3f2f1;--border:#e1dfdd;--border-light:#c8c6c4;
+  --text:#323130;--text-dim:#605e5c;--text-bright:#201f1e;--accent:#0078d4;--accent-bg:#0078d40a;--accent-border:#0078d425;
+  --pass:#107c10;--pass-bg:#107c100a;--pass-border:#107c1020;--warn:#a13b08;--warn-bg:#ca50100a;--warn-border:#ca501025;
+  --danger:#a4262c;--danger-bg:#a4262c0a;--danger-border:#a4262c25;
+  --mono:'Cascadia Code','Consolas',monospace;--sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px;--shadow-4:0 1.6px 3.6px rgba(0,0,0,.132),0 .3px .9px rgba(0,0,0,.108);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 var(--sans)}
+a{color:var(--accent);text-underline-offset:3px}
+button{font:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.skip-link{position:fixed;top:8px;left:8px;z-index:200;transform:translateY(-160%);padding:8px 16px;background:var(--surface)}
+.skip-link:focus{transform:none}
+.topbar{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 28px;background:var(--surface);box-shadow:var(--shadow-4)}
+.topbar-left{display:flex;align-items:center;gap:14px;min-width:0}
+.logo{width:32px;height:32px;flex-shrink:0}
+.topbar-title{font-size:15px;font-weight:600;color:var(--text-bright)}
+.topbar-sub{font-size:12px;color:var(--text-dim)}
+.pill{color:var(--accent);font-size:13px;font-weight:600}
+.topbar-right{display:flex;align-items:center;gap:16px;flex-shrink:0}
+.print-btn{border:1px solid var(--border);border-radius:4px;background:var(--surface);padding:5px 12px;color:var(--text);cursor:pointer;font-size:13px}
+.layout{display:flex;min-height:calc(100vh - 68px)}
+.sidebar{position:sticky;top:68px;align-self:flex-start;width:248px;height:calc(100dvh - 68px);flex-shrink:0;overflow-y:auto;background:var(--surface);border-inline-end:1px solid var(--border);padding:20px 0}
+.nav-group-label{font-size:12px;font-weight:600;color:var(--text-dim);padding:8px 20px}
+.nav-btn{display:block;border-inline-start:2px solid transparent;color:var(--text-dim);padding:9px 20px;font-size:13px;line-height:1.5;text-decoration:none;overflow-wrap:anywhere}
+.nav-btn:hover{color:var(--text);background:var(--surface2)}
+.nav-btn.active{color:var(--accent);font-weight:600;border-inline-start-color:var(--accent);background:var(--accent-bg)}
+.toc{margin-top:24px}
+.toc>summary{cursor:pointer}
+.content{flex:1;min-width:0;max-width:1080px;padding:40px 56px 72px}
+.report-intro,.reader-section,.audit-section,.supporting-record{scroll-margin-top:96px}
+h1,h2,h3,h4,h5{color:var(--text-bright);line-height:1.3;overflow-wrap:anywhere}
+h1{font-size:30px;font-weight:700;margin:0 0 16px;letter-spacing:-.4px}
+h2{font-size:22px;font-weight:600;margin:0 0 16px}
+h3{font-size:18px;font-weight:600;margin:28px 0 12px}
+h4,h5{font-size:15px;font-weight:600;margin:24px 0 10px}
+p{margin:12px 0;max-width:72ch}
+.lead{font-size:18px;line-height:1.65;margin:0 0 16px;max-width:68ch}
+.document-meta{font-size:13px;color:var(--text-dim);margin:16px 0 0}
+.document-meta strong{font-weight:600}
+.reader-section{margin-top:32px;padding-top:28px;border-top:1px solid var(--border)}
+.rich{overflow-wrap:anywhere;white-space:pre-line}
+code,pre{font-family:var(--mono);font-size:.9em}
+code{background:var(--surface2);border-radius:4px;padding:1px 4px;overflow-wrap:anywhere}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+ul,ol{padding-inline-start:24px;margin:16px 0}
+li{margin:10px 0;max-width:72ch}
+.facts{margin:0}
+.fact-row{display:grid;grid-template-columns:minmax(140px,.35fr) minmax(0,1fr);gap:24px;padding:14px 0;border-bottom:1px solid var(--border)}
+.fact-row:last-child{border-bottom:0}
+dt{font-size:14px;font-weight:600;color:var(--text-dim)}
+dd{margin:0}
+.table-wrap{max-width:100%;overflow-x:auto;margin:16px 0 24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+table{width:100%;border-collapse:collapse}
+th{background:var(--surface2);color:var(--text-dim);font-size:12px;font-weight:600;text-align:start}
+td,th{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td{font-size:14px}
+.badge{display:inline-block;font-size:12px;font-weight:600;padding:1px 7px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text-dim);white-space:normal;line-height:1.5}
+.tone-info{color:var(--accent);background:var(--accent-bg);border-color:var(--accent-border)}
+.tone-success{color:var(--pass);background:var(--pass-bg);border-color:var(--pass-border)}
+.tone-warning{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-border)}
+.tone-danger{color:var(--danger);background:var(--danger-bg);border-color:var(--danger-border)}
+.callout{border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin:20px 0;background:var(--surface)}
+.callout p,.callout li{color:var(--text)}
+.callout>:first-child{margin-top:0}.callout>:last-child{margin-bottom:0}
+.supporting-record{margin-top:40px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.supporting-record>summary{padding:18px 20px;cursor:pointer;font-size:15px;font-weight:600}
+.supporting-record[open]{padding-bottom:20px}
+.supporting-record>.detail-intro,.supporting-record>.metadata,.supporting-record>.audit-section{margin:0 24px 20px}
+.detail-intro,.metadata{font-size:13px;color:var(--text-dim)}
+.audit-section{padding-top:12px;border-top:1px solid var(--border);font-size:14px}
+.audit-section h3{margin-top:16px}
+.footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim)}
+@media(max-width:900px){
+  .topbar{position:static;padding:12px 20px;flex-wrap:wrap}
+  .layout{display:block}
+  .sidebar{position:static;width:100%;height:auto;overflow:visible;border-inline-end:0;border-bottom:1px solid var(--border);padding:12px 16px}
+  /* Five record links do not fit one narrow row; wrapping keeps every report
+     reachable instead of pushing the last ones off-screen. */
+  .record-nav{display:flex;flex-wrap:wrap;gap:4px}
+  .record-nav .nav-btn{padding:8px 10px;border-inline-start:0;border-bottom:2px solid transparent}
+  .record-nav .nav-btn.active{border-bottom-color:var(--accent)}
+  .nav-group-label{padding:4px 8px}
+  .toc{margin-top:8px}
+  .section-nav{padding-top:8px}
+  .content{padding:28px 24px 48px}
+  .report-intro,.reader-section,.audit-section,.supporting-record{scroll-margin-top:16px}
+}
+@media(max-width:640px){
+  h1{font-size:26px}h2{font-size:21px}
+  .lead{font-size:17px}
+  .content{padding:24px 20px 40px}
+  .topbar-right{width:100%;justify-content:space-between}
+  .reader-section{margin-top:28px;padding-top:24px}
+  .fact-row{grid-template-columns:1fr;gap:4px;padding:12px 0}
+  .table-wrap{overflow:visible}
+  table,tbody,tr,td{display:block;width:100%}
+  thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}
+  tr{padding:12px 16px;border-bottom:1px solid var(--border)}
+  tr:last-child{border-bottom:0}
+  td{padding:6px 0;border:0;font-size:15px}
+  td::before{content:attr(data-label);display:block;color:var(--text-dim);font-size:12px;font-weight:600;margin-bottom:3px}
+  .empty-row td::before{display:none}
+  .supporting-record>.detail-intro,.supporting-record>.metadata,.supporting-record>.audit-section{margin-inline:16px}
+}
+@media print{
+  .sidebar,.print-btn,.skip-link{display:none}
+  .topbar{position:static;box-shadow:none;border-bottom:1px solid var(--border)}
+  .layout{display:block}
+  .content{max-width:none;padding:24px 0}
+  .reader-section,.audit-section{break-inside:avoid-page}
+  .table-wrap{overflow:visible}
+  .supporting-record{border:0}
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#report-content">Skip to report</a>
+<header class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="__ATTR_ICON__" alt="Power Pages"/>
+    <div><div class="topbar-title">SharePoint to Power Pages</div><div class="topbar-sub">Updated __UPDATED__</div></div>
+  </div>
+  <div class="topbar-right"><span class="pill">__LABEL__</span><button class="print-btn" id="print-report" type="button">Print report</button></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="nav-group-label" id="records-label">Reports</div>
+    <nav class="record-nav" id="record-nav" aria-labelledby="records-label">__RAW_NAVIGATION__</nav>
+    <details class="toc" id="report-toc">
+      <summary class="nav-group-label">On this page</summary>
+      <nav class="section-nav" id="section-nav" aria-label="On this page">__RAW_CONTENTS__</nav>
+    </details>
+  </aside>
+  <main class="content" id="report-content" tabindex="-1">__RAW_REPORT_CONTENT__</main>
+</div>
+<script id="sharepoint-report-data" type="application/json">__JSON_REPORT_DATA__</script>
+<script nonce="__ATTR_CSP_NONCE__">
+'use strict';
+(() => {
+  const toc = document.getElementById('report-toc');
+  const desktop = window.matchMedia('(min-width:901px)');
+  toc.open = desktop.matches;
+  desktop.addEventListener('change', event => { toc.open = event.matches; });
+  const links = Array.from(document.querySelectorAll('.toc-link'));
+  function markCurrent(id) {
+    for (const link of links) {
+      const active = link.getAttribute('href') === `#${id}`;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    }
+  }
+  function revealHash() {
+    const target = document.getElementById(location.hash.slice(1));
+    if (!target) return;
+    const supporting = target.closest('.supporting-record');
+    if (supporting) supporting.open = true;
+    markCurrent(supporting ? supporting.id : target.id);
+    target.scrollIntoView({ block: 'start' });
+  }
+  for (const link of links) {
+    link.addEventListener('click', () => {
+      const target = document.getElementById(link.hash.slice(1));
+      if (target?.matches('details')) target.open = true;
+    });
+  }
+  window.addEventListener('hashchange', revealHash);
+  if (location.hash) revealHash();
+  else markCurrent('overview');
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length) markCurrent(visible[0].target.id);
+    }, { rootMargin: '-80px 0px -60% 0px', threshold: 0 });
+    document.querySelectorAll('.report-intro,.reader-section,.supporting-record').forEach(section => observer.observe(section));
+  }
+  // Printing must include the evidence without leaving disclosures open after
+  // the print dialog closes. Native browser-menu printing fires these events too.
+  let printState = [];
+  window.addEventListener('beforeprint', () => {
+    printState = Array.from(document.querySelectorAll('details'), element => [element, element.open]);
+    for (const [element] of printState) element.open = true;
+  });
+  window.addEventListener('afterprint', () => {
+    for (const [element, open] of printState) element.open = open;
+    printState = [];
+  });
+  document.getElementById('print-report').addEventListener('click', () => window.print());
+})();
+</script>
+</body>
+</html>
