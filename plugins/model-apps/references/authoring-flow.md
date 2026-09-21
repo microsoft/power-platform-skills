@@ -283,11 +283,19 @@ so you ask once and use the answer twice:
     "jobs": [
       { "name": "Assign incoming work", "description": "Triage new work orders and route them to a technician" },
       { "name": "Watch today's queue",  "description": "See at a glance what is overdue, unassigned, or at risk" }
-    ] }
+    ],
+    "excludes": ["Approving budgets — handled in the Finance app"] }
 ]
 ```
 
 `privileges[]` is **not** filled in yet — entities don't exist until Level (a). Level (c) adds it.
+
+**Capture what the app deliberately leaves out**, too, in `excludes[]`. When the user rules
+something out — "dispatchers don't approve anything", "we won't touch invoicing here" — that is a
+scope decision, and it renders into the design document as **Deliberately out of scope** beside the
+traceability table. Two apps built over the same tables are told apart by what each declines to do,
+and an omission the reviewer was never shown cannot be approved. It is documentary only; nothing is
+applied to Dataverse.
 
 **Carry the jobs forward.** At Level (b), every job must be answerable with "this surface lets them
 do it". Record that link in `jobs[].surfaces[]` (view/form/page names, or a page `key`):
@@ -451,7 +459,8 @@ the layout that lands.
 
 **Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
 ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
-sub-grids before approving — then ask for changes:
+sub-grids before approving — then ask for changes. Fields carry their authored state, so a
+`(hidden)` or `(read-only)` annotation in the wireframe is part of what is being approved:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]

@@ -152,7 +152,11 @@ test('reconstructs N:N only when both ends are in the app, and reports the rest 
     },
   });
   const { relationships, skipped } = await readRelationships(sdk, ['new_ticket', 'new_tag'], 'new');
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag' }]);
+  // `schemaName` is carried because the deployed name diverges from the generated default:
+  // `manyToManySchemaName` SORTS the pair, so it would compose `new_tag_new_ticket`. Without the
+  // deployed name a rebuild into this environment creates a SECOND intersect relationship instead of
+  // matching the existing one.
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
   assert.strictEqual(skipped.length, 1);
   assert.match(skipped[0].reason, /does not include both tables/i);
 });
@@ -170,7 +174,7 @@ test('an N:N is emitted once even though it appears on BOTH tables metadata (#56
   const r = rel({ SchemaName: 'new_ticket_new_tag', Entity1LogicalName: 'new_ticket', Entity2LogicalName: 'new_tag' });
   const sdk = makeSdk({ m2m: { new_ticket: [r], new_tag: [r] } });
   const { relationships } = await readRelationships(sdk, ['new_ticket', 'new_tag'], 'new');
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag' }]);
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
 });
 
 test('a failed relationship read is REPORTED, not silently read as "this table has none" (#567)', async () => {

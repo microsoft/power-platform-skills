@@ -482,6 +482,35 @@ function parseLanguageCode(value) {
   return lc;
 }
 
+// Refuse to mutate unless the changed-only snapshot was demonstrably invalidated (#587 item 3).
+//
+// Extracted from main() so it can be tested by BEHAVIOUR. The first version of this guard was
+// covered only by a source-level test, and an adversarial review proved that test worthless: both
+// `if (false && …)` and a catch that manufactures `{ ok: true }` passed the whole file. A guard
+// whose test survives its own removal is not a guard.
+//
+// Throws on anything that is not a definite success — `{ ok: false }`, a thrown error, and a
+// missing/malformed return alike. A MISSING snapshot is not one of those: invalidateSnapshot
+// reports `{ ok: true, reason: 'no snapshot to invalidate' }`, so an ordinary first build is
+// unaffected. Halting costs a retry; continuing costs a silently incomplete deployment.
+function assertSnapshotInvalidated(store, workspaceDir) {
+  let inv;
+  try {
+    inv = store.invalidateSnapshot(workspaceDir);
+  } catch (e) {
+    inv = { ok: false, reason: e && e.message ? e.message : String(e) };
+  }
+  if (!inv || inv.ok !== true) {
+    throw new Error(
+      `refusing to apply: the changed-only snapshot in ${workspaceDir} could not be invalidated `
+      + `(${(inv && inv.reason) || 'unknown reason'}). A later --changed-only run would trust it and `
+      + 'skip work this apply is about to make necessary. Retry once any concurrent run has finished, '
+      + 'or delete the snapshot to re-baseline.'
+    );
+  }
+  return inv;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
@@ -689,12 +718,15 @@ async function main() {
     } else {
       // Invariant: EVERY state-changing apply must invalidate the changed-only snapshot BEFORE it writes
       // (design core invariant). A plain `--apply` (or `--stage data --apply`) mutates the app outside the
-      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state. Best-effort
-      // + fail-safe: if a snapshot exists it is marked ineligible (the next `--changed-only` re-baselines via
-      // a full build); no snapshot ⇒ a harmless no-op. Never blocks the build.
-      if (opts.apply) {
-        try { applySnapshotStore.invalidateSnapshot(workspaceDir); } catch { /* best-effort — never block a build */ }
-      }
+      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state.
+      //
+      // FAIL CLOSED (#587 item 3). This used to be best-effort: the `{ ok, reason }` result was discarded
+      // and a throw was swallowed with "never block a build". But "the snapshot could not be invalidated"
+      // is not cosmetic — the snapshot is exactly what a later `--changed-only` run trusts to decide what
+      // it may SKIP. If a full apply mutates the environment while an ELIGIBLE snapshot survives (lease
+      // contention from a concurrent run, an unwritable workspace), that later run certifies pre-apply
+      // state and can skip work this apply just made necessary.
+      if (opts.apply) assertSnapshotInvalidated(applySnapshotStore, workspaceDir);
       r = await buildModelApp(spec, opts, deps);
     }
   } finally {
@@ -725,4 +757,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated };

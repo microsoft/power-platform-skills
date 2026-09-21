@@ -263,11 +263,28 @@ function mockSdk(opts = {}) {
     // Generic mutation surface (mirrors the SDK). The mock does NOT mint layout ids (tests don't
     // assert on them); it just maintains a coherent in-memory tree so getArtifact/firstSectionRowsPointer
     // and reconcile see the effects of adds/removes.
-    addElement: async (t, id, ptr, el) => { await Promise.resolve();
-      calls.push({ name: 'addElement', args: [t, id, ptr, el] });
+    addElement: async (t, id, ptr, el, opts) => { await Promise.resolve();
+      calls.push({ name: 'addElement', args: [t, id, ptr, el, opts] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       const arr = jpGet(art, ptr);
-      if (Array.isArray(arr)) arr.push(clone(el));
+      // Model the REAL SDK's position contract exactly, INCLUDING its failure mode. It resolves
+      // `undefined | 'end' | 'start' | { index } | { before } | { after }` and tests
+      // `'index' in position`, so a BARE NUMBER throws. A permissive mock that accepted a number
+      // hid exactly that bug: the suite passed green while every real insertion failed with
+      // "Cannot use 'in' operator to search for 'index' in 1".
+      if (Array.isArray(arr)) {
+        const pos = opts && opts.position;
+        let at;
+        if (pos === undefined || pos === 'end') at = arr.length;
+        else if (pos === 'start') at = 0;
+        else if (pos && typeof pos === 'object' && 'index' in pos) at = Math.max(0, Math.min(pos.index, arr.length));
+        else if (pos && typeof pos === 'object' && 'before' in pos) {
+          const n = arr.findIndex((x) => x && x.id === pos.before); at = n < 0 ? arr.length : n;
+        } else if (pos && typeof pos === 'object' && 'after' in pos) {
+          const n = arr.findIndex((x) => x && x.id === pos.after); at = n < 0 ? arr.length : n + 1;
+        } else throw new TypeError(`Cannot use 'in' operator to search for 'index' in ${pos}`);
+        arr.splice(at, 0, clone(el));
+      }
       return clone(art);
     },
     updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
@@ -1899,7 +1916,13 @@ test('form topology: a field sitting in the wrong section is MOVED, never duplic
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   const moves = find(calls, 'moveElement');
   assert.strictEqual(moves.length, 1, `exactly one move; saw ${moves.map((c) => `${c.args[2]} -> ${c.args[3]}`).join(', ')}`);
-  assert.strictEqual(moves[0].args[3], '/tabs/0/columns/0/sections/1/rows/0/cells', 'moved INTO section_more');
+  // Row 1, not row 0. `section_more` is a ONE-column section whose row 0 already holds
+  // `new_obsolete`, so packing the relocated cell onto it would produce a two-cell row in a
+  // one-column section — a shape `rowsFromCells` never emits on the create path. The reconcile now
+  // uses that same packing rule, so it opens a new row instead.
+  assert.strictEqual(moves[0].args[3], '/tabs/0/columns/0/sections/1/rows/1/cells', 'moved INTO section_more, in a row that has space');
+  const seededRow = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/0/columns/0/sections/1/rows' && Array.isArray(c.args[3].cells) && c.args[3].cells.length === 0);
+  assert.ok(seededRow, 'and the row it moves into was seeded empty rather than overfilling row 0');
   const dupAdds = find(calls, 'addElement').filter((c) => /\/rows$/.test(String(c.args[2])) && ((c.args[3].cells || [])[0] || {}).control && c.args[3].cells[0].control.fieldName === 'new_tier');
   assert.strictEqual(dupAdds.length, 0, 'a relocated field must never be re-added as a second control');
 });
@@ -4145,4 +4168,478 @@ test('a failed default-form promotion WARNS instead of reporting a silent succes
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(m) });
   assert.ok(warnings.some((w) => /could not make form the default/.test(w) && /privilege check failed/.test(w)),
     `expected a promotion-failure warning naming the reason; got ${JSON.stringify(warnings)}`);
+});
+
+// --- #581: field placement must pack to the section's grid width ---------------------------------
+//
+// The reconcile path ignored `section.columns` entirely: an ADDED field became its own single-cell
+// row, and a MOVED field was appended to whatever row happened to be last. So the same spec produced
+// a structurally different form depending only on whether the form already existed — a 2-column
+// section that `rowsFromCells` would lay out as [[a,b],[c,d]] came out as one four-cell row on a
+// rebuild, a shape the create path can never emit.
+
+test('form topology: fields ADDED to a 2-column section pack two per row, like the create path', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', 'new_tier', 'new_note', 'new_extra'] },
+  ] }]);
+  // Deployed with ONLY new_name, so the other three are adds onto an existing form.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  // new_tier fits beside new_name in row 0, so the ROW is rewritten rather than a new row appended.
+  const rowPatch = find(calls, 'updateElement').find((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells));
+  assert.ok(rowPatch, `the first add must pack onto row 0; row writes: ${find(calls, 'updateElement').map((c) => c.args[2]).join(', ')}`);
+  assert.deepStrictEqual(rowPatch.args[3].cells.map((c) => c.control.fieldName), ['new_name', 'new_tier'],
+    'row 0 carries both cells, and the existing cell object is re-sent so its id survives');
+  // The third field does NOT fit in row 0, so it opens row 1.
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, `exactly one new row; saw ${rowAdds.length}`);
+  assert.deepStrictEqual(rowAdds[0].args[3].cells.map((c) => c.control.fieldName), ['new_note']);
+});
+
+test('form topology: a 1-column section never packs two cells into one row', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  const rowPatches = find(calls, 'updateElement').filter((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells));
+  assert.deepStrictEqual(rowPatches, [], 'a full one-column row must not be rewritten to hold two cells');
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, 'the field opens its own row instead');
+  assert.deepStrictEqual(rowAdds[0].args[3].cells.map((c) => c.control.fieldName), ['new_tier']);
+});
+
+// A colspan is load-bearing for packing: a full-width title in a 2-column section consumes the whole
+// row, so the next field must NOT be packed beside it even though the row holds only one cell.
+test('form topology: packing counts colspan, not cell count', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  assert.deepStrictEqual(
+    find(calls, 'updateElement').filter((c) => String(c.args[2]) === sec + '/rows/0' && Array.isArray(c.args[3].cells)), [],
+    'a row already filled by a colspan:2 cell has no space left, despite holding one cell');
+  const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(rowAdds.length, 1, 'so the next field opens a new row');
+});
+
+// --- #581 item 2: a section the layout VACATED is reclaimed, not left as an empty twin ----------
+//
+// A generated section name encodes POSITION (`section_<tab>[_<column>]_<index>`), so moving a
+// section between form-columns or tabs under a generated name changes its identity: the topology
+// pass creates a new section and never matches the old one again. The field pass then empties it,
+// and the deployed form ends up with two sections headed the same thing, one blank — stable across
+// rebuilds and permanently wrong. Reported in #581 as: two sections headed "B", one empty.
+
+const vacateSpec = () => {
+  const spec = makeSpec();
+  // One tab, TWO form-columns. The authored section carrying new_tier now lives in column 1; the
+  // deployed form has it in column 0 under the generated name column 0 would have produced.
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', columns: [
+    { width: '60%', sections: [{ label: 'A', columns: 1, fields: ['new_name'] }] },
+    { width: '40%', sections: [{ label: 'B', columns: 1, fields: ['new_tier'] }] },
+  ] }]);
+  return spec;
+};
+const vacatedForm = () => ({ id: 'f1', tabs: [
+  { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [
+    { width: '60%', sections: [
+      { id: 's0', name: 'section_0_0', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      // Deployed in column 0 under the name column 0 generates; the spec now wants it in column 1,
+      // where the generated name is `section_0_1_0`. Different identity -> new section created.
+      { id: 's1', name: 'section_0_1', label: 'B', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] },
+    { width: '40%', sections: [] },
+  ] },
+], bag: { a: [], c: [] } });
+
+test('form topology: a section emptied by a layout move is removed, not left as a blank twin', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: vacatedForm() });
+  const warnings = [];
+  await runSdkBuild(vacateSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(m) });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.strictEqual(removedSections.length, 1,
+    `exactly one vacated section should be reclaimed; saw ${removedSections.map((c) => c.args[2]).join(', ')}`);
+  assert.ok(warnings.some((w) => /removed the now-empty section/.test(w) && /section_0_1/.test(w)),
+    `the removal must be reported and name the section; got ${JSON.stringify(warnings)}`);
+});
+
+// The sweep must never touch a section that still holds anything, nor one the engine owns.
+test('form topology: the vacated-section sweep spares populated, claimed and engine-owned sections', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier'] },
+  ] }]);
+  // section_more still holds new_obsolete (pruned below), section_extra is EMPTY but engine-owned
+  // via a control with no fieldName, and tab_extra's section carries a sub-grid.
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: 'section_grid_x', label: 'Related', visible: true, showLabel: true, columns: 1,
+        rows: [{ cells: [{ control: { parameters: { RelationshipName: 'r' } } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'an engine-owned sub-grid section, and the section the layout claims, must both survive');
+});
+
+// `prune: false` means "leave what I did not re-declare" — the sweep honours the same opt-out the
+// field prune does, so a partial layout edit cannot silently delete containers.
+test('form topology: prune:false leaves a vacated section alone', async () => {
+  const spec = vacateSpec();
+  spec.forms[0].prune = false;
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: vacatedForm() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [], 'prune:false must not remove containers either');
+});
+
+// The zero-cells guard, exercised where it actually decides. The PRIMARY field is never pruned, so
+// an unclaimed section holding it still has a cell when the sweep runs — and deleting that section
+// would take the record's title off the form. (The earlier "spares populated" test does not reach
+// this guard: its surviving sections are spared by the claimed-name and engine-owned checks first,
+// which mutation testing exposed.)
+test('form topology: an UNCLAIMED section that still holds a cell is never removed', async () => {
+  const spec = makeSpec();
+  // The layout claims only section_general/new_tier. new_name is the primary, so the field prune
+  // leaves it where it is — in a section the layout does not claim.
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+      { id: 's1', name: 'section_leftover', label: 'Leftover', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'a section still holding the primary field must survive — removing it would take the record title off the form');
+});
+
+// Astra review, HIGH: "zero cells" does not establish that THIS reconcile vacated the section. A
+// maker-added section that was ALREADY empty — one a form script may show/hide by name — would be
+// deleted by an otherwise no-op rebuild, and the destructive preflight cannot see it because that
+// compares fields and sitemap targets, not containers.
+test('form topology: a pre-existing EMPTY section the layout never touched is not deleted', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      // Added by a maker, deliberately empty, never mentioned by the spec. This reconcile does not
+      // vacate it — it was already like this.
+      { id: 's9', name: 'maker_script_target', label: 'Maker Panel', visible: true, showLabel: true, columns: 1, rows: [] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'only a section THIS run emptied may be reclaimed; a pre-existing empty section is the maker\'s, not ours');
+});
+
+// Same rule from the other side: a section named `__proto__` must still be claimable. `sectionTargets`
+// is keyed by section name, and a plain object turns that assignment into a prototype mutation rather
+// than an own property — so the claimed-set lookup missed it and the sweep deleted a section the
+// layout explicitly asked for.
+test('form topology: a section named __proto__ is claimed like any other', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name'] },
+    { name: '__proto__', label: 'Odd', columns: 1, fields: [] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: '__proto__', label: 'Odd', visible: true, showLabel: true, columns: 1, rows: [] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'an explicitly authored section must be claimed whatever its name');
+});
+
+// The `__proto__` claim, exercised where it actually decides. The previous test passes even with a
+// plain-object `sectionTargets`, because the vacated-set check spares the section first — a test
+// that passes for the wrong reason. Here the section IS vacated (its field moves out), so the ONLY
+// thing standing between it and deletion is whether the claimed-set saw it.
+test('form topology: a vacated section named __proto__ is still claimed, not reclaimed', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name', 'new_tier'] },
+    { name: '__proto__', label: 'Odd', columns: 1, fields: [] },
+  ] }]);
+  // new_tier is deployed inside `__proto__` and the spec moves it to section_general, so the sweep
+  // sees `__proto__` vacated AND empty. It must survive because the layout still declares it.
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: '__proto__', label: 'Odd', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'a section the layout claims must never be reclaimed, whatever its name');
+});
+// A RESET is what an author hits after widening a field and changing their mind: the declared span
+// goes from 2 back to 1. Folding an explicit 1 into "no opinion" made that unrepresentable, so the
+// deployed cell kept its old width across repeated applies — live-reproduced, twice, before the fix.
+// The omission control above ("a field with no authored span leaves the deployed cell alone") is what
+// still protects a maker's hand-widened cell; these two only cover a span the author DECLARED.
+test('form topology: an authored span RESET to 1 converges on a deployed cell that is wider', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 1, rowspan: 1 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, rowspan: 3, control: { fieldName: 'new_name' } }] },
+          { cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => /\/cells\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.strictEqual(patches.length, 1,
+    `the reset must reach the deployed cell; saw ${JSON.stringify(patches.map((c) => [c.args[2], c.args[3]]))}`);
+  assert.strictEqual(patches[0].args[3].colspan, 1, 'colspan must be reset to 1, not left at 2');
+  assert.strictEqual(patches[0].args[3].rowspan, 1, 'rowspan must be reset to 1, not left at 3');
+});
+
+// The same reset declared through the OTHER route. `fieldOptions` has its own span normalizer, so a
+// fix applied only to inline entries leaves this path still dropping the reset.
+test('form topology: a span RESET declared via fieldOptions converges too', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { colspan: 1 } } }];
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ colspan: 2, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => /\/cells\/\d+$/.test(String(c.args[2]))
+    && c.args[3] && c.args[3].colspan !== undefined);
+  assert.strictEqual(patches.length, 1,
+    `the fieldOptions reset must reach the deployed cell; saw ${JSON.stringify(patches.map((c) => [c.args[2], c.args[3]]))}`);
+  assert.strictEqual(patches[0].args[3].colspan, 1, 'colspan must be reset to 1 through the fieldOptions route as well');
+});
+
+// Converged state must be a fixed point: re-applying the same spec against the now-correct form must
+// issue NO span write at all, or every rebuild churns the form and its audit history.
+test('form topology: a span already at the authored value is not rewritten', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 1 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => c.args[3]
+    && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.deepStrictEqual(patches, [],
+    'an absent colspan already MEANS 1, so declaring 1 must not produce a write');
+});
+
+// --- #N2: widening a field on a DEPLOYED form must re-pack its row -------------------------------
+// LIVE-REPRODUCED: widening an existing field left three columns of content in a two-column row.
+// The span was patched in place, but the packing that the create path applies (`rowsFromCells`)
+// never re-ran, so the row kept both its original cells and the newly widened one.
+test('form topology: widening a field re-packs the row it overflows', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  // Deployed: two colspan-1 cells sharing one row of a 2-column section — occupancy 2, exactly full.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  // Assert the RESULTING form, not just that some calls were made: emptying either packed row left
+  // the call-shape assertions passing while the primary field was deleted, or the displaced field
+  // was recreated later and lost its cell id and control state.
+  // The mock keys the store by the id the BUILD resolved, not the fixture's — take it from a call.
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  assert.ok(formCall, 'the build must have written to the form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const rows = finalForm.tabs[0].columns[0].sections[0].rows || [];
+  assert.strictEqual(rows.length, 2, `the row must split in two; got ${JSON.stringify(rows)}`);
+
+  const names = rows.map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(names, [['new_name'], ['new_tier']],
+    `the widened field keeps its row and the displaced one moves DOWN; got ${JSON.stringify(names)}`);
+  assert.strictEqual(rows[0].cells[0].colspan, 2, 'the widened cell keeps its span');
+  // Identity must survive: a cell recreated instead of moved loses its id and any maker-edited state.
+  assert.strictEqual(rows[0].cells[0].id, 'c1', 'the widened cell is the SAME cell, not a new one');
+  assert.strictEqual(rows[1].cells[0].id, 'c2', 'the displaced cell is MOVED, not recreated');
+
+  for (const r of rows) {
+    const width = (r.cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(width <= 2, `no row may exceed the section's 2 columns; got ${JSON.stringify(r.cells)}`);
+  }
+
+  // The new row goes immediately BELOW the widened one, and carries the SDK's real position shape:
+  // it resolves `'index' in position`, so a bare number throws at the SDK boundary.
+  const inserted = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(inserted.length, 1, 'exactly one row is created');
+  assert.deepStrictEqual(inserted[0].args[4] && inserted[0].args[4].position, { index: 1 },
+    `position must be { index: n }; got ${JSON.stringify(inserted[0].args[4])}`);
+
+  // Converged state is a fixed point: re-applying the same spec must write nothing more.
+  const before = calls.length;
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const second = calls.slice(before);
+  assert.deepStrictEqual(find(second, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows'), [],
+    'a second apply must not create another row');
+  assert.deepStrictEqual(
+    find(second, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2])) && c.args[3] && Array.isArray(c.args[3].cells)),
+    [], 'a second apply must not rewrite the rows it already packed');
+});
+
+// A span change that does NOT overflow must not churn the form.
+test('form topology: widening a field that still fits re-packs nothing', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 4, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const sec = '/tabs/0/columns/0/sections/0';
+  // 2 + 1 = 3 <= 4, so the row still fits and must be left alone.
+  assert.deepStrictEqual(find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows'), [],
+    'no row may be created when the widened cell still fits');
+  assert.deepStrictEqual(
+    find(calls, 'updateElement').filter((c) => /\/rows\/\d+$/.test(String(c.args[2])) && c.args[3] && Array.isArray(c.args[3].cells)),
+    [], 'no row may be rewritten when nothing overflowed');
+});
+
+// A MIDDLE row is where the insertion index actually matters: appending would drop the displaced
+// field below every later row instead of immediately beneath the field it was sharing a row with.
+// With a single-row section, "insert at 1" and "append" are indistinguishable — so this is the case
+// that holds the packer honest.
+test('form topology: widening a field in a MIDDLE row inserts directly below it, not at the end', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push(
+    { schemaName: 'new_alpha', displayName: 'Alpha', type: 'Text' },
+    { schemaName: 'new_beta', displayName: 'Beta', type: 'Text' },
+    { schemaName: 'new_gamma', displayName: 'Gamma', type: 'Text' },
+  );
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2,
+      fields: ['new_name', 'new_tier', { name: 'new_alpha', colspan: 2 }, 'new_beta', 'new_gamma'] },
+  ] }]);
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [
+          { cells: [cell('c1', 'new_name'), cell('c2', 'new_tier')] },
+          { cells: [cell('c3', 'new_alpha'), cell('c4', 'new_beta')] }, // new_alpha widens here
+          { cells: [cell('c5', 'new_gamma')] },
+        ] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const names = (finalForm.tabs[0].columns[0].sections[0].rows || [])
+    .map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(names,
+    [['new_name', 'new_tier'], ['new_alpha'], ['new_beta'], ['new_gamma']],
+    `the displaced field goes DIRECTLY below, keeping author order; got ${JSON.stringify(names)}`);
+
+  const sec = '/tabs/0/columns/0/sections/0';
+  const inserted = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
+  assert.strictEqual(inserted.length, 1, 'exactly one row is created');
+  assert.deepStrictEqual(inserted[0].args[4] && inserted[0].args[4].position, { index: 2 },
+    `the row goes immediately below row 1; got ${JSON.stringify(inserted[0].args[4])}`);
+});
+
+// A span must be clamped against the section the field is MOVING TO, not the one it is leaving.
+// Converging before the relocation cut a `colspan: 4` down to the 2-column source's width and then
+// moved the narrowed cell, so the destination showed 2 and only reached 4 on a second apply.
+test('form topology: a relocated field is clamped against its DESTINATION, not its source', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'sec_narrow', label: 'Narrow', columns: 2, fields: ['new_tier'] },
+    { name: 'sec_wide', label: 'Wide', columns: 4, fields: [{ name: 'new_name', colspan: 4 }] },
+  ] }]);
+  // Deployed: new_name sits in the 2-column section beside new_tier and must move to the 4-column one.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'sec_narrow', label: 'Narrow', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ id: 'c1', control: { fieldName: 'new_name' } }, { id: 'c2', control: { fieldName: 'new_tier' } }] }] },
+      { id: 's1', name: 'sec_wide', label: 'Wide', visible: true, showLabel: true, columns: 4, rows: [] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const wide = finalForm.tabs[0].columns[0].sections[1];
+  const moved = (wide.rows || []).flatMap((r) => r.cells || [])
+    .find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.ok(moved, `new_name must land in the wide section; got ${JSON.stringify(wide.rows)}`);
+  assert.strictEqual(moved.colspan, 4,
+    'the authored span is clamped against the 4-column DESTINATION, not the 2-column source');
+  assert.strictEqual(moved.id, 'c1', 'the cell is moved, not recreated');
 });

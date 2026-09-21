@@ -1701,3 +1701,167 @@ test('the teardown filter does NOT depend on businessRuleFilter\'s spelling', as
   assert.strictEqual(importLine.includes('businessRuleFilter'), false,
     `teardown must not import businessRuleFilter; got: ${importLine.trim().slice(0, 160)}`);
 });
+
+// #587 item 7 — the role resolver read the appmodule<->role association to avoid deleting a role
+// ANOTHER app still uses, but a failed read set `sharedWithAnotherApp = false`, i.e. "not shared",
+// leaving the role eligible for deletion. That is the wrong direction for a destructive decision,
+// and it was inconsistent with the very same function: a failure to resolve the business unit
+// already returns [] and deletes nothing.
+//
+// Cost of being wrong each way: fail-closed leaves a role behind that an operator can delete by
+// hand; fail-open silently strips permissions from a DIFFERENT app that shares the persona.
+test('#587 a role whose sharing check cannot be read is retained, not deleted', async () => {
+  const ROLE_ID = '11111111-2222-4333-8444-555555555555';
+  const sdkWith = (appmodule) => ({
+    deleteSecurityRole: async () => {},
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: ROLE_ID, name: 'Dispatcher', description: SDK_ROLE_MARKER, ismanaged: false }];
+      if (set === 'appmodule') return appmodule();
+      return [];
+    },
+  });
+
+  // CONTROLS first, so a blanket "never delete anything" regression cannot pass this test.
+  const deletable = await KIND_HANDLERS.role.resolve(sdkWith(() => []), { name: 'Dispatcher' });
+  assert.deepStrictEqual(deletable, [{ id: ROLE_ID, name: 'Dispatcher' }],
+    'a role no app still references must remain deletable');
+
+  const shared = await KIND_HANDLERS.role.resolve(sdkWith(() => [{ appmoduleid: 'other-app' }]), { name: 'Dispatcher' });
+  assert.deepStrictEqual(shared, [], 'a role another app still references must be retained');
+
+  // The fix: an UNREADABLE sharing check must behave like "shared", not like "not shared".
+  const unreadable = await KIND_HANDLERS.role.resolve(
+    sdkWith(() => { throw new Error('403 read denied'); }), { name: 'Dispatcher' });
+  assert.deepStrictEqual(unreadable, [],
+    'an unreadable sharing check must fail CLOSED and retain the role');
+});
+
+// #587 item 5 — teardown continued after the APP delete failed. The app module is the dependency
+// ROOT: tables, forms, views and charts are its components. Continuing past a failed app delete
+// therefore strips a LIVE app of everything it renders, leaving a broken app in the environment —
+// strictly worse than stopping and leaving a consistent one for the operator to retry.
+//
+// Continue-on-error is right for the steps AFTER the root is gone (one undeletable view should not
+// strand the rest); it is wrong for the root itself.
+test('#587 a failed app delete stops dependent teardown instead of stripping a live app', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async () => { throw new Error('HTTP 400 app delete refused'); },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'a failed app delete must fail the run');
+  const destructive = base.calls.filter((c) => /^delete/.test(c.method) && c.method !== 'deleteAppCascade');
+  assert.deepStrictEqual(destructive.map((c) => c.method), [],
+    'nothing dependent may be deleted once the app itself was not removed');
+  assert.ok(r.errors.some((e) => /app delete refused/.test(e.message)), 'the real cause must be reported');
+  assert.strictEqual(base.db.tables.size, 3, 'the tables the live app renders must still be there');
+});
+
+// The distinction that makes the rule safe. `app.del` ALSO throws when the app record WAS removed
+// and only a cascade cleanup step failed — aborting there would strand MORE orphans, not fewer. So
+// the abort is conditioned on the app not being proven deleted, not on "the app step threw".
+test('#587 a cascade-cleanup failure still lets teardown continue — the app itself is gone', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      await base.deleteAppCascade(id, unique); // the app row really is removed
+      return { success: false, deleted: [], retained: [], failures: [{ operation: 'delete', type: 'sitemap', id: 's1', error: new Error('HTTP 500 cleanup failed') }] };
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'the cleanup failure is still a failure');
+  assert.strictEqual(base.db.tables.size, 0,
+    'the app is gone, so its dependents must still be torn down rather than left orphaned');
+});
+// is not a GUID skips the association query entirely — and that is deliberate: FORM_GUID_RE is an
+// injection guard on the OData filter, not an existence check. Every Dataverse `roleid` is an
+// astra HIGH — the abort added above is DOWNSTREAM of deleteStep, which treats any not-found error
+// as a successful delete. But the SDK also throws 404 when an ATOMIC app+sitemap changeset is
+// ROLLED BACK by the platform — the app is still there. That was recorded as a phantom delete, the
+// abort never fired, and dependent teardown went on to strip a live app: `ok: true`, no errors.
+//
+// For the dependency ROOT, "not found" must be MEASURED, not inferred.
+test('#587 a rolled-back atomic app delete is not mistaken for a successful one', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    // The app row is deliberately LEFT IN PLACE: the changeset rolled back.
+    deleteAppCascade: async (id, unique) => {
+      base.calls.push({ method: 'deleteAppCascade', appModuleId: id, appModuleIdUnique: unique });
+      const err = new Error('The atomic delete of app and sitemap was rolled back');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'a rolled-back delete must not report success');
+  assert.deepStrictEqual(r.deleted.app || [], [], 'and must not be recorded as a deleted app');
+  const destructive = base.calls.filter((c) => /^delete/.test(c.method) && c.method !== 'deleteAppCascade');
+  assert.deepStrictEqual(destructive.map((c) => c.method), [],
+    'the app is still live, so nothing it renders may be deleted');
+  assert.strictEqual(base.db.tables.size, 3, 'its tables must survive');
+});
+
+// The CONTROL that keeps the rule honest: an app genuinely already gone (a re-run of a completed
+// teardown) must still be tolerated, or every second teardown would fail.
+test('#587 an app that is genuinely absent is still tolerated as already deleted', async () => {
+  const base = mockSdk({
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  });
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      // Remove the row (it really is gone), THEN report 404 — the shape a cascade race produces.
+      await base.deleteAppCascade(id, unique);
+      const err = new Error('Not Found');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(r.ok, true, `a genuinely-absent app is not a failure: ${JSON.stringify(r.errors)}`);
+  assert.strictEqual(base.db.tables.size, 0, 'and its dependents are still torn down');
+});
+
+// The OTHER branch of the same resolver, pinned so it is not "fixed" later without being thought
+// through. A roleid that is not a GUID skips the association query entirely — deliberately:
+// FORM_GUID_RE is an injection guard on the OData filter, not an existence check. Every Dataverse
+// roleid is an Edm.Guid, so an id failing it never came from the platform and has no app
+// association to protect.
+// Making it fail closed was considered and rejected: no real row benefits, and role ownership would
+// start depending on id formatting.
+test('#587 a non-GUID role id still resolves — the GUID test is an injection guard, not a safety check', async () => {
+  const sdk = {
+    deleteSecurityRole: async () => {},
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: 'r1', name: 'Dispatcher', description: SDK_ROLE_MARKER, ismanaged: false }];
+      return [];
+    },
+  };
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Dispatcher' }),
+    [{ id: 'r1', name: 'Dispatcher' }]);
+});
