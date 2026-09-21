@@ -173,6 +173,8 @@ function copySharedFiles(projectRoot, samplesRoot) {
 function assertPreparationPath(projectRoot, relativePath) {
   // lstat each component: existsSync follows links and misses dangling ones.
   // In particular, a customer-owned `.github` must never redirect guidance writes.
+  // relativePath is a repository-relative constant such as '.github/copilot-instructions.md',
+  // not a native root. path.join handles an untouched Windows root such as 'C:\\Apps\\Demo'.
   const components = relativePath.split('/');
   for (let index = 0; index < components.length; index += 1) {
     const prefix = components.slice(0, index + 1).join('/');

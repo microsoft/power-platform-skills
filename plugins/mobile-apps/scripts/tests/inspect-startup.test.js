@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const { inspectStartup } = require('../inspect-startup');
+const { createStartupScenario } = require('./helpers/startup-scenario');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-startup-'));
@@ -42,6 +43,8 @@ test('inspection works before install, Metro configuration, or Power Apps initia
   const { root } = fixture(t);
   const result = inspectStartup(root, ['sample-package']);
   assert.equal(result.status, 'inspected');
+  assert.equal(result.validationScope, 'static-metadata-only');
+  assert.equal(result.startupVerified, false);
   assert.equal(result.node.current, process.version);
   assert.equal(result.node.projectRequirement, '>=22');
   assert.equal(result.packages[0].installedStatus, 'missing');
@@ -67,6 +70,32 @@ test('entry resolution never evaluates package code or project config', (t) => {
   assert.equal(result.entryPoints[0].status, 'resolved');
   assert.equal(result.packages[0].matchesLock, true);
   assert.deepEqual(fs.readFileSync(path.join(root, 'package-lock.json')), before);
+});
+
+test('clean metadata cannot diagnose an app-owned pre-start failure or prove its repair', (t) => {
+  const { root } = fixture(t);
+  createStartupScenario(root);
+  const runPrestart = () => spawnSync(process.execPath, ['scripts/check-launch.cjs'], {
+    cwd: root, encoding: 'utf8', timeout: 5000,
+  });
+  const before = inspectStartup(root, ['sample-package/config']);
+  assert.equal(before.status, 'inspected');
+  assert.equal(before.lockfile.status, 'direct-declarations-match');
+  assert.equal(before.packages[0].matchesLock, true);
+  assert.equal(before.entryPoints[0].status, 'resolved');
+  assert.equal(before.startupVerified, false);
+  const failed = runPrestart();
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /STARTUP_ENTRY_MISSING: app\/start\.tsx/);
+
+  const manifest = fs.readFileSync(path.join(root, 'package.json'));
+  const lock = fs.readFileSync(path.join(root, 'package-lock.json'));
+  fs.writeFileSync(path.join(root, 'launch-config.json'), JSON.stringify({ entry: 'app/index.tsx' }));
+  const repaired = runPrestart();
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.deepEqual(inspectStartup(root, ['sample-package/config']), before);
+  assert.deepEqual(fs.readFileSync(path.join(root, 'package.json')), manifest);
+  assert.deepEqual(fs.readFileSync(path.join(root, 'package-lock.json')), lock);
 });
 
 test('correct installed version with absent export is reported without claiming package defect', (t) => {
@@ -294,4 +323,43 @@ test('CLI uses the explicitly selected project even from another cwd', (t) => {
   ], { cwd: os.tmpdir(), encoding: 'utf8', timeout: 5000 });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).node.projectRequirement, '>=22');
+});
+
+test('CLI preserves a native absolute root with spaces, apostrophes, and brackets', (t) => {
+  const { root } = fixture(t);
+  const projectRoot = path.join(root, "app's launch [test]");
+  createStartupScenario(projectRoot);
+  assert.ok(path.isAbsolute(projectRoot));
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '../inspect-startup.js'),
+    '--working-dir', projectRoot, '--entry-point', 'sample-package/config',
+  ], { cwd: root, encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.entryPoints[0].status, 'resolved');
+  assert.equal(report.packages[0].matchesLock, true);
+  assert.equal(report.startupVerified, false);
+  assert.equal(result.stdout.includes(projectRoot), false);
+});
+
+test('Windows PowerShell invokes the inspector with a quoted native root', {
+  skip: process.platform !== 'win32',
+}, (t) => {
+  const { root } = fixture(t);
+  const projectRoot = path.join(root, "app's launch [test]");
+  createStartupScenario(projectRoot);
+  const quote = (value) => `'${value.replaceAll("'", "''")}'`;
+  const command = [
+    '&', quote(process.execPath), quote(path.resolve(__dirname, '../inspect-startup.js')),
+    '--working-dir', quote(projectRoot), '--entry-point', quote('sample-package/config'),
+    '; exit $LASTEXITCODE',
+  ].join(' ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    cwd: root, encoding: 'utf8', timeout: 20000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.entryPoints[0].status, 'resolved');
+  assert.equal(report.packages[0].matchesLock, true);
 });

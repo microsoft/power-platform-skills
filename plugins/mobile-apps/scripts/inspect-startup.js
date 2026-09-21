@@ -183,6 +183,8 @@ function inspectStartup(projectRoot, entryPoints = DEFAULT_ENTRY_POINTS) {
     : 'unspecified';
   return {
     status: 'inspected',
+    validationScope: 'static-metadata-only',
+    startupVerified: false,
     node: { current: process.version, projectRequirement: engine(manifest) },
     packageManager: ['npm', 'yarn', 'pnpm', 'bun', 'unspecified'].includes(packageManager)
       ? packageManager : 'unknown',
