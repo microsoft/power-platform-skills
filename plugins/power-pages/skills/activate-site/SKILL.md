@@ -5,7 +5,7 @@ description: >-
   via the Power Platform REST API. Use when the user wants to activate, provision,
   turn on, or enable a Power Pages website or portal.
 user-invocable: true
-allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
 ---
 
@@ -22,6 +22,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 - **Cloud-aware URL resolution** — Never hardcode API base URLs or site URL domains. Always derive them from the Cloud value returned by `pac auth who`.
 - **Token handling** — The agent only needs to verify the user is logged in to Azure CLI.
 - **Confirm before mutating** — Always present the full activation parameters to the user and get explicit approval before POSTing to the websites API.
+- **Caller status updates** — When `/create-site` supplies a `statusPath`, update that file before and after activation prompts so the open template status page shows when user input is required.
 
 **Initial request:** $ARGUMENTS
 
@@ -93,9 +94,12 @@ First inspect `$ARGUMENTS` for explicit imported-site identity from another skil
 ```text
 siteName: <name>
 websiteRecordId: <guid>
+statusPath: <path>
 ```
 
 When both values are present, set `SITE_IDENTITY_SOURCE = "arguments"` immediately and **skip the local-project activation status check below**. That check resolves identity from `powerpages.config.json` / `.powerpages-site`, which may be absent or unrelated when `/create-site` activates an imported template site. Continue to Phase 2 with the explicit identity.
+
+When `source` is `create-site template path` and `statusPath` is present, store it as `ACTIVATION_STATUS_PATH`. This is the existing template status file created by `/create-site`; do not create a separate status page.
 
 Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
@@ -179,6 +183,31 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 | Question | Header | Options |
 |----------|--------|---------|
 | Your site subdomain will be: **`<suggestion>`** (full URL: `https://<suggestion>.<siteUrlDomain>`). Would you like to use this subdomain or enter your own? | Subdomain | Use `<suggestion>` (Recommended), Enter a custom subdomain |
+
+When `ACTIVATION_STATUS_PATH` is set, use `Write` to atomically overwrite it immediately before `AskUserQuestion`:
+
+```json
+{
+  "state": "running",
+  "phase": "activation",
+  "message": "Waiting for subdomain selection",
+  "awaitingInput": true,
+  "inputPrompt": "Choose the site subdomain in the agent terminal."
+}
+```
+
+Immediately after the user responds, overwrite the file again so the toast disappears:
+
+```json
+{
+  "state": "running",
+  "phase": "activation",
+  "message": "Preparing site activation",
+  "awaitingInput": false
+}
+```
+
+If the user cancels the prompt, clear `awaitingInput` before stopping. Apply the same status updates whenever a subdomain conflict loops back to this step.
 
 **If custom**: The user provides their own subdomain via "Other" free text input. Validate it is lowercase, alphanumeric with hyphens only, and 3-50 characters.
 

@@ -64,6 +64,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /translateX/);
   assert.match(html, /role="status" aria-live="polite"/);
   assert.match(html, /role="alert"/);
+  assert.match(html, /status\.awaitingInput/);
+  assert.match(html, /Waiting for your input/);
+  assert.match(html, /status\.inputPrompt/);
+  assert.match(html, /hideToast\('waiting'\)/);
   assert.match(html, /progressFill/);
   assert.match(html, /pillProgress/);
   assert.match(html, /phase-step active/);
@@ -94,7 +98,7 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.doesNotMatch(html, /status\.progress/);
   assert.doesNotMatch(html, /status\.percentComplete/);
   assert.doesNotMatch(html, /--progress-scale/);
-  assert.match(html, /setInterval\(pollStatus, 30000\)/);
+  assert.match(html, /setInterval\(pollStatus, 1500\)/);
   assert.match(html, /Template site is ready/);
   assert.match(html, /status\.redirectUrl/);
   assert.match(html, /window\.location\.assign/);

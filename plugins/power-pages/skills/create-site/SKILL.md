@@ -589,17 +589,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    14. Mark **Show inactive template site** as `in_progress`. Tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). It is not activated yet. Seed-data processing is complete, and activation is next." If the template has no seed data, say that instead of implying records were inserted. Mark **Show inactive template site** as `completed`.
    15. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
        ```json
-       { "state": "running", "phase": "activation", "message": "Activating template site" }
+       { "state": "running", "phase": "activation", "message": "Activating template site", "awaitingInput": false }
        ```
-       Then invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+       Then invoke `/activate-site`, passing the resolved identity and status path in the request so it skips local-project discovery and can show a toast while waiting for activation input:
        ```text
        Activate cloned template site:
        - siteName: <IMPORTED_SITE_NAME>
        - websiteRecordId: <IMPORTED_WEBSITE_RECORD_ID>
        - environmentUrl: <environmentUrl>
+       - statusPath: <temp-import-status-dir>/status.json
        - source: create-site template path
        ```
-       The activate-site skill owns subdomain selection, final activation confirmation, provisioning-status polling, and recovery. Its foreground activation script is the only poll required by this flow.
+       The activate-site skill owns subdomain selection, the waiting-for-input toast, final activation confirmation, provisioning-status polling, and recovery. Its foreground activation script is the only poll required by this flow.
        If activation fails, tell the user the cloned site exists but is not live and can be activated later by rerunning `/activate-site` with this identity. Do not treat activation failure as a failed supporting-solution import or site upload.
    16. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
    17. Redirect the already-open status page to the live site:

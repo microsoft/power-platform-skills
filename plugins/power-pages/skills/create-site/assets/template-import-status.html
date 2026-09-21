@@ -117,6 +117,7 @@
     .toast[hidden] { display: none; }
     .toast.error .toast-title { color: var(--pp-error); }
     .toast.success .toast-title { color: var(--pp-success); }
+    .toast.waiting .toast-title { color: var(--pp-violet); }
     .toast-title { font-weight: 700; margin-bottom: 4px; }
     .toast-message { font-size: 13px; color: var(--pp-text-secondary); }
     @keyframes toastEnter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -216,6 +217,7 @@
       var previewIndex = 0;
       var previewPaused = false;
       var toastShown = false;
+      var toastKind = '';
       var redirectScheduled = false;
       var latestLiveMessage = '';
 
@@ -404,12 +406,20 @@
       }
 
       function showToast(kind, title, message) {
-        if (toastShown) return;
         toastShown = true;
+        toastKind = kind;
         toast.className = 'toast ' + kind;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.hidden = false;
+      }
+
+      function hideToast(kind) {
+        if (!toastShown || (kind && toastKind !== kind)) return;
+        toast.hidden = true;
+        toast.className = 'toast';
+        toastShown = false;
+        toastKind = '';
       }
 
       function scheduleRedirect(url) {
@@ -428,6 +438,15 @@
             latestLiveMessage = status.message;
             renderStatusMessage(status.message);
             updatePhaseLabel(status.message);
+          }
+          if (status.awaitingInput) {
+            showToast(
+              'waiting',
+              'Waiting for your input',
+              status.inputPrompt || 'Check the agent terminal to respond.'
+            );
+          } else {
+            hideToast('waiting');
           }
           if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
             showToast('error', 'Template setup needs attention', 'Check the agent terminal for details.');
@@ -500,7 +519,7 @@
       setTimeout(showTip, 3500);
       setInterval(showTip, 12000);
       pollStatus();
-      setInterval(pollStatus, 30000);
+      setInterval(pollStatus, 1500);
     })();
   </script>
 </body>
