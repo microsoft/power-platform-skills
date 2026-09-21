@@ -167,23 +167,43 @@ test('an ancestor junction cannot land the delete at a filesystem root', () => {
 });
 
 // --- a UNC/network workspace is refused BEFORE any filesystem call ------------------------------
-// MEASURED: `\\\\server\\share\\proj\\.maker-workspace` resolves with root `\\\\server\\share\\`, so the
-// filesystem-root rules do not reject it and it reaches `lstatSync` — which BLOCKS on an unreachable
-// share until the SMB timeout. A hang is not catchable, and this runs right after a SUCCESSFUL
-// teardown, so the command simply appears wedged.
+// MEASURED on Windows: `\\server\share\proj\.maker-workspace` resolves with root `\\server\share\`,
+// so the filesystem-root rules do not reject it and it reaches `lstatSync` — which BLOCKS on an
+// unreachable share until the SMB timeout. A hang is not catchable, and this runs right after a
+// SUCCESSFUL teardown, so the command simply appears wedged.
 //
-// The injected deps THROW here: if the guard ever reaches the filesystem for a UNC path, the test
-// fails loudly instead of silently depending on whether this machine has such a share.
+// WINDOWS-ONLY by nature. UNC is a Windows/SMB concept: on POSIX a backslash is an ordinary filename
+// character, so `\\server\share\…` is a single relative component and `path.resolve` prepends the
+// cwd — there is no UNC path to detect, and no share to hang on. (A POSIX network mount is just a
+// path like `/mnt/share`, with no syntactic marker to key on.) The test therefore asserts the
+// Windows behaviour on Windows, and on POSIX asserts the thing that actually matters there: such a
+// string is still refused, as an ordinary path that is not a workspace.
+//
+// The injected deps THROW in the Windows case: if the guard ever reaches the filesystem for a UNC
+// path, this fails loudly instead of silently depending on whether the machine has such a share.
 test('a UNC workspace path is refused without touching the filesystem', () => {
-  const boom = () => { throw new Error("the guard must not stat a UNC path"); };
-  for (const unc of [
+  const UNC = [
     String.raw`\\server\share\proj\.maker-workspace`,
     String.raw`\\server\share\.maker-workspace`,
     String.raw`\\?\UNC\server\share\proj\.maker-workspace`,
-  ]) {
-    const r = checkWorkspaceClearable(unc, { lstatSync: boom, realpathSync: boom, readFileSync: boom });
-    assert.strictEqual(r.ok, false, `${unc} must be refused`);
-    assert.match(r.reason, /UNC\/network path/);
+  ];
+  if (process.platform === 'win32') {
+    const boom = () => { throw new Error('the guard must not stat a UNC path'); };
+    for (const unc of UNC) {
+      const r = checkWorkspaceClearable(unc, { lstatSync: boom, realpathSync: boom, readFileSync: boom });
+      assert.strictEqual(r.ok, false, `${unc} must be refused`);
+      assert.match(r.reason, /UNC\/network path/);
+    }
+    return;
+  }
+  // POSIX: not a UNC path at all, but it must still never be deleted.
+  for (const unc of UNC) {
+    const r = checkWorkspaceClearable(unc, {
+      lstatSync: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+      realpathSync: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+      readFileSync: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+    });
+    assert.strictEqual(r.ok, false, `${unc} must still be refused on POSIX`);
   }
 });
 
