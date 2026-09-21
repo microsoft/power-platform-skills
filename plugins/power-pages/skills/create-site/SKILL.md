@@ -219,9 +219,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | Where should I create the template site's local files? | Project Location | New folder in current directory (Recommended), Any other directory |
+        | Where should I create the template site's local files? | Project Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
         Resolve the clone destination:
+        - **Current directory**: use `<cwd>`.
         - **New folder in current directory**: use `<cwd>/<__SITE_SLUG__>/`.
         - **Any other directory**: ask for a full path and resolve it to an absolute path.
 
