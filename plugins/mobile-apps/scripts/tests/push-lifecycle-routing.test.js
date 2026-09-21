@@ -60,18 +60,15 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
   assert.match(lifecycle, /`\/setup-fcm` owns every Firebase MCP call/);
-  assert.match(lifecycle, /`\/setup-push-wif` owns every gcloud\/Azure MCP call/);
-  assert.match(lifecycle, /at most two MCP-free tracks/);
-  assert.match(lifecycle, /exactly one parseable `WORKER_RESULT`/);
-  assert.match(lifecycle, /recompute the SHA-256 and stop on drift/);
-  assert.match(lifecycle, /Every `Task` capability check carries `operation: preflight` in the prompt/);
-  assert.match(lifecycle, /Preflight is mutation-free/);
+  assert.match(lifecycle, /`\/setup-push-wif` owns every guarded Google Cloud CLI invocation, Azure MCP\s+call/);
+  assert.match(lifecycle, /Push setup runs serially/);
+  assert.match(lifecycle, /invokes\s+`\/setup-apple-ios` and then `\/setup-apns` synchronously/);
+  assert.match(lifecycle, /implements runtime integration directly/);
+  assert.doesNotMatch(lifecycle, /WORKER_RESULT|operation: preflight|exclusive_files|pre-wave/);
   assert.match(lifecycle, /app\s+registration or another same-tenant existing registration:[\s\S]*read-only\s+inventory -> explicit approval -> execution and proof/i);
   assert.match(lifecycle, /Only an explicitly\s+selected new dedicated registration uses the staged path/i);
   assert.match(lifecycle, /fresh claim-driven plan -> second explicit\s+approval/);
   assert.match(lifecycle, /first\s+approval never authorizes the remaining plan/);
-  assert.match(lifecycle, /resolves\s+them against the canonical absolute project root/);
-  assert.match(lifecycle, /proves only the local worker contract,\s+not MCP inheritance/);
   assert.match(lifecycle, /FlowAgent authoring, wrapped builds, installation handoffs, and physical\s+verification remain sequential/);
 });
 
@@ -105,7 +102,7 @@ test('add-push owns runtime integration and orchestrates platform owners', () =>
   assert.match(skill, /Build a stage-lazy readiness schedule/);
   assert.match(skill, /\*\*Configure app:\*\* Firebase client readiness only/);
   assert.match(skill, /Resource Manager error from Firebase MCP is not evidence that gcloud\s+is missing/);
-  assert.match(skill, /background `Task` may not inherit/);
+  assert.match(skill, /does not dispatch background push agents/);
 });
 
 test('build and physical verification boundaries remain non-overlapping', () => {
@@ -155,20 +152,19 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
   assert.match(addPush.evals[19].expected_output, /scheduleNotificationAsync/);
   assert.match(addPush.evals[20].expected_output, /same channel ID/);
-  assert.strictEqual(addPush.evals[21].coverage, 'serial-cloud-owners-noncloud-wave');
-  assert.match(addPush.evals[21].expected_output, /maximum-two MCP-free wave/);
-  assert.strictEqual(addPush.evals[22].coverage, 'single-track-single-platform');
-  assert.strictEqual(addPush.evals[23].coverage, 'task-unavailable-serial-fallback');
-  assert.strictEqual(addPush.evals[24].coverage, 'worker-mcp-inheritance-forbidden');
-  assert.strictEqual(addPush.evals[25].coverage, 'memory-sha-drift');
+  assert.strictEqual(addPush.evals[21].coverage, 'fully-serial-push-orchestration');
+  assert.match(addPush.evals[21].expected_output, /creates no background Task/);
+  assert.strictEqual(addPush.evals[22].coverage, 'inline-single-platform-runtime');
+  assert.strictEqual(addPush.evals[23].coverage, 'task-unavailable-irrelevant');
+  assert.strictEqual(addPush.evals[24].coverage, 'serial-owner-tool-context');
+  assert.strictEqual(addPush.evals[25].coverage, 'serial-memory-updates');
   assert.strictEqual(addPush.evals[26].coverage, 'platform-specific-partial-blocker');
   assert.strictEqual(
     addPush.evals[27].coverage,
-    'mcp-free-worker-contract-and-ios-fallback',
+    'serial-ios-owner-order',
   );
-  assert.match(addPush.evals[27].expected_output, /mutation-free and MCP-free/);
-  assert.match(addPush.evals[27].expected_output, /completes WIF synchronously/);
-  assert.match(addPush.evals[27].expected_output, /setup-apns exactly once/);
+  assert.match(addPush.evals[27].expected_output, /setup-apple-ios and then \/setup-apns synchronously/);
+  assert.match(addPush.evals[27].expected_output, /No worker preflight or fallback exists/);
   assert.strictEqual(addPush.evals[28].coverage, 'cold-wif-identity-bootstrap-reapproval');
   assert.match(addPush.evals[28].expected_output, /null client ID/);
   assert.match(addPush.evals[28].expected_output, /second explicit approval/);
@@ -191,7 +187,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[34].expected_output, /does not require gcloud/);
   assert.strictEqual(addPush.evals[35].coverage, 'delivery-flow-readiness-order');
   assert.strictEqual(addPush.evals[36].coverage, 'selected-platform-build-readiness');
-  assert.strictEqual(addPush.evals[37].coverage, 'worker-preflight-stays-inert');
+  assert.strictEqual(addPush.evals[37].coverage, 'no-push-worker-preflight');
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

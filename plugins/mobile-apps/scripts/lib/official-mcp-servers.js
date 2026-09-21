@@ -23,10 +23,6 @@ const FIREBASE_ALLOWED_TOOLS = Object.freeze([
   'firebase_get_sdk_config',
 ]);
 
-const GCLOUD_PACKAGE = '@google-cloud/gcloud-mcp';
-const GCLOUD_VERSION = '0.5.3';
-const GCLOUD_ALLOWLIST_RELATIVE_PATH = path.join('shared', 'mcp', 'gcloud-allowlist.json');
-
 // npm metadata snapshot on 2026-08-24:
 // - npm view @azure/mcp dist-tags.latest => 3.0.0-beta.37
 // - latest non-prerelease / GA tagable version => 2.0.5
@@ -38,15 +34,11 @@ const AZURE_NAMESPACES = Object.freeze([
   'role',
 ]);
 
-const OFFICIAL_SERVER_IDS = Object.freeze(['firebase', 'gcloud', 'azure']);
+const OFFICIAL_SERVER_IDS = Object.freeze(['firebase', 'azure']);
 const OFFICIAL_SERVER_REQUIREMENTS = Object.freeze({
   firebase: Object.freeze({
     package: `${FIREBASE_PACKAGE}@${FIREBASE_VERSION}`,
     tools: FIREBASE_ALLOWED_TOOLS,
-  }),
-  gcloud: Object.freeze({
-    package: `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
-    tools: Object.freeze(['run_gcloud_command']),
   }),
   azure: Object.freeze({
     package: `${AZURE_PACKAGE}@${AZURE_VERSION}`,
@@ -62,10 +54,6 @@ function getNpxCommand() {
   return process.platform === 'win32' ? 'npx.cmd' : 'npx';
 }
 
-function getGcloudAllowlistPath(pluginRoot = PLUGIN_ROOT) {
-  return path.resolve(resolvePluginRoot(pluginRoot), GCLOUD_ALLOWLIST_RELATIVE_PATH);
-}
-
 function buildFirebaseInvocation() {
   return {
     command: getNpxCommand(),
@@ -77,18 +65,6 @@ function buildFirebaseInvocation() {
       'stdio',
       '--tools',
       FIREBASE_ALLOWED_TOOLS.join(','),
-    ],
-  };
-}
-
-function buildGcloudInvocation(pluginRoot = PLUGIN_ROOT) {
-  return {
-    command: getNpxCommand(),
-    args: [
-      '-y',
-      `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
-      '--config',
-      getGcloudAllowlistPath(pluginRoot),
     ],
   };
 }
@@ -116,8 +92,6 @@ function buildOfficialMcpInvocation(serverId, pluginRoot = PLUGIN_ROOT) {
   switch (serverId) {
     case 'firebase':
       return buildFirebaseInvocation();
-    case 'gcloud':
-      return buildGcloudInvocation(pluginRoot);
     case 'azure':
       return buildAzureInvocation();
     default:
@@ -132,16 +106,12 @@ module.exports = {
   FIREBASE_ALLOWED_TOOLS,
   FIREBASE_PACKAGE,
   FIREBASE_VERSION,
-  GCLOUD_ALLOWLIST_RELATIVE_PATH,
-  GCLOUD_PACKAGE,
-  GCLOUD_VERSION,
   MCP_SCHEMA_URL,
   MICROSOFT_LEARN_URL,
   OFFICIAL_SERVER_IDS,
   OFFICIAL_SERVER_REQUIREMENTS,
   PLUGIN_ROOT,
   buildOfficialMcpInvocation,
-  getGcloudAllowlistPath,
   getNpxCommand,
   resolvePluginRoot,
 };

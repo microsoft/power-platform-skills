@@ -15,12 +15,9 @@ const {
   FIREBASE_ALLOWED_TOOLS,
   FIREBASE_PACKAGE,
   FIREBASE_VERSION,
-  GCLOUD_PACKAGE,
-  GCLOUD_VERSION,
   MICROSOFT_LEARN_URL,
   OFFICIAL_SERVER_REQUIREMENTS,
   buildOfficialMcpInvocation,
-  getGcloudAllowlistPath,
 } = require('../lib/official-mcp-servers');
 const { validateMcpConfig } = require('../validate-mcp-config');
 
@@ -62,10 +59,6 @@ test('official MCP invocation plans stay pinned and capability-bounded', () => {
     package: `${FIREBASE_PACKAGE}@${FIREBASE_VERSION}`,
     tools: FIREBASE_ALLOWED_TOOLS,
   });
-  assert.deepEqual(OFFICIAL_SERVER_REQUIREMENTS.gcloud, {
-    package: `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
-    tools: ['run_gcloud_command'],
-  });
   assert.deepEqual(OFFICIAL_SERVER_REQUIREMENTS.azure, {
     package: `${AZURE_PACKAGE}@${AZURE_VERSION}`,
     tools: AZURE_NAMESPACES,
@@ -81,14 +74,6 @@ test('official MCP invocation plans stay pinned and capability-bounded', () => {
     'stdio',
     '--tools',
     FIREBASE_ALLOWED_TOOLS.join(','),
-  ]);
-
-  const gcloud = buildOfficialMcpInvocation('gcloud', pluginRoot);
-  assert.deepEqual(gcloud.args, [
-    '-y',
-    `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
-    '--config',
-    getGcloudAllowlistPath(pluginRoot),
   ]);
 
   const azure = buildOfficialMcpInvocation('azure', pluginRoot);
@@ -128,7 +113,7 @@ test('bootstrap entries resolve the launcher without host env vars and dispatch 
   const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'));
   const pathSeparator = process.platform === 'win32' ? ';' : ':';
 
-  for (const serverId of ['firebase', 'gcloud', 'azure']) {
+  for (const serverId of ['firebase', 'azure']) {
     const server = config.mcpServers[serverId];
     const result = spawnSync(server.command, server.args, {
       cwd: pluginRoot,
@@ -159,19 +144,6 @@ test('bootstrap entries resolve the launcher without host env vars and dispatch 
   assert.match(firebaseOutput, /--tools/);
   assert.match(firebaseOutput, new RegExp(FIREBASE_ALLOWED_TOOLS.join(',')));
 
-  const gcloudOutput = spawnSync(config.mcpServers.gcloud.command, config.mcpServers.gcloud.args, {
-    cwd: pluginRoot,
-    encoding: 'utf8',
-    env: {
-      HOME: process.env.HOME,
-      PATH: `${fixtureDir}${pathSeparator}${process.env.PATH || ''}`,
-      USERPROFILE: process.env.USERPROFILE,
-    },
-    timeout: 5_000,
-  }).stdout;
-  assert.match(gcloudOutput, new RegExp(`${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(gcloudOutput, new RegExp(getGcloudAllowlistPath(pluginRoot).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-
   const azureOutput = spawnSync(config.mcpServers.azure.command, config.mcpServers.azure.args, {
     cwd: pluginRoot,
     encoding: 'utf8',
@@ -193,5 +165,38 @@ test('microsoft-learn entry is preserved as hosted HTTP MCP', () => {
   assert.deepEqual(config.mcpServers['microsoft-learn'], {
     type: 'http',
     url: MICROSOFT_LEARN_URL,
+  });
+
+  test('gcloud is not registered as an automatically started MCP server', () => {
+    const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'));
+    assert.equal(config.mcpServers.gcloud, undefined);
+    assert.equal(OFFICIAL_SERVER_REQUIREMENTS.gcloud, undefined);
+    assert.throws(
+      () => buildOfficialMcpInvocation('gcloud', pluginRoot),
+      /Unsupported official MCP server 'gcloud'/,
+    );
+  });
+
+  test('validator rejects a reintroduced gcloud MCP entry', (t) => {
+    const fixtureDir = createFixtureDir();
+    t.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(fixtureDir, 'shared', 'mcp'), { recursive: true });
+
+    const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'));
+    config.mcpServers.gcloud = {
+      command: 'node',
+      args: ['-e', "require('./scripts/launch-official-mcp').launch('gcloud')"],
+    };
+    fs.writeFileSync(path.join(fixtureDir, '.mcp.json'), JSON.stringify(config));
+    fs.copyFileSync(
+      path.join(pluginRoot, 'shared', 'mcp', 'gcloud-allowlist.json'),
+      path.join(fixtureDir, 'shared', 'mcp', 'gcloud-allowlist.json'),
+    );
+
+    const result = validateMcpConfig(fixtureDir);
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.includes(
+      'gcloud: must not be registered as an automatically started MCP server.',
+    ));
   });
 });

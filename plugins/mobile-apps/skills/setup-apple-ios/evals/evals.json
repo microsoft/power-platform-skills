@@ -94,16 +94,16 @@
     },
     {
       "id": 14,
-      "coverage": "orchestrated-parent-confirmations",
-      "prompt": "Apply setup-apple-ios through the iOS prerequisites worker using a complete parent-collected confirmation envelope for one exact Team, bundle, and mode.",
-      "expected_output": "The worker validates the immutable envelope without asking questions or performing Apple/Xcode actions, invokes no nested worker or skill, writes no memory, preserves user-confirmed; not portal proof, and returns safe proposed memory fields only in the single WORKER_RESULT for the parent merge.",
+      "coverage": "serial-owner-invocation",
+      "prompt": "Invoke setup-apple-ios from add-push-notifications after Firebase established the exact iOS app identity.",
+      "expected_output": "The skill runs its normal interactive owner workflow, collects the required Yes/No confirmations for the exact Team, bundle, and mode, remains credential-blind, and writes only the safe user-confirmed memory section.",
       "files": []
     },
     {
       "id": 15,
-      "coverage": "combined-ios-fallback-no-intermediate-result",
-      "prompt": "Task dispatch is unavailable while the parent has a complete Apple and APNs confirmation envelope.",
-      "expected_output": "The parent does not invoke setup-apple-ios as a separate fallback and does not accept an intermediate Apple WORKER_RESULT. It invokes setup-apns exactly once as the combined fallback owner, applies Apple identity/capability/signing semantics before APNs semantics, and accepts one final iOS WORKER_RESULT.",
+      "coverage": "serial-apple-before-apns",
+      "prompt": "Add iOS push when Apple setup and APNs setup are both incomplete.",
+      "expected_output": "The parent invokes setup-apple-ios first, waits for its exact user-confirmed memory handoff, then invokes setup-apns. No Task fallback or combined worker result is used.",
       "files": []
     },
     {

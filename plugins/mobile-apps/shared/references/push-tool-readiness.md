@@ -37,7 +37,7 @@ does not invoke Xcode and therefore does not re-require `xcodebuild`.
 | Stage | Local readiness | Host/tool readiness | Live proof |
 |---|---|---|---|
 | Firebase client | Node.js 20+, npm, npx | `firebase` connected with the complete `/setup-fcm` tool set | Firebase account, project directory, active project, exact project read-back |
-| WIF sender auth | Node.js 20+, npm, npx, `gcloud`, and narrow `az` gap support | `azure` connected; `gcloud` preferred | Active Azure and Google identities/context, resource inventory, IAM/API/policy state |
+| WIF sender auth | Node.js 20+, npm, npx, `gcloud`, and narrow `az` gap support | `azure` connected | Active Azure and Google identities/context, resource inventory, IAM/API/policy state |
 | Flow authoring | Node.js 20+, npm, npx, local `power-apps`, `pac`, `az` | `flowagent` connected with the tools used by the requested operation | Power Apps/PAC/Azure/FlowAgent environment and tenant continuity; connector state |
 | Android build | Node.js 20+, npm, npx, Android SDK Build-Tools `apksigner` + `aapt`, `unzip` | none | Existing external signing boundary and fresh APK verification |
 | iOS build | macOS, Node.js 20+, npm, npx, `xcodebuild` | none | User-confirmed Apple/Xcode signing boundary and fresh IPA handoff |
@@ -46,12 +46,11 @@ does not invoke Xcode and therefore does not re-require `xcodebuild`.
 
 Firebase MCP is launched through pinned `firebase-tools` by `npx`; a separately
 installed `firebase` executable is not required. The Firebase client stage does
-not require gcloud CLI, gcloud MCP, or Application Default Credentials.
+not require gcloud CLI or Application Default Credentials.
 
-The gcloud MCP package is different: it shells out to the locally installed
-Google Cloud CLI. WIF therefore requires both the MCP surface (preferred) and a
-working `gcloud` executable, or the explicitly approved allowlisted CLI
-fallback documented by `/setup-push-wif`.
+WIF uses the locally installed Google Cloud CLI directly through the checked-in
+allowlisted wrapper. No separate Google Cloud server is registered in
+`.mcp.json`.
 
 ## Manual setup sources
 
@@ -99,7 +98,7 @@ Classify from observed evidence before proposing recovery:
 Do not infer a category from a product name in the error. In particular, a
 Firebase MCP project read may mention Google Cloud Resource Manager because
 Firebase projects are backed by Google Cloud projects. That message alone does
-not prove that gcloud CLI or gcloud MCP is missing.
+not prove that gcloud CLI is missing.
 
 ## Installation, login, restart, and resume protocol
 
@@ -129,8 +128,9 @@ For Copilot CLI MCP recovery, use:
 
 The second `/mcp` result must show the named server connected and every exact
 required tool present. Firebase and Azure remain blocked without their required
-MCP surfaces. Only `/setup-push-wif` may offer its explicitly approved,
-allowlisted gcloud CLI fallback.
+MCP surfaces. Google Cloud CLI readiness is separate and stage-lazy:
+`/setup-push-wif` reruns `gcloud --version` and the read-only account/context
+checks after installation, login, or PATH repair.
 
 ## Error handling rules
 
@@ -142,10 +142,7 @@ allowlisted gcloud CLI fallback.
 - Authentication failures route to login; authorization failures route to
   least-privilege access; API/policy failures route to the owning
   administrator. Do not suggest installation for those categories.
-- A connected MCP surface belongs to the main owner context that proved its
-  readiness. A background `Task` may not inherit the parent's MCP connection
-  or tool availability.
-- Worker `operation: preflight` remains a mutation-free capability handshake
-  for non-cloud workers only. It does not test or prove MCP inheritance.
-  Tool installation, MCP recovery, authentication, context proof, and every
-  MCP call remain parent/owner responsibilities.
+- Tool installation, MCP recovery, authentication, context proof, and every
+  MCP call remain responsibilities of the serial owner skill for that stage.
+  Push orchestration does not delegate readiness or execution to background
+  agents.

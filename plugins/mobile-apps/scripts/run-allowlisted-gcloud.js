@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { buildGcloudProcessInvocation } = require('./lib/gcloud-cli');
 
 const ALLOWLIST_PATH = path.join(
   __dirname,
@@ -46,7 +47,7 @@ function isAllowedGcloudArgs(args, allowlist = loadAllowlist()) {
   );
 }
 
-function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2), options = {}) {
   const separator = argv.indexOf('--');
   const args = separator >= 0 ? argv.slice(separator + 1) : [];
   if (!isAllowedGcloudArgs(args)) {
@@ -56,13 +57,18 @@ function main(argv = process.argv.slice(2)) {
     return 2;
   }
 
-  const result = spawnSync('gcloud', args, {
+  let invocation;
+  try {
+    invocation = buildGcloudProcessInvocation(args, options);
+  } catch (error) {
+    process.stderr.write(`BLOCKED: unable to resolve gcloud: ${error.message}\n`);
+    return 1;
+  }
+  const spawn = options.spawnSync || spawnSync;
+  const result = spawn(invocation.command, invocation.args, {
     stdio: 'inherit',
     shell: false,
-    env: {
-      ...process.env,
-      CLOUDSDK_CORE_DISABLE_PROMPTS: '1',
-    },
+    env: invocation.env,
   });
   if (result.error) {
     process.stderr.write(`BLOCKED: unable to run gcloud: ${result.error.message}\n`);

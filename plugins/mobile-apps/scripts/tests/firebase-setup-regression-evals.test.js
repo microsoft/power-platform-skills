@@ -162,13 +162,13 @@ test('Firebase readiness distinguishes tooling from Resource Manager failures', 
   const evals = JSON.parse(fs.readFileSync(EVAL_PATH, 'utf8')).evals;
 
   assert.match(skill, /--stage firebase-client/);
-  assert.match(skill, /Do not ask the user to\s+install a standalone Firebase CLI, Google Cloud CLI, or gcloud MCP/);
+  assert.match(skill, /Do not ask the user to\s+install a standalone Firebase CLI or Google Cloud CLI/);
   assert.match(skill, /Never tell the user to install gcloud merely because a\s+Firebase project read mentions Google Cloud Resource Manager/);
-  assert.match(reference, /does not by itself mean gcloud CLI or gcloud MCP is absent/);
+  assert.match(reference, /does not by itself mean gcloud CLI is absent/);
   assert.match(reference, /`resourcemanager\.projects\.get`/);
   assert.match(reference, /Do not call gcloud, install gcloud, replay project creation/);
   assert.match(readiness, /a\s+Firebase MCP project read may mention Google Cloud Resource Manager/);
-  assert.match(readiness, /does\s+not prove that gcloud CLI or gcloud MCP is missing/);
+  assert.match(readiness, /does\s+not prove that gcloud CLI is missing/);
   for (const coverage of [
     'firebase-mcp-disconnected',
     'firebase-local-runtime-missing',
@@ -382,7 +382,7 @@ test('sanitized SDK fixtures cover exact project, app, package, and bundle valid
   );
 });
 
-test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI fallback', () => {
+test('fixtures and workflow remain sanitized with no Firebase CLI fallback', () => {
   const fixtureNames = fs.readdirSync(FIXTURE_ROOT).sort();
   assert.strictEqual(fixtureNames.length, 18);
   for (const name of fixtureNames) {
@@ -404,7 +404,7 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(officialMcp, /\/setup-fcm[\s\S]*firebase[\s\S]*mcp__firebase__firebase_get_environment[\s\S]*mcp__firebase__firebase_get_sdk_config/s);
   assert.match(officialMcp, /`\/setup-apns` has no MCP readiness gate/);
   assert.match(officialMcp, /user performs the APNs key upload manually in\s+Firebase Console/);
-  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*extend this exception to Firebase or Azure/i);
+  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*outside the checked-in allowlist/i);
   assert.match(provisioning, /mcp__firebase__firebase_get_environment/);
   assert.match(provisioning, /mcp__firebase__firebase_login/);
   assert.match(provisioning, /mcp__firebase__firebase_list_projects/);

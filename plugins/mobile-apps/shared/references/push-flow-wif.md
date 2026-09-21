@@ -11,10 +11,10 @@ plugin-managed sender-auth mode.
 
 ## Provisioning ownership boundary
 
-The provisioning owner prefers pinned `@google-cloud/gcloud-mcp@0.5.3` and
-uses `@azure/mcp@2.0.5`. Google administration uses
-`mcp__gcloud__run_gcloud_command`, or the provisioning reference's guarded
-official CLI fallback when MCP recovery fails.
+The provisioning owner uses the installed Google Cloud CLI only through
+`scripts/run-allowlisted-gcloud.js` and uses `@azure/mcp@2.0.5` for covered
+Azure reads. The checked-in gcloud allowlist bounds every Google
+administration command.
 Azure covered reads use
 `mcp__azure__subscription`, `mcp__azure__group`, and `mcp__azure__role`.
 Call the namespace tool with routed command/parameters; use

@@ -287,7 +287,7 @@
       "id": 36,
       "coverage": "resource-manager-permission-denied",
       "prompt": "firebase_get_project fails while requesting Google Cloud Resource Manager with PERMISSION_DENIED for resourcemanager.projects.get.",
-      "expected_output": "The skill identifies an authenticated permission-denied Firebase project read-back, reports the exact missing permission with least-privilege guidance, and stops before app/config work. It does not claim gcloud CLI or gcloud MCP is missing, does not run the generic MCP repair sequence, and does not recommend Owner or Editor.",
+      "expected_output": "The skill identifies an authenticated permission-denied Firebase project read-back, reports the exact missing permission with least-privilege guidance, and stops before app/config work. It does not claim gcloud CLI is missing, does not run unrelated recovery, and does not recommend Owner or Editor.",
       "files": []
     },
     {
@@ -315,7 +315,7 @@
       "id": 40,
       "coverage": "firebase-resource-manager-not-gcloud",
       "prompt": "Setup says Firebase MCP could not read the project through Google Cloud Resource Manager. Tell me whether I need to install gcloud.",
-      "expected_output": "The skill explains that setup-fcm uses Firebase MCP credentials and that a Resource Manager mention alone does not require gcloud CLI or gcloud MCP. It checks Firebase MCP connection/tools, Firebase authentication/account, active project, permission/API/policy evidence, and safe transient retry in that order.",
+      "expected_output": "The skill explains that setup-fcm uses Firebase MCP credentials and that a Resource Manager mention alone does not require gcloud CLI. It checks Firebase MCP connection/tools, Firebase authentication/account, active project, permission/API/policy evidence, and safe transient retry in that order.",
       "files": []
     }
   ]

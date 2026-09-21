@@ -30,36 +30,24 @@ setup. The orchestrator must continue in-session when an owner can run, and
 stop only at the selected stopping point, a user-managed external action, or a
 real blocker.
 
-## Bounded orchestration
+## Serial orchestration
 
-Cloud owners are serial because a background `Task` cannot be assumed to
-inherit the parent context's connected MCP servers:
+Push setup runs serially so every stage uses the same main-session tool,
+identity, approval, and user-interaction context:
 
 1. `/setup-fcm` owns every Firebase MCP call and processes selected platform
    app/config work serially, Android then iOS.
-2. `/setup-push-wif` owns every gcloud/Azure MCP call, approval, mutation,
-   proof, and sender-auth handoff serially.
+2. `/setup-push-wif` owns every guarded Google Cloud CLI invocation, Azure MCP
+   call, approval, mutation, proof, and sender-auth handoff serially.
 3. `/create-push-notification-flow` and verification owners keep FlowAgent in
    their main contexts.
 
-After Firebase and eligible WIF work complete, `/add-push-notifications` may
-run at most two MCP-free tracks: `mobile-app:push-runtime-worker` and
-`mobile-app:push-ios-prerequisites-worker`.
-
-The parent owns every question and approval. Before non-cloud dispatch it
-freezes immutable decision envelopes, disjoint `exclusive_files`, and one
-`memory-bank.md` SHA-256. Workers never prompt, invoke another worker or skill,
-fan out, call MCP, or write memory. Every return must have a recognized literal
-status line and exactly one parseable `WORKER_RESULT`; malformed,
-identity-drifted, or unexpected-file results are blocked rather than inferred
-from disk state.
-
-Every `Task` capability check carries `operation: preflight` in the prompt.
-Preflight is mutation-free: no cloud calls, project or memory reads, file
-writes, or ownership acquisition. It proves only the local worker contract,
-not MCP inheritance. Result paths remain project-relative; the parent resolves
-them against the canonical absolute project root before comparing them with
-absolute exclusive files.
+After Firebase completes, `/add-push-notifications` invokes
+`/setup-apple-ios` and then `/setup-apns` synchronously for incomplete selected
+iOS prerequisites. It then implements runtime integration directly before
+continuing to sender authentication, FlowAgent authoring, wrapped builds, and
+physical verification. No push stage uses a background `Task`, execution
+envelope, exclusive-file ownership, or worker result protocol.
 
 Cold WIF preserves the short path when the user selects either the app
 registration or another same-tenant existing registration: read-only
@@ -72,16 +60,7 @@ approval for the exact remaining Google/API/RBAC diff -> final execution.
 Bootstrap never mutates Google state or writes `sender-auth.json`, and first
 approval never authorizes the remaining plan.
 
-Join every started non-cloud task, including a partially dispatched batch,
-before starting an undispatched track or fallback. Group valid
-`NEEDS_CONTEXT` requests into one parent question, retry only affected tracks,
-and cap each worker at two retries. Preserve successful independent work when
-one platform-specific track blocks. Immediately before the single parent
-memory merge, recompute the SHA-256 and stop on drift rather than overwriting
-concurrent changes.
-
-If task execution is unavailable, use one synchronous worker or the documented
-deterministic serial owner/inline fallback; never manufacture parallelism.
+Preserve successful independent work when one platform-specific stage blocks.
 FlowAgent authoring, wrapped builds, installation handoffs, and physical
 verification remain sequential owner boundaries in canonical lifecycle order.
 

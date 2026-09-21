@@ -248,7 +248,7 @@ test('iOS push chain: guided orchestration and manual boundaries stay explicit',
   assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
 });
 
-test('iOS fallback has one combined setup-apns owner and one terminal result', () => {
+test('iOS orchestration invokes Apple then APNs as separate serial owners', () => {
   const addPush = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
     'utf8',
@@ -270,31 +270,22 @@ test('iOS fallback has one combined setup-apns owner and one terminal result', (
     'utf8',
   )).evals;
 
-  const fallback = addPush.match(
-    /documented deterministic serial fallback[\s\S]*?(?=\nAfter successful preflight)/,
-  )?.[0] || '';
-  assert.match(fallback, /apply the combined `\/setup-apns`\s+owner path exactly once/);
-  assert.match(fallback, /do not invoke\s+`\/setup-apple-ios` separately/);
-  assert.match(fallback, /one final iOS `WORKER_RESULT`/);
-  assert.strictEqual(
-    (fallback.match(/apply the combined `\/setup-apns`[\s\S]*?exactly once/g) || []).length,
-    1,
-    'fallback invokes one combined setup-apns owner',
-  );
-
-  assert.match(apple, /do not emit an intermediate Apple `WORKER_RESULT`/i);
-  assert.match(apple, /returns exactly one final iOS result/i);
-  assert.match(apns, /do not emit or accept an intermediate Apple result|do not invoke `\/setup-apple-ios` separately and do\s+not emit or accept an intermediate Apple result/i);
-  assert.match(apns, /return exactly one\s+final iOS `WORKER_RESULT`/i);
+  const appleIndex = addPush.indexOf('/setup-apple-ios --working-dir <root>');
+  const apnsIndex = addPush.indexOf('/setup-apns --working-dir <root>');
+  assert.ok(appleIndex >= 0);
+  assert.ok(apnsIndex > appleIndex);
+  assert.doesNotMatch(addPush, /WORKER_RESULT|operation: preflight|exclusive_files/);
+  assert.doesNotMatch(apple, /WORKER_RESULT|push-ios-prerequisites-worker/);
+  assert.doesNotMatch(apns, /WORKER_RESULT|push-ios-prerequisites-worker/);
 
   assert.match(
-    appleEvals.find(({ coverage }) => coverage === 'combined-ios-fallback-no-intermediate-result')
+    appleEvals.find(({ coverage }) => coverage === 'serial-apple-before-apns')
       ?.expected_output || '',
-    /invokes setup-apns exactly once/,
+    /invokes setup-apple-ios first/,
   );
   assert.match(
-    apnsEvals.find(({ coverage }) => coverage === 'single-combined-fallback-result')
+    apnsEvals.find(({ coverage }) => coverage === 'reject-missing-apple-handoff')
       ?.expected_output || '',
-    /exactly one final iOS WORKER_RESULT/,
+    /routes to setup-apple-ios/,
   );
 });

@@ -7,6 +7,7 @@ const {
   assertVerificationTools,
   resolveTool,
 } = require('./verify-android-apk');
+const { buildGcloudProcessInvocation } = require('./lib/gcloud-cli');
 
 const MIN_NODE_MAJOR = 20;
 const STAGE_REQUIREMENTS = Object.freeze({
@@ -45,14 +46,14 @@ function sanitizeVersion(value) {
   return firstLine.replace(/[^\w.+() /-]/g, '').slice(0, 120) || null;
 }
 
-function commandSpec(name) {
+function commandSpec(name, options = {}) {
   switch (name) {
     case 'npm':
     case 'npx':
     case 'pac':
       return { command: name, args: ['--version'] };
     case 'gcloud':
-      return { command: name, args: ['--version'] };
+      return buildGcloudProcessInvocation(['--version'], options);
     case 'az':
       return { command: name, args: ['version', '--output', 'json'] };
     case 'power-apps':
@@ -66,10 +67,20 @@ function commandSpec(name) {
 
 function probeCommand(name, options = {}) {
   const spawn = options.spawnSync || spawnSync;
-  const spec = commandSpec(name);
+  let spec;
+  try {
+    spec = commandSpec(name, options);
+  } catch {
+    return {
+      name,
+      status: 'missing',
+      code: 'local-runtime-missing',
+      version: null,
+    };
+  }
   const result = spawn(spec.command, spec.args, {
     encoding: 'utf8',
-    env: options.env || process.env,
+    env: spec.env || options.env || process.env,
     timeout: 10_000,
   });
   if (result.error || result.status !== 0) {

@@ -42,7 +42,7 @@ shared contract does not replace, shorten, or weaken any APNs or iOS gate.
 FlowAgent tools are named below without a client prefix. Claude Code exposes
 them as `mcp__flowagent__<tool>` and Copilot CLI as `flowagent-<tool>`.
 
-This skill consumes only previously validated MCP-first handoffs. Repair
+This skill consumes only previously validated owner-generated handoffs. Repair
 Firebase, Google Cloud, Azure, or sender-auth prerequisites in their owner
 skills; do not substitute CLI fallbacks here.
 

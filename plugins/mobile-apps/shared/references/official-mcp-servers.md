@@ -1,9 +1,8 @@
-# Official MCP server bootstrap pins
+# Official MCP server bootstrap pins and guarded cloud CLI
 
-The mobile-apps plugin ships four MCP entries in `.mcp.json`:
+The mobile-apps plugin ships three MCP entries in `.mcp.json`:
 
 - `firebase` — official Firebase CLI MCP bootstrap via `firebase-tools@15.27.0`
-- `gcloud` — official Google Cloud MCP bootstrap via `@google-cloud/gcloud-mcp@0.5.3`
 - `azure` — official Azure MCP bootstrap via `@azure/mcp@2.0.5`
 - `microsoft-learn` — hosted Microsoft Learn MCP at `https://learn.microsoft.com/api/mcp`
 
@@ -36,27 +35,32 @@ This intentionally excludes deploy and security-rules helpers while retaining
 the authentication and active-project tools required by `/setup-fcm` and
 `/setup-apns`.
 
-### gcloud
+### Google Cloud CLI
 
-`@google-cloud/gcloud-mcp` exposes a single `run_gcloud_command` tool, so the
-plugin constrains it with a checked-in allowlist at
-`${PLUGIN_ROOT}/shared/mcp/gcloud-allowlist.json`.
-
-The MCP package invokes the locally installed Google Cloud CLI and therefore
-requires Node.js 20+ plus a working `gcloud` executable. The plugin can install
-the CLI on the user's behalf only after an explicit machine-level installation
+Google-side WIF administration is stage-lazy and does not register an MCP
+server. `/setup-push-wif` requires Node.js 20+ plus a working official
+`gcloud` executable only when that stage runs. The plugin can install the CLI
+on the user's behalf only after an explicit machine-level installation
 confirmation and only through a supported package manager already present.
 Otherwise, the user installs it from the official Google Cloud CLI
 documentation. Never silently install Homebrew, add package repositories, use
 `sudo`, or execute a downloaded installer.
 
-`run_gcloud_command` prepends the `gcloud` executable itself, so workflow
-examples and callers must pass `args` starting with the subcommand (`config`,
-`iam`, `services`, etc.), not a literal `"gcloud"` first token.
+Every Google operation must use:
 
-The allowlist is scoped to the Google-side operations the push/WIF workflows
-actually need today: project inspection, API enablement, workload-identity
-pool/provider management, service-account IAM, and custom-role management.
+```bash
+node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- <subcommand> <args>
+```
+
+The wrapper passes tokenized arguments to `gcloud` with `shell: false`,
+disables interactive prompts, and enforces
+`${PLUGIN_ROOT}/shared/mcp/gcloud-allowlist.json`. The allowlist is scoped to
+the Google-side operations the push/WIF workflows actually need today:
+project inspection, API enablement, workload-identity pool/provider
+management, service-account IAM, and custom-role management. Windows installs
+expose `gcloud.cmd`, so the wrapper resolves that SDK installation and invokes
+its Python entry point directly; cloud values never pass through command-script
+parsing.
 
 ### Azure
 
@@ -84,10 +88,11 @@ the latest non-prerelease GA version (`2.0.5`) instead of the prerelease
 Read [push-tool-readiness.md](./push-tool-readiness.md) first. It is canonical
 for stage-specific local checks, stable failure categories, bounded read
 retries, installation/login/restart waiting, and exact rechecks. This file
-defines only the official MCP package and capability boundaries.
+defines the official MCP package boundaries and the guarded Google Cloud CLI
+boundary.
 
-These push workflows require the listed official MCP server/tool surfaces
-before any cloud mutation or read-back. If a required server is missing,
+Firebase and Azure workflows require the listed official MCP server/tool
+surfaces before any covered cloud mutation or read-back. If a required server is missing,
 disconnected, or missing a required tool, give these
 Copilot CLI steps in this exact order:
 
@@ -100,12 +105,11 @@ Copilot CLI steps in this exact order:
 
 Require the second `/mcp` check to show the named server as **connected** and
 the required tool(s) present before continuing. Firebase and Azure workflows
-remain blocked when their required MCP surfaces are unavailable. The sole
-pre-readiness exception is `/setup-push-wif`: after the recovery sequence
-fails, it may use the official authenticated `gcloud` CLI through
-`scripts/run-allowlisted-gcloud.js`. Never call `gcloud` directly for
-provisioning, add commands outside the checked-in allowlist during an active
-provisioning run, or extend this exception to Firebase or Azure.
+remain blocked when their required MCP surfaces are unavailable.
+`/setup-push-wif` checks Google Cloud CLI independently and never uses `/mcp`
+recovery for a missing `gcloud` executable. Never call `gcloud` directly for
+provisioning or add commands outside the checked-in allowlist during an active
+provisioning run.
 
 Do not use this recovery sequence for an authenticated MCP call that returned
 an IAM, disabled-API, billing, organization-policy, VPC Service Controls,
@@ -116,7 +120,7 @@ when the server/package/tool surface itself is missing or disconnected.
 | Workflow | Required server(s) | Required tool(s) that must be visible before the workflow continues |
 |---|---|---|
 | `/setup-fcm` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_create_project`, `mcp__firebase__firebase_list_apps`, `mcp__firebase__firebase_create_app`, `mcp__firebase__firebase_get_sdk_config` |
-| `/setup-push-wif` | `azure`; `gcloud` preferred | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`; use `mcp__gcloud__run_gcloud_command` when available, otherwise the guarded official CLI fallback |
+| `/setup-push-wif` | `azure` | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`; Google operations use `scripts/run-allowlisted-gcloud.js` |
 `/setup-apns` has no MCP readiness gate. It consumes the exact `/setup-fcm`
 identity handoff, then the user performs the APNs key upload manually in
 Firebase Console because the official Firebase MCP exposes no credential-upload

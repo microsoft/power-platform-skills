@@ -259,7 +259,7 @@ After selecting or creating/upgrading a project:
 If the project is missing, the active project drifts, or the authenticated user
 is wrong, STOP before app registration or SDK config retrieval. A
 `firebase_get_project` failure that mentions Google Cloud Resource Manager
-does not by itself mean gcloud CLI or gcloud MCP is absent. Classify it from
+does not by itself mean gcloud CLI is absent. Classify it from
 the actual status/code/message:
 
 - unauthenticated or stale Firebase credentials -> Firebase login/re-auth;

@@ -23,18 +23,17 @@ key.
 
 ## 1. Tool and secret boundaries
 
-- Prefer pinned `@google-cloud/gcloud-mcp@0.5.3` and use
-  `@azure/mcp@2.0.5` semantics.
-- When available, use `mcp__gcloud__run_gcloud_command` for every Google Cloud
-  read, mutation, IAM operation, and read-back. Its `args` is one tokenized
-  command, starts with the subcommand, and contains no shell syntax.
-- If gcloud MCP remains unavailable after `/mcp`, `/setup`, `/restart`, and
-  `/mcp`, the user may approve the official CLI fallback. Require `gcloud
-  --version`, confirm the active account, and execute every Google operation as
-  `node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- <args>`. The
-  wrapper invokes no shell and rejects command families outside
-  `shared/mcp/gcloud-allowlist.json`. Keep explicit project/location flags and
-  the same read-back and mutation confirmations as the MCP path.
+- Use the installed official Google Cloud CLI through
+  `scripts/run-allowlisted-gcloud.js` for every Google Cloud read, mutation,
+  IAM operation, and read-back, and use `@azure/mcp@2.0.5` semantics for
+  covered Azure reads. Require `gcloud --version`, confirm the active account,
+  and pass tokenized arguments beginning with the subcommand. The wrapper
+  uses `shell: false`, disables prompts, and rejects command families outside
+  `shared/mcp/gcloud-allowlist.json`. On Windows it resolves the SDK from
+  `gcloud.cmd` on `PATH` and invokes `lib/gcloud.py` directly, so dynamic
+  values never pass through command-script parsing. Keep explicit
+  project/location flags and the same read-back and mutation confirmations for
+  every operation.
 - Use Azure namespace tools `mcp__azure__subscription`,
   `mcp__azure__group`, and `mcp__azure__role`; call the namespace tool plus
   routed command/parameters. Use `role_assignment_list` for RBAC inventory.
@@ -45,15 +44,15 @@ key.
 - Keep `az` only for Entra app/service-principal/credential work and
   secret-safe Key Vault metadata/write operations. Never replace covered Azure
   MCP reads with `az`. Do not call `gcloud` directly; the guarded wrapper is
-  the only CLI fallback.
+  the only Google Cloud execution path.
 
-Before inventory, require the `wif` local probe and the exact Azure/gcloud MCP
+Before inventory, require the `wif` local probe and the exact Azure MCP
 readiness described by `push-tool-readiness.md`. Then prove active identities
 and contexts through read-only calls. Keep these failure classes distinct:
 
 - missing/unsupported Node, npm/npx, gcloud, or narrow Azure CLI support is a
   local-tool problem;
-- missing/disconnected/incomplete Azure or gcloud MCP is an MCP problem;
+- missing/disconnected/incomplete Azure MCP is an MCP problem;
 - no valid Google/Azure session is `not-authenticated`;
 - a different account, tenant, subscription, or project is
   `wrong-account`/`active-context-mismatch`;
@@ -66,9 +65,12 @@ and contexts through read-only calls. Keep these failure classes distinct:
   `transient-readback`.
 
 Do not recommend installation for an authenticated IAM/API/policy failure.
-After manual install, login, MCP restart, or context repair, wait for the user
+After manual install, login, Azure MCP restart, or context repair, wait for the user
 when necessary and rerun the exact failed probe before planning. Do not replay
 a mutation after an uncertain response; first reread the affected resource.
+Google authentication is user-owned: direct the user to `gcloud auth login`
+when no active account exists, never run that interactive command through
+Bash, and rerun the allowlisted `config list account` probe afterward.
 
 Never print, echo, persist, or place in argv, files, flow definitions,
 `memory-bank.md`, or captured output any client secret, JWT, access token,
@@ -79,14 +81,7 @@ process.
 ## 2. Inputs and live inventory
 
 Read `memory-bank.md` and verify the active Azure identity and Google Cloud
-account.
-With gcloud MCP:
-
-```json
-{"args":["config","list","account","--format=json"]}
-```
-
-With the approved CLI fallback:
+account:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
@@ -264,25 +259,20 @@ Stop if neither app claim exists; never weaken to tenant-only trust.
 
 ## 6. Google WIF and IAM
 
-Use one gcloud MCP call per command, or one guarded wrapper invocation per
-command in fallback mode. Example MCP read-back:
+Use one guarded wrapper invocation per command. Example read-back:
 
-```json
-{
-  "args": [
-    "iam", "workload-identity-pools", "providers", "describe",
-    "<provider-id>", "--location=global",
-    "--workload-identity-pool=<pool-id>", "--project=<project-id>",
-    "--format=json"
-  ]
-}
+```bash
+node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
+  iam workload-identity-pools providers describe "<provider-id>" \
+  --location=global --workload-identity-pool="<pool-id>" \
+  --project="<project-id>" --format=json
 ```
 
 Create/repair the pool and OIDC provider from the observed contract, then read
 back issuer, audience, mapping, and condition before IAM mutation. A mismatch
 returns to the approved repair route; do not compensate with broader trust.
 
-Use these gcloud MCP command families as the provisioning templates, always
+Use these allowlisted gcloud command families as the provisioning templates, always
 with explicit project/location/resource flags and JSON read-back:
 
 | Resource | Mutate | Read back |

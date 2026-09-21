@@ -22,7 +22,7 @@
     {
       "id": 26,
       "prompt": "All named WIF, sender service-account, FCM role, and Key Vault resources already exist. Reuse them and write sender-auth.json without changing anything.",
-      "expected_output": "The skill takes the validate/reuse route only after reading Google resources through mcp__gcloud__run_gcloud_command one command at a time, reading Azure RBAC through the GA 2.0.5 namespace tool mcp__azure__role with role_assignment_list, checking Key Vault metadata without exposing the secret value, and comparing a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
+      "expected_output": "The skill takes the validate/reuse route only after reading Google resources one command at a time through scripts/run-allowlisted-gcloud.js, reading Azure RBAC through the GA 2.0.5 namespace tool mcp__azure__role with role_assignment_list, checking Key Vault metadata without exposing the secret value, and comparing a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
       "files": []
     },
     {
@@ -40,14 +40,14 @@
     {
       "id": 29,
       "prompt": "Some dedicated WIF resources exist with repairable drift, while provisioning isolated replacements is also possible. Go ahead with whichever route is easiest.",
-      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, keeps Google mutations on run_gcloud_command, keeps az limited to Entra plus secret-safe Azure gaps, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
+      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, keeps every Google mutation behind scripts/run-allowlisted-gcloud.js, keeps az limited to Entra plus secret-safe Azure gaps, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
       "files": []
     },
     {
       "id": 54,
       "coverage": "orchestrated-worker-contract",
-      "prompt": "Run setup-push-wif as the bounded worker with a complete parent-approved immutable envelope, sender-auth.json as the exclusive file, and a pre-wave memory hash.",
-      "expected_output": "The worker asks no questions, invokes no nested skill or agent, preserves the exact route and identities, writes only sender-auth.json after the four-stage proof, never writes memory-bank.md, rechecks the memory hash, and returns the literal status plus exactly one safe WORKER_RESULT for the parent.",
+      "prompt": "Run setup-push-wif synchronously from add-push-notifications with a complete approved immutable plan.",
+      "expected_output": "The owner preserves the exact route and identities, executes only the approved changes, completes the four-stage proof, writes the safe sender-auth.json handoff, and returns control to the serial parent workflow without delegating to an agent.",
       "files": []
     },
     {
@@ -116,7 +116,7 @@
     {
       "id": 69,
       "coverage": "wrong-google-account",
-      "prompt": "gcloud and gcloud MCP are available, but the active Google account cannot access the selected Firebase project.",
+      "prompt": "Google Cloud CLI is installed, but the active Google account cannot access the selected Firebase project.",
       "expected_output": "The skill distinguishes wrong-account or permission-denied from missing tooling by reading the active identity and project access. It asks the user to authenticate/select the intended account or obtain least-privilege access, reruns the same read-only probes, and does not reinstall gcloud or replay mutations.",
       "files": []
     },
@@ -131,7 +131,7 @@
       "id": 71,
       "coverage": "wif-iam-not-install",
       "prompt": "The authenticated Google principal gets PERMISSION_DENIED while reading or updating the workload identity pool IAM policy.",
-      "expected_output": "The skill classifies permission-denied, reports the bounded missing permission or denied operation, proposes least-privilege access or an approved repair, and does not suggest installing or restarting gcloud/MCP.",
+      "expected_output": "The skill classifies permission-denied, reports the bounded missing permission or denied operation, proposes least-privilege access or an approved repair, and does not suggest reinstalling gcloud or restarting Azure MCP.",
       "files": []
     },
     {

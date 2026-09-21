@@ -2,7 +2,7 @@
 name: setup-push-wif
 description: Use when provisioning, validating, reusing, or repairing the keyless Entra-to-Google Workload Identity Federation sender-auth stage for a Power Automate FCM sender, including selecting the app registration, another same-tenant existing registration, or a new dedicated registration; JWT claim discovery; Google STS; sender service-account impersonation; or Azure Key Vault RBAC. Owns only the non-secret sender-auth handoff, not Firebase client setup, flow authoring, wrapped builds, installation, or delivery.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__gcloud__run_gcloud_command, mcp__azure__subscription, mcp__azure__group, mcp__azure__role
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__azure__subscription, mcp__azure__group, mcp__azure__role
 model: opus
 ---
 
@@ -49,15 +49,15 @@ client ID or enter `identity-bootstrap`.
 
 ## Google tool readiness gate
 
-Before MCP recovery or cloud read-back, run:
+Before local readiness checks, Azure MCP recovery, or cloud read-back, run:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" --stage wif
 ```
 
-The official gcloud MCP requires Node.js 20+ and an installed `gcloud`
-executable. The WIF workflow also uses the narrow documented `az` gaps for
-Entra and secret-safe Key Vault operations. Branch on the probe's exact
+The WIF workflow requires Node.js 20+, an installed Google Cloud CLI, and the
+narrow documented `az` gaps for Entra and secret-safe Key Vault operations.
+Branch on the probe's exact
 `local-runtime-missing` or `local-runtime-unsupported` result rather than
 assuming an authentication or IAM error means a tool is absent.
 
@@ -89,25 +89,22 @@ host, wait for confirmation, and rerun the complete WIF local probe before
 continuing. Apply the same wait-and-recheck rule when the user manually installs
 or upgrades Node, npm/npx, or Azure CLI.
 
-Before any cloud read-back, require the Azure MCP surfaces and prefer the
-official gcloud MCP surface. If gcloud MCP is unavailable after `gcloud`
-readiness is proven, first give:
+Before any cloud read-back, require the Azure MCP surfaces, a successful
+`gcloud --version`, and a confirmed active Google account. Authentication or
+account repair is user-owned: wait for completion, then rerun the exact
+read-only account probe. Route every Google operation through
+`scripts/run-allowlisted-gcloud.js`; never call `gcloud` directly. If Azure MCP
+is unavailable, use the documented MCP recovery sequence and stop until its
+required surfaces reconnect; it has no general CLI fallback.
 
-```text
-/mcp
-/setup
-/restart
-/mcp
-```
+If the account probe reports no active account, instruct the user to run
+`gcloud auth login` in their terminal. If the wrong account is active, instruct
+them to select or authenticate the intended account. Do not execute interactive
+authentication through Bash or add `auth` commands to the allowlist. Wait for
+confirmation, then rerun the wrapper-based `config list account` probe.
 
-If the second `/mcp` still lacks gcloud, offer the official CLI fallback.
-Continue only after explicit approval, `gcloud --version` succeeds, the active
-Google account is confirmed, and every Google operation is routed through
-`scripts/run-allowlisted-gcloud.js`. If Azure MCP is unavailable, stop; it has
-no general CLI fallback.
-
-After local and MCP readiness succeeds, prove the active Google and Azure
-identities and pinned project/tenant/subscription through read-only calls.
+After local and Azure MCP readiness succeeds, prove the active Google and
+Azure identities and pinned project/tenant/subscription through read-only calls.
 Classify no session as `not-authenticated`, a different identity as
 `wrong-account`, and missing/drifted project or subscription as an active
 context failure. IAM, API enablement, billing/policy, and propagation failures
@@ -116,23 +113,22 @@ an authenticated provider denial. Retry only bounded idempotent inventory
 reads. Never replay identity, credential, API, IAM, or WIF mutations after an
 uncertain response without first rereading live state.
 
-The supported boundary is pinned `@google-cloud/gcloud-mcp@0.5.3` or the
-guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
+The supported boundary is the guarded official Google Cloud CLI plus
+`@azure/mcp@2.0.5`:
 
-- `mcp__gcloud__run_gcloud_command` owns every Google Cloud operation. It
-  prepends the `gcloud` executable itself, so pass one tokenized command whose
-  first argument is a subcommand:
-
-  ```json
-  {"args":["config","list","account","--format=json"]}
-  ```
-
-- In fallback mode, replace each MCP call with:
+- Route every Google Cloud operation through:
 
   ```bash
   node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
     config list account --format=json
   ```
+
+  Pass tokenized arguments after `--`, beginning with the gcloud subcommand.
+  The wrapper invokes `gcloud` with `shell: false`, disables prompts, and
+  rejects command families outside `shared/mcp/gcloud-allowlist.json`. On
+  Windows, where the SDK exposes `gcloud.cmd`, it resolves that installation
+  and invokes its Python entry point directly so arguments never pass through
+  command-script parsing.
 
   Never invoke `gcloud` directly for inventory, mutation, IAM, or API
   enablement.

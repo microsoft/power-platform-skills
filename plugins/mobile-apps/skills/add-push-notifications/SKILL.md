@@ -2,7 +2,7 @@
 name: add-push-notifications
 description: Primary guided entry point for adding, resuming, building, or verifying push notifications in a Power Apps Expo mobile app. It orchestrates the independent Firebase, Apple/APNs, app runtime, sender-auth, Power Automate, wrapped-build, and physical-delivery owners while directly owning permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and shared typed navigation-intent integration.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, Task
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: opus
 ---
 
@@ -45,17 +45,16 @@ provisioning, flow mutation, wrapped builds, installation handoffs, and
 physical-device verification inside their owner skills; orchestration means
 invoking and resuming those owners, not copying their implementation here.
 
-Push cloud setup around this skill is **official MCP-first**. `/setup-fcm` is
+Push cloud setup around this skill is **owner-bounded**. `/setup-fcm` is
 the only supported Firebase owner and requires the vendor-official Firebase MCP
 only; do not substitute `firebase-tools`, `gcloud`, or browser automation from
-here. `/setup-push-wif` separately owns Google-side WIF provisioning through
-gcloud MCP or its guarded official CLI fallback, and FlowAgent remains the
+here. `/setup-push-wif` separately owns Google-side WIF provisioning through the
+guarded official Google Cloud CLI, and FlowAgent remains the
 only Power Automate mutation path.
 
-Do not add gcloud or Azure MCP surfaces to this skill's `allowed-tools`.
+Do not add bare gcloud or Azure MCP surfaces to this skill's `allowed-tools`.
 `/setup-push-wif` owns the complete serial cloud plan/approval/execute path in
-the main context. This parent supplies pinned inputs, invokes owners, dispatches
-only non-cloud workers, validates, joins, and merges.
+the main context. This skill invokes every push owner serially and implements runtime integration directly; it does not dispatch background push agents.
 
 **Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)** —
 use this comparison when reporting sender-auth next steps. Manual FCM
@@ -67,7 +66,7 @@ authentication is customer-owned; this plugin does not inspect or validate it.
 
 0. Collect orchestration decisions -> 1. Verify app and runtime -> 2. Verify
 auth identity -> 3. Serially resume/establish Firebase client setup ->
-4. Run serial cloud owners and the bounded non-cloud worker wave -> 5. Write wrapper
+4. Complete serial platform owners -> 5. Write wrapper
 and shared navigation module -> 6. Add permission UX -> 7. Wire auth/topic
 lifecycle -> 8. Wire navigation sources -> 9. Validate -> 10. Continue
 sequential downstream owners -> 11. Update memory bank and report
@@ -107,8 +106,7 @@ eligible. A later missing prerequisite does not invalidate a completed
 Firebase/runtime stage.
 
 In the same main-context decision pass, resolve everything knowable before
-worker dispatch. Workers have no authority to ask, infer, or broaden these
-choices:
+runtime mutation or downstream owner invocation:
 
 - show the canonical two-option sender-auth comparison and record exactly
   **Workload Identity Federation (Recommended)** or **Create Power Automate
@@ -228,137 +226,42 @@ project and every selected immutable Firebase app/config/Expo identity. Do not
 start any later worker from one platform's early result. Active
 Android and iOS configs must name the same exact project.
 
-Only after this exact Firebase result, reread `memory-bank.md`. The remaining
-worker-wave SHA-256 is frozen only after serial WIF completion and immediately
-before non-cloud execution dispatch in Step 4.3.
-
 At this point, after Firebase login when needed, exact project activation and
 read-back, and the immutable iOS Firebase app has been created or reused and
-validated, collect unresolved iOS decisions in the main context:
-registered-device mode (`development`, `ad-hoc`, or both), approved Apple Team
-ID, Apple setup completion, APNs `.p8` or `.p12` route, and the Firebase
-Console upload attestation. Reuse safely recorded answers rather than asking
-again, but never solicit or confirm them before the Firebase foundation
-exists. Complete any identity-dependent WIF questions at this same
-post-Firebase boundary. Present every user-performed Apple and Firebase Console
-instruction in the canonical `/setup-apple-ios` then `/setup-apns` order and
-collect each required Yes/No attestation before an iOS worker is eligible.
-This manual Apple Developer/Xcode guidance does not change credentials or
-portal state. It does not automate Apple setup or emit a proof artifact.
+validated, complete selected iOS prerequisites serially in Step 4. Do not ask
+Apple/APNs questions before this Firebase foundation exists.
 
-### 4. Run serial cloud owners, then the bounded non-cloud worker wave
+### 4. Complete platform prerequisites serially
 
-Connected MCP servers are owned by the main skill context that proved their
-readiness. A background `Task` may not inherit that connection, so no worker
-may declare or call Firebase, gcloud, Azure, or FlowAgent MCP tools.
+For selected iOS, inspect the safe handoffs in `memory-bank.md` after Firebase
+identity is fixed:
 
-#### 4.1 Complete sender authentication serially
+1. If exact Apple Team, bundle, mode, capability, device, signing/profile, or
+   local Xcode confirmations are incomplete, invoke
+   `/setup-apple-ios --working-dir <root>` synchronously and wait for its
+   user-confirmed completion.
+2. Reread the Apple handoff. If the exact APNs route and Firebase Console
+   upload confirmation are incomplete, invoke
+   `/setup-apns --working-dir <root>` synchronously and wait for its completion.
+3. Reread both handoffs and rerun the bounded local push-config check. Require
+   the same Firebase project/iOS app/plist, Expo bundle, Apple Team, and
+   selected modes across the complete sequence.
 
-When the stopping point is **Create delivery flows** or later and WIF is
-selected, invoke `/setup-push-wif --working-dir <root>` synchronously. That
-owner performs all local readiness, gcloud/Azure MCP authentication and
-context checks, read-only planning, explicit approvals, cloud mutations,
-fresh proof, and `sender-auth.json` validation in the main context.
+Never invoke `/setup-apns` before `/setup-apple-ios` is complete for the exact
+identity. Reuse safely recorded confirmations instead of asking again. A
+user-managed **No**, missing action, or identity drift blocks only iOS
+prerequisites; preserve completed Android and shared setup. Apple Developer,
+Xcode, and Firebase Console actions remain manual and credential-blind.
+This is manual Apple Developer/Xcode guidance; it does not automate Apple setup or emit a proof artifact.
 
-Preserve its three immutable registration modes:
-
-- `reuse-app-registration`;
-- `use-existing-registration`;
-- `create-dedicated-registration`.
-
-The two existing-registration modes retain the read-only inventory -> exact
-approval -> execute path. A truly absent new dedicated identity retains the
-two-stage approval boundary: approve and execute only the Entra/credential/
-Key Vault bootstrap, reread the server-generated client ID and fresh claims,
-then separately approve and execute the remaining Google/API/RBAC plan.
-Bootstrap never mutates Google or writes `sender-auth.json`. Never collapse
-the two approvals, replay an uncertain mutation, switch registration modes,
-or offer a broader Firebase role. Do not ask about a broader Firebase role or
-Firebase Admin SDK access.
-
-If `/setup-push-wif` blocks, record sender authentication as blocked while
-preserving completed Firebase and platform state. Runtime and iOS prerequisite
-work may still continue when independently eligible, but FlowAgent authoring
-cannot start until the selected sender-auth path is ready.
-
-Manual FCM authentication skips `/setup-push-wif`, never fabricates
-`sender-auth.json`, and remains customer-owned.
-
-#### 4.2 Determine non-cloud worker tracks
-
-Evaluate only these two independent tracks:
-
-1. **Runtime integration** —
-   `mobile-app:push-runtime-worker`, eligible when any selected platform's
-   Steps 5-9 runtime state is incomplete or strict validation is not current.
-2. **iOS prerequisites** —
-   `mobile-app:push-ios-prerequisites-worker`, eligible only for selected iOS
-   whose exact Apple/APNs safe state is incomplete and whose complete
-   parent-collected confirmation envelope is ready. Android-only work skips
-   this track.
-
-Neither worker may declare an MCP tool. Do not dispatch a proven track. A
-parent-collected **No**, missing manual action, or unsafe/missing approval keeps
-only that track incomplete.
-
-#### 4.3 Preflight, dispatch, and fallback
-
-Silently preflight each eligible fully-qualified worker with an ordinary
-`Task` request carrying `operation: preflight` in the prompt. Preflight
-remains a no-read, no-network, no-write capability handshake and does not prove
-MCP availability.
-
-Require the exact capability records defined by each worker:
-
-- runtime: `supportedOperations: ["preflight","execute"]`,
-  `executeCloudAccess: "none"`, and
-  `executeWriteScope: "exclusive-runtime-files-only"`;
-- iOS prerequisites: `supportedOperations: ["preflight","execute"]`,
-  `executeCloudAccess: "none"`, and `executeWriteScope: "none"`.
-
-If Task resolution or preflight fails before any execution starts, use the
-documented deterministic serial fallback: apply the combined `/setup-apns`
-owner path exactly once for iOS prerequisites; it owns the Apple-first/APNs
-sequence and returns one final iOS `WORKER_RESULT`, so do not invoke
-`/setup-apple-ios` separately. Execute runtime Steps 5-9 inline. Do not add
-cloud work to fallback; Firebase and WIF have already run serially in their
-owners.
-
-After successful preflight, freeze the exact worker decision envelopes,
-exclusive files, and one raw-byte SHA-256 of `memory-bank.md`. When both
-tracks are eligible, dispatch exactly two tasks in one bounded batch. When only
-one is eligible, use one synchronous worker. Never manufacture another task
-for symmetry.
-
-Join every started task before fallback or parent access to its exclusive
-files. Treat uncertain or partial dispatch as
-`BLOCKED: push-worker-partial-dispatch-uncertain`.
-
-#### 4.4 Validate returns, retry affected tracks, and merge once
-
-Require the literal status line and exactly one parseable single-line
-`WORKER_RESULT` from each worker. Validate worker/run/operation/stage/status,
-all pinned identities and decisions, project-relative paths resolved against
-`working_dir`, exclusive-file containment, required validations, safe memory
-patch fields, and the exact cleanup/ownership rules in the worker contracts.
-
-Collect valid `NEEDS_CONTEXT` results before asking one grouped parent
-question. Update and redispatch only affected tracks, preserve successful
-results, and cap each worker at two retries. Never auto-retry `BLOCKED`,
-malformed output, identity drift, or an uncertain mutation.
-
-After retries, independently rerun runtime and iOS owner validations.
-Immediately before memory mutation, recompute the SHA-256. On mismatch,
-preserve changed files and stop without overwriting. On match, apply all
-allowlisted non-secret worker memory sections in one parent edit, ordered by
-`ios-prerequisites` then `runtime-integration`.
+Android has no separate platform-credential owner in this workflow. Do not
+invent one.
 
 ### 5. Write the wrapper and shared navigation module
 
-Steps 5-9 are the canonical runtime execution specification. The runtime
-worker applies them when dispatched. The parent applies them only for the
-deterministic inline fallback and must not touch runtime exclusive files while
-a worker may own them.
+Steps 5-9 are the canonical runtime execution specification. Execute them
+directly and serially in this skill. No background agent, execution envelope,
+exclusive-file ownership protocol, retry handoff, or fallback branch is used.
 
 Create `src/navigation/linkContract.ts` first. Use the approved screen plan's
 Navigation Contracts table to define stable kebab-case destination IDs, exact
@@ -525,19 +428,29 @@ Add every other changed file explicitly to the final validator call.
 After strict runtime validation succeeds, continue only as far as the selected
 stopping point:
 
-1. For **Create delivery flows** or later, invoke
+1. For **Create delivery flows** or later with WIF selected, invoke `/setup-push-wif --working-dir <root>` synchronously. Preserve its three
+   immutable registration modes and exact approval boundaries. The two
+   existing-registration modes retain read-only inventory -> exact approval ->
+   execution and proof. A truly absent new dedicated identity retains the
+   two-stage approval boundary: Entra/credential/Key Vault bootstrap first,
+   then a fresh claim-driven Google/API/RBAC plan and second approval.
+   Bootstrap never mutates Google or writes `sender-auth.json`.
+   Do not ask about a broader Firebase role or Firebase Admin SDK access.
+   Manual FCM authentication skips this owner and never fabricates
+   `sender-auth.json`.
+2. For **Create delivery flows** or later, invoke
    `/create-push-notification-flow --working-dir <root>` synchronously. Pass
    the already selected sender-auth route so that owner does not ask the
    sender-auth question a second time. For WIF, require the independently
    revalidated owner handoff. For manual authentication, preserve the
    owner's stopped-flow/customer-configuration behavior and never inspect
    credentials or require `sender-auth.json`.
-2. For **Build for device** or later, invoke `/build-android` and/or
+3. For **Build for device** or later, invoke `/build-android` and/or
    `/build-ios` for selected platforms whose stages 1-5 are ready, in
    deterministic Android-then-iOS order. Preserve platform independence: an
    iOS Apple/APNs blocker must not prevent an otherwise ready Android build,
    and an Android blocker must not rewrite iOS state.
-3. For **Verify end to end**, invoke `/verify-android-push` and/or
+4. For **Verify end to end**, invoke `/verify-android-push` and/or
    `/verify-ios-push`, in deterministic Android-then-iOS order, only after
    each exact current artifact is ready and the owner-required installation handoff is complete.
 
@@ -556,10 +469,9 @@ Update `memory-bank.md` with packages, Firebase project ID (not credentials),
 permission UX, topic policy, navigation schema version/destination registry,
 custom-scheme/HTTPS configuration state, and validation status.
 
-Do not reapply worker `memoryPatch` sections here: Step 4 performs their one
-ordered parent merge. This final update records only subsequent sequential
-owner handoffs and the final lifecycle summary, while preserving every
-successful branch and every unresolved platform-specific blocker.
+This final update records the direct runtime result and subsequent serial
+owner handoffs while preserving every successful branch and every unresolved
+platform-specific blocker.
 
 Apply the canonical states and resume rules from `push-lifecycle.md`. Report
 one compact row per selected platform plus one shared delivery row:

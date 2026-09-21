@@ -30,7 +30,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   }
 });
 
-test('shared push docs record verified Firebase, gcloud, and Azure MCP boundaries', () => {
+test('shared push docs record Firebase MCP, guarded gcloud CLI, and Azure MCP boundaries', () => {
   const fs = require('node:fs');
   const shared = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'shared/shared-instructions.md'),
@@ -52,7 +52,7 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   );
 
   assert.match(shared, /Firebase MCP required/);
-  assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
+  assert.match(shared, /Guarded Google Cloud CLI required for `\/setup-push-wif`/);
   assert.match(shared, /mcp__azure__role/);
   assert.doesNotMatch(shared, /mcp__azure__keyvault/);
   assert.match(shared, /role_assignment_list/);
@@ -66,21 +66,24 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
     readme,
     /\| `\/setup-fcm` \| .*vendor-official Firebase MCP\. No CLI fallback\./,
   );
-  assert.match(readme, /gcloud MCP for `\/setup-push-wif` Google Cloud operations/);
+  assert.match(readme, /Google Cloud CLI executed\s+only through the checked-in allowlisted wrapper/);
   assert.match(readme, /does not expose the `keyvault` namespace/i);
 
   assert.match(agents, /Firebase MCP for `\/setup-fcm`/);
-  assert.match(agents, /gcloud MCP for `\/setup-push-wif`/);
-  assert.match(agents, /gcloud MCP requires Node\.js 20\+ and Google Cloud CLI/i);
+  assert.match(agents, /Google Cloud CLI only through `scripts\/run-allowlisted-gcloud\.js` for `\/setup-push-wif`/);
+  assert.match(agents, /requires Node\.js 20\+ and Google Cloud CLI only when WIF setup runs/i);
   assert.match(agents, /`keyvault` namespace remains excluded/i);
   assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
-  assert.match(officialMcp, /\/setup-push-wif[\s\S]*`azure`; `gcloud` preferred[\s\S]*mcp__azure__role[\s\S]*mcp__gcloud__run_gcloud_command/s);
-  assert.match(officialMcp, /requires Node\.js 20\+ plus a working `gcloud` executable/i);
+  assert.match(officialMcp, /\/setup-push-wif[\s\S]*`azure`[\s\S]*mcp__azure__role[\s\S]*run-allowlisted-gcloud\.js/s);
+  assert.match(officialMcp, /requires Node\.js 20\+ plus a working official\s+`gcloud` executable/i);
   assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*extend this exception to Firebase or Azure/i);
+  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*outside the checked-in allowlist/i);
 
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
   assert.doesNotMatch(addPush, /Firebase MCP[\s\S]*plus gcloud MCP/);
+  assert.doesNotMatch(`${agents}\n${addPush}`, /gcloud(?:\/Azure)? MCP/i);
+  const orchestrationEvals = fs.readFileSync(ORCHESTRATION_EVAL_PATH, 'utf8');
+  assert.doesNotMatch(orchestrationEvals, /gcloud(?:\/Azure)? MCP/i);
   assert.match(createFlow, /vendor-official Firebase MCP only/);
 });
 
@@ -241,7 +244,7 @@ test('push flow recovery keeps the tool surface non-destructive', () => {
   assert.match(evals.find(({ id }) => id === 53).expected_output, /fixed lookup/i);
 });
 
-test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
+test('WIF sender auth uses the guarded gcloud CLI and pinned Azure MCP', () => {
   const fs = require('node:fs');
   const wifSkill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
@@ -251,15 +254,15 @@ test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
     path.join(PLUGIN_ROOT, 'shared/references/push-flow-wif.md'),
     'utf8',
   );
-  assert.match(wifSkill, /allowed-tools: .*mcp__gcloud__run_gcloud_command.*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role/s);
+  assert.match(wifSkill, /allowed-tools: .*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role/s);
+  assert.doesNotMatch(wifSkill, /mcp__gcloud/);
   assert.match(wifSkill, /Google tool readiness gate/);
-  assert.match(wifSkill, /official gcloud MCP requires Node\.js 20\+/i);
+  assert.match(wifSkill, /requires Node\.js 20\+, an installed Google Cloud CLI/i);
   assert.match(wifSkill, /Install Google Cloud CLI for me/);
   assert.match(wifSkill, /brew update && brew install --cask gcloud-cli/);
   assert.match(wifSkill, /separate explicit\s+confirmation/i);
-  assert.match(wifSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(wifSkill, /require the Azure MCP surfaces and prefer the\s+official gcloud MCP surface/i);
-  assert.match(wifSkill, /@google-cloud\/gcloud-mcp@0\.5\.3/);
+  assert.match(wifSkill, /require the Azure MCP surfaces, a successful\s+`gcloud --version`/i);
+  assert.match(wifSkill, /scripts\/run-allowlisted-gcloud\.js/);
   assert.match(wifSkill, /@azure\/mcp@2\.0\.5/);
   assert.match(wifSkill, /mcp__azure__subscription/);
   assert.match(wifSkill, /mcp__azure__group/);
@@ -267,16 +270,15 @@ test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
   assert.match(wifSkill, /mcp__azure__role/);
   assert.match(wifSkill, /role_assignment_list/);
   assert.match(wifSkill, /namespace tool plus[\s\S]*routed command\/parameters/);
-  assert.match(wifSkill, /prepends the `gcloud` executable itself/);
-  assert.match(wifSkill, /args"\s*:\s*\[\s*"config",\s*"list",\s*"account",\s*"--format=json"/s);
-  assert.doesNotMatch(wifSkill, /"args"\s*:\s*\[\s*"gcloud"/s);
+  assert.match(wifSkill, /Pass tokenized arguments after `--`/);
+  assert.match(wifSkill, /config list account --format=json/);
   assert.match(wifSkill, /does not expose the `keyvault` namespace/i);
   assert.match(wifSkill, /value-carrying Key[\s\S]*Vault secret operations/i);
   assert.match(wifSkill, /mcp__azure__azmcp_role_assignment_list/);
   assert.match(wifSkill, /keyvault_secret_list/);
   assert.doesNotMatch(wifSkill, /mcp__azure__azmcp_role_assignment_list.*allowed-tools/s);
 
-  assert.match(wifReference, /@google-cloud\/gcloud-mcp@0\.5\.3/);
+  assert.match(wifReference, /scripts\/run-allowlisted-gcloud\.js/);
   assert.match(wifReference, /@azure\/mcp@2\.0\.5/);
   assert.match(wifReference, /mcp__azure__subscription/);
   assert.match(wifReference, /mcp__azure__group/);
@@ -348,7 +350,7 @@ test('push owners share stage-specific readiness and evidence-based recovery', (
   assert.match(authoring, /--stage flow-authoring/);
   assert.match(authoring, /Confirmation alone is not proof/);
   assert.match(appleSkill, /--stage ios-build/);
-  assert.match(appleSkill, /combined worker mode, keep preflight inert/);
+  assert.doesNotMatch(appleSkill, /combined worker mode|WORKER_RESULT|push-ios-prerequisites-worker/);
   assert.match(apnsSkill, /has no MCP, Firebase CLI, gcloud, Azure/);
   assert.match(apnsSkill, /do not diagnose that as a missing APNs automation tool/);
   for (const id of [68, 69, 70, 71, 72]) assert.ok(wifEvals.find((item) => item.id === id));
@@ -509,21 +511,20 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
   assert.match(orchestration.evals[19].expected_output, /scheduleNotificationAsync/);
   assert.match(orchestration.evals[20].expected_output, /same channel ID/);
-  assert.match(orchestration.evals[21].expected_output, /maximum-two MCP-free wave/);
+  assert.match(orchestration.evals[21].expected_output, /creates no background Task/);
   assert.match(orchestration.evals[21].expected_output, /invokes \/setup-fcm serially/);
-  assert.match(orchestration.evals[21].expected_output, /invokes \/setup-push-wif synchronously/);
-  assert.match(orchestration.evals[22].expected_output, /one synchronous mobile-app:push-runtime-worker/);
-  assert.match(orchestration.evals[23].expected_output, /deterministic serial runtime inline path/);
-  assert.match(orchestration.evals[24].expected_output, /never retries cloud MCP from a Task worker/);
-  assert.match(orchestration.evals[25].expected_output, /detects drift from the pre-wave hash/);
+  assert.match(orchestration.evals[21].expected_output, /implements runtime integration directly/);
+  assert.match(orchestration.evals[22].expected_output, /implements Android runtime integration directly/);
+  assert.match(orchestration.evals[23].expected_output, /uses no background Task/);
+  assert.match(orchestration.evals[24].expected_output, /uses no background agents/);
+  assert.match(orchestration.evals[25].expected_output, /No deferred worker merge/i);
   assert.match(orchestration.evals[26].expected_output, /iOS as blocked/);
   assert.strictEqual(
     orchestration.evals[27].coverage,
-    'mcp-free-worker-contract-and-ios-fallback',
+    'serial-ios-owner-order',
   );
-  assert.match(orchestration.evals[27].expected_output, /Task preflights are mutation-free and MCP-free/);
-  assert.match(orchestration.evals[27].expected_output, /completes WIF synchronously/);
-  assert.match(orchestration.evals[27].expected_output, /setup-apns exactly once/);
+  assert.match(orchestration.evals[27].expected_output, /setup-apple-ios and then \/setup-apns synchronously/);
+  assert.match(orchestration.evals[27].expected_output, /No worker preflight or fallback exists/);
   assert.strictEqual(
     orchestration.evals[28].coverage,
     'cold-wif-identity-bootstrap-reapproval',
@@ -568,7 +569,7 @@ test('iOS push orchestration invokes owners without duplicating their workflows'
   assert.doesNotMatch(readme, /push-notifications-architecture-diagrams\.md/);
   assert.match(readme, /push-notifications\.md/);
   assert.match(readme, /navigation-link-contract\.md/);
-  assert.match(agents, /35 skills \+ 9 agents/);
+  assert.match(agents, /35 skills \+ 5 agents/);
   assert.match(agents, /manual Apple Developer and Xcode guidance/);
   assert.match(agents, /user owns signing assets, registered devices/);
 });
@@ -597,7 +598,7 @@ test('screen-planner navigation examples match the eight-column contract', () =>
   }
 });
 
-test('push docs require official MCP-first orchestration boundaries', () => {
+test('push docs require owner-bounded cloud orchestration', () => {
   const fs = require('node:fs');
   const shared = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'shared/shared-instructions.md'),
@@ -622,13 +623,12 @@ test('push docs require official MCP-first orchestration boundaries', () => {
     'utf8',
   );
 
-  assert.match(shared, /official MCP-first/i);
+  assert.match(shared, /Owner-bounded push cloud architecture/i);
   assert.match(shared, /firebase-tools` \*\*15\.27\.0\*\*/);
   assert.match(shared, /15\.28\.1.*main\/unpublished/);
-  assert.match(shared, /gcloud MCP \*\*0\.5\.3\*\*/);
   assert.match(shared, /Azure MCP GA \*\*2\.0\.5\*\*/);
   assert.match(shared, /Firebase MCP required/);
-  assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
+  assert.match(shared, /Guarded Google Cloud CLI required for `\/setup-push-wif`/);
   assert.match(shared, /Azure MCP required for covered operations/);
   assert.match(shared, /role_assignment_list/);
   assert.match(shared, /secret values and are intentionally excluded/i);
@@ -638,18 +638,16 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(shared, /FlowAgent remains the Power Automate mutation path/);
   assert.match(shared, /Apple setup is manual and user-owned/);
   assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
-  assert.match(readme, /Push cloud setup is \*\*official MCP-first\*\*/);
+  assert.match(readme, /Push cloud setup is \*\*owner-bounded\*\*/);
   assert.match(readme, /No CLI fallback/);
   assert.match(readme, /Microsoft Learn MCP\/docs remain the authoritative\s+source/);
   assert.match(readme, /firebase-tools` \*\*15\.27\.0\*\*/);
-  assert.match(readme, /gcloud MCP \*\*0\.5\.3\*\*/);
   assert.match(readme, /Azure MCP GA \*\*2\.0\.5\*\*/);
   assert.match(readme, /subscription\/group\/RBAC read-back/i);
   assert.match(readme, /does not expose the `keyvault` namespace/i);
   assert.match(readme, /RBAC mutations/);
-  assert.match(agents, /Push cloud setup is \*\*official MCP-first\*\*/);
+  assert.match(agents, /Push cloud setup uses the narrowest supported owner surface/);
   assert.match(agents, /firebase-tools` 15\.27\.0/);
-  assert.match(agents, /gcloud MCP 0\.5\.3/);
   assert.match(agents, /Azure MCP GA 2\.0\.5/);
   assert.match(agents, /Google Cloud CLI/);
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
@@ -657,7 +655,7 @@ test('push docs require official MCP-first orchestration boundaries', () => {
     createFlow,
     /Do not fall\s+back to `firebase-tools`, `gcloud`, or cloud\s+provisioning from this skill/,
   );
-  assert.match(verify, /consumes only previously validated MCP-first handoffs/i);
+  assert.match(verify, /consumes only previously validated owner-generated handoffs/i);
   assert.match(officialMcp, /Apple Developer and Xcode setup is intentionally outside MCP automation/);
   assert.match(
     officialMcp,

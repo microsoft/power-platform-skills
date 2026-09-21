@@ -10,13 +10,10 @@ const {
   FIREBASE_ALLOWED_TOOLS,
   FIREBASE_PACKAGE,
   FIREBASE_VERSION,
-  GCLOUD_PACKAGE,
-  GCLOUD_VERSION,
   MCP_SCHEMA_URL,
   MICROSOFT_LEARN_URL,
   OFFICIAL_SERVER_IDS,
   PLUGIN_ROOT,
-  getGcloudAllowlistPath,
   resolvePluginRoot,
 } = require('./lib/official-mcp-servers');
 
@@ -51,7 +48,7 @@ function validateMicrosoftLearn(entry, issues) {
 }
 
 function validateGcloudAllowlist(pluginRoot, issues) {
-  const allowlistPath = getGcloudAllowlistPath(pluginRoot);
+  const allowlistPath = path.join(pluginRoot, 'shared', 'mcp', 'gcloud-allowlist.json');
   if (!fs.existsSync(allowlistPath)) {
     issues.push(`gcloud: missing allowlist file at ${allowlistPath}.`);
     return;
@@ -73,17 +70,11 @@ function validateServerPins(issues) {
   if (FIREBASE_VERSION !== '15.27.0') {
     issues.push(`firebase: expected firebase-tools stable pin 15.27.0, got ${FIREBASE_VERSION}.`);
   }
-  if (GCLOUD_VERSION !== '0.5.3') {
-    issues.push(`gcloud: expected @google-cloud/gcloud-mcp pin 0.5.3, got ${GCLOUD_VERSION}.`);
-  }
   if (AZURE_VERSION !== '2.0.5') {
     issues.push(`azure: expected @azure/mcp GA pin 2.0.5, got ${AZURE_VERSION}.`);
   }
   if (FIREBASE_PACKAGE !== 'firebase-tools') {
     issues.push(`firebase: expected package firebase-tools, got ${FIREBASE_PACKAGE}.`);
-  }
-  if (GCLOUD_PACKAGE !== '@google-cloud/gcloud-mcp') {
-    issues.push(`gcloud: expected package @google-cloud/gcloud-mcp, got ${GCLOUD_PACKAGE}.`);
   }
   if (AZURE_PACKAGE !== '@azure/mcp') {
     issues.push(`azure: expected package @azure/mcp, got ${AZURE_PACKAGE}.`);
@@ -129,6 +120,9 @@ function validateMcpConfig(pluginRoot = PLUGIN_ROOT) {
   }
 
   const servers = config.mcpServers || {};
+  if (Object.prototype.hasOwnProperty.call(servers, 'gcloud')) {
+    issues.push('gcloud: must not be registered as an automatically started MCP server.');
+  }
   for (const serverId of OFFICIAL_SERVER_IDS) {
     validateBootstrapEntry(serverId, servers[serverId], issues);
   }
@@ -147,8 +141,8 @@ function validateMcpConfig(pluginRoot = PLUGIN_ROOT) {
         tools: FIREBASE_ALLOWED_TOOLS,
       },
       gcloud: {
-        package: `${GCLOUD_PACKAGE}@${GCLOUD_VERSION}`,
-        allowlistPath: getGcloudAllowlistPath(resolvedRoot),
+        execution: 'scripts/run-allowlisted-gcloud.js',
+        allowlistPath: path.join(resolvedRoot, 'shared', 'mcp', 'gcloud-allowlist.json'),
       },
       azure: {
         package: `${AZURE_PACKAGE}@${AZURE_VERSION}`,

@@ -9,8 +9,8 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 - The Power Apps Developer app from the Apple App Store or Google Play.
 - Push setup checks prerequisites only when their lifecycle stage is selected.
   Firebase client setup requires the official Firebase MCP but not gcloud.
-  WIF additionally requires Azure MCP and a working Google Cloud CLI for the
-  preferred gcloud MCP path. Power Automate flow stages require the separately
+  WIF additionally requires Azure MCP and a working Google Cloud CLI executed
+  only through the checked-in allowlisted wrapper. Power Automate flow stages require the separately
   installed `power-automate@power-platform-skills` plugin and connected
   FlowAgent tools. Manual installation/restart paths pause and recheck the
   exact prerequisite before resuming.
@@ -233,28 +233,22 @@ Choose whether to stop after app configuration, Power Automate delivery flows,
 a wrapped device build, or end-to-end physical-device verification. You do not
 need to remember or manually chain the individual push commands.
 
-Setup is faster when independent work is available: Firebase project setup
-stays serial, then Android and iOS client configuration may run together.
-After Firebase joins, independent runtime, WIF, and iOS-prerequisite work may
-also run in a bounded wave. The workflow falls back to one worker or serial
-execution when needed. Flow authoring, wrapped builds, installation handoffs,
-and physical verification still run in their required order, so not every
-push step runs concurrently.
+Push setup runs serially so every stage retains the same main-session tool and
+user-interaction context. Firebase setup completes first. For iOS,
+`/setup-apple-ios` then `/setup-apns` complete manual prerequisites before the
+main skill implements runtime integration. Sender authentication, flow
+authoring, wrapped builds, installation handoffs, and physical verification
+then continue in lifecycle order.
 
-Each bounded worker first completes a no-read/no-write capability preflight.
-Workers receive fixed identities and files, never write the memory bank, and
-return project-relative paths that the parent checks against its absolute
-allowlist. WIF reuse/repair requires a read-only plan and approval before
-execution. WIF setup asks the user to reuse the app registration, provide another
+WIF reuse/repair requires a read-only plan and approval before execution. WIF
+setup asks the user to reuse the app registration, provide another
 same-tenant existing client ID, or create a new dedicated registration. The
 two existing-registration routes use a read-only plan followed by approval and
 execution. The create-new route uses two approvals: first only for creating
 the absent dedicated Entra identity/credential and storing it safely in Key
 Vault, then—after a fresh claim-driven plan using the generated client ID—for
 the remaining Google/API/RBAC work and final proof. The bootstrap never writes
-`sender-auth.json`. If iOS worker dispatch is unavailable, one combined
-`/setup-apns` fallback validates Apple setup first and returns one Apple/APNs
-result.
+`sender-auth.json`.
 
 The workflow configures `expo-notifications`, React Native Firebase Messaging,
 permission UX, auth/topic lifecycle, and a typed semantic navigation contract.
@@ -276,7 +270,7 @@ invokes the first incomplete owner and continues to the selected stopping
 point. The individual commands remain available as advanced repair or resume
 entry points.
 
-Push cloud setup is **official MCP-first**. `/setup-fcm` is the only supported
+Push cloud setup is **owner-bounded**. `/setup-fcm` is the only supported
 owner for Firebase project/app selection and requires the vendor-official
 Firebase MCP; do not fall back to `firebase-tools` or other CLI/browser
 automation when that MCP path is unavailable. Android package names and iOS
@@ -336,8 +330,8 @@ on a physical Android 8+ device. Emulator, Expo Go, Metro/browser preview,
 Firebase acceptance, and an outbox `Sent` state alone do not prove delivery.
 
 When the Google trust is not already verified, the flow owner offers
-`/setup-push-wif` as the preferred sender mode. It uses the official gcloud MCP and
-Azure MCP where its current coverage applies, inspects a real Entra app-only
+`/setup-push-wif` as the preferred sender mode. It uses the guarded official
+Google Cloud CLI and Azure MCP where its current coverage applies, inspects a real Entra app-only
 token, configures the provider from the observed issuer and application claim,
 and proves the Google STS and service-account impersonation exchange without
 storing a Google private key. Azure MCP GA `2.0.5` is used here for covered
@@ -368,17 +362,18 @@ authentication/account context, IAM, API/service, policy, propagation, and
 transient read-back failures. Manual installation, login, setup, or restart
 pauses until the user confirms completion and the exact failed probe succeeds
 again. In particular, a Firebase project read that mentions Google Cloud
-Resource Manager does not imply that gcloud CLI or gcloud MCP is missing.
+Resource Manager does not imply that gcloud CLI is missing.
 
 - **Required MCP servers:** vendor-official Firebase MCP for Firebase
-  project/app work, gcloud MCP for `/setup-push-wif` Google Cloud operations,
-  Azure MCP for covered WIF read-back, and FlowAgent for Power Automate
-  mutation/read-back. The separate `power-automate@power-platform-skills`
+  project/app work, Azure MCP for covered WIF read-back, and FlowAgent for
+  Power Automate mutation/read-back. The separate
+  `power-automate@power-platform-skills`
   plugin is not installed automatically; `/create-push-notification-flow`
   provides the exact manual install, restart, setup, and MCP verification steps
-  when FlowAgent is unavailable. The gcloud MCP requires Node.js 20+ and the Google Cloud
-  CLI. `/setup-push-wif` can install the CLI only after explicit approval and
-  only through a supported package manager already present. Azure MCP GA
+  when FlowAgent is unavailable. `/setup-push-wif` requires Node.js 20+ and
+  the Google Cloud CLI only when WIF setup runs. It can install the CLI only
+  after explicit approval and only through a supported package manager already
+  present. Azure MCP GA
   `2.0.5` currently covers the WIF subscription/group/RBAC read-back used by
   this plugin. This plugin
   intentionally does not expose the `keyvault` namespace because its available
@@ -388,7 +383,7 @@ Resource Manager does not imply that gcloud CLI or gcloud MCP is missing.
   Microsoft Learn MCP/docs remain the authoritative source for
   Microsoft-platform behavior. Tested stable package baselines for this path
   are Firebase MCP package `firebase-tools` **15.27.0** (`15.28.1` is
-  main/unpublished), gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
+  main/unpublished) and Azure MCP GA **2.0.5**.
 - **Common:** a Firebase project, matching wrapped physical-device runtime,
   Dataverse environment, Power Automate access, and licensing for Dataverse
   plus the premium connectors/actions selected by FlowAgent.
@@ -521,8 +516,6 @@ Example edit flows:
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
-| `push-runtime-worker` | Bounded runtime integration worker with exclusive app-file ownership |
-| `push-ios-prerequisites-worker` | Read-only validator for parent-collected Apple/APNs confirmations |
 
 ## Telemetry and privacy
 

@@ -60,6 +60,32 @@ test('WIF readiness reports a missing gcloud executable without account probing'
   }]);
 });
 
+test('WIF readiness probes gcloud.cmd safely on Windows', () => {
+  const calls = [];
+  const sdkBin = 'C:\\Google\\CloudSDK\\google-cloud-sdk\\bin';
+  const gcloudCmd = `${sdkBin}\\gcloud.cmd`;
+  const python = 'C:\\Google\\CloudSDK\\google-cloud-sdk\\platform\\bundledpython\\python.exe';
+  const gcloudPy = 'C:\\Google\\CloudSDK\\google-cloud-sdk\\lib\\gcloud.py';
+  const result = checkStage('wif', {
+    platform: 'win32',
+    nodeVersion: 'v22.14.0',
+    env: { Path: sdkBin },
+    existsSync(candidate) {
+      return [gcloudCmd, python, gcloudPy].includes(candidate);
+    },
+    spawnSync(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, stdout: 'tool 1.2.3\n', stderr: '' };
+    },
+  });
+
+  assert.equal(result.status, 'ready');
+  const gcloudProbe = calls.find(({ command }) => command === python);
+  assert.ok(gcloudProbe, 'Windows gcloud probe bypasses the command script');
+  assert.equal(gcloudProbe.options.shell, undefined);
+  assert.deepEqual(gcloudProbe.args, ['-S', gcloudPy, '--version']);
+});
+
 test('flow readiness reports each independently missing local command', () => {
   const result = checkStage('flow-authoring', {
     nodeVersion: 'v22.14.0',

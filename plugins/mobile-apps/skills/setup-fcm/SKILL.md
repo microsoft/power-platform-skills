@@ -38,7 +38,7 @@ node "${PLUGIN_ROOT}/scripts/check-push-prerequisites.js" \
 If Node/npm/npx is missing or unsupported, classify the exact local issue,
 give only the relevant official installation/upgrade guidance, wait for the
 user to confirm completion, and rerun the same probe. Do not ask the user to
-install a standalone Firebase CLI, Google Cloud CLI, or gcloud MCP.
+install a standalone Firebase CLI or Google Cloud CLI.
 
 Then verify every `/setup-fcm` tool in the official-MCP readiness table. If
 `firebase` is missing, disconnected, or incomplete, classify that exact MCP
