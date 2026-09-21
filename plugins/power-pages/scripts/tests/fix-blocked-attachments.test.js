@@ -76,6 +76,7 @@ test('passes --environment as a literal argv value with shell disabled', async (
     envUrl: 'https://staging.crm.dynamics.com',
     extensions: ['js'],
     quiet: true,
+    platform: 'linux',
     execImpl: (file, args, options) => {
       calls.push({ file, args, options });
       if (args.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
