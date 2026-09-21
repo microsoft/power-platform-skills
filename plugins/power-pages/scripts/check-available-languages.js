@@ -6,7 +6,7 @@ const {
   makeRequest,
   validateDataverseEnvironmentUrl,
 } = require('./lib/validation-helpers');
-const { formatJsonResult } = require('./lib/template-cli-args');
+const { runBestEffortJsonCli } = require('./lib/template-cli-args');
 
 const DEFAULT_REQUIRED_LOCALE_IDS = [1033];
 
@@ -106,21 +106,21 @@ async function checkAvailableLanguages({
   };
 }
 
-async function main() {
-  const result = await checkAvailableLanguages(parseArgs());
-  process.stdout.write(formatJsonResult(result));
-  process.exit(0);
+async function main(deps = {}) {
+  const argv = deps.argv || process.argv.slice(2);
+  await runBestEffortJsonCli(
+    () => checkAvailableLanguages({ ...parseArgs(argv), ...(deps.checkOptions || {}) }),
+    deps
+  );
 }
 
 if (require.main === module) {
-  main().catch((err) => {
-    process.stdout.write(formatJsonResult({ ok: false, error: err.message }));
-    process.exit(0);
-  });
+  main();
 }
 
 module.exports = {
   DEFAULT_REQUIRED_LOCALE_IDS,
   checkAvailableLanguages,
+  main,
   parseArgs,
 };

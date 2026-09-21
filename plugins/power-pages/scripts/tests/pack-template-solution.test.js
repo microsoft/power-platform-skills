@@ -7,7 +7,9 @@ const os = require('os');
 const path = require('path');
 
 const {
+  WORK_DIRECTORY_PREFIX,
   cleanupPackedTemplateSolution,
+  isGeneratedWorkDirectoryPath,
   isOwnedWorkDirectory,
   packTemplateSolution,
   parseArgs,
@@ -47,6 +49,17 @@ test('parseArgs accepts pack and cleanup inputs', () => {
     cleanup: true,
     workDirectory: '/tmp/work',
   });
+  assert.deepEqual(parseArgs([
+    '--cleanup',
+    '--workDirectory', '/tmp/work',
+    '--cleanupMarker', '/tmp/marker.json',
+    '--cleanupToken', 'secret',
+  ]), {
+    cleanup: true,
+    workDirectory: '/tmp/work',
+    cleanupMarker: '/tmp/marker.json',
+    cleanupToken: 'secret',
+  });
 });
 
 test('packTemplateSolution packs an unmanaged source tree into an owned temp directory', (t) => {
@@ -69,7 +82,12 @@ test('packTemplateSolution packs an unmanaged source tree into an owned temp dir
 
   assert.equal(result.ok, true);
   assert.equal(result.solutionPath, path.resolve(source));
-  assert.equal(isOwnedWorkDirectory(result.workDirectory, tmpRoot), true);
+  assert.equal(isGeneratedWorkDirectoryPath(result.workDirectory, tmpRoot), true);
+  assert.equal(isOwnedWorkDirectory(result.workDirectory, {
+    tmpRoot,
+    cleanupMarker: result.cleanupMarker,
+    cleanupToken: result.cleanupToken,
+  }), true);
   assert.deepEqual(calls, [[
     'solution', 'pack',
     '--zipfile', result.zipPath,
@@ -77,11 +95,25 @@ test('packTemplateSolution packs an unmanaged source tree into an owned temp dir
     '--packagetype', 'Unmanaged',
   ]]);
   assert.equal(fs.existsSync(result.zipPath), true);
-  assert.deepEqual(cleanupPackedTemplateSolution(result.workDirectory, { tmpRoot }), {
+  assert.deepEqual(cleanupPackedTemplateSolution(result.workDirectory, {
+    tmpRoot,
+    cleanupMarker: result.cleanupMarker,
+    cleanupToken: 'wrong-token',
+  }), {
+    ok: false,
+    error: 'workDirectory ownership could not be verified',
+  });
+  assert.equal(fs.existsSync(result.workDirectory), true);
+  assert.deepEqual(cleanupPackedTemplateSolution(result.workDirectory, {
+    tmpRoot,
+    cleanupMarker: result.cleanupMarker,
+    cleanupToken: result.cleanupToken,
+  }), {
     ok: true,
     removed: true,
   });
   assert.equal(fs.existsSync(result.workDirectory), false);
+  assert.equal(fs.existsSync(result.cleanupMarker), false);
 });
 
 test('packTemplateSolution rejects invalid source and removes partial output after PAC failure', (t) => {
@@ -120,11 +152,63 @@ test('packTemplateSolution rejects invalid source and removes partial output aft
 test('cleanup rejects arbitrary paths outside generated work directories', (t) => {
   const root = tempDir();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  assert.equal(isOwnedWorkDirectory(root, path.dirname(root)), false);
+  assert.equal(isGeneratedWorkDirectoryPath(root, path.dirname(root)), false);
   assert.deepEqual(cleanupPackedTemplateSolution(root, { tmpRoot: path.dirname(root) }), {
     ok: false,
-    error: 'workDirectory is not a generated template solution directory',
+    error: 'workDirectory ownership could not be verified',
   });
+});
+
+test('cleanup rejects matching temporary directories without the ownership token', (t) => {
+  const root = tempDir();
+  const tmpRoot = path.join(root, 'tmp');
+  const unrelated = path.join(tmpRoot, `${WORK_DIRECTORY_PREFIX}unrelated`);
+  fs.mkdirSync(unrelated, { recursive: true });
+  fs.writeFileSync(path.join(unrelated, 'keep.txt'), 'keep');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.equal(isGeneratedWorkDirectoryPath(unrelated, tmpRoot), true);
+  assert.deepEqual(cleanupPackedTemplateSolution(unrelated, { tmpRoot }), {
+    ok: false,
+    error: 'workDirectory ownership could not be verified',
+  });
+  assert.equal(fs.readFileSync(path.join(unrelated, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('packTemplateSolution rejects a symlinked ZIP output without reading its target', (t) => {
+  const root = tempDir();
+  const tmpRoot = path.join(root, 'tmp');
+  const source = path.join(root, 'solution');
+  const outsideZip = path.join(root, 'outside.zip');
+  fs.mkdirSync(tmpRoot);
+  createSolutionSource(source);
+  fs.writeFileSync(outsideZip, fakeSolutionZip());
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let symlinksUnavailable = false;
+
+  const result = packTemplateSolution({ solutionPath: source }, {
+    tmpRoot,
+    runPac(args) {
+      const zipPath = args[args.indexOf('--zipfile') + 1];
+      try {
+        fs.symlinkSync(outsideZip, zipPath);
+      } catch (err) {
+        if (err.code === 'EPERM' || err.code === 'EACCES') {
+          symlinksUnavailable = true;
+          t.skip(`symlinks are unavailable: ${err.code}`);
+          return { status: 1, stdout: '', stderr: err.message };
+        }
+        throw err;
+      }
+      return { status: 0, stdout: 'packed', stderr: '' };
+    },
+  });
+
+  if (symlinksUnavailable) return;
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'output');
+  assert.equal(fs.readFileSync(outsideZip).equals(fakeSolutionZip()), true);
+  assert.deepEqual(fs.readdirSync(tmpRoot), []);
 });
 
 test('packTemplateSolution preserves the PAC error when cleanup also fails', (t) => {

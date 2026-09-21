@@ -419,7 +419,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
         --solutionPath "<CURRENT_TEMPLATE_SOLUTION.solutionPath>"
       ```
-      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>` for the current solution. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded template cache or another repository path.
+      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>`, `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>`, `PACKED_TEMPLATE_SOLUTION_CLEANUP_MARKER = <result.cleanupMarker>`, and `PACKED_TEMPLATE_SOLUTION_CLEANUP_TOKEN = <result.cleanupToken>` for the current solution. The packer creates the ZIP only in a token-owned OS temporary directory. Never write a packed ZIP into the downloaded template cache or another repository path.
 
       If packing fails, do not call Dataverse and do not emit `template_import_failure` because no import was attempted. The packer removes partial output automatically.
 
@@ -457,7 +457,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --include-headers
       node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
         --cleanup \
-        --workDirectory "<PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY>"
+        --workDirectory "<PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY>" \
+        --cleanupMarker "<PACKED_TEMPLATE_SOLUTION_CLEANUP_MARKER>" \
+        --cleanupToken "<PACKED_TEMPLATE_SOLUTION_CLEANUP_TOKEN>"
       # Run this poll command in a Task subagent, not in the main conversation:
       node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
         --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \

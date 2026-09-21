@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   checkAvailableLanguages,
+  main,
   parseArgs,
 } = require('../check-available-languages');
 
@@ -104,4 +105,27 @@ test('parseArgs reads environment and locale arguments without accepting a beare
     envUrl: 'https://org.crm.dynamics.com/',
     requiredLocaleIds: [1033, 1041],
   });
+});
+
+test('main uses the drain-safe JSON runner instead of forcing process exit', async () => {
+  const output = [];
+  const proc = {};
+
+  await main({
+    argv: ['--envUrl', 'https://org.crm.dynamics.com', '--requiredLocaleIds', '1033'],
+    checkOptions: {
+      token: 'token',
+      request: async () => ({ statusCode: 200, body: JSON.stringify({ LocaleIds: [1033] }) }),
+    },
+    process: proc,
+    stdout: {
+      write(value) {
+        output.push(value);
+      },
+    },
+  });
+
+  assert.equal(proc.exitCode, 0);
+  assert.equal(output.length, 1);
+  assert.equal(JSON.parse(output[0]).hasRequiredLanguages, true);
 });
