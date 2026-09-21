@@ -165,3 +165,43 @@ test('an ancestor junction cannot land the delete at a filesystem root', () => {
   });
   assert.strictEqual(ok.ok, true, `an ordinary canonical target must still clear: ${JSON.stringify(ok)}`);
 });
+
+// --- a UNC/network workspace is refused BEFORE any filesystem call ------------------------------
+// MEASURED: `\\\\server\\share\\proj\\.maker-workspace` resolves with root `\\\\server\\share\\`, so the
+// filesystem-root rules do not reject it and it reaches `lstatSync` — which BLOCKS on an unreachable
+// share until the SMB timeout. A hang is not catchable, and this runs right after a SUCCESSFUL
+// teardown, so the command simply appears wedged.
+//
+// The injected deps THROW here: if the guard ever reaches the filesystem for a UNC path, the test
+// fails loudly instead of silently depending on whether this machine has such a share.
+test('a UNC workspace path is refused without touching the filesystem', () => {
+  const boom = () => { throw new Error("the guard must not stat a UNC path"); };
+  for (const unc of [
+    String.raw`\\server\share\proj\.maker-workspace`,
+    String.raw`\\server\share\.maker-workspace`,
+    String.raw`\\?\UNC\server\share\proj\.maker-workspace`,
+  ]) {
+    const r = checkWorkspaceClearable(unc, { lstatSync: boom, realpathSync: boom, readFileSync: boom });
+    assert.strictEqual(r.ok, false, `${unc} must be refused`);
+    assert.match(r.reason, /UNC\/network path/);
+  }
+});
+
+// The refusal must be narrow: a mapped drive is an ordinary local path and a real workspace on one
+// still has to clear, or the guard breaks the normal way of working from a network location.
+test('a mapped drive and an extended-length LOCAL path are not treated as UNC', () => {
+  const d = makeDir(WORKSPACE_DIR_NAME, SDK_MANIFEST);
+  const r = checkWorkspaceClearable(d);
+  assert.strictEqual(r.ok, true, `an ordinary local workspace must still clear; got ${JSON.stringify(r)}`);
+
+  // `\\?\C:\…` is the extended-length form of a LOCAL path — it must reach the normal checks
+  // rather than being rejected as a network path.
+  const ext = checkWorkspaceClearable(String.raw`\\?\C:\proj\.maker-workspace`, {
+    lstatSync: () => { throw new Error("ENOENT"); },
+    realpathSync: () => { throw new Error("ENOENT"); },
+    readFileSync: () => { throw new Error("ENOENT"); },
+  });
+  assert.strictEqual(ext.ok, false);
+  assert.ok(!/UNC\/network path/.test(ext.reason),
+    `an extended-length local path is not UNC; got ${ext.reason}`);
+});
