@@ -54,6 +54,32 @@ function fakeWindowsExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {})
   };
 }
 
+function fakeFallbackExecFile({ platform = 'linux' } = {}) {
+  return (command, args) => {
+    const joined = args.join(' ');
+    if (platform === 'win32') {
+      if (command === 'cmd.exe' && joined === '/d /s /c pac.exe auth who') {
+        return `Tenant ID: ${TENANT_A}\n`;
+      }
+      if (command === 'cmd.exe' && joined === '/d /s /c pac.exe env who') {
+        return 'Environment ID: 11111111-1111-1111-1111-111111111111\n';
+      }
+      if (command === 'cmd.exe' && joined === '/d /s /c pac.exe auth list') {
+        return '[1] * Active user Public https://org.crm.dynamics.com\n';
+      }
+      if (command === 'cmd.exe' && joined === '/d /s /c az.cmd account show --query tenantId -o tsv') {
+        return `${TENANT_A}\n`;
+      }
+    } else {
+      if (command === 'pac' && joined === 'auth who') return `Tenant ID: ${TENANT_A}\n`;
+      if (command === 'pac' && joined === 'env who') return 'Environment ID: 11111111-1111-1111-1111-111111111111\n';
+      if (command === 'pac' && joined === 'auth list') return '[1] * Active user Public https://org.crm.dynamics.com\n';
+      if (command === 'az' && joined === 'account show --query tenantId -o tsv') return `${TENANT_A}\n`;
+    }
+    throw new Error(`unexpected command: ${command} ${joined}`);
+  };
+}
+
 test('parsePacTenantId extracts Tenant ID from PAC auth output', () => {
   assert.equal(parsePacTenantId(`User: u\nTenant ID:    ${TENANT_A}\n`), TENANT_A);
   assert.equal(parsePacTenantId(`Tenant: ${TENANT_A}`), TENANT_A);
@@ -92,6 +118,18 @@ test('validateCliTenantAlignment invokes Windows cmd shims through cmd.exe', () 
     execFile: fakeWindowsExecFile(),
     platform: 'win32',
   }).ok, true);
+});
+
+test('validateCliTenantAlignment falls back to the active PAC auth profile on POSIX and Windows', () => {
+  for (const platform of ['linux', 'win32']) {
+    assert.equal(validateCliTenantAlignment({
+      envUrl: 'https://org.crm.dynamics.com',
+      token: fakeJwt(TENANT_A),
+    }, {
+      execFile: fakeFallbackExecFile({ platform }),
+      platform,
+    }).ok, true);
+  }
 });
 
 test('validateCliTenantAlignment blocks when PAC and Azure tenants differ', () => {

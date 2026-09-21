@@ -3,6 +3,7 @@
 const { execFileSync } = require('child_process');
 const {
   getAuthToken,
+  parseActiveAuthListEnvironmentUrl,
   parseEnvironmentUrl,
   runAzureCli,
   validateDataverseEnvironmentUrl,
@@ -57,6 +58,13 @@ function runPacEnvWho({ execFile = execFileSync, platform = process.platform } =
   return execFile('pac', ['env', 'who'], { encoding: 'utf8', timeout: 15000 });
 }
 
+function runPacAuthList({ execFile = execFileSync, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'pac.exe', 'auth', 'list'], { encoding: 'utf8', timeout: 15000 });
+  }
+  return execFile('pac', ['auth', 'list'], { encoding: 'utf8', timeout: 15000 });
+}
+
 function runAzAccountShowTenant({ execFile = execFileSync, platform = process.platform } = {}) {
   return runAzureCli(
     ['account', 'show', '--query', 'tenantId', '-o', 'tsv'],
@@ -82,7 +90,11 @@ function getAzAccountTenantId(execFile = execFileSync, platform = process.platfo
 
 function getPacEnvironmentUrl(execFile = execFileSync, platform = process.platform) {
   try {
-    return parseEnvironmentUrl(runPacEnvWho({ execFile, platform }));
+    const environmentUrl = parseEnvironmentUrl(runPacEnvWho({ execFile, platform }));
+    if (environmentUrl) return environmentUrl;
+  } catch {}
+  try {
+    return parseActiveAuthListEnvironmentUrl(runPacAuthList({ execFile, platform }));
   } catch {
     return null;
   }
@@ -165,6 +177,7 @@ module.exports = {
   decodeJwtPayload,
   parsePacTenantId,
   runAzAccountShowTenant,
+  runPacAuthList,
   runPacAuthWho,
   runPacEnvWho,
   tenantIdFromToken,

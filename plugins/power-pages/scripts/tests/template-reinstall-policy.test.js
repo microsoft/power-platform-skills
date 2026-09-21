@@ -56,6 +56,10 @@ test('decideReinstall covers import, update, clone, and ask cases', () => {
 
 test('decideReinstall asks when installed or available versions are malformed', () => {
   assert.equal(decideReinstall({
+    installed: false,
+    availableVersion: '1.0.preview',
+  }), 'ask');
+  assert.equal(decideReinstall({
     installed: true,
     installedVersion: 'unknown',
     availableVersion: '1.0.0.0',

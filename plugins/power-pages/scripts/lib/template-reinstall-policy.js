@@ -7,8 +7,14 @@ const { compareVersions, parseVersionToSegments } = require('./bump-solution-ver
 
 function decideReinstall({ installed, installedVersion, availableVersion, detectionFailed } = {}) {
   if (detectionFailed) return 'ask';
+  if (!availableVersion) return 'ask';
+  try {
+    parseVersionToSegments(availableVersion);
+  } catch {
+    return 'ask';
+  }
   if (!installed) return 'import';
-  if (!installedVersion || !availableVersion) return 'ask';
+  if (!installedVersion) return 'ask';
   try {
     if (compareVersions(availableVersion, installedVersion) > 0) return 'confirm-update';
   } catch {

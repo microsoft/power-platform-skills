@@ -504,17 +504,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
-   8. When every required solution import succeeds, mark **Import template supporting solutions** as `completed`, then run the `template_import_success` telemetry command once. If every solution import was skipped, mark the task as skipped and do not emit an import event:
-      ```bash
-      node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
-        --eventName template_import_success \
-        --templateId "<SELECTED_TEMPLATE.id>" \
-        --templateKind "<SELECTED_TEMPLATE.kind>" \
-        --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
-        --audience "<internal|external from Phase 1 discovery>" \
-        --seedApplied "false"
-      ```
-      `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+   8. When every required solution import succeeds, mark **Import template supporting solutions** as `completed` and set `EMIT_TEMPLATE_IMPORT_SUCCESS = true`. Defer that telemetry event until the seed-data workstream joins so `seedApplied` reflects this run. If every solution import was skipped, mark the task as skipped and set `EMIT_TEMPLATE_IMPORT_SUCCESS = false`.
    9. Start site provisioning and seed-data application concurrently after all required solution imports finish:
       - Mark **Clone, build, and upload template site** as `in_progress`.
       - If seed data is present, mark **Apply template seed data** as `in_progress` and launch the seed-data workstream with `Task` using `run_in_background: true`. The background task must only fetch, apply, and verify seed data. It must not clone, build, upload, activate, update the shared status file, ask the user questions, or retry failed writes.
@@ -546,6 +536,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Return the JSON summary (`inserted`, `failed`, `skipped`, `errors`) to the main conversation. Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`.
    11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
+
+       If `EMIT_TEMPLATE_IMPORT_SUCCESS = true`, emit the import result now:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+         --eventName template_import_success \
+         --templateId "<SELECTED_TEMPLATE.id>" \
+         --templateKind "<SELECTED_TEMPLATE.kind>" \
+         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+         --audience "<internal|external from Phase 1 discovery>" \
+         --seedApplied "<true only when the seed summary has inserted > 0 and failed = 0; otherwise false>"
+       ```
+       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    12. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \

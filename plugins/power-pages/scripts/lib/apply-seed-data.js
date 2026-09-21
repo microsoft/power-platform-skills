@@ -27,10 +27,21 @@ function emptySummary() {
 function listSeedFiles(seedDir, deps = {}) {
   const fsImpl = deps.fs || fs;
   if (!seedDir || !fsImpl.existsSync(seedDir)) return [];
+  const rootStat = fsImpl.lstatSync(seedDir);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error('Seed directory must be a regular directory and not a symbolic link');
+  }
   return fsImpl.readdirSync(seedDir)
     .filter((name) => name.toLowerCase().endsWith('.json'))
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-    .map((name) => path.join(seedDir, name));
+    .map((name) => {
+      const filePath = path.join(seedDir, name);
+      const fileStat = fsImpl.lstatSync(filePath);
+      if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+        throw new Error(`Seed JSON must be a regular file and not a symbolic link: ${name}`);
+      }
+      return filePath;
+    });
 }
 
 function isDuplicateConflict(res) {
@@ -47,6 +58,10 @@ function isDuplicateConflict(res) {
 
 function readSeedFile(filePath, deps = {}) {
   const fsImpl = deps.fs || fs;
+  const fileStat = fsImpl.lstatSync(filePath);
+  if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+    throw new Error(`Seed JSON must be a regular file and not a symbolic link: ${path.basename(filePath)}`);
+  }
   // Seed files are intentionally small authored JSON files. Supported shapes:
   //   Flat:
   //   { "entitySetName": "cr123_categories",

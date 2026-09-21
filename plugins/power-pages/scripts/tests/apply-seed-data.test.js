@@ -21,6 +21,36 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'apply-seed-data-test-'));
 }
 
+function withSeedStats(fsImpl, seedDir) {
+  const resolvedSeedDir = path.resolve(seedDir);
+  const existingLstat = fsImpl.lstatSync;
+  return {
+    ...fsImpl,
+    lstatSync(targetPath) {
+      if (path.resolve(targetPath) === resolvedSeedDir) {
+        return {
+          isSymbolicLink: () => false,
+          isDirectory: () => true,
+          isFile: () => false,
+        };
+      }
+      if (existingLstat) {
+        const stat = existingLstat(targetPath);
+        return {
+          isSymbolicLink: () => typeof stat.isSymbolicLink === 'function' ? stat.isSymbolicLink() : false,
+          isDirectory: () => typeof stat.isDirectory === 'function' ? stat.isDirectory() : false,
+          isFile: () => typeof stat.isFile === 'function' ? stat.isFile() : false,
+        };
+      }
+      return {
+        isSymbolicLink: () => false,
+        isDirectory: () => false,
+        isFile: () => true,
+      };
+    },
+  };
+}
+
 test('listSeedFiles sorts JSON files by filename and ignores non-json files', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -29,6 +59,40 @@ test('listSeedFiles sorts JSON files by filename and ignores non-json files', (t
   fs.writeFileSync(path.join(dir, 'notes.txt'), 'ignore');
 
   assert.deepEqual(listSeedFiles(dir).map((file) => path.basename(file)), ['010-categories.json', '020-posts.json']);
+});
+
+test('listSeedFiles rejects symlinked seed roots and JSON files', (t) => {
+  const parent = tempDir();
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const realSeedDir = path.join(parent, 'real-seed');
+  const linkedSeedDir = path.join(parent, 'linked-seed');
+  fs.mkdirSync(realSeedDir);
+  fs.writeFileSync(path.join(realSeedDir, '010-data.json'), '{}');
+  try {
+    fs.symlinkSync(realSeedDir, linkedSeedDir, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+  assert.throws(() => listSeedFiles(linkedSeedDir), /symbolic link/);
+
+  const outsideFile = path.join(parent, 'outside.json');
+  const linkedFile = path.join(realSeedDir, '020-linked.json');
+  fs.writeFileSync(outsideFile, '{}');
+  try {
+    fs.symlinkSync(outsideFile, linkedFile, 'file');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`file symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+  assert.throws(() => listSeedFiles(realSeedDir), /symbolic link/);
+  assert.throws(() => readSeedFile(linkedFile), /symbolic link/);
 });
 
 test('readSeedFile validates the seed file contract', (t) => {
@@ -158,7 +222,7 @@ test('applySeedData success path can run with injected fs and request function',
   const requests = [];
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async (req) => {
       requests.push(req);
       return { statusCode: 204 };
@@ -252,7 +316,7 @@ test('applySeedData preserves exact OData lookup navigation properties', async (
 
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async (req) => {
       requests.push(req);
       return { statusCode: 204 };
@@ -303,7 +367,7 @@ test('applySeedData rejects ambiguous lookup aliases before the first Dataverse 
 
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async () => {
       requestCount++;
       return { statusCode: 204 };
@@ -363,7 +427,7 @@ test('applySeedData posts Dataverse export seed tables and uploads fileExports',
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, seedDir),
     randomBlockId: () => 'block-1',
     makeRequest: async (req) => {
       requests.push(req);
@@ -399,7 +463,7 @@ test('applySeedData refreshes tokens across the whole seed run instead of per re
   const authHeaders = [];
 
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     token: 'initial-token',
     tokenRefreshEvery: 2,
     getAuthToken: (resource) => {
@@ -449,7 +513,7 @@ test('applySeedData strips __files, requires primaryKey, and uploads file-column
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, seedDir),
     randomBlockId: (() => {
       const ids = ['block-1', 'block-2'];
       return () => ids.shift();
@@ -491,7 +555,7 @@ test('applySeedData records attachment validation failures without blocking othe
 
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async () => ({ statusCode: 204 }),
   });
 
@@ -604,7 +668,7 @@ test('applySeedData rejects non-object __files before posting', async () => {
 
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async (req) => {
       requests.push(req);
       return { statusCode: 204 };
@@ -675,7 +739,7 @@ test('applySeedData uploads file attachments when the explicit-guid record alrea
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, seedDir),
     randomBlockId: () => 'block-1',
     makeRequest: async (req) => {
       requests.push(req);
@@ -718,7 +782,7 @@ test('applySeedData rejects disallowed attachment extensions and Git LFS pointer
   const requests = [];
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: fsImpl,
+    fs: withSeedStats(fsImpl, '/virtual/seed'),
     makeRequest: async (req) => {
       requests.push(req);
       return { statusCode: 204 };
@@ -756,12 +820,13 @@ test('applySeedData catches token and filesystem failures as summaries', async (
     errors: [{ scope: 'seedDir', message: 'token exploded' }],
   });
 
+  const failingFs = {
+    existsSync: () => true,
+    readdirSync: () => { throw new Error('fs exploded'); },
+  };
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
-    fs: {
-      existsSync: () => true,
-      readdirSync: () => { throw new Error('fs exploded'); },
-    },
+    fs: withSeedStats(failingFs, '/virtual/seed'),
   });
   assert.equal(result.ok, false);
   assert.equal(result.failed, 1);

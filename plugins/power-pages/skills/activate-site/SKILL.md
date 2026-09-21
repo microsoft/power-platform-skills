@@ -111,7 +111,7 @@ Continue only when the JSON result has `ok: true`. This check compares the activ
 
 When `source` is `create-site template path` and `statusPath` is present, store it as `ACTIVATION_STATUS_PATH`. This is the existing template status file created by `/create-site`; do not create a separate status page.
 
-Before gathering parameters, check whether the site is already activated by running the shared activation status script:
+When `SITE_IDENTITY_SOURCE !== "arguments"`, check whether the local project site is already activated by running the shared activation status script:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
@@ -124,12 +124,14 @@ Evaluate the JSON result:
 - **If `activated` is `false`**: Proceed to Phase 2.
 - **If `error` is present**: Proceed to Phase 2 (do not block the activation flow).
 
+When `SITE_IDENTITY_SOURCE = "arguments"`, skip this entire local-project status check and continue to Phase 2 with the supplied site identity.
+
 ### Output
 
 - PAC CLI installed and authenticated
 - Environment ID, Organization ID, and Cloud value extracted
 - Azure CLI login confirmed
-- Activation status checked (already activated → stop early, not activated → continue)
+- Activation status checked for a local project, or skipped for an argument-based imported site
 
 ---
 
