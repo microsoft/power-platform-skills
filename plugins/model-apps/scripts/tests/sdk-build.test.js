@@ -4643,3 +4643,62 @@ test('form topology: a relocated field is clamped against its DESTINATION, not i
     'the authored span is clamped against the 4-column DESTINATION, not the 2-column source');
   assert.strictEqual(moved.id, 'c1', 'the cell is moved, not recreated');
 });
+
+// --- F2: a span CLAMPED to 1 is still an explicit claim -----------------------------------------
+// The clamp branch dropped the attribute when it reduced a span to 1, on the reasoning that "1 is
+// the default". That recreates exactly the omission/value ambiguity the explicit-1 fix removed one
+// layer up: reconcile reads the missing value as "no opinion" and LEAVES AN EXISTING WIDE CELL
+// ALONE. Live-reproduced — a deployed colspan-2 cell, re-declared as colspan 4 in a ONE-column
+// section, stayed at 2 across two applies instead of shrinking to the clamped 1.
+test('form topology: a clamped span is an EXPLICIT 1 and shrinks an existing wide cell', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: [{ name: 'new_name', colspan: 4 }] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1,
+        rows: [{ cells: [{ id: 'c1', colspan: 2, control: { fieldName: 'new_name' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const cell = (finalForm.tabs[0].columns[0].sections[0].rows || [])
+    .flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_name');
+  assert.ok(cell, `the field must still be on the form; got ${JSON.stringify(finalForm.tabs[0].columns[0].sections[0].rows)}`);
+  assert.strictEqual(cell.colspan, 1,
+    'a colspan of 4 in a 1-column section clamps to 1, and that 1 must REACH the deployed cell');
+});
+
+// --- F3: shrinking the GRID must repack the rows it now overflows -------------------------------
+// The repack fires when a CELL span changes. A section whose width shrinks overflows without any
+// cell changing: three unit-width cells sit legally in a 4-column row and illegally in a 1-column
+// one. Live-reproduced: occupancy 3 in width 1, on both applies.
+test('form topology: shrinking a section grid repacks the rows that no longer fit', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_code', displayName: 'Code', type: 'Text' });
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier', 'new_code'] },
+  ] }]);
+  // Deployed as a 4-column section holding all three in ONE row — legal at width 4, not at width 1.
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [cell('c1', 'new_name'), cell('c2', 'new_tier'), cell('c3', 'new_code')] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  for (const [ri, r] of (sec.rows || []).entries()) {
+    const used = (r.cells || []).reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(used <= 1, `row ${ri} carries ${used} columns of content in a 1-column section: ${JSON.stringify(r.cells)}`);
+  }
+  const names = (sec.rows || []).flatMap((r) => (r.cells || []).map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(names, ['new_name', 'new_tier', 'new_code'], 'no field may be lost by the reflow');
+});

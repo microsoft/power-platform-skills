@@ -1517,3 +1517,87 @@ test('verify skips the occupancy check when the deployed section declares no wid
   const chk = await topoCheck(xml, shapeSpec(['new_name', 'new_notes']));
   assert.strictEqual(chk.present, true, `unknown width must not invent an overflow; got ${chk && chk.detail}`);
 });
+
+// --- F1: a span the COMPILER clamps must verify against its effective value --------------------
+// The schema documents that a span wider than its section is clamped, so `colspan: 4` in a
+// one-column section deploys as 1. Comparing the RAW authored value failed a layout that had been
+// built exactly as documented. Live-reproduced:
+//   verify FAIL — field 'qa18a_name' has colspan 1, the spec declares 4
+test('verify accepts a span the compiler CLAMPED to the section width', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_left" columns="1">`
+    + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+    + `<row><cell colspan="1"><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
+      { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 1, fields: [{ name: 'new_name', colspan: 4 }] }] }] }];
+  });
+  assert.strictEqual(chk.present, true,
+    `a correctly clamped span must verify; got ${chk && chk.detail}`);
+});
+
+test('verify STILL fails a span that is wrong after clamping', async () => {
+  // Declared 4 in a 2-column section clamps to 2, but the cell deployed as 1 — a real mismatch.
+  const xml = `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_left" columns="11">`
+    + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+    + `<row><cell colspan="1"><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
+      { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 2, fields: [{ name: 'new_name', colspan: 4 }] }] }] }];
+  });
+  assert.strictEqual(chk.present, false, `a genuine mismatch must still fail; got ${chk && chk.detail}`);
+  assert.match(chk.detail, /clamped to 2/, `the message must explain the clamp; got ${chk.detail}`);
+});
+
+// --- F4: a same-named section in ANOTHER tab must not satisfy the placement --------------------
+// The builder can produce two sections called `sec_fields` in different tabs — one holding the
+// fields, one empty in the tab that was requested. Keying placement by section NAME found the
+// empty one equal to the real one and reported PASS while the relocation had not happened.
+// Live-reproduced: verify PASS (28/28) against a form whose fields were in the wrong tab.
+test('verify FAILS when the fields sit in a same-named section under a DIFFERENT tab', async () => {
+  const xml = `<form><tabs>`
+    + `<tab name="tab_source"><labels><label description="Source" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows>`
+    + `<row><cell><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab>`
+    + `<tab name="tab_destination"><labels><label description="Destination" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows></rows></section>`
+    + `</sections></column></columns></tab>`
+    + `</tabs></form>`;
+  // The spec asks for the field in the DESTINATION tab. The deployed form has an empty section of
+  // that exact name there, and the real field still in the source tab.
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_destination', label: 'Destination', columns: [
+      { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
+  });
+  assert.strictEqual(chk.present, false,
+    'an empty same-named section must not stand in for the real one');
+  assert.match(chk.detail, /under a different tab/,
+    `the message must name the aliasing; got ${chk && chk.detail}`);
+});
+
+// The control: a correctly relocated field must still PASS, so the fix cannot be satisfied by
+// failing every same-named section.
+test('verify PASSES when the field really is in the requested tab', async () => {
+  const xml = `<form><tabs>`
+    + `<tab name="tab_source"><labels><label description="Source" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows></rows></section>`
+    + `</sections></column></columns></tab>`
+    + `<tab name="tab_destination"><labels><label description="Destination" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows>`
+    + `<row><cell><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab>`
+    + `</tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_destination', label: 'Destination', columns: [
+      { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
+  });
+  assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
+});

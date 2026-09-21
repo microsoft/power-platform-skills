@@ -1968,6 +1968,16 @@ async function runSdkBuild(spec, opts = {}) {
           // columns rather than one, and it was previously unreachable on an existing form.
           const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
           if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
+          // NARROWING the grid overflows rows that no cell changed. Three unit-width cells sit
+          // legally in a 4-column row and illegally in a 1-column one, so a width change alone can
+          // invalidate the layout — and the span-change repack never fires, because no span changed.
+          // Live-reproduced: occupancy 3 in width 1, on both applies.
+          //
+          // Only a NARROWING needs this. Widening cannot overflow a row that already fitted, and
+          // re-packing on every widen would reflow rows the author never asked to touch.
+          if (patch.columns !== undefined && Number(patch.columns) < Number(live.columns || 1)) {
+            await repackSectionRows(formId, pointer, Number(patch.columns));
+          }
         }
       }
     }
@@ -1992,6 +2002,40 @@ async function runSdkBuild(spec, opts = {}) {
     const tab = (form.tabs || [])[Number(t[1])];
     const col = tab && (tab.columns || [])[Number(t[3])];
     return (col && (col.sections || [])[Number(t[5])]) || null;
+  };
+
+  // Reflow an ENTIRE section against a new grid width, using the create path's own packer so both
+  // routes produce the same shape. Called when a section NARROWS: no cell changed, but rows that
+  // fitted the old width can overrun the new one.
+  //
+  // The cells are re-laid in their existing reading order, so the author's field order survives, and
+  // they are MOVED (written as cells arrays) rather than recreated, so ids and any maker-edited
+  // control state survive with them. Rows beyond the new count are removed from the END backwards,
+  // because removing by index shifts every later index.
+  const repackSectionRows = async (formId, sectionPointer, width) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, sectionPointer);
+    if (!section) return;
+    const cells = (section.rows || []).flatMap((r) => (r && r.cells) || []);
+    if (!cells.length) return;
+    const packed = rowsFromCells(cells, width);
+    const live = section.rows || [];
+    // Nothing to do when the existing rows already match the packing the new width implies.
+    const same = packed.length === live.length
+      && packed.every((r, i) => JSON.stringify((r.cells || []).map((c) => c.control && c.control.fieldName))
+        === JSON.stringify(((live[i] || {}).cells || []).map((c) => c.control && c.control.fieldName)));
+    if (same) return;
+    for (let i = 0; i < packed.length; i += 1) {
+      if (i < live.length) {
+        await provision.updateElement('form', formId, `${sectionPointer}/rows/${i}`, { cells: packed[i].cells });
+      } else {
+        await provision.addElement('form', formId, `${sectionPointer}/rows`, { cells: [] });
+        await provision.updateElement('form', formId, `${sectionPointer}/rows/${i}`, { cells: packed[i].cells });
+      }
+    }
+    for (let i = live.length - 1; i >= packed.length; i -= 1) {
+      await provision.removeElement('form', formId, `${sectionPointer}/rows/${i}`);
+    }
   };
 
   // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the

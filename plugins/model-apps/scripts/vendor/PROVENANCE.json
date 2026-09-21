@@ -1,14 +1,14 @@
 {
-  "commit": "50a43bd3f570ec9ea5545dcc257fae1949f22aaa",
-  "subject": "fix(cds-maker-sdk): three regressions from the last two PRs, plus BPF concurrency tokens",
+  "commit": "81b2d6ed10ad6dcf1a313b6890585770e7410e32",
+  "subject": "fix: initialize solution version for new-shell host slots",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-17T23:34:42.907Z",
-  "newestSrcAt": "2026-09-17T23:33:11.099Z",
+  "libBuiltAt": "2026-09-21T20:15:13.914Z",
+  "newestSrcAt": "2026-09-21T17:42:47.492Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-17T23:35:33.267Z",
-  "bundleSha256": "609cfc9fda047b2a3f6cbea80823942e81e8b99b44a044a681ca98dcb6379467",
-  "bundleBytes": 708362
+  "builtAt": "2026-09-21T20:15:30.709Z",
+  "bundleSha256": "b6b93bbce9a68639189ace01ff3811430c7621f6ba7918495334326116ae3eb8",
+  "bundleBytes": 714498
 }

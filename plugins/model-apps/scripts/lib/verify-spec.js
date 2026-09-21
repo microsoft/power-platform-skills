@@ -284,10 +284,20 @@ async function verifySpec(spec, read, opts = {}) {
       }
 
       const deployed = parseFormTopology(xml);
-      // Where the DEPLOYED form actually placed each bound field, keyed by section name.
+      // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
+      // holding it — not merely its name.
+      //
+      // A name alone aliases: the builder can produce two sections called `packed_fields` in
+      // DIFFERENT tabs (one holding the fields, one empty in the requested tab), and a name-keyed
+      // comparison found the empty one equal to the real one and reported verify PASS while the
+      // requested relocation had not happened. Live-reproduced: 28/28 PASS against a form whose
+      // fields were in the wrong tab.
+      //
+      // The identity is the section object itself, so a later comparison can ask "is this the SAME
+      // section I matched?" rather than "does it have the same name as the one I matched?".
       const placedIn = new Map();
       for (const t of deployed) for (const c of t.columns || []) for (const sec of c.sections || []) {
-        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, String(sec.name || '').toLowerCase());
+        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, sec);
       }
 
       const problems = [];
@@ -352,22 +362,42 @@ async function verifySpec(spec, read, opts = {}) {
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
               for (const key of ['colspan', 'rowspan']) {
-                const want = Number(entry[key]);
-                if (!Number.isFinite(want) || want < 1) continue; // not declared
+                const declared = Number(entry[key]);
+                if (!Number.isFinite(declared) || declared < 1) continue; // not declared
+                // Compare the EFFECTIVE span, not the raw authored one. The compiler clamps a span
+                // to the section width by design — `colspan: 4` in a one-column section deploys as
+                // 1 — so comparing the raw value failed a layout that was built exactly as
+                // documented. Live-reproduced: "field 'x' has colspan 1, the spec declares 4"
+                // against a correctly clamped cell.
+                //
+                // Only `colspan` is bounded by the grid; `rowspan` has no such limit, so it is
+                // compared as authored.
+                const want = key === 'colspan' && Number.isFinite(secCols) && secCols >= 1
+                  ? Math.min(declared, secCols)
+                  : declared;
                 const got = Number(dc[key]) || 1;
-                if (got !== want) problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${want}`);
+                if (got !== want) {
+                  problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${declared}`
+                    + (want !== declared ? ` (clamped to ${want} by the ${secCols}-column section)` : ''));
+                }
               }
             }
-            // Fields are compared against the section that was MATCHED, not the authored name — the
-            // deployed section legitimately keeps its own name.
-            const deployedSecName = String(secHit.item.name || '').toLowerCase();
+            // Fields are compared against the section OBJECT that was matched, not its name — the
+            // deployed section legitimately keeps its own name, and two sections can share one.
+            // Identity comparison is what catches a field sitting in a same-named section under a
+            // DIFFERENT tab, which a name comparison reported as correct.
             for (const entry of (sec.fields || [])) {
               const fieldName = typeof entry === 'string' ? entry : (entry && entry.name);
               if (!fieldName) continue;
               const fl = String(fieldName).toLowerCase();
               const where = placedIn.get(fl);
               if (where === undefined) problems.push(`field '${fl}' is not placed on the deployed form`);
-              else if (where !== deployedSecName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
+              else if (where !== secHit.item) {
+                const whereName = String(where.name || '').toLowerCase();
+                problems.push(`field '${fl}' is deployed in section '${whereName}'`
+                  + (whereName === secName ? ' under a different tab' : '')
+                  + `, the spec places it in '${secName}'`);
+              }
             }
           });
         });

@@ -301,9 +301,35 @@ async function realSdk() {
   const sdk = createMakerSdk({
     workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
-      get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
-      post: async (url, body) => { writes.push({ verb: 'POST', url: String(url), body }); return { status: 200, headers: {}, body: { workflowid: '44444444-4444-4444-4444-444444444444' } }; },
-      patch: async (url, body) => { writes.push({ verb: 'PATCH', url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+      // A real Dataverse GET of a record carries `@odata.etag`, and the SDK now reads the created
+      // BPF back to obtain a concurrency token — without one the NEXT push would have nothing to
+      // condition on, so it refuses with BPF_CREATE_NO_TOKEN rather than push blind. The old fake
+      // answered every GET with an empty collection and therefore modelled a server that never
+      // returns an etag, which no Dataverse does.
+      //
+      // A single-record read (`/workflows(<id>)`) returns the ROW; a collection read returns
+      // `{ value: [...] }`. Both shapes are produced here so the token lookup works whichever the
+      // SDK uses.
+      get: async (url) => {
+        const m = /\/workflows\(([^)]+)\)/i.exec(String(url));
+        if (m) {
+          return { status: 200, headers: { etag: 'W/"1001"' },
+            body: { workflowid: m[1].replace(/'/g, ''), '@odata.etag': 'W/"1001"', statecode: 0, statuscode: 1 } };
+        }
+        if (/\/workflows/i.test(String(url))) {
+          return { status: 200, headers: {}, body: { value: [] } };
+        }
+        return { status: 200, headers: {}, body: { value: [] } };
+      },
+      post: async (url, body) => {
+        writes.push({ verb: 'POST', url: String(url), body });
+        return {
+          status: 200,
+          headers: { etag: 'W/"1001"', 'odata-entityid': 'https://contoso.crm.dynamics.com/api/data/v9.2/workflows(44444444-4444-4444-4444-444444444444)' },
+          body: { workflowid: '44444444-4444-4444-4444-444444444444', '@odata.etag': 'W/"1001"' },
+        };
+      },
+      patch: async (url, body) => { writes.push({ verb: 'PATCH', url: String(url), body }); return { status: 204, headers: { etag: 'W/"1002"' }, body: {} }; },
       put: async () => ({ status: 204, headers: {}, body: {} }),
       delete: async () => ({ status: 204, headers: {}, body: {} }),
     },

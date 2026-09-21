@@ -59,12 +59,18 @@ function rowsFromCells(cells, columns) {
     }
     // The clamp has to reach the EMITTED cell, not just the row arithmetic. Packing a `colspan: 4`
     // cell as width 2 while still serializing `colspan="4"` produces exactly the overrunning cell
-    // this clamp exists to prevent, and contradicts the documented behaviour. A span clamped back
-    // down to 1 drops the attribute entirely, matching fieldCellIntent's omit-the-default rule.
+    // this clamp exists to prevent, and contradicts the documented behaviour.
+    //
+    // The clamped value is written EVEN WHEN IT IS 1. Dropping the attribute there looked harmless
+    // ("1 is the default"), but it recreates the omission-vs-value ambiguity one layer down:
+    // reconcile reads a missing span as "no opinion" and LEAVES AN EXISTING WIDE CELL ALONE.
+    // Live-reproduced — a deployed colspan-2 cell, re-declared as `colspan: 4` in a ONE-column
+    // section, stayed at 2 across two applies instead of shrinking to the clamped 1. The author did
+    // declare a span here; 1 is its effective value, not an absence.
     let out = cell;
     if (span !== declared) {
       out = Object.assign({}, cell);
-      if (span > 1) out.colspan = span; else delete out.colspan;
+      out.colspan = span;
     }
     current.push(out);
     used += span;
