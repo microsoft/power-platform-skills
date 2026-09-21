@@ -18,7 +18,6 @@ const {
   createSnapshot,
   expandSnapshot,
 } = require('../create-dataverse-snapshot');
-const { createFixtureRequest, createScaleScenario } = require('../benchmark-dataverse-planning');
 
 const context = {
   environmentUrl: 'https://example.crm.dynamics.com/',
@@ -45,6 +44,105 @@ function inventoryItem() {
     canBeRelatedEntityInRelationship: true, canBeInManyToMany: true,
     hasActivities: false, hasNotes: false,
     isAvailableOffline: true, changeTrackingEnabled: true,
+  };
+}
+
+function planningFixture() {
+  const displayName = (value) => ({ UserLocalizedLabel: { Label: value } });
+  const logicalName = 'new_item';
+  return {
+    concepts: [{
+      phrase: 'items',
+      kind: 'entity',
+      discoverTable: true,
+      evidence: 'Fixture brief mentions items.',
+    }],
+    entities: [{
+      LogicalName: logicalName,
+      SchemaName: 'new_Item',
+      EntitySetName: 'new_items',
+      DisplayName: displayName('Item'),
+      DisplayCollectionName: displayName('Items'),
+      Description: displayName('Item records'),
+      PrimaryIdAttribute: 'new_itemid',
+      PrimaryNameAttribute: 'new_name',
+      OwnershipType: 'UserOwned',
+      IsCustomEntity: true,
+      IsManaged: false,
+      IsCustomizable: { Value: true },
+      CanCreateAttributes: { Value: true },
+      CanBePrimaryEntityInRelationship: { Value: true },
+      CanBeRelatedEntityInRelationship: { Value: true },
+      CanBeInManyToMany: { Value: true },
+      HasActivities: false,
+      HasNotes: false,
+      IsAvailableOffline: true,
+      ChangeTrackingEnabled: true,
+    }],
+    tables: [{
+      logicalName,
+      columns: [{
+        MetadataId: 'new_name-metadata',
+        LogicalName: 'new_name',
+        SchemaName: 'new_Name',
+        AttributeType: 'String',
+        AttributeTypeName: { Value: 'StringType' },
+        IsPrimaryName: true,
+        IsCustomAttribute: true,
+        IsManaged: false,
+        IsCustomizable: { Value: true },
+        IsValidForCreate: true,
+        IsValidForRead: true,
+        IsValidForUpdate: true,
+        RequiredLevel: { Value: 'ApplicationRequired' },
+        MaxLength: 200,
+        FormatName: { Value: 'Text' },
+        SourceType: 0,
+        SourceTypeMask: 0,
+      }],
+      manyToOneRelationships: [],
+      oneToManyRelationships: [],
+      manyToManyRelationships: [],
+      alternateKeys: [],
+      lookupTargets: {},
+      computed: {},
+    }],
+  };
+}
+
+function fixtureRequest(fixture, calls = []) {
+  return async (_method, apiPath) => {
+    calls.push(apiPath);
+    if (apiPath.startsWith('EntityDefinitions?')) {
+      return {
+        status: 200,
+        data: {
+          value: apiPath.includes('IsCustomizable/Value eq true')
+            ? fixture.entities
+            : fixture.entities.filter(
+              (item) => apiPath.includes(`LogicalName eq '${item.LogicalName}'`),
+            ),
+        },
+      };
+    }
+    const table = fixture.tables[0];
+    if (apiPath.includes('$expand=Attributes(')) {
+      return {
+        status: 200,
+        data: {
+          LogicalName: table.logicalName,
+          Attributes: table.columns,
+          ManyToOneRelationships: [],
+          OneToManyRelationships: [],
+          ManyToManyRelationships: [],
+          Keys: [],
+        },
+      };
+    }
+    if (apiPath.includes('/Attributes?$select=')) {
+      return { status: 200, data: { value: table.columns } };
+    }
+    return { status: 200, data: { value: [] } };
   };
 }
 
@@ -292,9 +390,9 @@ test('cache preserves customizable managed tables and explicit unknown capabilit
 });
 
 test('cached advisory tables refresh live identity flags without broad discovery or duplicate exact reads', async () => {
-  const fixture = createScaleScenario(6, 'all-reuse');
+  const fixture = planningFixture();
   const options = { ...context, concepts: [fixture.concepts[0]], combinedBaseRead: true };
-  const baseline = await createSnapshot({ ...options, request: createFixtureRequest(fixture, []) });
+  const baseline = await createSnapshot({ ...options, request: fixtureRequest(fixture) });
   const target = fixture.entities[0];
   target.CanCreateAttributes = { Value: false };
   target.OwnershipType = 'OrganizationOwned';
@@ -302,7 +400,7 @@ test('cached advisory tables refresh live identity flags without broad discovery
     const calls = [];
     const snapshot = await createSnapshot({
       ...options, ...exact, inventory: baseline.inventory, inventorySource: 'cache',
-      request: createFixtureRequest(fixture, calls),
+      request: fixtureRequest(fixture, calls),
     });
     const selected = snapshot.tables.find((item) => item.logicalName === target.LogicalName);
     assert.equal(selected.detailLevel, 'full');
@@ -318,7 +416,7 @@ test('cached advisory tables refresh live identity flags without broad discovery
   target.IsCustomizable = { Value: false };
   const changed = await createSnapshot({
     ...options, inventory: baseline.inventory, inventorySource: 'cache',
-    request: createFixtureRequest(fixture, []),
+    request: fixtureRequest(fixture),
   });
   assert.equal(changed.tables[0].customizable, false);
   assert.equal(changed.inventoryFacts.customizableTables, baseline.inventory.length - 1);
@@ -330,9 +428,9 @@ test('cached advisory tables refresh live identity flags without broad discovery
 });
 
 test('deleted cached candidates are unavailable and malformed identity responses remain errors', async () => {
-  const fixture = createScaleScenario(6, 'all-reuse');
+  const fixture = planningFixture();
   const options = { ...context, concepts: [fixture.concepts[0]] };
-  const baseline = await createSnapshot({ ...options, request: createFixtureRequest(fixture, []) });
+  const baseline = await createSnapshot({ ...options, request: fixtureRequest(fixture) });
   const cached = { ...options, inventory: baseline.inventory, inventorySource: 'cache' };
   const snapshot = await createSnapshot({
     ...cached, request: async (_method, apiPath) => {

@@ -67,15 +67,6 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   rationale, ER diagram, tiers, and risks verbatim. Keep the compact sidecar as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
   tables into `native-app-plan.md`.
-- **Timing ownership.** The foreground `/create-mobile-app` skill measures the
-  outer `nativePlanner` wall. This planner measures only nested
-  `modelArchitect`, `screenPlanner`, `artifactValidation`, `planRevision`, and
-  `userApproval` stages with `${PLUGIN_ROOT}/scripts/planning-timings.js`.
-  Start immediately before work and finish immediately after success. Use
-  `needs-context` or `fail` for those returns and `start --retry` only for a
-  corrective re-dispatch. Omit token/cost fields unless the host exposes them;
-  never put prompts, requirements, credentials, URLs, or response bodies in a
-  timing reason.
 - **Connectivity intent ownership.** Follow
   [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
   throughout planning.
@@ -268,10 +259,6 @@ Always present this gate before any data-model architect dispatch. Present the
 foreground's provisional Dataverse recommendation, but let this gate make the
 first user-visible data-platform decision:
 
-Time the actual `EnterPlanMode` / `ExitPlanMode` interval as `userApproval`.
-Finish the interval before returning the architecture-completion signal. Time
-corrections after rejection separately as `planRevision`.
-
 ```markdown
 ## Gate 1 of 4 — Architecture
 
@@ -340,12 +327,6 @@ is auto-skipped as not applicable.
 Only now dispatch `mobile-app:data-model-architect` with the locked
 architecture inputs:
 
-Immediately before the Task call, start `modelArchitect` timing. When its
-literal status is available, close the same attempt with `finish`,
-`needs-context --reason bounded-metadata-required`, or `fail --reason
-architect-blocked`. A re-spawn caused by missing context or validation feedback
-uses `start --retry`.
-
 > Requirements: [paste confirmed requirements]
 > Wizard answers: [target users & device, aesthetic, features]
 > Target platforms: iOS and Android
@@ -371,8 +352,7 @@ duplicating entities owned by approved connectors. Wait for its return and
 apply the standard status switch:
 
 - `DONE` or `DONE_WITH_CONCERNS:` — require `_dm_section.md` and the normalized
-  `.tmp/dataverse-schema-contract.json`, then time the decision check as
-  `artifactValidation` and run
+  `.tmp/dataverse-schema-contract.json`, then run
   `validate-dataverse-planning-decisions.js --contract <contract> --snapshot <snapshot>`.
   Exit `3` must preserve the validator's exact stderr first line:
   `NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-logical-names>` or
@@ -518,12 +498,6 @@ Approve? (Reject → revise data model only)
 
 Call `ExitPlanMode` to request approval.
 
-Start `userApproval` timing immediately before `EnterPlanMode` and finish it
-immediately after `ExitPlanMode` returns, whether the answer approves or rejects.
-On rejection, time only the corrective work as `planRevision`; then start a new
-approval attempt without `--retry` because approval attempts are not model
-retries.
-
 - **Approved:** mark `[x] Data model approved` in the plan doc and immediately
   initialize/update `<working_dir>/.tmp/mobile-plan-status.json` with the
   normalized contract's exact content/hash and a `dataModel` approval record.
@@ -553,10 +527,6 @@ Only run after Gate 2 is approved or auto-skipped. Screen planning has two bound
 This cuts the cost of a screen-list rejection from "regenerate everything" to "regenerate just the specs."
 
 #### 5b.1 — Spawn planner with `phase: graph`
-
-Start `screenPlanner` timing immediately before dispatch. Finish it on `DONE`;
-use `needs-context` or `fail` for those literal statuses. A graph re-dispatch
-after deterministic validation failure uses `start --retry`.
 
 Pass the data model + connectors + design + an explicit `phase: graph`:
 
@@ -615,10 +585,6 @@ Reject loop = re-spawn with `phase: graph` and the user's feedback. Approve = pr
 Re-spawn the planner with the canonical `native-app-plan.md`; read its `## Screens` section
 as the locked graph. `_screens_section.md` remains graph-only scratch and is
 not the specs input or output.
-
-Start a new `screenPlanner` attempt without `--retry`; graph and specs are two
-normal phases. Use `--retry` only when re-running the same specs phase after a
-failure or missing-context return.
 
 ```
 You are the screen-planner agent. PHASE 2 OF 2 — specs only.
@@ -727,9 +693,6 @@ synthesizes calculated/formula metadata and must preserve the already approved
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
-Time this as a new `modelArchitect` attempt without `--retry`; it is a distinct
-audit phase. A corrective audit re-dispatch after user feedback uses `--retry`.
-
 ```
 You are the data-model-architect agent. ROUND 2 — cross-entity audit only.
 
@@ -755,8 +718,6 @@ Wait for return; apply the Step 3.0 status switch:
 #### 5c.2 — Gate 2 addendum (cross-entity read paths)
 
 If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a Gate 2 addendum (not a fresh Gate 2 — the original schema is already approved and unchanged):
-
-Time the addendum's `EnterPlanMode`/`ExitPlanMode` interval as `userApproval`.
 
 ```
 ## Gate 2 — Addendum: Cross-entity Reads

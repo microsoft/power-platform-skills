@@ -175,20 +175,10 @@ the block below. Connector-only runs set
 `$DETECTED_PUBLISHER_PREFIX = ""` and make no Dataverse prefix query.
 
 ```bash
-PUBLISHER_PREFIX_STARTED_MS=$(node -e 'process.stdout.write(String(Date.now()))')
 PUBLISHER_PREFIX_JSON=$(node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" \
   "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
-PUBLISHER_PREFIX_DURATION_MS=$(node -e \
-  'process.stdout.write(String(Math.max(0, Date.now() - Number(process.argv[1]))))' \
-  "$PUBLISHER_PREFIX_STARTED_MS")
 echo "$PUBLISHER_PREFIX_JSON"
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage publisherPrefixDetection \
-  --action record --duration-ms "$PUBLISHER_PREFIX_DURATION_MS"
 ```
-
-Record the measured duration when this deferred block runs after Gate 1; the
-Step 3 timing-artifact directory already exists at that point.
 
 Output is one line of JSON, e.g.:
 
@@ -463,30 +453,11 @@ First, create the working and planning-artifact directories:
 
 ```bash
 mkdir -p <working_dir> <working_dir>/.tmp
-PLANNING_TIMINGS_PATH="<working_dir>/.tmp/mobile-planning-timings.json"
 ```
-
-For every timed command or agent dispatch below, call `planning-timings.js`
-with `--action start` immediately before it and `--action finish` immediately
-after success. On `BLOCKED` or command failure use `--action fail --reason
-<short-safe-classification>`; on `NEEDS_CONTEXT` use `--action needs-context
---reason <short-safe-classification>`, then start the re-dispatch with
-`--retry`. Never put prompts, requirements, credentials, URLs, or response
-bodies in `reason`. Model token/cost fields are optional and must be omitted
-when the host does not expose them.
-
-The validated architecture-completion signal below is a successful `finish`,
-not a missing-context retry. The initial `gate-only` and `complete` planner
-passes are separate normal `nativePlanner` attempts; only corrective
-re-dispatches use `--retry`.
 
 ### Architecture gate
 
 Run the planner once in architecture-only mode before any Dataverse discovery:
-
-Start `nativePlanner` timing immediately before this dispatch and finish it
-after validating the architecture-completion result. In the inline fallback,
-measure the actual architecture approval interaction as `userApproval` instead.
 
 ```
 Spawn agent: mobile-app:native-app-planner
@@ -544,37 +515,15 @@ Branch on the Gate 1-approved
   nested planner or architect rediscover the tenant.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage environmentResolution --action start
-if ! PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache); then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage environmentResolution \
-    --action fail --reason environment-resolution-command-failed
-  exit 2
-fi
-if ! ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON"); then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage environmentResolution \
-    --action fail --reason environment-resolution-parse-failed
-  exit 2
-fi
-if ! ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON"); then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage environmentResolution \
-    --action fail --reason environment-resolution-parse-failed
-  exit 2
-fi
-if [ -z "$ACTIVE_ENV_URL" ] || [ -z "$ACTIVE_TENANT_ID" ]; then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage environmentResolution \
-    --action fail --reason environment-resolution-incomplete
-  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."
-  exit 2
-fi
-echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage environmentResolution --action finish
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant
 ```
+
+The command validates both required fields before returning JSON. On exit `0`,
+use its `environmentUrl` as `$ACTIVE_ENV_URL` and `tenantId` as
+`$ACTIVE_TENANT_ID` in the following commands, replacing the previous values.
+Read these fields directly from the structured command result; do not run
+separate JSON-extraction commands. On a nonzero exit, follow foreground
+recovery below and do not create a snapshot or reuse stale environment values.
 
 Build `<working_dir>/.tmp/dataverse-concepts.json` as a JSON array of typed
 concepts from the confirmed brief and Gate 1-approved architecture. Account for
@@ -616,12 +565,9 @@ Detailed advisory discovery is quality-bounded:
 SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
 ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
-PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
 INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
 run_dataverse_planning_attempt() {
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage metadataSnapshot --action start "$@" || return 2
 if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -632,33 +578,19 @@ if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --progressive-detail \
   --combined-base-read \
   --read-concurrency 1 \
-  --inventory-cache "$INVENTORY_CACHE_PATH" \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"; then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage metadataSnapshot \
-    --action fail --reason snapshot-command-failed
+  --inventory-cache "$INVENTORY_CACHE_PATH"; then
   printf 'NEEDS_RECOVERY: dataverse-snapshot\n' >&2
   return 2
 fi
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage metadataSnapshot --action finish || return 2
 
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action start "$@" || return 2
 if ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH" \
   || ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
     --snapshot "$SNAPSHOT_PATH" --output "$ARCHITECT_EVIDENCE_PATH" --validate-only; then
-  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage artifactValidation \
-    --action fail --reason evidence-command-failed
   printf 'NEEDS_RECOVERY: dataverse-evidence\n' >&2
   return 2
 fi
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action finish || return 2
 
 node -e '
   const s=require(process.argv[1]);
@@ -671,20 +603,16 @@ node -e '
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
 ' "$SNAPSHOT_PATH" || return 2
 echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
-echo "✓ Request telemetry: $PLANNING_TELEMETRY_PATH"
 }
 run_dataverse_planning_attempt
 ```
-
-`metadataSnapshotWallMs` records whole snapshot attempts, including failed ones.
-It overlaps the metadata component timings; do not add it to their sum.
 
 `--combined-base-read` loads attributes, three relationship collections, and
 alternate keys through one entity-definition GET per selected table, following
 any nested continuation links before normalization. Typed constraints, choices,
 lookup targets, and computed metadata remain separate full-detail GETs.
 `--read-concurrency 1` is the production default. Concurrency `2` through `8`
-is an explicit benchmark/operator choice only; metadata writes are never sent
+is an explicit operator choice only; metadata writes are never sent
 through this read worker pool. The inventory cache stores inventory-level facts
 only, has a five-minute TTL, fails open on corruption or identity mismatch, and
 is never read by `--reconcile-exact`. After any metadata publish, invalidate it
@@ -702,11 +630,10 @@ resolution, parsing, and evidence validation failures in this step.
   transient retries; do not launch parallel retry loops or repeat an unchanged
   permanent error. Invalid cached or old-format metadata is regenerated from
   live reads, never edited into apparent validity.
-- After a targeted repair, rerun `run_dataverse_planning_attempt --retry` (or
+- After a targeted repair, rerun `run_dataverse_planning_attempt` (or
   rerun the block with that invocation if the shell function is unavailable).
   Allow at most two repair-and-retry attempts per failing stage. Re-resolve the
-  selected environment first if resolution failed. Preserve failure history
-  and include `--retry` on restarted environment timing stages as well.
+  selected environment first if resolution failed.
 - Resume automatically only after the current attempt succeeds and its fresh
   snapshot and matching evidence validate. File existence is not success:
   prior artifacts can survive a failed atomic write. Never substitute stale
@@ -744,9 +671,6 @@ live Dataverse calls inside the agent. For `connector-only`, pass the mode
 explicitly and state that both paths are not supplied; never provide placeholder
 file paths.
 
-Benchmark method and acceptance criteria:
-[`references/dataverse-planning-benchmark.md`](references/dataverse-planning-benchmark.md).
-
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
 - `<working_dir>/native-app-plan.md`
@@ -766,11 +690,6 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 - `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
-
-Immediately before dispatch, start a new `nativePlanner` attempt without
-`--retry` for this normal `complete` phase. Close it with
-`finish`, `needs-context`, or `fail` according to the literal first-line return.
-Every re-dispatch after bounded expansion uses `start --retry`.
 
 ```
 Spawn agent: mobile-app:native-app-planner
@@ -864,11 +783,6 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
   on exit `4`, and permit approval only on exit `0`. This check also applies to
   every direct revision and the fully-inline fallback; architecture approval
   never substitutes for data-model approval.
-
-  Wrap every direct architect dispatch with the same timing protocol using the
-  `modelArchitect` stage. Wrap direct graph/spec screen-planner dispatches with
-  `screenPlanner`; graph and specs are separate successful attempts, while only
-  a corrective re-dispatch adds `--retry`.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
@@ -1033,9 +947,7 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --output "$SNAPSHOT_PATH" \
   --tables "<NEW_DETAIL_NAMES as exact comma-separated logical names>" \
   --combined-base-read \
-  --read-concurrency 1 \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
+  --read-concurrency 1
 
 node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
@@ -1083,9 +995,7 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --output "$SNAPSHOT_PATH" \
   --proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>" \
   --combined-base-read \
-  --read-concurrency 1 \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
+  --read-concurrency 1
 
 node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
@@ -2761,22 +2671,6 @@ When the user is ready to deploy:
 ### Step 13 — Summary
 
 Print a compact status block, then present exactly 6 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
-
-First run the deterministic timing summary:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --summary
-```
-
-Report `dataverseMetadataNetworkMs`, `localDeterministicProcessingMs`,
-`modelArchitectMs`, `screenPlannerMs`, `outerPlannerWallMs`, and
-`userApprovalWaitingMs` as separate values. The outer planner wall contains
-nested work and is not added to architect/screen durations. Scaffold and
-mutation timing stays outside this planning artifact; show its own captured
-step duration when available, otherwise `not recorded`. Never label fixture
-processing as network/model time or include user approval waiting in an
-agent-performance claim.
 
 ```
 ✅ Native code app created

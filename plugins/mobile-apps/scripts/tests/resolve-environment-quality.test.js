@@ -10,6 +10,7 @@ const test = require('node:test');
 const {
   describeResponseShape,
   formatRequestFailure,
+  main,
   parseArgs,
   redactDiagnostic,
   resolveEnvironment,
@@ -45,6 +46,83 @@ test('resolver argument parsing accepts no-cache in either position', () => {
   const id = '11111111-1111-1111-1111-111111111111';
   assert.deepStrictEqual(parseArgs([id, '--no-cache']), { noCache: true, target: id });
   assert.deepStrictEqual(parseArgs(['--no-cache', id]), { noCache: true, target: id });
+});
+
+test('resolver accepts required-tenant and help options and rejects unknown flags', () => {
+  const id = '11111111-1111-1111-1111-111111111111';
+  for (const args of [
+    [id, '--no-cache', '--require-tenant'],
+    ['--require-tenant', '--no-cache', id],
+  ]) {
+    assert.deepStrictEqual(parseArgs(args), { noCache: true, target: id, requireTenant: true });
+  }
+  for (const help of ['--help', '-h']) {
+    assert.deepStrictEqual(parseArgs([help]), { noCache: false, target: null, help: true });
+  }
+  for (const args of [['--typo'], ['--typo', id], [id, '--typo'], ['--help', '--typo']]) {
+    assert.throws(() => parseArgs(args), /Unknown option: --typo/);
+  }
+  assert.throws(() => parseArgs([id, id]), /Unknown argument/);
+});
+
+test('resolver help and invalid options exit without resolving or writing project files', (testContext) => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-cli-options-'));
+  testContext.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const target = '11111111-1111-1111-1111-111111111111';
+  const run = (args) => spawnSync(process.execPath, [resolverPath, ...args], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout: 5000,
+    env: { ...process.env, PATH: '', POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+  });
+  for (const args of [['--help'], ['-h'], [target, '--no-cache', '--require-tenant', '--help']]) {
+    const result = run(args);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Usage:.*<environment-url-or-id>/);
+    assert.match(result.stdout, /--require-tenant/);
+    assert.match(result.stdout, /Existing identity metadata may still be read/);
+    assert.strictEqual(result.stderr, '');
+  }
+  for (const args of [['--typo'], [target, '--typo']]) {
+    const result = run(args);
+    assert.strictEqual(result.status, 1, result.stderr);
+    assert.match(result.stderr, /^Unknown option: --typo/);
+    assert.strictEqual(result.stdout, '');
+  }
+  assert.deepStrictEqual(fs.readdirSync(projectRoot), []);
+});
+
+test('required-tenant mode rejects incomplete resolution before emitting JSON', async (testContext) => {
+  const environmentResolution = require('../lib/environment-resolution');
+  let resolved;
+  const resolution = testContext.mock.method(environmentResolution, 'resolveEnvironment', async () => resolved);
+  const output = testContext.mock.method(console, 'log', () => {});
+  const environment = {
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: '22222222-2222-2222-2222-222222222222',
+  };
+  const args = ['11111111-1111-1111-1111-111111111111', '--no-cache', '--require-tenant'];
+  for (const incomplete of [
+    null,
+    {},
+    { environmentUrl: environment.environmentUrl },
+    { tenantId: environment.tenantId },
+    { ...environment, tenantId: null },
+    { ...environment, tenantId: ' ' },
+    { ...environment, tenantId: 42 },
+    { ...environment, environmentUrl: '' },
+  ]) {
+    resolved = incomplete;
+    await assert.rejects(main(args), /Could not resolve a Dataverse environment URL and tenant ID/);
+  }
+  assert.strictEqual(output.mock.callCount(), 0);
+  resolved = environment;
+  await main(args);
+  assert.strictEqual(output.mock.callCount(), 1);
+  assert.deepStrictEqual(JSON.parse(output.mock.calls[0].arguments[0]), environment);
+  assert.deepStrictEqual(resolution.mock.calls[0].arguments[3], {
+    noCache: true, target: args[0], requireTenant: true,
+  });
 });
 
 test('resolver export retains project lookup while the CLI requires an explicit target', async (t) => {
@@ -111,7 +189,7 @@ test('resolver CLI and exported API leave cached project files byte-identical in
       const filesBefore = fs.readdirSync(projectRoot).sort();
       const result = spawnSync(
         process.execPath,
-        [resolverPath, environment.environmentId, '--no-cache'],
+        [resolverPath, environment.environmentId, '--no-cache', '--require-tenant'],
         {
           cwd: projectRoot,
           encoding: 'utf8',

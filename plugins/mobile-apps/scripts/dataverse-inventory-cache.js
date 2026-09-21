@@ -3,11 +3,22 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { atomicWriteJson } = require('./lib/dataverse-planning-telemetry');
 
 const CACHE_SCHEMA_VERSION = 1;
 const DATAVERSE_API_VERSION = '9.2';
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
+
+function atomicWriteJson(file, value, fileSystem = fs) {
+  const resolved = path.resolve(file);
+  fileSystem.mkdirSync(path.dirname(resolved), { recursive: true });
+  const temporary = `${resolved}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fileSystem.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fileSystem.renameSync(temporary, resolved);
+  } finally {
+    if (fileSystem.existsSync(temporary)) fileSystem.rmSync(temporary, { force: true });
+  }
+}
 
 function normalizeUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '').toLowerCase();

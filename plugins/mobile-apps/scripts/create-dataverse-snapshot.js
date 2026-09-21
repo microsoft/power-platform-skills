@@ -5,18 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createDataverseRequestExecutor } = require('./dataverse-request');
 const {
-  appendPlanningTelemetry,
-  createPlanningTelemetryCollector,
-} = require('./lib/dataverse-planning-telemetry');
-const {
   DEFAULT_TTL_MS,
   readInventoryCache,
   writeInventoryCache,
 } = require('./dataverse-inventory-cache');
-const {
-  readArtifact: readPlanningTimingArtifact,
-  updatePlanningTiming,
-} = require('./planning-timings');
 
 const ENTITY_SELECT = [
   'LogicalName',
@@ -332,24 +324,6 @@ function atomicWriteFile(file, content, fileSystem = fs) {
 
 function atomicWriteJson(file, value, fileSystem = fs) {
   atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`, fileSystem);
-}
-
-function appendSnapshotPlanningTimings(file, snapshot, fileSystem = fs) {
-  const output = path.resolve(file);
-  const artifact = readPlanningTimingArtifact(output, fileSystem);
-  // Expansion wall time includes local selection/orchestration. Record the
-  // measured components so reporting does not misclassify all expansion time
-  // as Dataverse network latency.
-  const measuredStages = [
-    ['metadataInventory', snapshot.timings.inventoryRetrievalMs],
-    ['metadataCandidateSelection', snapshot.timings.candidateSelectionMs],
-    ['metadataDetailLoading', snapshot.timings.detailLoadingMs],
-  ];
-  for (const [stage, durationMs] of measuredStages) {
-    updatePlanningTiming(artifact, { stage, action: 'record', durationMs });
-  }
-  atomicWriteJson(output, artifact, fileSystem);
-  return artifact;
 }
 
 function normalizeUrl(value) {
@@ -2802,20 +2776,14 @@ async function main() {
       + '[--base-snapshot <existing-json>] [--reconcile-exact] [--progressive-detail] '
       + '[--combined-base-read] '
       + '[--read-concurrency <1-8>] [--inventory-cache <json>] '
-      + '[--inventory-cache-ttl-ms <number>] [--telemetry-output <json>] '
-      + '[--planning-timings-output <json>]\n',
+      + '[--inventory-cache-ttl-ms <number>]\n',
     );
     process.exit(1);
   }
   const progress = (event) => {
     process.stderr.write(`DATAVERSE_SNAPSHOT_PROGRESS ${JSON.stringify(event)}\n`);
   };
-  const telemetry = args['telemetry-output']
-    ? createPlanningTelemetryCollector()
-    : null;
-  const request = createCliRequest(args, createDataverseRequestExecutor, {
-    onTelemetry: telemetry ? (event) => telemetry.record(event) : null,
-  });
+  const request = createCliRequest(args);
   const baseSnapshot = args['base-snapshot']
     ? JSON.parse(fs.readFileSync(path.resolve(args['base-snapshot']), 'utf8'))
     : null;
@@ -2889,27 +2857,12 @@ async function main() {
     });
   const output = path.resolve(args.output);
   atomicWriteJson(output, snapshot);
-  if (args['planning-timings-output']) {
-    appendSnapshotPlanningTimings(args['planning-timings-output'], snapshot);
-  }
   if (inventoryCachePath && !baseSnapshot && !args['reconcile-exact'] && !cacheRead.hit) {
     writeInventoryCache(
       inventoryCachePath,
       cacheContext,
       cacheablePlanningInventory(snapshot),
     );
-  }
-  const telemetryOutput = args['telemetry-output']
-    ? path.resolve(args['telemetry-output'])
-    : null;
-  if (telemetry && telemetryOutput) {
-    appendPlanningTelemetry(telemetryOutput, telemetry.run({
-      id: `${snapshot.purpose}-${snapshot.generatedAt}`,
-      purpose: snapshot.purpose,
-      environmentUrl: snapshot.environmentUrl,
-      snapshotGeneratedAt: snapshot.generatedAt,
-      snapshotTimings: snapshot.timings,
-    }));
   }
   console.log(JSON.stringify({
     status: 'DONE',
@@ -2948,7 +2901,6 @@ async function main() {
       reason: cacheRead.reason,
       ageMs: cacheRead.ageMs ?? null,
     } : null,
-    telemetryOutput,
   }, null, 2));
 }
 
@@ -2961,7 +2913,6 @@ if (require.main === module) {
 
 module.exports = {
   analyzeProposedNames,
-  appendSnapshotPlanningTimings,
   adaptiveReadRequest,
   atomicWriteFile,
   atomicWriteJson,

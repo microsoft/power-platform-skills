@@ -28,7 +28,7 @@ test('foreground command extraction accepts LF and Windows CRLF checkouts', () =
     planningAttemptBlock(normalized));
 });
 
-test('foreground Dataverse planning bypasses cached environment resolution', () => {
+test('foreground Dataverse planning resolves and validates environment in one read-only command', () => {
   const planningStart = skill.indexOf('### Foreground Dataverse planning');
   const planningEnd = skill.indexOf(
     'Build `<working_dir>/.tmp/dataverse-concepts.json`',
@@ -36,10 +36,17 @@ test('foreground Dataverse planning bypasses cached environment resolution', () 
   );
   assert.notStrictEqual(planningStart, -1);
   assert.notStrictEqual(planningEnd, -1);
-  assert.match(
-    skill.slice(planningStart, planningEnd),
-    /resolve-environment\.js" "\$ACTIVE_ENV_ID" --no-cache/,
+  const planning = skill.slice(planningStart, planningEnd);
+  const commands = [...planning.matchAll(/```bash\r?\n([\s\S]*?)\r?\n```/g)];
+  assert.strictEqual(commands.length, 1);
+  assert.strictEqual(
+    commands[0][1].trim(),
+    'node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant',
   );
+  assert.doesNotMatch(planning, /PLANNING_ENV_JSON|node -e|JSON\.parse/);
+  assert.match(planning, /`environmentUrl` as `\$ACTIVE_ENV_URL`/);
+  assert.match(planning, /`tenantId` as\s+`\$ACTIVE_TENANT_ID`/);
+  assert.match(planning, /nonzero exit[\s\S]*do not create a snapshot or reuse stale environment values/);
 });
 
 test('approved architecture precedes typed discovery without retrying the normal planner phases', () => {
@@ -59,8 +66,8 @@ test('approved architecture precedes typed discovery without retrying the normal
   const concepts = skill.slice(conceptsStart, commandsStart);
   assert.match(concepts, /Gate 1-approved architecture/);
   assert.match(concepts, /exclude connector-owned\s+records from Dataverse candidate selection/);
-  assert.match(skill, /initial `gate-only` and `complete` planner\s+passes are separate normal `nativePlanner` attempts/);
-  assert.match(skill, /architecture-completion signal below is a successful `finish`/);
+  assert.doesNotMatch(skill, /planning-timings\.js|PLANNING_TIMINGS_PATH/);
+  assert.doesNotMatch(skill, /telemetry-output|PLANNING_TELEMETRY_PATH/);
 });
 
 test('inline Dataverse planning keeps compact evidence and validates before Gate 2', () => {
@@ -72,6 +79,7 @@ test('inline Dataverse planning keeps compact evidence and validates before Gate
   assert.match(fallback, /`SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim/);
   assert.match(fallback, /full snapshot is\s+validator input only; read only the compact evidence/);
   assert.doesNotMatch(fallback, /\bEVIDENCE_PATH\b/);
+  assert.doesNotMatch(fallback, /timing protocol|modelArchitect|screenPlanner|--retry/);
   assert.match(fallback, /Before presenting Gate 2[\s\S]*validate-dataverse-planning-decisions\.js/);
   assert.match(fallback, /permit approval only on exit `0`/);
   assert.match(fallback, /every direct revision and the fully-inline fallback/);
@@ -118,14 +126,12 @@ node() {
     fs.mkdirSync(temporary);
     const snapshotFile = path.join(temporary, 'dataverse-foreground-planning-snapshot.json');
     const evidenceFile = path.join(temporary, 'dataverse-architect-evidence.json');
-    const timingsFile = path.join(temporary, 'mobile-planning-timings.json');
     fs.writeFileSync(snapshotFile, '{"stale":true}');
     fs.writeFileSync(evidenceFile, '{"stale":true}');
     const block = commands.replaceAll('<working_dir>', directory.replaceAll('\\', '/'));
     const env = {
       ...process.env, PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'), REAL_NODE: process.execPath.replaceAll('\\', '/'),
       FIXTURE_SNAPSHOT: JSON.stringify(snapshot), FAILURE_STAGE: failureStage,
-      PLANNING_TIMINGS_PATH: timingsFile.replaceAll('\\', '/'),
       POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
     };
     const failed = spawnSync(bash, ['-s'], {
@@ -137,32 +143,24 @@ node() {
     assert.match(failed.stdout, /CONTROLLER_READY:2/);
     assert.doesNotMatch(failed.stdout, /Dataverse inventory:/);
     assert.equal(fs.readFileSync(evidenceFile, 'utf8'), '{"stale":true}');
-    const failedTimings = JSON.parse(fs.readFileSync(timingsFile, 'utf8'));
-    const stage = failureStage === 'snapshot' ? 'metadataSnapshot' : 'artifactValidation';
-    assert.equal(failedTimings.stages[stage].status, 'failed');
     if (failureStage === 'snapshot') {
       assert.equal(fs.readFileSync(snapshotFile, 'utf8'), '{"stale":true}');
-      assert.equal(failedTimings.stages.artifactValidation, undefined);
     }
 
     const recovered = spawnSync(bash, ['-s'], {
-      input: `${stub}\n${block.replace(/run_dataverse_planning_attempt$/, 'run_dataverse_planning_attempt --retry')}`,
+      input: `${stub}\n${block}`,
       env: { ...env, FAILURE_STAGE: '' }, encoding: 'utf8', timeout: 10000,
     });
     assert.equal(recovered.status, 0, recovered.stderr);
     assert.match(recovered.stdout, /Dataverse inventory:/);
     loadAndValidateArchitectEvidence(snapshotFile, evidenceFile);
-    const timings = JSON.parse(fs.readFileSync(timingsFile, 'utf8'));
-    assert.deepEqual(timings.stages[stage].history.map((attempt) => attempt.status), ['failed', 'done']);
-    assert.equal(timings.stages[stage].retryCount, 1);
-    if (failureStage === 'snapshot') assert.equal(timings.stages.artifactValidation.retryCount, 0);
   }
 });
 
 test('planning recovery keeps the agent active without weakening approval or metadata checks', () => {
   assert.match(skill, /Foreground recovery, not agent termination/);
   assert.match(skill, /at most two repair-and-retry attempts per failing stage/);
-  assert.match(skill, /rerun `run_dataverse_planning_attempt --retry`/);
+  assert.match(skill, /rerun `run_dataverse_planning_attempt`/);
   assert.match(skill, /Never substitute stale\s+evidence, invent metadata/);
   assert.match(skill, /Ask the user only when recovery needs interactive sign-in/);
   assert.match(skill, /Individual table-detail failures do not stop planning/);
