@@ -29,6 +29,29 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
+  anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
+  summary read as authoritative — and a truncated-but-authoritative listing is what drives a
+  duplicate page create.
+- **A malformed page id is refused instead of stored.** The old pattern accepted 36 characters from
+  an alphabet containing `-`, so a row of dashes passed and an over-long id was silently *truncated*
+  into a plausible one. An unparsable id now goes through the existing uncertain-create recovery.
+- **A sample-data row that is not an object is rejected up front.** `null` crashed, a string became
+  `{"0":"a","1":"b"}` and a number became `{}` — all after tables, forms and views had deployed.
+- **A failed PAC command reports what PAC actually said.** The real error was replaced by the last
+  line of the help dump that follows it, and a deterministic failure (a bad argument, a missing file)
+  was retried three times before reporting anything.
+- **A path ending in `\` no longer swallows the flags after it** on Windows, where a trailing
+  backslash escaped its own closing quote.
+- **A crashed browser-automation server reports failure**, instead of exiting 0 because the process
+  was killed by a signal rather than by its own choice.
+- **`generate-page-manifest --force` writes only inside the working directory.** A `package.json`
+  that is a symlink is refused rather than followed — including a dangling one, which previously
+  *created* a file outside the directory.
+- **`--clear-workspace` refuses a UNC/network path**, which could otherwise block on an unreachable
+  share with no way to interrupt it. A mapped drive is unaffected.
+- **A transient discovery failure no longer certifies a `--changed-only` baseline as fresh**, which
+  could let a later page edit skip a full build it actually needed.
 - **An explicit form layout reshapes a form instead of flattening it** ([#575]). Every field was
   appended to the first section, containers were never created or resized, and declaring `tabs`
   silently switched pruning on. Containers now match by `name`, then `label`, then position, and a
