@@ -28,6 +28,8 @@
 | `DataverseDiscoveryIncomplete` / `DataverseDiscoveryChanged` | Table discovery is incomplete or changed between related reads | Retry with the intended organization and a working connection. Do not infer absence, uniqueness, or a need to recreate a table. |
 | `ResponseTooLarge` | The response cannot fit without losing data | No partial success payload is returned. Use `resolve_params` filtering/paging, or `get_flow` with a supported `properties.definition...` path. |
 | `DiscoveryChanged` | A discovery cursor was used with different arguments or the catalog changed | Restart without `cursor`, then keep the environment, connector, operation, connection, inputs, parameter and query unchanged across pages. |
+| `DynamicPickerContinuationUnsupported` | An upstream continuation changes the authenticated origin/picker path, or an opaque token has no unambiguous schema-declared paging parameter | Do not infer absence. Use the connector's documented scoped discovery operation; the client will not guess a token binding or forward credentials to another origin. |
+| `DynamicPickerPaginationLimit` / `DynamicPickerPaginationLoop` | Service discovery exceeded a bound or repeated a continuation | Narrow the connector inputs or investigate the upstream paging response. No complete catalog is returned for a failed collection. |
 | `OperationDiscoveryUnavailable` | The per-environment PPAPI endpoint needed by operation search/schema discovery is unavailable | Check the environment ID, configured cloud and network/DNS access. These operations have no classic Flow RP fallback implemented in this client. |
 | `UnsupportedCloudConfiguration` with `PA_CLOUD=dod` | No explicit DoD Flow token audience was configured | Set `PA_FLOW_RESOURCE` to an operator-verified audience. DoD has no guessed built-in Flow audience. |
 | Machine-group calls return `400` on `$select` | Old builds selected a non-existent `grouptype` column | Fixed — the real column is `flowgrouptype` (label `flowgrouptypename`). Rebuild/update the plugin. |
@@ -81,6 +83,14 @@ Use `operation: "ListRecordsWithOrganization"` and
 `currentInputs: {"organization": "https://contoso.crm.dynamics.com"}` when
 selecting an organization. Repeat the same request with `_page.nextCursor`
 as `cursor` until `_page.hasMore` is false.
+
+Supported service continuations are retrieved before local response paging:
+HTTPS next links must keep the authenticated origin and picker path, and opaque
+tokens must map to a schema-declared paging parameter (`continuationToken`, or
+`pageToken`/`nextPageToken` for a returned `nextPageToken`). Discovery is bounded
+to 100 upstream pages, 100,000 values and 10,000,000 serialized characters.
+Unsupported continuations and exceeded bounds produce explicit errors instead
+of discarding the continuation or reporting a complete first page.
 
 `_page.returned` counts entries in the current response; `_page.available`
 counts matching entries observed from the service. `_page.total` is `null`

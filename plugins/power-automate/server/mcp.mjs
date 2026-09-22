@@ -49917,6 +49917,99 @@ async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES) {
   return allItems;
 }
 
+// packages/core/dist/api/picker-pagination.js
+var LINK_KEYS = ["@odata.nextLink", "odata.nextLink", "nextLink", "nextPageLink"];
+var TOKEN_KEYS = ["continuationToken", "nextPageToken"];
+var STATE_KEYS = [...LINK_KEYS, ...TOKEN_KEYS, "hasMore", "isComplete", "complete", "truncated", "moreRecords"];
+function paginationError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+function continuation(page) {
+  const fields = new Map(Object.entries(page));
+  for (const key of LINK_KEYS) {
+    const value = fields.get(key);
+    if (value == null || value === "")
+      continue;
+    if (typeof value !== "string")
+      throw paginationError("DynamicPickerMalformedResponse", "Picker next link must be a string.");
+    return { kind: "link", value };
+  }
+  for (const key of TOKEN_KEYS) {
+    const value = fields.get(key);
+    if (value == null || value === "")
+      continue;
+    if (typeof value !== "string")
+      throw paginationError("DynamicPickerMalformedResponse", "Picker continuation token must be a string.");
+    return { kind: "token", key, value };
+  }
+}
+function pickerNextLink(value, requestUrl) {
+  let next;
+  try {
+    next = new URL(value, requestUrl);
+  } catch {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker returned an invalid continuation URL.");
+  }
+  const original = new URL(requestUrl);
+  if (next.protocol !== "https:" || next.origin !== original.origin || next.pathname !== original.pathname || next.username || next.password || next.hash) {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker continuation changes the authenticated origin or picker path. Refusing to forward credentials; use the connector's supported scoped discovery operation.");
+  }
+  return next.href;
+}
+function bindPickerToken(extension, next) {
+  const parameters = extension.parameters;
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker returned an opaque continuation without a schema-declared paging parameter.");
+  }
+  const names = next.key === "nextPageToken" ? ["pagetoken", "nextpagetoken"] : ["continuationtoken"];
+  const matches = Object.keys(parameters).filter((key) => names.includes(key.toLowerCase()));
+  if (matches.length !== 1) {
+    throw paginationError("DynamicPickerContinuationUnsupported", `Cannot map ${next.key} to one schema-declared paging parameter. Discovery is incomplete; no absence claim can be made.`);
+  }
+  return { ...extension, parameters: { ...parameters, [matches[0]]: { value: next.value } } };
+}
+async function collectPickerPages(first, fetchNext, limits = {}) {
+  const maxPages = limits.maxPages ?? 100;
+  const maxItems = limits.maxItems ?? 1e5;
+  const maxChars = limits.maxChars ?? 1e7;
+  const values = [];
+  const seen = /* @__PURE__ */ new Set();
+  let page = first;
+  let pages = 0;
+  let chars = 0;
+  while (true) {
+    if (!page || !Array.isArray(page.value)) {
+      throw paginationError("DynamicPickerMalformedResponse", "An upstream picker page has no value array.");
+    }
+    if (Reflect.get(page, "error")) {
+      throw paginationError("DynamicPickerMalformedResponse", "An upstream picker page reported an error; discovery did not complete.");
+    }
+    pages++;
+    values.push(...page.value);
+    chars += JSON.stringify(page).length;
+    if (values.length > maxItems || chars > maxChars) {
+      throw paginationError("DynamicPickerPaginationLimit", "Upstream picker discovery exceeded its item or size bound. Narrow the connector inputs; no complete result was returned.");
+    }
+    const next = continuation(page);
+    if (!next) {
+      const result = { ...first, ...page, value: values };
+      for (const key2 of STATE_KEYS) {
+        Reflect.deleteProperty(result, key2);
+        if (Object.hasOwn(page, key2))
+          Reflect.set(result, key2, Reflect.get(page, key2));
+      }
+      return result;
+    }
+    const key = JSON.stringify(next);
+    if (seen.has(key))
+      throw paginationError("DynamicPickerPaginationLoop", "The picker repeated an upstream continuation. No complete result was returned.");
+    if (pages >= maxPages)
+      throw paginationError("DynamicPickerPaginationLimit", "Upstream picker discovery exceeded its page bound. Narrow the connector inputs; no complete result was returned.");
+    seen.add(key);
+    page = await fetchNext(next);
+  }
+}
+
 // packages/core/dist/api/dynamic-resolvers.js
 init_logger();
 function isPickerRecord(value) {
@@ -52492,7 +52585,7 @@ var FlowClient = class _FlowClient {
       operations
     };
   }
-  async invokeOperation(envId, connectorName, connectionId, operationId, params) {
+  async invokeOperation(envId, connectorName, connectionId, operationId, params, continuation2) {
     const connectorUrl = ppapiConnectorUrl(envId, connectorName, { expand: "swagger" });
     const connector = await this.ppapiRequest("GET", connectorUrl);
     const runtimeUrl = connector.properties.primaryRuntimeUrl;
@@ -52562,6 +52655,10 @@ var FlowClient = class _FlowClient {
       invokeUrl += (invokeUrl.includes("?") ? "&" : "?") + qs2;
     }
     const apihubToken = await this.auth.getAccessToken(APIHUB_RESOURCE);
+    if (continuation2) {
+      const nextUrl = pickerNextLink(continuation2.nextLink, invokeUrl);
+      return this.requestWithToken("GET", nextUrl, apihubToken, void 0, headerParams);
+    }
     return this.requestWithToken(opMethod, invokeUrl, apihubToken, operationBody, headerParams);
   }
   // --- PPAPI (PowerPlatform API) ---
@@ -52646,7 +52743,16 @@ var FlowClient = class _FlowClient {
     };
     if (params)
       body.parameters = params;
-    return this.ppapiRequest("POST", url2, body);
+    const first = await this.ppapiRequest("POST", url2, body);
+    return collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return this.ppapiRequest("GET", pickerNextLink(next.value, url2));
+      }
+      return this.ppapiRequest("POST", url2, {
+        ...body,
+        dynamicInvocationDefinition: bindPickerToken(extension, next)
+      });
+    });
   }
   /**
    * PPAPI can project a table picker down to value/displayName, dropping its
@@ -52672,6 +52778,8 @@ var FlowClient = class _FlowClient {
         const reference = binding.parameterReference ?? binding.parameter;
         if (typeof reference === "string") {
           if (!Object.hasOwn(currentInputs, reference)) {
+            if (binding.required !== true && /^(pageToken|nextPageToken|continuationToken)$/i.test(key))
+              continue;
             throw Object.assign(new Error(`Missing picker dependency "${reference}". Pass it via dependencies.`), { code: "MissingPickerDependency" });
           }
           params[key] = currentInputs[reference];
@@ -52682,7 +52790,6 @@ var FlowClient = class _FlowClient {
       } else
         params[key] = binding;
     }
-    const raw = await this.invokeOperation(envId, connector, connection, extension.operationId, params);
     const atPath = (value, path7) => path7.split(/[/.]/).filter(Boolean).reduce((v, key) => {
       if (!isPickerRecord(v))
         return void 0;
@@ -52691,24 +52798,44 @@ var FlowClient = class _FlowClient {
       const matches = Object.keys(v).filter((candidate) => candidate.toLowerCase() === key.toLowerCase());
       return matches.length === 1 ? v[matches[0]] : void 0;
     }, value);
-    const envelope = isPickerRecord(raw) ? raw : {};
     const collectionPath = extension.itemsPath ?? extension["value-collection"];
-    const rows = typeof collectionPath === "string" ? atPath(raw, collectionPath) : envelope.value ?? raw;
     const valuePath = extension.itemValuePath ?? extension["value-path"];
     const titlePath = extension.itemTitlePath ?? extension["value-title"];
-    if (!Array.isArray(rows) || !rows.every(isPickerRecord) || typeof valuePath !== "string")
+    if (typeof valuePath !== "string")
       throw unavailable();
-    const normalized = normalizePickerResponse({
-      ...envelope,
-      value: rows.map((row) => ({
-        ...row,
-        value: atPath(row, valuePath),
-        displayName: typeof titlePath === "string" ? atPath(row, titlePath) : row.DisplayCollectionName ?? row.DisplayName
-      }))
+    const normalizePage = (raw) => {
+      const envelope = isPickerRecord(raw) ? raw : {};
+      const rows = typeof collectionPath === "string" ? atPath(raw, collectionPath) : envelope.value ?? raw;
+      if (!Array.isArray(rows) || !rows.every(isPickerRecord))
+        throw unavailable();
+      if (!rows.every((row) => typeof (row.LogicalName ?? row.logicalName) === "string") && !/^(LogicalName|logicalName)$/.test(valuePath))
+        throw unavailable();
+      return {
+        ...envelope,
+        value: rows.map((row) => ({
+          ...row,
+          value: atPath(row, valuePath),
+          displayName: typeof titlePath === "string" ? atPath(row, titlePath) : row.DisplayCollectionName ?? row.DisplayName
+        }))
+      };
+    };
+    const operationId = extension.operationId;
+    const first = normalizePage(await this.invokeOperation(envId, connector, connection, operationId, params));
+    const complete = await collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return normalizePage(await this.invokeOperation(envId, connector, connection, operationId, params, { nextLink: next.value }));
+      }
+      const bound = bindPickerToken(extension, next);
+      if (!isPickerRecord(bound.parameters))
+        throw unavailable();
+      const nextParams = { ...params };
+      for (const [key, binding] of Object.entries(bound.parameters)) {
+        if (isPickerRecord(binding) && Object.hasOwn(binding, "value"))
+          nextParams[key] = binding.value;
+      }
+      return normalizePage(await this.invokeOperation(envId, connector, connection, operationId, nextParams));
     });
-    if (!rows.every((row) => typeof (row?.LogicalName ?? row?.logicalName) === "string") && !/^(LogicalName|logicalName)$/.test(valuePath))
-      throw unavailable();
-    return normalized;
+    return normalizePickerResponse(complete);
   }
   async getDynamicTreeValues(envId, connector, connection, extension, params, selection) {
     const base = this.ppapiBase(envId);
@@ -52720,7 +52847,16 @@ var FlowClient = class _FlowClient {
       body.parameters = params;
     if (selection)
       body.selectionState = selection;
-    return this.ppapiRequest("POST", url2, body);
+    const first = await this.ppapiRequest("POST", url2, body);
+    return collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return this.ppapiRequest("GET", pickerNextLink(next.value, url2));
+      }
+      return this.ppapiRequest("POST", url2, {
+        ...body,
+        dynamicInvocationDefinition: bindPickerToken(extension, next)
+      });
+    });
   }
   async getDynamicSchema(envId, connector, connection, extension, params, alias, location) {
     const base = this.ppapiBase(envId);
