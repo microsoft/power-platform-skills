@@ -52583,7 +52583,7 @@ var FlowClient = class _FlowClient {
     } else {
       body.anyTagsToExclude = ["Deprecated"];
     }
-    const data = await this.ppapiRequest("POST", url2, body);
+    const data = await this.ppapiOperationRequest(envId, "POST", url2, body);
     let results = data.value.map((item) => ({
       name: item.name,
       displayName: item.properties.summary,
@@ -52602,7 +52602,25 @@ var FlowClient = class _FlowClient {
   async getOperationSchema(envId, connector, operation) {
     const base = this.ppapiBase(envId);
     const url2 = ppapiOperationSchemaUrl(base, connector, operation);
-    return this.ppapiRequest("GET", url2);
+    return this.ppapiOperationRequest(envId, "GET", url2);
+  }
+  /**
+   * This client's operation catalog/schema path has no classic Flow RP fallback.
+   * Return an actionable error when per-environment PPAPI DNS is unavailable
+   * instead of exposing a generic ENOTFOUND or attempting an invalid fallback.
+   */
+  async ppapiOperationRequest(envId, method, url2, body) {
+    try {
+      return await this.ppapiRequest(method, url2, body);
+    } catch (error51) {
+      if (!this.isPpapiDnsFailure(error51))
+        throw error51;
+      throw Object.assign(new FlowApiError(0, "OperationDiscoveryUnavailable", `Operation discovery requires the per-environment Power Platform API endpoint for ${envId}, but that endpoint is unavailable and this client has no classic Flow RP fallback for this operation. Verify the environment ID, cloud-specific PPAPI configuration, and network/DNS access.`, url2), {
+        code: "OperationDiscoveryUnavailable",
+        cause: error51,
+        remediation: "Check the environment ID, configured cloud, and per-environment PPAPI endpoint. This operation requires PPAPI availability; a classic Flow RP fallback is not implemented."
+      });
+    }
   }
   /**
    * Per-process cache of operation schemas. The same `getOperationSchema` call
@@ -53859,11 +53877,12 @@ var FlowClient = class _FlowClient {
     await this.request("DELETE", url2);
   }
   async requestWithToken(method, url2, token, body, extraHeaders) {
+    const safeExtraHeaders = Object.fromEntries(Object.entries(extraHeaders ?? {}).filter(([name3]) => name3.toLowerCase() !== "authorization"));
     const headers = {
-      Authorization: `Bearer ${token}`,
       Accept: "application/json",
       "User-Agent": "power-automate-plugin/2.4.2",
-      ...extraHeaders
+      ...safeExtraHeaders,
+      Authorization: `Bearer ${token}`
     };
     if (body !== void 0) {
       headers["Content-Type"] = "application/json";
@@ -54565,11 +54584,10 @@ var CLOUD_ENDPOINTS = {
   dod: {
     authorityHost: "https://login.microsoftonline.us",
     flowBaseUrl: "https://api.flow.appsplatform.us",
-    // UNVERIFIED. flowResource is an audience (App ID URI), not an address,
-    // so DNS cannot confirm it - `service.flow.microsoft.com` does not
-    // resolve in commercial either. The value below follows the domain but
-    // has not been checked against a real DoD token, so treat it as a guess.
-    flowResource: "https://service.flow.appsplatform.us",
+    // The Flow audience is an App ID URI rather than a network address, so it
+    // cannot be inferred from DNS. Require PA_FLOW_RESOURCE until a DoD tenant
+    // holder validates the audience instead of shipping a guessed credential.
+    flowResource: "",
     bapBaseUrl: "https://api.bap.appsplatform.us",
     powerPlatformApiUrl: "https://api.appsplatform.us",
     ppapiSuffix: "environment.api.appsplatform.us"
@@ -54654,9 +54672,13 @@ function loadConfig() {
     cloud = resolveCloud();
   }
   const baseCloudEndpoints = getCloudEndpoints(cloud);
+  const flowResourceOverride = process.env.PA_FLOW_RESOURCE?.trim();
+  if (cloud === "dod" && !flowResourceOverride) {
+    throw Object.assign(new Error("DoD Flow authentication requires an explicit PA_FLOW_RESOURCE token audience. The DoD audience has not been validated, so FlowAgent will not use a guessed default."), { code: "UnsupportedCloudConfiguration" });
+  }
   const cloudEndpoints = {
     ...baseCloudEndpoints,
-    ...process.env.PA_FLOW_RESOURCE ? { flowResource: process.env.PA_FLOW_RESOURCE } : {},
+    ...flowResourceOverride ? { flowResource: flowResourceOverride } : {},
     ...process.env.PA_PPAPI_RESOURCE ? { powerPlatformApiUrl: process.env.PA_PPAPI_RESOURCE } : {}
   };
   return {

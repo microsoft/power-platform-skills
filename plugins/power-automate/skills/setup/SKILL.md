@@ -65,16 +65,15 @@ az cloud show --query name -o tsv
 | `AzureCloud` (commercial) | `https://service.flow.microsoft.com` |
 | `AzureCloud` + GCC tenant | `https://gov.service.flow.microsoft.us` |
 | `AzureUSGovernment` (GCC High) | `https://high.service.flow.microsoft.us` |
-| `AzureUSGovernment` (DoD) | `https://service.flow.appsplatform.us` |
+| `AzureUSGovernment` (DoD) | Operator-verified `PA_FLOW_RESOURCE` value required; no built-in audience |
 
 `az cloud show` cannot distinguish commercial from GCC, or GCC High from DoD —
 for those, set `PA_CLOUD=gcc` / `PA_CLOUD=dod` explicitly.
 
-DoD is served from `appsplatform.us`, not `powerplatform.microsoft.us` — the
-sovereign naming does not extend from the GCC/GCC High pattern. The DoD resource
-above follows that domain but is **unverified**: it is an audience (App ID URI),
-not an address, so DNS cannot confirm it. If you have a DoD tenant and it fails,
-please report the working value.
+DoD endpoint hosts use `appsplatform.us`, but that does not establish the token
+audience (App ID URI). With `PA_CLOUD=dod`, FlowAgent requires an explicit,
+operator-verified `PA_FLOW_RESOURCE` and fails configuration otherwise. Do not
+copy a guessed audience from a hostname; obtain the correct value for the tenant.
 
 Then request a token for the matching resource, e.g. for commercial:
 ```bash

@@ -18,7 +18,8 @@
 | `TriggerInputMissing` | The trigger body is missing keys listed in the trigger schema `required[]` | The error lists the missing keys and expected shape; pass them via `--body=@file`. Applies to **every** trigger kind, including `PowerApps` / `PowerAppsV2`: the connector does not validate required inputs itself (it returns `202` with nulls), so the check must happen client-side. |
 | `InvalidEnvironmentId` | An environment id that is not a GUID (e.g. a display name or a slug) was passed to `--env` | Pass the environment **id**, not its name: `list-environments` shows the GUID. `Default-<tenantGuid>` is also accepted. Previously this produced an opaque `ENOTFOUND` on `*.environment.api.powerplatform.com`. |
 | `ENOTFOUND *.environment.api.powerplatform.com` | Almost always a malformed environment id (see above); occasionally a network/proxy block | Run `doctor`. If the id is a bare tenant GUID, use `Default-<tenantGuid>` instead. |
-| `EnvironmentAccessDenied` / `ServiceToServiceEnvironmentNotFound` | FlowAgent is authenticated as a different account than intended, or a cached token outlived an `az logout`/`az login` | Run `whoami` to see the active identity and `list_accounts` to see the separate Connectivity one, then `switch_account` (or `reconnect`) to fix it. No session restart needed. |
+| `EnvironmentAccessDenied` / `ServiceToServiceEnvironmentNotFound` on a Flow, Dataverse, Graph, or API Hub request | Identity or access problem on the Azure CLI-backed request path | Run `whoami` and confirm the active Azure CLI account. If it is wrong, use `az login` or `az account set`, then `reconnect` to clear stale tokens. If it is correct, investigate resource access. `switch_account` does not change the Azure CLI identity. |
+| The same errors on a Connectivity connection-management request | Identity or access problem on the separate MSAL-backed request path | Run `list_accounts` to inspect the effective Connectivity identity. If it is wrong, use `switch_account`; if it is correct, investigate environment/connection permissions. `reconnect` clears credentials but does not grant access. |
 | Calls still succeed as the *old* account after `az login` | Stale disk token entry | Fixed: cache entries are now stamped with the active `az` identity and are rejected on mismatch. If you still see it, run `reconnect`. |
 | `az` account looks right but FlowAgent disagrees | `AZURE_CONFIG_DIR` points at a different CLI profile | `whoami` reports the profile directory in use; `doctor` flags a custom `AZURE_CONFIG_DIR`. |
 | `token-cache-clear-failed` | An explicit credential reset could not enumerate or delete cache files | Read the failed path in the error, close competing processes or fix directory permissions, then retry `reconnect` or `switch_account`. A persisted account preference alone does not mean credentials were reset. |
@@ -27,6 +28,8 @@
 | `DataverseDiscoveryIncomplete` / `DataverseDiscoveryChanged` | Table discovery is incomplete or changed between related reads | Retry with the intended organization and a working connection. Do not infer absence, uniqueness, or a need to recreate a table. |
 | `ResponseTooLarge` | The response cannot fit without losing data | No partial success payload is returned. Use `resolve_params` filtering/paging, or `get_flow` with a supported `properties.definition...` path. |
 | `DiscoveryChanged` | A discovery cursor was used with different arguments or the catalog changed | Restart without `cursor`, then keep the environment, connector, operation, connection, inputs, parameter and query unchanged across pages. |
+| `OperationDiscoveryUnavailable` | The per-environment PPAPI endpoint needed by operation search/schema discovery is unavailable | Check the environment ID, configured cloud and network/DNS access. These operations have no classic Flow RP fallback implemented in this client. |
+| `UnsupportedCloudConfiguration` with `PA_CLOUD=dod` | No explicit DoD Flow token audience was configured | Set `PA_FLOW_RESOURCE` to an operator-verified audience. DoD has no guessed built-in Flow audience. |
 | Machine-group calls return `400` on `$select` | Old builds selected a non-existent `grouptype` column | Fixed — the real column is `flowgrouptype` (label `flowgrouptypename`). Rebuild/update the plugin. |
 
 ## Auth and identity diagnostics
@@ -35,6 +38,10 @@ FlowAgent uses Azure CLI for Flow, Dataverse and Graph calls, and a separate
 MSAL sign-in for Connectivity. A mismatch can surface as a permission or
 environment error. These tools distinguish the effective identity from the
 inventory of historical cached accounts:
+
+Determine the failed request's auth path first; the error code alone does not
+identify which account needs attention. `switch_account` changes only the
+Connectivity preference, not the Azure CLI account.
 
 | Tool | Use it when |
 |------|-------------|
