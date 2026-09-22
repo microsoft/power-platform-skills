@@ -64,12 +64,16 @@ still receive the exact declarative root rather than the documentation directory
   "aesthetic": "Bold & Vibrant",
   "mood": "Technical & Precise",
   "capabilities": [],
+  "assets": [],
   "operations": [],
   "warnings": [],
   "verification": [],
   "deployment": []
 }
 ```
+
+Schema version 1 plans must include `assets`, including an empty array when no visual assets are
+needed.
 
 Use `null` for an unavailable template name or styling selection. Do not infer a Microsoft
 template from visual similarity.
@@ -94,6 +98,78 @@ Capabilities describe readiness observed in the downloaded files:
 
 `status` is `ready`, `blocked`, or `not-requested`. A blocked capability must name the missing
 prerequisite and a local remediation; it is not a permanent template limitation.
+
+## Visual asset records
+
+Assets explain the approved visual decision while operations retain execution mechanics:
+
+```json
+{
+  "id": "home-hero",
+  "name": "Home advisory hero",
+  "kind": "photograph",
+  "role": "editorial",
+  "purpose": "Establish a calm, credible first impression for prospective clients.",
+  "source": {
+    "type": "unsplash",
+    "sourcePage": "https://unsplash.com/photos/<photo>",
+    "downloadUrl": "https://images.unsplash.com/photo-<id>?w=1600&fit=crop&fm=jpg",
+    "photographer": "<photographer>",
+    "license": "Unsplash License"
+  },
+  "delivery": "web-file",
+  "placements": [
+    {
+      "page": "Home",
+      "section": "Hero",
+      "usage": "Wide supporting photograph behind the introduction",
+      "scope": "page"
+    }
+  ],
+  "visual": {
+    "rationale": "The restrained architectural subject supports the premium visual direction.",
+    "aspectRatio": "16:9",
+    "crop": "Keep the open left side available for text"
+  },
+  "accessibility": {
+    "decorative": false,
+    "altByLocale": {
+      "en-US": "Modern advisory office with natural light"
+    }
+  },
+  "preparation": {
+    "status": "staged",
+    "cachePath": ".powerpages-customization/assets/<sha256>-Home-Hero.jpg",
+    "sha256": "<64-lowercase-hex>",
+    "mimeType": "image/jpeg",
+    "fileName": "Home-Hero.jpg",
+    "width": 1600,
+    "height": 900
+  },
+  "webFileOperationId": "import-home-hero"
+}
+```
+
+Rules:
+
+- `kind` is `photograph`, `logo`, `favicon`, `icon`, `illustration`, `pattern`, `font`, or
+  `other-image`.
+- `role` is `brand`, `informative`, `editorial`, `structural`, `functional`, or `decorative`.
+- `source.type` is `existing-site`, `user-provided`, `agent-authored`, or `unsplash`.
+- `existing-site` sources use `preparation.status: "existing"`; every other source uses `staged`.
+- Agent-authored assets are safe original SVGs, not raster images.
+- New files are staged outside the declarative root and delivered as local Web Files.
+- A staged asset references one `author-web-file` operation whose inputs contain the exact
+  `cachePath` and whose outputs include `publicUrl`.
+- Existing assets use `preparation.status: "existing"` plus a site-root-relative
+  `existingPublicUrl` (never a protocol-relative URL); they do not require a new Web File operation.
+- Every placement states page, section, usage, and `page` or `sitewide` scope.
+- Every configured site locale has an alternative-text entry. Informative images require
+  non-empty text; decorative assets use an empty value.
+- Do not include binary bytes, data URIs, tokens, private URLs, or unresolved source choices.
+- Unsplash assets retain their photo page, direct image URL, photographer, and license basis.
+- Logos and favicons with site-wide placements must identify their exact approved caller in the
+  corresponding operation.
 
 ## Operation envelope
 

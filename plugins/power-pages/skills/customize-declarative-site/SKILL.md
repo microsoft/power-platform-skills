@@ -10,7 +10,7 @@ description: >-
   hands off to deployment. For one narrow component change, use the owning authoring skill
   directly. Not for React, Angular, Vue, or Astro code sites.
 user-invocable: true
-allowed-tools: Read, Write, Grep, Glob, Bash, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Grep, Glob, Bash, WebSearch, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
@@ -29,6 +29,7 @@ Read:
 - `${PLUGIN_ROOT}/references/design-studio-site-discovery.md`
 - `${PLUGIN_ROOT}/skills/customize-declarative-site/references/customization-plan-contract.md`
 - `${PLUGIN_ROOT}/skills/customize-declarative-site/references/content-and-page-compositions.md`
+- `${PLUGIN_ROOT}/skills/customize-declarative-site/references/visual-asset-planning.md`
 
 For requested styling, also read:
 
@@ -73,7 +74,8 @@ Create these tasks before starting:
 3. If several valid sites remain and request/workspace evidence does not identify one, ask the
    user to choose. Never select the first filesystem result.
 4. Read the site identity, configured languages, existing pages, navigation,
-   snippets, web files, web templates, page templates, CSS sources, and Bootstrap evidence.
+   snippets, web files, web templates, page templates, CSS sources, Bootstrap evidence, logos,
+   favicons, existing page imagery, and the exact callers of site-wide brand assets.
 5. Treat missing component directories as readiness findings. Do not create directories merely
    to make a planned operation appear supported.
 6. Establish the local comparison baseline before creating plan artifacts:
@@ -121,11 +123,18 @@ Apply the content reasoning and example page-compositions reference. Inspect sim
 derive a content outline and supported `section -> columns -> elements` structure, draft safe
 explanatory copy, and identify only organization-specific facts that require confirmation.
 
+Apply the visual-asset reference whenever imagery, branding, icons, illustrations, patterns, or
+fonts could materially improve the requested design. Reuse existing approved assets first, then
+user-provided files, original safe SVGs, and finally curated Unsplash photography. Do not add an
+asset merely to fill space. Do not generate raster images or use another stock provider.
+
 <!-- not-a-gate: compact clarification gathers missing content and layout inputs; Phase 4 approves the plan -->
 
 When material inputs remain, ask once with the unresolved business facts plus compact choices for
-content source, navigation placement, locales, layout reuse versus proposal, and whether styling
-changes are in scope. Prefer site-derived defaults and do not repeat known information.
+content source, navigation placement, locales, layout reuse versus proposal, whether styling
+changes are in scope, and only the unresolved asset decisions: approved brand files, permission
+to use Unsplash photography, and preserve/supply/propose/no-change logo direction. Prefer
+site-derived defaults and do not repeat known information.
 
 Generate context-aware feature choices from the selected template and current site. Do not offer
 a capability whose required local structure is absent without presenting the missing prerequisite
@@ -135,14 +144,19 @@ owning skill supports the requested operation.
 ## Phase 3: Resolve and prepare the plan
 
 1. Resolve stable existing identities before planning: exact paths, IDs, routes, locale records,
-   template bindings, public web-file URLs, and caller relationships.
+   template bindings, public web-file URLs, asset hashes/provenance, and caller relationships.
+   Prepare every new user-provided, original SVG, or Unsplash asset through
+   `scripts/prepare-declarative-asset.js`. Keep approved bytes in the project-local ignored asset
+   cache and record the returned hash, MIME type, dimensions, filename, and cache path. Do not
+   write staged bytes directly into the declarative site.
 2. Divide the request into the smallest coherent operations owned by:
    `author-web-file`, `author-content-snippet`, `author-web-template`,
    `author-page-template`, `author-webpage`, `author-webpage-content`, and `style-site`.
 3. Order operations by actual dependencies, not by skill name. Assets/snippets/templates normally
    precede their consumers; webpage metadata must create an exact localized copy file before
    `author-webpage-content` fills it; styling runs after structural authoring.
-4. Follow the plan contract and write the proposed JSON into a fresh external review directory
+4. Follow the plan contract and write a schema-version-1 JSON plan, including the complete
+   `assets` manifest, into a fresh external review directory
    outside the selected site root. Do not replace the canonical approved plan during review.
 
    ```text
@@ -232,6 +246,13 @@ requested navigation. Let it invoke `author-webpage-content` when it owns the re
 handoff. Invoke `author-webpage-content` directly only when one exact existing localized target
 file and its composition are already resolved.
 
+For every staged visual asset, invoke `author-web-file` before its consumers and record the
+verified `publicUrl`. Dependent page, snippet, template, or styling operations must consume that
+URL through an approved `outputBindings` entry; never predict a Web File URL. For a global logo or
+favicon, update only the exact verified snippet, template, or setting caller. Do not replace the
+whole header merely to change a logo, and preserve navigation, search, language selection,
+sign-in behavior, and authenticated/anonymous branches.
+
 For styling, invoke `style-site` last. Its exact-diff/hash approval is a separate binding between
 the user-reviewed CSS proposal and the bytes applied; the customization-plan approval does not
 replace that safety gate.
@@ -244,7 +265,10 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
 2. Re-run declarative site discovery and confirm the selected root and website identity are
    unchanged.
 3. Verify planned files and records exist, generated identities are unique, locale scope matches
-   the plan, dependencies resolve, and unrequested callers/content remain unchanged.
+   the plan, dependencies resolve, and unrequested callers/content remain unchanged. For assets,
+   verify the approved SHA-256, file/YAML pair, MIME type, dimensions, public URL, localized alt
+   text, caller placement, and absence of unapproved SVG active content or Design Studio
+   placeholders.
 4. Review the complete Git diff against the approved plan. Unexpected component categories or
    unrelated changes block completion. Classify `docs/customize-declarative-site/**` separately as
    orchestration evidence; it is not a PAC component category and is not uploaded.

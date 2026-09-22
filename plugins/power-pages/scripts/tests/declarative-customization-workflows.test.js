@@ -47,6 +47,10 @@ test('customize-declarative-site coordinates owning skills without authoring rec
   assert.match(skill, /current-execution\.json/);
   assert.match(skill, /promote-customize-declarative-site-plan\.js/);
   assert.match(skill, /content-and-page-compositions\.md/);
+  assert.match(skill, /visual-asset-planning\.md/);
+  assert.match(skill, /prepare-declarative-asset\.js/);
+  assert.match(skill, /WebSearch/);
+  assert.match(skill, /Do not generate raster images or use another stock provider/);
   assert.match(skill, /outputBindings/);
   assert.match(skill, /--action resolve/);
   assert.match(skill, /publish the approved JSON/);
@@ -56,6 +60,9 @@ test('customize-declarative-site coordinates owning skills without authoring rec
   assert.match(contract, /current-execution\.json/);
   assert.match(contract, /history\/<UTC-timestamp>/);
   assert.match(contract, /data-model-neutral/);
+  assert.match(contract, /Schema version 1 plans must include `assets`/);
+  assert.match(contract, /"assets": \[\]/);
+  assert.match(contract, /Unsplash assets retain their photo page/);
 });
 
 test('deploy-site keeps code and declarative upload commands isolated', () => {

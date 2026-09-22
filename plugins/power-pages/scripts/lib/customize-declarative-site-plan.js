@@ -14,6 +14,30 @@ const ALLOWED_SKILLS = new Set([
   'author-webpage-content',
   'style-site',
 ]);
+const ASSET_KINDS = new Set([
+  'photograph',
+  'logo',
+  'favicon',
+  'icon',
+  'illustration',
+  'pattern',
+  'font',
+  'other-image',
+]);
+const ASSET_ROLES = new Set([
+  'brand',
+  'informative',
+  'editorial',
+  'structural',
+  'functional',
+  'decorative',
+]);
+const ASSET_SOURCE_TYPES = new Set([
+  'existing-site',
+  'user-provided',
+  'agent-authored',
+  'unsplash',
+]);
 
 function assertObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -33,6 +57,187 @@ function assertStringArray(value, label) {
   }
 }
 
+function assertEnum(value, allowed, label) {
+  assertString(value, label);
+  if (!allowed.has(value)) {
+    throw new Error(`${label} must be one of: ${[...allowed].join(', ')}`);
+  }
+}
+
+function assertProjectRelativePath(value, label) {
+  assertString(value, label);
+  if (path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) {
+    throw new Error(`${label} must be a project-relative path without parent traversal`);
+  }
+}
+
+function validateAsset(asset, plan, operationsById) {
+  assertObject(asset, 'every asset');
+  if (typeof asset.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(asset.id)) {
+    throw new Error('every asset id must be kebab-case');
+  }
+  for (const key of ['name', 'purpose']) assertString(asset[key], `asset ${asset.id}.${key}`);
+  assertEnum(asset.kind, ASSET_KINDS, `asset ${asset.id}.kind`);
+  assertEnum(asset.role, ASSET_ROLES, `asset ${asset.id}.role`);
+  assertObject(asset.source, `asset ${asset.id}.source`);
+  assertEnum(
+    asset.source.type,
+    ASSET_SOURCE_TYPES,
+    `asset ${asset.id}.source.type`
+  );
+  if (asset.delivery !== 'web-file') {
+    throw new Error(`asset ${asset.id}.delivery must be web-file`);
+  }
+  if (!Array.isArray(asset.placements) || asset.placements.length === 0) {
+    throw new Error(`asset ${asset.id}.placements must be a non-empty array`);
+  }
+  for (const [index, placement] of asset.placements.entries()) {
+    assertObject(placement, `asset ${asset.id}.placements[${index}]`);
+    for (const key of ['page', 'section', 'usage', 'scope']) {
+      assertString(placement[key], `asset ${asset.id}.placements[${index}].${key}`);
+    }
+    if (!['page', 'sitewide'].includes(placement.scope)) {
+      throw new Error(
+        `asset ${asset.id}.placements[${index}].scope must be page or sitewide`
+      );
+    }
+  }
+  assertObject(asset.visual, `asset ${asset.id}.visual`);
+  assertString(asset.visual.rationale, `asset ${asset.id}.visual.rationale`);
+  assertObject(asset.accessibility, `asset ${asset.id}.accessibility`);
+  if (typeof asset.accessibility.decorative !== 'boolean') {
+    throw new Error(`asset ${asset.id}.accessibility.decorative must be a boolean`);
+  }
+  assertObject(asset.accessibility.altByLocale, `asset ${asset.id}.accessibility.altByLocale`);
+  for (const locale of plan.site.languages) {
+    if (!(locale in asset.accessibility.altByLocale)) {
+      throw new Error(`asset ${asset.id} is missing alt text for locale ${locale}`);
+    }
+    assertString(
+      asset.accessibility.altByLocale[locale],
+      `asset ${asset.id}.accessibility.altByLocale.${locale}`,
+      { allowEmpty: true }
+    );
+    if (
+      !asset.accessibility.decorative &&
+      asset.kind !== 'font' &&
+      asset.accessibility.altByLocale[locale].trim() === ''
+    ) {
+      throw new Error(`asset ${asset.id} requires non-empty alt text for locale ${locale}`);
+    }
+  }
+  assertObject(asset.preparation, `asset ${asset.id}.preparation`);
+  assertString(asset.preparation.status, `asset ${asset.id}.preparation.status`);
+  if (!['existing', 'staged'].includes(asset.preparation.status)) {
+    throw new Error(`asset ${asset.id}.preparation.status must be existing or staged`);
+  }
+
+  if (asset.source.type === 'unsplash') {
+    for (const key of ['sourcePage', 'downloadUrl', 'photographer', 'license']) {
+      assertString(asset.source[key], `asset ${asset.id}.source.${key}`);
+    }
+    let sourcePage;
+    let downloadUrl;
+    try {
+      sourcePage = new URL(asset.source.sourcePage);
+      downloadUrl = new URL(asset.source.downloadUrl);
+    } catch {
+      throw new Error(`asset ${asset.id} Unsplash URLs must be valid absolute URLs`);
+    }
+    if (
+      sourcePage.protocol !== 'https:' ||
+      sourcePage.username ||
+      sourcePage.password ||
+      sourcePage.port ||
+      !['unsplash.com', 'www.unsplash.com'].includes(sourcePage.hostname.toLowerCase()) ||
+      downloadUrl.protocol !== 'https:' ||
+      downloadUrl.username ||
+      downloadUrl.password ||
+      downloadUrl.port ||
+      downloadUrl.hostname.toLowerCase() !== 'images.unsplash.com'
+    ) {
+      throw new Error(
+        `asset ${asset.id} Unsplash sourcePage and downloadUrl must use approved Unsplash HTTPS hosts without credentials or custom ports`
+      );
+    }
+  }
+
+  if (asset.preparation.status === 'staged') {
+    if (asset.source.type === 'existing-site') {
+      throw new Error(`asset ${asset.id} existing-site sources must use existing preparation`);
+    }
+    for (const key of ['cachePath', 'sha256', 'mimeType', 'fileName']) {
+      assertString(asset.preparation[key], `asset ${asset.id}.preparation.${key}`);
+    }
+    assertProjectRelativePath(
+      asset.preparation.cachePath,
+      `asset ${asset.id}.preparation.cachePath`
+    );
+    if (!/^[a-f0-9]{64}$/.test(asset.preparation.sha256)) {
+      throw new Error(`asset ${asset.id}.preparation.sha256 must be a lowercase SHA-256`);
+    }
+    if (
+      asset.source.type === 'agent-authored' &&
+      asset.preparation.mimeType !== 'image/svg+xml'
+    ) {
+      throw new Error(`asset ${asset.id} agent-authored assets must be SVG`);
+    }
+    for (const key of ['width', 'height']) {
+      if (
+        asset.preparation[key] !== null &&
+        asset.preparation[key] !== undefined &&
+        (!Number.isInteger(asset.preparation[key]) || asset.preparation[key] <= 0)
+      ) {
+        throw new Error(`asset ${asset.id}.preparation.${key} must be a positive integer or null`);
+      }
+    }
+    assertString(asset.webFileOperationId, `asset ${asset.id}.webFileOperationId`);
+    const operation = operationsById.get(asset.webFileOperationId);
+    if (!operation || operation.skill !== 'author-web-file') {
+      throw new Error(
+        `asset ${asset.id}.webFileOperationId must reference an author-web-file operation`
+      );
+    }
+    if (!operation.expectedOutputs.includes('publicUrl')) {
+      throw new Error(
+        `asset ${asset.id} web-file operation must declare the publicUrl output`
+      );
+    }
+    const operationPaths = [
+      operation.inputs.sourcePath,
+      ...(Array.isArray(operation.inputs.sourcePaths) ? operation.inputs.sourcePaths : []),
+    ].filter(Boolean);
+    if (!operationPaths.includes(asset.preparation.cachePath)) {
+      throw new Error(
+        `asset ${asset.id} cachePath must be an input to ${asset.webFileOperationId}`
+      );
+    }
+    const consumer = [...operationsById.values()].find((candidate) =>
+      Object.values(candidate.outputBindings).some(
+        (binding) =>
+          binding.sourceOperation === asset.webFileOperationId && binding.output === 'publicUrl'
+      )
+    );
+    if (!consumer) {
+      throw new Error(
+        `asset ${asset.id} publicUrl must be consumed through an approved output binding`
+      );
+    }
+  } else {
+    if (asset.source.type !== 'existing-site') {
+      throw new Error(`asset ${asset.id} new asset sources must use staged preparation`);
+    }
+    assertString(asset.existingPublicUrl, `asset ${asset.id}.existingPublicUrl`);
+    if (
+      !asset.existingPublicUrl.startsWith('/') ||
+      asset.existingPublicUrl.startsWith('//') ||
+      asset.existingPublicUrl.includes('\\')
+    ) {
+      throw new Error(`asset ${asset.id}.existingPublicUrl must be site-root-relative`);
+    }
+  }
+}
+
 function validateCustomizationPlan(plan) {
   assertObject(plan, 'plan');
 
@@ -44,6 +249,7 @@ function validateCustomizationPlan(plan) {
     'aesthetic',
     'mood',
     'capabilities',
+    'assets',
     'operations',
     'warnings',
     'verification',
@@ -75,9 +281,7 @@ function validateCustomizationPlan(plan) {
     throw new Error('site.websiteRecordId must be a UUID');
   }
   assertString(plan.site.siteRoot, 'site.siteRoot');
-  if (path.isAbsolute(plan.site.siteRoot) || plan.site.siteRoot.split(/[\\/]/).includes('..')) {
-    throw new Error('site.siteRoot must be a project-relative path without parent traversal');
-  }
+  assertProjectRelativePath(plan.site.siteRoot, 'site.siteRoot');
   assertStringArray(plan.site.languages, 'site.languages');
   for (const key of ['summary', 'preservation']) assertString(plan[key], key);
   for (const key of ['aesthetic', 'mood']) {
@@ -149,6 +353,15 @@ function validateCustomizationPlan(plan) {
     }
     operationIds.add(operation.id);
     operationsById.set(operation.id, operation);
+  }
+  if ('assets' in plan) {
+    if (!Array.isArray(plan.assets)) throw new Error('assets must be an array');
+    const assetIds = new Set();
+    for (const asset of plan.assets) {
+      validateAsset(asset, plan, operationsById);
+      if (assetIds.has(asset.id)) throw new Error(`duplicate asset id ${asset.id}`);
+      assetIds.add(asset.id);
+    }
   }
 
   return plan;
@@ -225,6 +438,9 @@ function writeJsonAtomic(filePath, value) {
 
 module.exports = {
   ALLOWED_SKILLS,
+  ASSET_KINDS,
+  ASSET_ROLES,
+  ASSET_SOURCE_TYPES,
   EXECUTION_SCHEMA_VERSION,
   PLAN_SCHEMA_VERSION,
   canonicalPlanJson,

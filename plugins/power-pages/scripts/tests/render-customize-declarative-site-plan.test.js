@@ -33,10 +33,13 @@ test('renders a declarative customization plan and copies the shared icon', () =
   assert.match(html, /EventPortal/);
   assert.match(html, /Pages &amp; navigation/);
   assert.match(html, /Content &amp; components/);
+  assert.match(html, /Visual assets/);
   assert.match(html, /Create the Speakers page and navigation link/);
   assert.match(html, /\/speakers/);
   assert.match(html, /Primary Navigation/);
-  assert.match(html, /speaker-1\.jpg/);
+  assert.match(html, /Conference speaker portrait/);
+  assert.match(html, /Example Photographer/);
+  assert.match(html, /Conference speaker presenting to an audience/);
   assert.match(html, /Retain the template structure while adding pages and sections/);
   assert.match(html, /Page relationships/);
   assert.match(html, /Approval authorizes local customization only/);
@@ -64,6 +67,102 @@ test('rejects missing required plan keys', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Missing required plan keys: operations/);
   assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('requires visual assets in schema-version-1 plans', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-plan-'));
+  const missingAssets = structuredClone(SAMPLE_PLAN);
+  delete missingAssets.assets;
+  const missingData = writePlan(tempDir, missingAssets);
+  const missingOutput = path.join(tempDir, 'missing-assets.html');
+  const rejected = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', missingOutput, '--data', missingData],
+    { encoding: 'utf8' }
+  );
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /Missing required plan keys: assets/);
+});
+
+test('rejects unsafe or incomplete visual asset records', () => {
+  const cases = [
+    [
+      'unapproved Unsplash host',
+      (plan) => {
+        plan.assets[0].source.downloadUrl = 'https://images.unsplash.com.example.test/photo.jpg';
+      },
+      /approved Unsplash HTTPS hosts/,
+    ],
+    [
+      'credentialed Unsplash URL',
+      (plan) => {
+        plan.assets[0].source.downloadUrl =
+          'https://user:secret@images.unsplash.com/photo.jpg';
+      },
+      /without credentials or custom ports/,
+    ],
+    [
+      'missing localized alt text',
+      (plan) => {
+        plan.assets[0].accessibility.altByLocale = {};
+      },
+      /missing alt text for locale en-US/,
+    ],
+    [
+      'wrong operation owner',
+      (plan) => {
+        plan.assets[0].webFileOperationId = 'create-speakers-page';
+      },
+      /must reference an author-web-file operation/,
+    ],
+    [
+      'unbound cache path',
+      (plan) => {
+        plan.assets[0].preparation.cachePath =
+          '.powerpages-customization/assets/other-speaker.jpg';
+      },
+      /cachePath must be an input/,
+    ],
+    [
+      'unconsumed public URL',
+      (plan) => {
+        plan.operations[1].outputBindings = {};
+      },
+      /publicUrl must be consumed through an approved output binding/,
+    ],
+    [
+      'protocol-relative existing URL',
+      (plan) => {
+        plan.assets[0].source = { type: 'existing-site' };
+        plan.assets[0].preparation = { status: 'existing' };
+        plan.assets[0].existingPublicUrl = '//example.test/photo.jpg';
+        delete plan.assets[0].webFileOperationId;
+      },
+      /must be site-root-relative/,
+    ],
+    [
+      'agent-authored raster image',
+      (plan) => {
+        plan.assets[0].source = { type: 'agent-authored' };
+      },
+      /agent-authored assets must be SVG/,
+    ],
+  ];
+
+  for (const [name, mutate, expected] of cases) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-plan-'));
+    const plan = structuredClone(SAMPLE_PLAN);
+    mutate(plan);
+    const dataPath = writePlan(tempDir, plan);
+    const outputPath = path.join(tempDir, 'plan.html');
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, '--output', outputPath, '--data', dataPath],
+      { encoding: 'utf8' }
+    );
+    assert.equal(result.status, 1, name);
+    assert.match(result.stderr, expected, name);
+  }
 });
 
 test('rejects duplicate operation identifiers', () => {

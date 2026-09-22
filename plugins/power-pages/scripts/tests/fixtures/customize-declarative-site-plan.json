@@ -24,6 +24,52 @@
       "note": "Page records are available."
     }
   ],
+  "assets": [
+    {
+      "id": "speaker-portrait",
+      "name": "Conference speaker portrait",
+      "kind": "photograph",
+      "role": "editorial",
+      "purpose": "Introduce the speaker content with a credible, people-focused visual.",
+      "source": {
+        "type": "unsplash",
+        "sourcePage": "https://unsplash.com/photos/example",
+        "downloadUrl": "https://images.unsplash.com/photo-example?w=1200&fit=crop",
+        "photographer": "Example Photographer",
+        "license": "Unsplash License"
+      },
+      "delivery": "web-file",
+      "placements": [
+        {
+          "page": "Speakers",
+          "section": "Speaker introduction",
+          "usage": "Responsive editorial image",
+          "scope": "page"
+        }
+      ],
+      "visual": {
+        "rationale": "The portrait makes the new speaker page feel specific rather than generic.",
+        "aspectRatio": "4:3",
+        "crop": "Center crop with the subject's face retained"
+      },
+      "accessibility": {
+        "decorative": false,
+        "altByLocale": {
+          "en-US": "Conference speaker presenting to an audience"
+        }
+      },
+      "preparation": {
+        "status": "staged",
+        "cachePath": ".powerpages-customization/assets/example-speaker-1.jpg",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mimeType": "image/jpeg",
+        "fileName": "Speaker-1.jpg",
+        "width": 1200,
+        "height": 900
+      },
+      "webFileOperationId": "add-speaker-images"
+    }
+  ],
   "operations": [
     {
       "id": "add-speaker-images",
@@ -35,9 +81,7 @@
       },
       "locales": [],
       "inputs": {
-        "sourcePaths": [
-          "assets/speaker-1.jpg"
-        ]
+        "sourcePath": ".powerpages-customization/assets/example-speaker-1.jpg"
       },
       "dependsOn": [],
       "outputBindings": {},

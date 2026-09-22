@@ -69,6 +69,11 @@ Choose structure in this order:
 5. add `style-site` only when the requested result requires presentation not already supplied by
    the selected local pattern.
 
+When an image is proposed, follow `visual-asset-planning.md` first. The content composition must
+consume an existing verified Web File URL or an `outputBindings` value from an earlier
+`author-web-file` operation. Never place an Unsplash hotlink, local filesystem path, symbolic
+asset name, or Design Studio placeholder data URI into the finished page.
+
 Do not invent a new Design Studio component serialization. If the request requires unsupported
 nested markup or behavior, disclose the boundary and propose the closest supported composition.
 

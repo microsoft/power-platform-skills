@@ -48,7 +48,7 @@ h3{margin:0;font-size:16px}
 .summary{font-size:16px;line-height:1.72}
 .preserve{border-left:5px solid var(--cyan)}
 .label{margin-bottom:7px;color:var(--muted);font:700 10px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase}
-.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin:16px 0 22px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin:16px 0 22px}
 .stat{padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:14px;text-align:center}
 .stat-value{font:800 29px/1 var(--mono);color:var(--plum-dark)}
 .stat-label{margin-top:7px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
@@ -64,6 +64,14 @@ h3{margin:0;font-size:16px}
 .change.content{border-left-color:var(--cyan)}
 .change.component{border-left-color:#6b5aa6}
 .change.styling{border-left-color:#b05d1e}
+.asset-card{display:grid;grid-template-columns:minmax(180px,34%) 1fr;gap:20px;padding:0;overflow:hidden}
+.asset-preview{min-height:220px;background:linear-gradient(135deg,var(--plum-soft),var(--cyan-soft));display:grid;place-items:center;overflow:hidden}
+.asset-preview img{width:100%;height:100%;min-height:220px;object-fit:cover}
+.asset-preview span{padding:22px;color:var(--plum-dark);font:800 13px var(--mono);letter-spacing:.08em;text-align:center;text-transform:uppercase}
+.asset-body{padding:21px 21px 21px 0}
+.asset-purpose{margin:6px 0 14px;color:var(--muted)}
+.asset-placement{padding:11px 13px;border-radius:10px;background:var(--soft);margin-top:8px}
+.asset-placement strong{display:block}
 .change-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
 .change-title{font-size:17px;font-weight:750}
 .change-tags{margin-top:11px}
@@ -96,6 +104,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
   .layout{grid-template-columns:1fr;padding-top:18px}.sidebar{position:static;display:flex;overflow:auto}
   .nav-label{display:none}.nav-btn{width:auto;white-space:nowrap}
   .facts,.stats{grid-template-columns:1fr}.detail-row{grid-template-columns:1fr;gap:2px}.hero{padding:26px}
+  .asset-card{grid-template-columns:1fr}.asset-preview,.asset-preview img{min-height:190px}.asset-body{padding:0 20px 20px}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.view.active{animation:none}}
 </style>
@@ -120,6 +129,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
     <button class="nav-btn active" data-view="overview">Overview</button>
     <button class="nav-btn" data-view="pages">Pages &amp; navigation</button>
     <button class="nav-btn" data-view="components">Content &amp; components</button>
+    <button class="nav-btn" data-view="assets">Visual assets</button>
     <button class="nav-btn" data-view="styling">Styling</button>
     <button class="nav-btn" data-view="review">Review &amp; next steps</button>
   </nav>
@@ -138,6 +148,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
       <div class="stats">
         <div class="stat"><div class="stat-value" id="pageCount">0</div><div class="stat-label">Page &amp; navigation changes</div></div>
         <div class="stat"><div class="stat-value" id="componentCount">0</div><div class="stat-label">Content &amp; component changes</div></div>
+        <div class="stat"><div class="stat-value" id="assetCount">0</div><div class="stat-label">Approved visual assets</div></div>
         <div class="stat"><div class="stat-value" id="styleCount">0</div><div class="stat-label">Styling changes</div></div>
       </div>
       <div class="card summary" id="summary"></div>
@@ -156,8 +167,13 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
     </section>
     <section class="view" id="components">
       <h2>Content &amp; components</h2>
-      <p class="lede">Visitor-facing copy, page compositions, assets, snippets, and reusable layouts.</p>
+      <p class="lede">Visitor-facing copy, page compositions, snippets, and reusable layouts.</p>
       <div id="componentChanges"></div>
+    </section>
+    <section class="view" id="assets">
+      <h2>Visual assets</h2>
+      <p class="lede">Approved photography, logos, icons, illustrations, patterns, and their intended site usage.</p>
+      <div id="assetChanges"></div>
     </section>
     <section class="view" id="styling">
       <h2>Styling</h2>
@@ -186,6 +202,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
 <script id="preservationData" type="application/json">__JSON_PRESERVATION_DATA__</script>
 <script id="siteData" type="application/json">__JSON_SITE_DATA__</script>
 <script id="capabilitiesData" type="application/json">__JSON_CAPABILITIES_DATA__</script>
+<script id="assetsData" type="application/json">__JSON_ASSETS_DATA__</script>
 <script id="operationsData" type="application/json">__JSON_OPERATIONS_DATA__</script>
 <script id="warningsData" type="application/json">__JSON_WARNINGS_DATA__</script>
 <script id="verificationData" type="application/json">__JSON_VERIFICATION_DATA__</script>
@@ -196,8 +213,10 @@ const esc=value=>{const node=document.createElement("span");node.textContent=val
 const words=value=>String(value||"").replace(/[-_]/g," ").replace(/([a-z])([A-Z])/g,"$1 $2").replace(/\b\w/g,char=>char.toUpperCase());
 const basename=value=>String(value||"").split(/[\\/]/).pop();
 const operations=read("operationsData");
+const assets=read("assetsData");
 const categoryFor=skill=>{
   if(["author-webpage","author-page-template"].includes(skill))return"page";
+  if(skill==="author-web-file")return"asset";
   if(skill==="style-site")return"styling";
   return"component";
 };
@@ -219,6 +238,7 @@ document.getElementById("summary").textContent=summary;
 document.getElementById("preservation").textContent=read("preservationData").text;
 document.getElementById("pageCount").textContent=categories.page.length;
 document.getElementById("componentCount").textContent=categories.component.length;
+document.getElementById("assetCount").textContent=assets.length;
 document.getElementById("styleCount").textContent=categories.styling.length;
 const site=read("siteData");
 const facts=[
@@ -258,8 +278,26 @@ const visibleDetails=item=>{
 const changeCard=(item,category)=>`<article class="card change ${category}"><div class="change-head"><div><div class="change-title">${esc(item.summary||words(item.action)+" planned change")}</div><p>${esc(category==="page"?"Page structure and navigation":category==="styling"?"Visual treatment":"Visitor-facing content or reusable site component")}</p></div><span class="tag accent">${esc(words(item.action))}</span></div>${visibleDetails(item)}${composition(item)}${(item.preserve||[]).length?`<div class="change-detail"><div class="label">Preserve</div><ul class="preserve-list">${item.preserve.map(value=>`<li>${esc(value)}</li>`).join("")}</ul></div>`:""}</article>`;
 const renderCategory=(id,items,category,empty)=>{document.getElementById(id).innerHTML=items.length?items.map(item=>changeCard(item,category)).join(""):`<div class="card empty">${esc(empty)}</div>`};
 renderCategory("pageChanges",categories.page,"page","No page or navigation changes are planned.");
-renderCategory("componentChanges",categories.component,"component","No content, asset, or reusable-component changes are planned.");
+renderCategory("componentChanges",categories.component,"component","No content or reusable-component changes are planned.");
 renderCategory("styleChanges",categories.styling,"styling","The existing visual treatment will be preserved.");
+const assetPreview=asset=>{
+  if(asset.source&&asset.source.type==="unsplash")return`<img src="${esc(asset.source.downloadUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+  return`<span>${esc(words(asset.kind))}</span>`;
+};
+const assetCard=asset=>{
+  const source=asset.source||{};
+  const prep=asset.preparation||{};
+  const alt=Object.entries((asset.accessibility&&asset.accessibility.altByLocale)||{}).map(([locale,value])=>`${locale}: ${value||"Decorative image"}`).join(" · ");
+  const details=[
+    ["Source",source.type==="unsplash"?`Unsplash · ${source.photographer}`:words(source.type)],
+    ["Delivery",asset.delivery==="web-file"?"Local Power Pages Web File":words(asset.delivery)],
+    ["Prepared file",prep.fileName||basename(asset.existingPublicUrl)],
+    ["Crop / aspect",[asset.visual&&asset.visual.aspectRatio,asset.visual&&asset.visual.crop].filter(Boolean).join(" · ")],
+    ["Accessibility",alt]
+  ].filter(([,value])=>value);
+  return`<article class="card asset-card"><div class="asset-preview">${assetPreview(asset)}</div><div class="asset-body"><div class="change-head"><div><div class="change-title">${esc(asset.name)}</div><div class="change-tags"><span class="tag accent">${esc(words(asset.kind))}</span><span class="tag">${esc(words(asset.role))}</span>${(asset.placements||[]).some(item=>item.scope==="sitewide")?`<span class="tag">Site-wide</span>`:""}</div></div></div><p class="asset-purpose">${esc(asset.purpose)}</p><div class="label">Why this asset</div><div>${esc(asset.visual&&asset.visual.rationale)}</div><div class="change-detail">${details.map(([name,value])=>`<div class="detail-row"><div class="detail-name">${esc(name)}</div><div class="detail-value">${esc(value)}</div></div>`).join("")}</div><div class="change-detail"><div class="label">Placements</div>${(asset.placements||[]).map(item=>`<div class="asset-placement"><strong>${esc(item.page)} · ${esc(item.section)}</strong><span>${esc(item.usage)}</span></div>`).join("")}</div></div></article>`;
+};
+document.getElementById("assetChanges").innerHTML=assets.length?assets.map(assetCard).join(""):`<div class="card empty">No new visual assets are needed for this customization.</div>`;
 const checks=read("verificationData");
 document.getElementById("checks").innerHTML=checks.length?checks.map(item=>`<div class="card check"><span class="check-mark"></span><div><strong>${esc(typeof item==="string"?item:item.label)}</strong>${typeof item==="object"&&item.description?`<div>${esc(item.description)}</div>`:""}</div></div>`).join(""):`<div class="card empty">No verification checks recorded.</div>`;
 const deployments=read("deploymentData");

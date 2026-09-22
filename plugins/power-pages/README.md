@@ -150,6 +150,11 @@ Text/HTML values, Liquid usage, and required caller migrations.
 Creates or modifies images, CSS, JavaScript, fonts, documents, and other site-served
 assets together with their PAC metadata.
 
+Broad declarative customization can also plan visual assets before invoking this skill. It reuses
+existing or user-provided assets, can author safe original SVGs, and can curate Unsplash
+photography that is validated and imported as a local Web File. The approved customization plan
+shows asset purpose, placement, source, crop intent, and accessibility before page composition.
+
 #### `/author-web-template`
 
 Creates or modifies reusable Liquid/HTML templates, inherited layouts, fragments, and

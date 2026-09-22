@@ -197,7 +197,11 @@ User-invocable via `/power-pages:<skill-name>`:
   its predecessor in timestamped history, resolves typed cross-skill output bindings, and resumes
   pending work without mutating the approved plan. It derives safe content and supported
   `section -> columns -> elements` structures, represents card-like layouts with columns rather
-  than an unsupported native card type, invokes the owning classic authoring skills, runs
+  than an unsupported native card type, and plans visual assets as existing/user-provided Web
+  Files, safe original SVGs, or curated Unsplash photography. New assets are securely staged
+  outside the declarative root, shown in the approved plan, imported through `author-web-file`,
+  and consumed through verified `publicUrl` bindings. It invokes the owning classic authoring
+  skills, runs
   `style-site` last when requested, verifies the combined local diff, commits coherent changes,
   and optionally hands off to `deploy-site`.
 - `deploy-site`: Routes by project type. Code sites retain the 6-step build,
