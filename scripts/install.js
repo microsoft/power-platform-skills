@@ -145,22 +145,23 @@ function installCanonicalDataverse(tool, runCommand = run) {
       const fallbackResult = runCommand(fallbackCommand);
       const fallbackOutput = String(fallbackResult.output || "");
       if (!fallbackResult.ok && !fallbackOutput.toLowerCase().includes("already")) {
-        fail(`Dataverse fallback installation failed: ${fallbackResult.output}`);
+        fail(`Dataverse fallback installation failed: ${fallbackOutput || "Unknown error"}`);
         return false;
       }
     }
   } else if (!installResult.ok && !alreadyInstalled) {
-    fail(`Dataverse installation failed: ${installResult.output}`);
+    fail(`Dataverse installation failed: ${installOutput || "Unknown error"}`);
     return false;
   }
 
   ok(installResult.ok ? "Dataverse installed" : "Dataverse installation completed");
   const listResult = runCommand(config.listCommand);
+  const listOutput = String(listResult.output || "");
   if (!listResult.ok) {
-    fail(`Could not verify Dataverse installation: ${listResult.output}`);
+    fail(`Could not verify Dataverse installation: ${listOutput || "Unknown error"}`);
     return false;
   }
-  if (!listResult.output.toLowerCase().includes(DATAVERSE_PLUGIN)) {
+  if (!listOutput.toLowerCase().includes(DATAVERSE_PLUGIN)) {
     fail("Dataverse was not found in the installed plugin list");
     return false;
   }
@@ -368,11 +369,17 @@ async function main() {
   }
 
   if (!hasInstallTarget(tools, dataverseTools, options)) {
-    fail("Neither Claude Code nor GitHub Copilot CLI found in PATH.");
+    const requiredTools = options.includeDataverse
+      ? "Claude Code, GitHub Copilot CLI, or Codex CLI"
+      : "Claude Code or GitHub Copilot CLI";
+    fail(`No supported CLI found in PATH (${requiredTools}).`);
     console.log("");
     console.log("  Install at least one and ensure it is on your PATH:");
     console.log("    Claude Code     https://docs.anthropic.com/en/docs/claude-code");
     console.log("    GitHub Copilot  https://docs.github.com/en/copilot");
+    if (options.includeDataverse) {
+      console.log("    Codex CLI       https://developers.openai.com/codex/cli");
+    }
     process.exit(1);
   }
   if (tools.length === 0) {

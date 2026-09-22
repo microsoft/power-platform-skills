@@ -206,6 +206,17 @@ if (errors.length === 0) {
         })),
         false
       );
+
+      let listCall = 0;
+      assert.equal(
+        installCanonicalDataverse('copilot', () => {
+          listCall += 1;
+          return listCall === 1
+            ? { ok: true, output: 'installed' }
+            : { ok: true, output: undefined };
+        }),
+        false
+      );
     } finally {
       console.log = originalLog;
     }
