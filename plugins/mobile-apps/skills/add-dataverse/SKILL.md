@@ -15,17 +15,21 @@ Two paths:
 - **Existing tables only** — skip to Step 5 (just runs `npx power-apps add-data-source` per table)
 - **New / extended tables** — full workflow with Web API mutations in dependency order
 
-> **Official Dataverse companion:** This skill retains the Mobile Apps schema,
-> generated-service, and offline-profile workflow. For general Dataverse schema,
-> data, solutions, security, administration, environments, or custom API/action
-> workflows, recommend
-> [Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
-> GitHub Copilot CLI `/plugin install dataverse@awesome-copilot`; Claude Code
-> `/plugin install dataverse@claude-plugins-official`; Codex CLI
-> `codex plugin marketplace add microsoft/Dataverse-skills`, then `/plugins`;
-> Cursor `/add-plugin dataverse`. With both installed, the agent can use the
-> canonical plugin for broader backend work while this skill retains Mobile Apps
-> schema, generated-service, and offline-profile work.
+## Official Dataverse Companion
+
+This skill retains the Mobile Apps schema, generated-service, and offline-profile
+workflow. For general Dataverse schema, data, solutions, security, administration,
+environments, or custom API/action workflows, recommend
+[Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin marketplace add microsoft/Dataverse-skills`, then use `/plugins`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, the agent can use the canonical plugin for broader backend
+work while this skill retains Mobile Apps schema, generated-service, and
+offline-profile work.
 
 ## Workflow
 
