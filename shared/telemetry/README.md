@@ -6,6 +6,8 @@ Canonical source for 1DS telemetry used by plugins in this repo. Each adopting p
 
 Zero npm dependencies. Node stdlib only.
 
+For the repository-level user disclosure, see [Telemetry](../../README.md#telemetry).
+
 ---
 
 ## What it does
@@ -47,6 +49,17 @@ The mirror is laid out per-plugin, per-session at
 so a user can hand over one self-contained file per problem. Session directories
 older than 14 days are pruned best-effort whenever a new session starts, and an
 individual session log is rotated to `events.<stamp>.old` if it ever exceeds 10 MB.
+
+### Current adopters
+
+The committed `disabled` value in each plugin's `ikey.json` determines whether
+that plugin currently emits telemetry. A user command or environment-variable
+choice cannot override `disabled: true`.
+
+| Plugin | Committed state | Current behavior | Plugin-specific fields |
+|---|---|---|---|
+| Power Pages | `disabled: false` | Enabled and default-on for transmission. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID; `eventInfo.framework` when the Power Pages code-site framework can be determined. |
+| Model Apps | `disabled: true` | Hard-off: no event building, network transmission, or local mirror. If enabled later, transmission will be default-on and the standard mirror and opt-out behavior will apply. | No signed-in user object ID. If enabled, the base event can include `orgId` and `tenantId` when PAC is signed in. |
 
 ### Custom routing (the resolver contract)
 
@@ -113,8 +126,25 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 
 ## Privacy posture
 
-- **Default-on.** Usage telemetry is enabled by default. No first-run prompt.
-- **Identifiers.** When PAC is signed in, events can include the Dataverse organization GUID (`orgId`), Entra tenant GUID (`tenantId`), and, for Power Pages, the signed-in user's Entra object ID (`eventInfo.aadObjectId`). The local diagnostic mirror retains the same fields.
+- **Shipped state is per plugin.** The committed `ikey.json` controls whether a
+  plugin is enabled or hard-disabled; see [Current adopters](#current-adopters).
+  A hard-disabled plugin produces no network or local telemetry side effects.
+- **Enabled plugins are default-on for transmission.** There is no first-run
+  prompt. A plugin that ships `disabled: true` remains hard-off regardless of a
+  user's saved telemetry choice.
+- **Identifiers.** When PAC is signed in, enabled-plugin events can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`). Power Pages can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it; Model Apps excludes that identifier. The local diagnostic mirror retains the same fields.
+- **Authenticated scenario.** For telemetry configured with geo routing, when PAC
+  supplies an organization ID and its geo is detected, the organization's cloud
+  stamp and geo select the corresponding regional collector. The transmitted
+  event may include the documented End User Pseudonymous Information (EUPI) and
+  Organization Identifiable Information (OII) fields above.
+- **Unauthenticated scenario.** When PAC provides no authentication context, geo
+  detection is not possible. Telemetry configured with geo routing uses its
+  configured default region, currently the US cluster. The organization, tenant,
+  and Entra user object ID fields are absent, so this path does not transmit the
+  documented identity-derived EUPI or OII fields. It transmits only the
+  allowlisted operational and system metadata and any separately documented
+  non-identity plugin-specific fields.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
 - **Opt out for automation** via the per-plugin opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
