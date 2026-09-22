@@ -31,6 +31,21 @@ The installer automatically:
 - Registers the plugin marketplace and installs all listed plugins
 - Enables auto-update so plugins stay current
 
+To also install the independently maintained official Dataverse plugin, pass
+`--include-dataverse`:
+
+**Windows (PowerShell)**:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js --include-dataverse; del install.js
+```
+
+**Mac OS/Linux/Windows (cmd)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+```
+
 ### Manual Installation
 
 If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
@@ -53,6 +68,26 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
     ```
+
+## Official Dataverse Companion
+
+Use the app plugins in this marketplace for app UI, data-source bindings, build,
+and deployment. For general Dataverse schema, data, solutions, security,
+administration, environments, and custom API/action workflows, install the
+official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, your agent can combine the app-building plugins for UI,
+bindings, build, and deployment with the Dataverse plugin's broader backend
+capabilities in the same development session. Each plugin remains independently
+maintained and updates from its canonical marketplace.
+
+The `--include-dataverse` installer option automates Claude, Copilot CLI, and any
+detected Codex CLI installation. Cursor uses the native interactive step shown above.
 
 ## Available Plugins
 

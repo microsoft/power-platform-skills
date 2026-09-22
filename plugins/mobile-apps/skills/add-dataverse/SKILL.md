@@ -15,6 +15,22 @@ Two paths:
 - **Existing tables only** — skip to Step 5 (just runs `npx power-apps add-data-source` per table)
 - **New / extended tables** — full workflow with Web API mutations in dependency order
 
+## Official Dataverse Companion
+
+This skill retains the Mobile Apps schema, generated-service, and offline-profile
+workflow. For general Dataverse schema, data, solutions, security, administration,
+environments, or custom API/action workflows, recommend
+[Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, the agent can use the canonical plugin for broader backend
+work while this skill retains Mobile Apps schema, generated-service, and
+offline-profile work.
+
 ## Workflow
 
 1. Verify project & auth → 2. Resolve plan/operation manifest → 3. Setup Dataverse Web API auth → 4. Validate manifest or reconcile live metadata → 5. Execute sequential metadata phases → 6. Add data sources → 6b. Publish fallback customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 8.5. Offline profile reconciliation → 9. Summary

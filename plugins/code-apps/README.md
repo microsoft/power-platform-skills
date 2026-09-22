@@ -25,6 +25,22 @@ Open Claude Code or GitHub Copilot in any folder and run the following commands:
    "/plugin install code-apps@power-platform-skills"
    ```
 
+## Official Dataverse Companion
+
+Code Apps owns app scaffolding, generated TypeScript services, UI, build, and
+deployment. For general Dataverse schema, data, solutions, security,
+administration, environments, and custom API/action workflows, install the
+official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, your agent can use Dataverse for broader backend work and
+Code Apps for generated services, UI, build, and deployment. Each plugin remains
+independently maintained.
+
 ## Available Commands
 
 | Command             | Description                                                  |

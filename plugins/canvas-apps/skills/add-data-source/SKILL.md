@@ -1,6 +1,6 @@
 ---
 name: add-data-source
-version: 1.0.0
+version: 1.0.1
 description: Guide the user to add a data source, connection, or API connector to a Canvas App via Power Apps Studio, then verify and continue. USE WHEN the user asks to add a data source, add a connection, add an API, add a connector, connect to SharePoint / Dataverse / SQL / Excel / OneDrive / Teams / Office 365, or any similar request to make new data available to the app. DO NOT USE WHEN the user is asking to list or describe existing data sources — call list_data_sources or list_apis directly instead.
 author: Microsoft Corporation
 user-invocable: false
@@ -8,6 +8,28 @@ allowed-tools: AskUserQuestion, mcp__canvas-authoring__list_data_sources, mcp__c
 ---
 
 Data sources, connections, and API connectors cannot be added by the coding agent — they must be added through the Power Apps Studio interface. This skill informs the user, guides them to add the connection in their Studio session, verifies it is available via the MCP server, and then continues with any pending work.
+
+## Dataverse Schema Boundary
+
+If the user asks to create or change Dataverse tables, columns, or relationships,
+or confirms that the required schema does not exist, do not send them to Studio's
+**Add data** flow yet. Canvas Authoring cannot create Dataverse schema.
+
+Recommend the official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills)
+for that environment-level work and show the install command for the active host:
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+Explain that the two plugins complement each other: Dataverse prepares the
+environment-level schema, and Canvas Apps attaches the resulting tables and builds
+the app experience. Stop and ask the user to return after the schema exists; then
+use the normal Studio attachment and verification phases below.
+
+If the table already exists and only needs to be attached to the Canvas App,
+continue directly to Phase 0.
 
 ## Phase 0 — Identify the Connection Type
 

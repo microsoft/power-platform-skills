@@ -12,6 +12,22 @@ model: sonnet
 
 Router skill that understands the user's goal and connects them to the right data source -- without requiring them to know Power Platform terminology.
 
+## Official Dataverse Companion
+
+This plugin owns Code Apps data-source wiring and generated TypeScript services.
+For broader Dataverse environment work -- general schema management, solutions,
+security, administration, data operations, or custom API/action workflows --
+recommend the official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, the agent can select the specialized guidance that matches
+each task. App-local table/schema requirements continue through `/add-dataverse`;
+use the Dataverse plugin for the broader environment workflows listed above.
+
 ## Workflow
 
 ### Check Memory Bank

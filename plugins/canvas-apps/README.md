@@ -67,6 +67,22 @@ For more information, see [Install a plugin from a marketplace](https://code.vis
 
 > **Local installation is not recommended.** It is host-specific and may not receive automatic plugin updates. Use a marketplace unless you are developing or contributing to the plugin.
 
+## Official Dataverse Companion
+
+Canvas Apps can bind to Dataverse tables that you add through Power Apps Studio.
+For general Dataverse schema creation, data, solutions, security, administration,
+environments, and custom API/action workflows, install the official
+[Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, your agent can use Dataverse to prepare and manage the
+backend, then use Canvas Apps to attach those tables and build the app experience.
+Each plugin remains independently maintained.
+
 ## Connect to a Canvas App
 
 1. Open the existing app in Power Apps Studio.

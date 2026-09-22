@@ -151,7 +151,77 @@ if (errors.length === 0) {
       assert.ok(openPluginNames.has(legacyPluginName), 'not present in marketplace.json');
     });
   }
-}
+
+  check('Dataverse companion installer metadata', () => {
+    const {
+      DATAVERSE_GUIDED_INSTALLS,
+      DATAVERSE_INSTALLS,
+      hasInstallTarget,
+      installCanonicalDataverse,
+      parseInstallerOptions,
+    } = require('./install.js');
+
+    assert.deepEqual(parseInstallerOptions([]), { includeDataverse: false });
+    assert.deepEqual(parseInstallerOptions(['--include-dataverse']), {
+      includeDataverse: true,
+    });
+    assert.equal(hasInstallTarget([], [], { includeDataverse: false }), false);
+    assert.equal(hasInstallTarget([], ['codex'], { includeDataverse: true }), true);
+    assert.equal(hasInstallTarget(['claude'], ['claude'], { includeDataverse: false }), true);
+    assert.match(DATAVERSE_INSTALLS.claude.command, /dataverse@claude-plugins-official/);
+    assert.match(DATAVERSE_INSTALLS.copilot.command, /dataverse@awesome-copilot/);
+    assert.match(DATAVERSE_INSTALLS.codex.command, /dataverse@openai-curated/);
+    assert.deepEqual(DATAVERSE_INSTALLS.codex.fallbackCommands, [
+      'codex plugin marketplace add "microsoft/Dataverse-skills"',
+      'codex plugin add "dataverse@dataverse-skills"',
+    ]);
+    assert.ok(
+      DATAVERSE_GUIDED_INSTALLS.some((entry) => entry.includes('/add-plugin dataverse'))
+    );
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      const commands = [];
+      assert.equal(
+        installCanonicalDataverse('codex', (command) => {
+          commands.push(command);
+          if (command.includes('@openai-curated')) {
+            return { ok: false, output: 'plugin not found' };
+          }
+          return { ok: true, output: command.includes('list') ? 'dataverse' : 'ok' };
+        }),
+        true
+      );
+      assert.deepEqual(commands, [
+        DATAVERSE_INSTALLS.codex.command,
+        ...DATAVERSE_INSTALLS.codex.fallbackCommands,
+        DATAVERSE_INSTALLS.codex.listCommand,
+      ]);
+
+      assert.equal(
+        installCanonicalDataverse('copilot', () => ({
+          ok: false,
+          output: undefined,
+        })),
+        false
+      );
+
+      let listCall = 0;
+      assert.equal(
+        installCanonicalDataverse('copilot', () => {
+          listCall += 1;
+          return listCall === 1
+            ? { ok: true, output: 'installed' }
+            : { ok: true, output: undefined };
+        }),
+        false
+      );
+    } finally {
+      console.log = originalLog;
+    }
+  });
+  }
 
 if (errors.length > 0) {
   console.log('Found legacy compatibility metadata issues:');
