@@ -1,0 +1,263 @@
+{
+  "skill_name": "add-localization",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add French (fr-FR) and German (de-DE) to my React Power Pages code site. Use English en-US as the default and generate the translations for me.",
+      "expected_output": "Detect React, explain SPA-only scope, recommend i18next/react-i18next runtime localization, validate locales, warn about AI translation quality, approve a plan, preserve tokens, add a persistent selector, write the manifest, build and browser-test.",
+      "files": [],
+      "expectations": [
+        "Detects React from react and react-dom dependencies",
+        "Uses runtime i18next plus react-i18next",
+        "Displays the Dataverse scope notice and AI translation warning",
+        "Validates en-US, fr-FR, and de-DE before implementation",
+        "Adds selector persistence, fallback, lang, and dir behavior"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Localize my Vue Power Pages SPA into en-US and es-MX. Please use a stable vue-i18n release and leave Spanish values blank for our translators.",
+      "expected_output": "Configure Vue runtime localization with a stable vue-i18n version and complete blank target resources without pretending source text is translated.",
+      "files": [],
+      "expectations": [
+        "Detects Vue and selects runtime localization",
+        "Rejects prerelease vue-i18n versions unless separately confirmed",
+        "Creates complete blank es-MX key structure",
+        "Uses en-US as the approved fallback",
+        "Runs validator, build, and Playwright checks"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add localization to this Angular 19.1 Power Pages site. Support en-US and fr-FR. I am fine with the recommended option.",
+      "expected_output": "Recommend Angular's official matching @angular/localize package and static locale builds, then create XLF catalogs and locale build configuration.",
+      "files": [],
+      "expectations": [
+        "Recommends static @angular/localize rather than Transloco",
+        "Uses a package version compatible with Angular 19.1",
+        "Configures Angular i18n locale builds and XLF resources",
+        "Adds navigation between equivalent locale builds",
+        "Does not add runtime browser persistence"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Our Angular site must switch language instantly without a reload. Add English and Arabic localization.",
+      "expected_output": "Offer the official static recommendation but allow the explicit runtime requirement to select Transloco, including persisted selection and RTL handling.",
+      "files": [],
+      "expectations": [
+        "Chooses Transloco only because runtime switching was explicitly requested",
+        "Configures runtime selection without page reload",
+        "Persists only the browser-local locale preference",
+        "Sets lang and rtl direction for Arabic",
+        "Flags RTL layout areas for manual visual review"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Make my Astro Power Pages site available at English and Japanese locale URLs.",
+      "expected_output": "Use Astro built-in i18n static routes and navigate between locale-specific URLs.",
+      "files": [],
+      "expectations": [
+        "Uses Astro built-in i18n without an npm localization package",
+        "Creates static locale routes",
+        "Uses equivalent-route navigation in the selector",
+        "Configures explicit default-locale routing and fallback",
+        "Does not add client-side locale persistence"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "This React site already uses react-i18next with en-US and fr-FR. Add de-DE and generate only the missing German translations.",
+      "expected_output": "Detect valid existing localization, choose add-languages mode, preserve package/mode/default, and avoid overwriting existing translations.",
+      "files": [],
+      "expectations": [
+        "Displays detected package, mode, locales, and default",
+        "Skips package, mode, and default-locale questions",
+        "Adds only de-DE and missing keys",
+        "Preserves all non-empty existing translations",
+        "Sets lastOperation to add-languages"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Repair localization in this Angular project. The manifest says Transloco runtime but angular.json and dependencies use @angular/localize static builds.",
+      "expected_output": "Surface the conflict, enter repair/reconfigure flow, ask which evidence-backed mode should remain, and change only the approved delta.",
+      "files": [],
+      "expectations": [
+        "Does not guess which conflicting mode is authoritative",
+        "Shows manifest, dependency, and angular.json evidence",
+        "Requires a new plan approval before replacement",
+        "Preserves translations unless replacement is explicitly approved",
+        "Rewrites the manifest to match the repaired implementation"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Add these site languages: en-us, EN-US, fr_fr, xx-YY, zh-hant-tw.",
+      "expected_output": "Canonicalize valid tags visibly, deduplicate en-US, reject malformed and unknown tags with reasons, then re-prompt.",
+      "files": [],
+      "expectations": [
+        "Shows en-us canonicalizing to en-US",
+        "Reports EN-US as a duplicate",
+        "Rejects fr_fr as malformed",
+        "Rejects xx-YY for unknown subtags",
+        "Shows zh-hant-tw canonicalizing to zh-Hant-TW"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use package react-intl for runtime localization in my React 19 site instead of the recommendation.",
+      "expected_output": "Validate the proposed package against npm metadata, peer compatibility, maintenance, mode, stable release, license, and documentation before planning it.",
+      "files": [],
+      "expectations": [
+        "Runs deterministic package validation",
+        "Checks React 19 peer compatibility",
+        "Checks runtime support and official documentation",
+        "Checks maintenance recency and permissive license",
+        "Uses the alternative only if every criterion passes"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use old-react-i18n-package version 1.0.0 even though it has not been updated in years.",
+      "expected_output": "Reject the package for failed maintenance and any other failed criteria and recommend react-i18next.",
+      "files": [],
+      "expectations": [
+        "Names the exact package and failed criterion",
+        "Rejects a release older than 24 months",
+        "Does not install before plan approval",
+        "Recommends the framework default",
+        "Re-prompts for package choice"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Install the latest alpha of vue-i18n for my Vue localization.",
+      "expected_output": "Detect the prerelease, require separate explicit confirmation, and otherwise recommend a stable release.",
+      "files": [],
+      "expectations": [
+        "Does not silently accept npm latest when it is prerelease",
+        "Explains that prerelease confirmation is required",
+        "Runs validation again with explicit prerelease approval only after confirmation",
+        "Keeps stable vue-i18n as the recommendation"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Use a GPL-licensed i18n library for this React site.",
+      "expected_output": "Reject the alternative because its license is outside the approved permissive list.",
+      "files": [],
+      "expectations": [
+        "Checks package license metadata",
+        "Names the rejected license",
+        "Lists the approved-license criterion",
+        "Recommends react-i18next"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Generate French translations for 'Hello {{name}}, you have {count} items' and preserve all variables.",
+      "expected_output": "Translate the visible text while preserving both interpolation tokens exactly and block mismatched output.",
+      "files": [],
+      "expectations": [
+        "Preserves {{name}} exactly",
+        "Preserves {count} exactly",
+        "Runs deterministic protected-token validation",
+        "Regenerates or flags a mismatched translation",
+        "Shows the AI translation warning"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Add Arabic and Hebrew to my runtime-localized React site.",
+      "expected_output": "Add both RTL locales, switch document direction with the active locale, and call out visual RTL review areas.",
+      "files": [],
+      "expectations": [
+        "Canonicalizes ar and he",
+        "Sets documentElement.dir to rtl for both",
+        "Restores ltr for non-RTL locales",
+        "Browser-tests at least one RTL locale",
+        "Flags directional icons and fixed left/right styling for review"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Re-run localization on this already localized Vue site. Do not change any existing translations; just sync new source keys.",
+      "expected_output": "Idempotently add missing keys, preserve non-empty targets, report stale keys, and avoid duplicate package or initialization work.",
+      "files": [],
+      "expectations": [
+        "Does not reinstall or duplicate initialization",
+        "Preserves all non-empty translations",
+        "Adds missing keys to every locale",
+        "Reports but does not delete stale keys",
+        "Updates the existing manifest instead of creating a competing setup"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "The site has src/i18n files and react-i18next but no .powerpages-localization.json. Adopt the setup and add Italian.",
+      "expected_output": "Corroborate the valid existing setup, offer adoption, preserve its choices, add Italian, and write the manifest.",
+      "files": [],
+      "expectations": [
+        "Detects localization without relying on the manifest",
+        "Corroborates package, initialization, resources, locales, and default",
+        "Preserves the valid existing package and mode",
+        "Adds only it-IT",
+        "Marks adoptedExistingConfiguration true"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "This package.json contains both React and Vue dependencies. Add localization.",
+      "expected_output": "Stop automatic framework selection, show conflicting evidence, and allow only evidence-backed selection or manual framework-configuration repair.",
+      "files": [],
+      "expectations": [
+        "Reports ambiguous React and Vue primary evidence",
+        "Does not choose a framework from the user's assertion alone",
+        "Offers evidence-backed candidates or manual repair stop",
+        "Makes no localization changes when the user stops",
+        "Identifies files requiring framework review"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Change the default language of this localized site from en-US to fr-FR.",
+      "expected_output": "Use repair/reconfigure mode, preserve all translations, show fallback and routing/persistence effects, and require plan approval.",
+      "files": [],
+      "expectations": [
+        "Does not treat this as add-languages mode",
+        "Asks for the new default only because change was explicit",
+        "Shows affected fallback and route behavior",
+        "Preserves locale resources",
+        "Updates and validates the manifest default"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Add localization directly to my existing site and deploy it after I approve.",
+      "expected_output": "Complete the standalone workflow and offer a separate deploy-site handoff only after final acceptance.",
+      "files": [],
+      "expectations": [
+        "Shows SPA-only scope when no setup exists",
+        "Requires plan and implementation review approval",
+        "Offers Deploy now and Skip for now",
+        "Invokes deploy-site only after Deploy now is selected",
+        "Never deploys automatically"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "The create-site workflow invoked add-localization for C:\\sites\\portal [FROM_CREATE_SITE]. Add en-US and fr-FR.",
+      "expected_output": "Complete localization but suppress the child deployment prompt and return to create-site for accessibility, review, and its single deploy prompt.",
+      "files": [],
+      "expectations": [
+        "Recognizes FROM_CREATE_SITE context",
+        "Runs the same localization implementation and verification path",
+        "Records AddLocalization usage",
+        "Does not ask to deploy from add-localization",
+        "Returns control to create-site"
+      ]
+    }
+  ]
+}
