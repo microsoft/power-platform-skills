@@ -18,12 +18,10 @@ or confirms that the required schema does not exist, do not send them to Studio'
 Recommend the official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills)
 for that environment-level work and show the install command for the active host:
 
-```text
-GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
-Claude Code:        /plugin install dataverse@claude-plugins-official
-Codex CLI:           codex plugin add dataverse@openai-curated
-Cursor:              /add-plugin dataverse
-```
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
 
 Explain that the two plugins complement each other: Dataverse prepares the
 environment-level schema, and Canvas Apps attaches the resulting tables and builds

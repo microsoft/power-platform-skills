@@ -74,12 +74,10 @@ For general Dataverse schema creation, data, solutions, security, administration
 environments, and custom API/action workflows, install the official
 [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
 
-```text
-GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
-Claude Code:        /plugin install dataverse@claude-plugins-official
-Codex CLI:           codex plugin add dataverse@openai-curated
-Cursor:              /add-plugin dataverse
-```
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
 
 With both installed, your agent can use Dataverse to prepare and manage the
 backend, then use Canvas Apps to attach those tables and build the app experience.

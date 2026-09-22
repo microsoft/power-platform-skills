@@ -76,12 +76,10 @@ and deployment. For general Dataverse schema, data, solutions, security,
 administration, environments, and custom API/action workflows, install the
 official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
 
-```text
-GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
-Claude Code:        /plugin install dataverse@claude-plugins-official
-Codex CLI:           codex plugin add dataverse@openai-curated
-Cursor:              /add-plugin dataverse
-```
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
 
 With both installed, your agent can combine the app-building plugins for UI,
 bindings, build, and deployment with the Dataverse plugin's broader backend

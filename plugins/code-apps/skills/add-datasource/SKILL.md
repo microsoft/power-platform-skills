@@ -19,12 +19,10 @@ For broader Dataverse environment work -- general schema management, solutions,
 security, administration, data operations, or custom API/action workflows --
 recommend the official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
 
-```text
-GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
-Claude Code:        /plugin install dataverse@claude-plugins-official
-Codex CLI:           codex plugin add dataverse@openai-curated
-Cursor:              /add-plugin dataverse
-```
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
 
 With both installed, the agent can select the specialized guidance that matches
 each task. App-local table/schema requirements continue through `/add-dataverse`;
