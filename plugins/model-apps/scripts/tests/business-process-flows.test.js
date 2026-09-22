@@ -454,9 +454,10 @@ test('REAL BUNDLE: against an echoing server the create takes its token from the
 // The fail-closed counterpart: when the read-back ALSO yields nothing there is no token at all, and
 // pushing blind would silently clobber a concurrent edit. It must refuse — and say the flow exists,
 // because it does: a caller who responds by creating the flow again authors a SECOND process.
-// (The message also prescribes `fetchArtifact` as the recovery, which does not work on its own —
-// see "Vendored SDK" in AGENTS.md. This plugin never follows it: the next build's reuse query
-// adopts the flow by name and table instead.)
+// (The message also prescribes `fetchArtifact` as the recovery. Measured, that alone does not work:
+// no metadata was stored for the never-pushed local copy, so the next push re-issues the create and
+// is refused with 412 — `deleteArtifact` first, then fetch. This plugin never follows it: the next
+// build's reuse query adopts the flow by name and table instead.)
 test('REAL BUNDLE: a create with no token from any source is refused, not pushed blind', async () => {
   const { sdk } = await realSdk({ honourPrefer: false, readBackEtag: false });
   const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));

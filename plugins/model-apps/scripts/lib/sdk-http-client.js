@@ -44,6 +44,15 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const random = deps.random || Math.random;
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
   // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
+  //
+  // ⚠ 502/503/504 come from an INTERMEDIARY, so the write behind them may have COMMITTED. For a
+  // CONDITIONAL write that makes a blind retry harmful: it re-sends an `If-Match` the committed
+  // write has just made stale, and the ambiguity comes back as a definitive-looking 412. The
+  // vendored SDK settles those statuses itself for BPF deactivation (its bpf `update`/`delete`
+  // re-read the row to decide), which this retry would pre-empt. Nothing in this plugin issues
+  // those writes today — the build converges a reused flow with a plain record update and teardown
+  // deletes records directly — so the policy is unchanged; exempt conditional writes from it before
+  // anything starts editing flows through the SDK.
   const TRANSIENT = new Set([429, 500, 502, 503, 504]);
   // Jittered, capped exponential backoff. Metadata customizations serialize on a per-entity
   // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,

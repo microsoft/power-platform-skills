@@ -845,57 +845,6 @@ Residual limits, accepted deliberately:
 Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
 silently. If you hit one, widen the tests first.
 
-## Vendored SDK — gap log (fix upstream, not here)
-
-`scripts/vendor/cds-maker-sdk.cjs` is a **build artefact** of the first-party maker SDK
-(`packages/cds-maker-sdk`), re-vendored wholesale and tracked by `PROVENANCE.json`. Never patch the
-bundle to work around a defect in it: the next re-vendor silently reverts the patch, and the hash in
-`PROVENANCE.json` stops matching. Fix it in the SDK, then re-vendor. Record the gap here so the next
-person does not re-diagnose it — and record only what was **measured**, with where it was measured.
-
-**Status at `29fdb172`: no open gap reachable from this plugin.** What was reported, and what held up:
-
-- **Fixed upstream (`e82444ab`): a failed edit or delete could leave an Active BPF disabled.** The
-  deactivate that precedes an edit could throw after it committed, outside the block that restores
-  the process. **Not reachable from this plugin** — the build never edits a flow through the SDK (a
-  reused flow's state is converged by a direct `workflow` record update) and teardown deletes with
-  direct record operations, so neither goes through the SDK's BPF `update`/`delete`.
-- **Reported as "`BPF_CREATE_NO_TOKEN` recovery does not adopt the server's version" — inaccurate
-  as stated; the real gap is next to it.** Measured against both `81b2d6ed` and `29fdb172`: when
-  recovery works, the next write IS conditioned on the server's current version. But the recovery
-  the error's own message prescribes, `fetchArtifact`, does not work on its own. The failed create
-  stored no metadata, and `fetchArtifact` deliberately stores none for a never-pushed local copy, so
-  the next push re-issues the create and the server refuses it (`412` → `ARTIFACT_ALREADY_EXISTS`,
-  `saved: false`). Discarding the local copy first (`deleteArtifact`, then `fetchArtifact`) makes the
-  next push an update. It fails closed, never silently. **Not reachable from this plugin** — a build
-  that hits it fails that step, and the next build's reuse query adopts the flow by name and table.
-- **A client-minted `workflowid` is not a defect.** It is the keyed-create contract: replaying a
-  create is refused with `412` rather than producing a second row.
-
-**The `workflows` write contract, measured live.** The fakes in
-`scripts/tests/business-process-flows.test.js` model exactly this:
-
-| Request | Response |
-|---|---|
-| plain `PATCH` | `204`, no `ETag`, no body |
-| `PATCH` + `Prefer: return=representation` | `200`, `ETag` header **and** `@odata.etag` |
-| `POST` + `Prefer: return=representation` | `201`, the token in the **body** only — no `ETag` header |
-| `POST` of an existing `workflowid` | `412`, `0x80040237` "A record with matching key values already exists." |
-
-The SDK asks every BPF write to echo, so a create takes its token from its own write. The by-id
-read-back is reached only in an environment that ignores `Prefer` — and then by an Active flow as
-much as a Draft one, because an un-echoed activation answers `204` with no `ETag` too. An earlier
-version of this section claimed only a Draft flow could reach it; that came from a fake that returned
-an `ETag` on every PATCH, not from Dataverse.
-
-**Before adopting the SDK's BPF `update`/`delete`,** note one interaction. `createAzHttpClient`
-retries `502`/`503`/`504` on POST and PATCH, which are exactly the statuses the SDK now treats as
-"outcome unknown" on a conditional deactivate and settles by re-reading. Retrying a deactivate that
-committed re-sends a now-stale `If-Match`, turning the ambiguity into a definitive-looking `412` that
-escapes the restore the fix added. Nothing here issues such a write today, so the transport is
-unchanged; a feature that starts editing flows through the SDK needs an exemption for conditional
-writes first.
-
 ## Hooks & Validators
 
 Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin
@@ -1102,7 +1051,8 @@ node plugins/model-apps/scripts/_vendor-build/build.js --sdk /path/to/power-plat
 
 Only the SDK `src/` is committed in the SDK repo (`lib/` is gitignored). A type-only/whitespace SDK
 edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding when SDK **runtime**
-changes.
+changes. **Never patch the bundle** to work around an SDK defect: the next re-vendor silently
+reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and re-vendor.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
 skill relies on behaviors that must survive. Four test files lock them — run all against every
@@ -1197,28 +1147,12 @@ that keeps an `external` web resource. Expect a clean environment afterwards *ex
 `<prefix>publisher`; if a probe must restore the environment exactly, remove that row yourself after
 confirming it owns no other solution.
 
-**`appmodulecomponent` rows also survive an app delete, and there is no supported way to remove
-them. Do not treat this as a teardown bug — it has been re-reported as one, and re-measured.** The
-platform neither cascades these children nor exposes a delete for them. Measured live:
-
-- `appmodulecomponent` registers exactly two SDK messages — `Retrieve` and `RetrieveMultiple`. A
-  direct `DELETE` is not *denied*, it **does not exist**, which is why it 400s.
-- `RemoveAppComponents` is registered, but while the app still exists it returns **HTTP 204 and
-  removes nothing** — the same "204 means ACCEPTED, not done" trap already recorded above for
-  `AddAppComponents` pinning a hidden `task` component. After the app row is gone it 404s, because
-  the action binds to the app.
-- So there is no window in which this is fixable from here. Adding a `RemoveAppComponents` call to
-  teardown would emit a request that silently does nothing and **imply a cleanup that never
-  happened** — worse than leaving the rows.
-
-Scale, so the residue is not mistaken for something this plugin causes: a read-only audit of a
-shared test environment found **10,189 orphaned rows across 281 distinct absent parents** — i.e.
-every app ever deleted there, by any tool, leaves its component rows behind. A model-apps fixture
-contributes a handful. The rows are unreachable metadata, not app-owned data, and a rebuild of the
-same app does not adopt or trip over them.
-
-If this ever becomes fixable, the prerequisite is a platform-supported delete (or a cascade) for
-`appmodulecomponent`; re-check the registered SDK messages before attempting it again.
+**`appmodulecomponent` rows also survive an app delete, and teardown deliberately leaves them** — this
+has been re-reported as a teardown bug and re-measured. The platform exposes no way to remove them:
+the table registers only `Retrieve`/`RetrieveMultiple` (a direct `DELETE` 400s), and
+`RemoveAppComponents` returns `204` while removing nothing as long as the app exists, then `404`s once
+it is gone. Calling it would report a cleanup that never happened. The rows are unreachable metadata
+that a rebuild neither adopts nor trips over; revisit only if the platform adds a delete or a cascade.
 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
