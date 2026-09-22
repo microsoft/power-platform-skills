@@ -124,6 +124,10 @@ function parseInstallerOptions(argv = process.argv.slice(2)) {
   };
 }
 
+function hasInstallTarget(tools, dataverseTools, options) {
+  return tools.length > 0 || (options.includeDataverse && dataverseTools.length > 0);
+}
+
 function installCanonicalDataverse(tool, runCommand = run) {
   const config = DATAVERSE_INSTALLS[tool];
   if (!config) {
@@ -131,21 +135,16 @@ function installCanonicalDataverse(tool, runCommand = run) {
   }
 
   header(`Official Dataverse companion (${config.label})`);
-  for (const command of config.prepareCommands || []) {
-    const prepareResult = runCommand(command);
-    if (!prepareResult.ok && !prepareResult.output.toLowerCase().includes("already")) {
-      fail(`Dataverse marketplace setup failed: ${prepareResult.output}`);
-      return false;
-    }
-  }
   info("Installing from the canonical Dataverse marketplace...");
   const installResult = runCommand(config.command);
-  const alreadyInstalled = installResult.output.toLowerCase().includes("already installed");
+  const installOutput = String(installResult.output || "");
+  const alreadyInstalled = installOutput.toLowerCase().includes("already installed");
   if (!installResult.ok && !alreadyInstalled && config.fallbackCommands) {
     warn("Curated Dataverse listing unavailable; trying the canonical repository marketplace...");
     for (const fallbackCommand of config.fallbackCommands) {
       const fallbackResult = runCommand(fallbackCommand);
-      if (!fallbackResult.ok && !fallbackResult.output.toLowerCase().includes("already")) {
+      const fallbackOutput = String(fallbackResult.output || "");
+      if (!fallbackResult.ok && !fallbackOutput.toLowerCase().includes("already")) {
         fail(`Dataverse fallback installation failed: ${fallbackResult.output}`);
         return false;
       }
@@ -368,13 +367,17 @@ async function main() {
     ok(`Codex CLI ${ver.ok ? ver.output : "(version unknown)"}`);
   }
 
-  if (tools.length === 0) {
+  if (!hasInstallTarget(tools, dataverseTools, options)) {
     fail("Neither Claude Code nor GitHub Copilot CLI found in PATH.");
     console.log("");
     console.log("  Install at least one and ensure it is on your PATH:");
     console.log("    Claude Code     https://docs.anthropic.com/en/docs/claude-code");
     console.log("    GitHub Copilot  https://docs.github.com/en/copilot");
     process.exit(1);
+  }
+  if (tools.length === 0) {
+    warn("No Claude Code or GitHub Copilot CLI found; Power Platform plugins will be skipped.");
+    info("Continuing with the requested Dataverse companion installation for Codex CLI.");
   }
 
   // ── PAC CLI ──────────────────────────────────────────────────
@@ -487,19 +490,22 @@ async function main() {
     }
   }
 
-  // ── Marketplace ────────────────────────────────────────────
-  header("Reading marketplace");
+  let plugins = [];
+  if (tools.length > 0) {
+    // ── Marketplace ──────────────────────────────────────────
+    header("Reading marketplace");
 
-  const manifest = await loadMarketplace();
-  const plugins = manifest.plugins.map((p) => p.name);
+    const manifest = await loadMarketplace();
+    plugins = manifest.plugins.map((p) => p.name);
 
-  console.log(`  Marketplace : ${manifest.name}`);
-  console.log("  Plugins     :");
-  for (const p of plugins) console.log(`    - ${p}`);
+    console.log(`  Marketplace : ${manifest.name}`);
+    console.log("  Plugins     :");
+    for (const p of plugins) console.log(`    - ${p}`);
 
-  if (plugins.length === 0) {
-    warn("No plugins found in the marketplace.");
-    process.exit(0);
+    if (plugins.length === 0) {
+      warn("No plugins found in the marketplace.");
+      process.exit(0);
+    }
   }
 
   // ── Install ────────────────────────────────────────────────
@@ -535,6 +541,9 @@ async function main() {
   for (const tool of tools) {
     console.log(`    ${tool} session  ->  /power-pages:create-site`);
   }
+  if (tools.length === 0 && dataverseTools.includes("codex")) {
+    console.log("    codex session   ->  Connect to Dataverse");
+  }
   console.log("");
 
   if (dataverseInstallFailed) {
@@ -552,6 +561,7 @@ if (require.main === module) {
 module.exports = {
   DATAVERSE_GUIDED_INSTALLS,
   DATAVERSE_INSTALLS,
+  hasInstallTarget,
   installCanonicalDataverse,
   parseInstallerOptions,
 };

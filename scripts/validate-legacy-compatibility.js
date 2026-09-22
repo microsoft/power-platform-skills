@@ -156,6 +156,7 @@ if (errors.length === 0) {
     const {
       DATAVERSE_GUIDED_INSTALLS,
       DATAVERSE_INSTALLS,
+      hasInstallTarget,
       installCanonicalDataverse,
       parseInstallerOptions,
     } = require('./install.js');
@@ -164,6 +165,9 @@ if (errors.length === 0) {
     assert.deepEqual(parseInstallerOptions(['--include-dataverse']), {
       includeDataverse: true,
     });
+    assert.equal(hasInstallTarget([], [], { includeDataverse: false }), false);
+    assert.equal(hasInstallTarget([], ['codex'], { includeDataverse: true }), true);
+    assert.equal(hasInstallTarget(['claude'], ['claude'], { includeDataverse: false }), true);
     assert.match(DATAVERSE_INSTALLS.claude.command, /dataverse@claude-plugins-official/);
     assert.match(DATAVERSE_INSTALLS.copilot.command, /dataverse@awesome-copilot/);
     assert.match(DATAVERSE_INSTALLS.codex.command, /dataverse@openai-curated/);
@@ -194,6 +198,14 @@ if (errors.length === 0) {
         ...DATAVERSE_INSTALLS.codex.fallbackCommands,
         DATAVERSE_INSTALLS.codex.listCommand,
       ]);
+
+      assert.equal(
+        installCanonicalDataverse('copilot', () => ({
+          ok: false,
+          output: undefined,
+        })),
+        false
+      );
     } finally {
       console.log = originalLog;
     }
