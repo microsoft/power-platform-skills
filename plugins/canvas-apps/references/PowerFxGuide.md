@@ -79,6 +79,42 @@ Text: =Text(varDate, "dddd, mmmm d, yyyy")
 Text: =Text(Now(), "hh:mm:ss")
 ```
 
+### Sort by time semantics, not display text
+
+Do not sort user-facing time strings directly. Lexicographic ordering puts values such as
+`"2:00 PM"` before `"9:00 AM"` and allows padded, non-padded, 12-hour, 24-hour, and blank
+values to mix silently.
+
+Prefer a typed Date/Time column and sort that field directly. When a local/mock source must
+store text, validate the same input that is written and persist a separate zero-padded
+24-hour sort key. The static acceptance validator deliberately supports a bounded direct
+form: an outer blank guard and an `IfError` whose successful expression directly writes
+`Text(TimeValue(the same input), "HH:mm")` to the declared source field. Staged variables
+and other control flow may be valid at runtime, but are reported as unverified rather than
+being inferred from unrelated parsing tokens.
+
+```yaml
+OnSelect: |-
+  =If(
+    IsBlank(Trim(txtStart.Text)),
+    Notify("Time is required"),
+    IfError(
+      Patch(
+        colMeetings,
+        First(colMeetings),
+        {StartSortKey: Text(TimeValue(txtStart.Text), "[$-en-US]HH:mm")}
+      ),
+      Notify("Enter a valid time")
+    )
+  )
+
+Items: =SortByColumns(colMeetings, "StartSortKey", SortOrder.Ascending)
+```
+
+Keep the original display value separate when the requested presentation is 12-hour time.
+The plan must name accepted input forms and the visible invalid/blank behavior. Do not
+claim free-form time input is valid merely because one seed format sorts correctly.
+
 ## Event handling
 
 ### Guard clauses
