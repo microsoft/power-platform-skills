@@ -21,6 +21,9 @@ for that environment-level work and show the install command for the active host
 ```text
 GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
+Codex CLI:           codex plugin marketplace add microsoft/Dataverse-skills
+                     Then use /plugins to install dataverse
+Cursor:              /add-plugin dataverse
 ```
 
 Explain that the two plugins complement each other: Dataverse prepares the

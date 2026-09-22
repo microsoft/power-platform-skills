@@ -35,6 +35,10 @@ const DATAVERSE_INSTALLS = {
     label: "GitHub Copilot CLI",
   },
 };
+const DATAVERSE_GUIDED_INSTALLS = [
+  "Codex CLI: codex plugin marketplace add microsoft/Dataverse-skills, then use /plugins to install dataverse",
+  "Cursor: use /add-plugin dataverse in agent chat, or install Microsoft Dataverse from Settings > Plugins",
+];
 
 // ── Colors (disabled when output is piped) ────────────────────
 const tty = process.stdout.isTTY;
@@ -486,6 +490,13 @@ async function main() {
   if (options.includeDataverse && !dataverseInstallFailed) {
     console.log("  The official Dataverse companion is installed from its canonical marketplace.");
   }
+  if (options.includeDataverse) {
+    console.log("");
+    console.log("  Dataverse on other native hosts:");
+    for (const instruction of DATAVERSE_GUIDED_INSTALLS) {
+      console.log(`    ${instruction}`);
+    }
+  }
   console.log("  Run this script again anytime to re-install or update.");
   console.log("");
   console.log("  Get started:");
@@ -507,6 +518,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DATAVERSE_GUIDED_INSTALLS,
   DATAVERSE_INSTALLS,
   installCanonicalDataverse,
   parseInstallerOptions,

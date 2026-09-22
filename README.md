@@ -79,12 +79,18 @@ official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-ski
 ```text
 GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
+Codex CLI:           codex plugin marketplace add microsoft/Dataverse-skills
+                     Then use /plugins to install dataverse
+Cursor:              /add-plugin dataverse
 ```
 
 With both installed, your agent can combine the app-building plugins for UI,
 bindings, build, and deployment with the Dataverse plugin's broader backend
 capabilities in the same development session. Each plugin remains independently
 maintained and updates from its canonical marketplace.
+
+The `--include-dataverse` installer option automates Claude and Copilot CLI
+installation. Codex and Cursor use the native interactive steps shown above.
 
 ## Available Plugins
 

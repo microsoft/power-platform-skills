@@ -77,6 +77,9 @@ environments, and custom API/action workflows, install the official
 ```text
 GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
+Codex CLI:           codex plugin marketplace add microsoft/Dataverse-skills
+                     Then use /plugins to install dataverse
+Cursor:              /add-plugin dataverse
 ```
 
 With both installed, your agent can use Dataverse to prepare and manage the

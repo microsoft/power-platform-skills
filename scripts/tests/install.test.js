@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  DATAVERSE_GUIDED_INSTALLS,
   DATAVERSE_INSTALLS,
   installCanonicalDataverse,
   parseInstallerOptions,
@@ -19,6 +20,8 @@ test("Dataverse companion is opt-in", () => {
 test("uses canonical Dataverse marketplace identifiers", () => {
   assert.match(DATAVERSE_INSTALLS.claude.command, /dataverse@claude-plugins-official/);
   assert.match(DATAVERSE_INSTALLS.copilot.command, /dataverse@awesome-copilot/);
+  assert.ok(DATAVERSE_GUIDED_INSTALLS.some((entry) => entry.includes("codex plugin marketplace add")));
+  assert.ok(DATAVERSE_GUIDED_INSTALLS.some((entry) => entry.includes("/add-plugin dataverse")));
 });
 
 test("verifies a successful Dataverse installation", () => {
