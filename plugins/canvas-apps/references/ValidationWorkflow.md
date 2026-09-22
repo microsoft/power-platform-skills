@@ -263,7 +263,7 @@ Contract `Observer and evidence` cell declares an exact
 
 | Ordering key | Input validation / normalization binding | Sort binding | Observer binding | Result |
 | ------------ | ---------------------------------------- | ------------ | ---------------- | ------ |
-| [plan key] | [exact final-YAML typed input or parse/normalize binding] | [exact `SortByColumns` binding over the declared typed/canonical field] | [exact visible observer binding] | PASS |
+| [plan key] | [exact final-YAML typed input or parse/normalize binding] | [exact `Sort` or `SortByColumns` binding over the declared typed/canonical field] | [exact visible observer binding] | PASS |
 
 For canonical text, static PASS is intentionally bounded to a direct
 `If(IsBlank(input), ..., IfError(Patch(declaredSource, ..., {declaredField:

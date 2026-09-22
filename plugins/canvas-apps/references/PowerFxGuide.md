@@ -102,7 +102,7 @@ OnSelect: |-
       Patch(
         colMeetings,
         First(colMeetings),
-        {StartSortKey: Text(TimeValue(txtStart.Text), "[$-en-US]HH:mm")}
+        {StartSortKey: Text(TimeValue(Trim(txtStart.Text)), "HH:mm")}
       ),
       Notify("Enter a valid time")
     )
