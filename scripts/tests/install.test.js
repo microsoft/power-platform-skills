@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+const {
+  DATAVERSE_INSTALLS,
+  installCanonicalDataverse,
+  parseInstallerOptions,
+} = require("../install.js");
+
+test("Dataverse companion is opt-in", () => {
+  assert.deepEqual(parseInstallerOptions([]), { includeDataverse: false });
+  assert.deepEqual(parseInstallerOptions(["--include-dataverse"]), {
+    includeDataverse: true,
+  });
+});
+
+test("uses canonical Dataverse marketplace identifiers", () => {
+  assert.match(DATAVERSE_INSTALLS.claude.command, /dataverse@claude-plugins-official/);
+  assert.match(DATAVERSE_INSTALLS.copilot.command, /dataverse@awesome-copilot/);
+});
+
+test("verifies a successful Dataverse installation", () => {
+  const commands = [];
+  const runCommand = (command) => {
+    commands.push(command);
+    return commands.length === 1
+      ? { ok: true, output: "installed" }
+      : { ok: true, output: "dataverse@awesome-copilot" };
+  };
+
+  assert.equal(installCanonicalDataverse("copilot", runCommand), true);
+  assert.deepEqual(commands, [
+    DATAVERSE_INSTALLS.copilot.command,
+    DATAVERSE_INSTALLS.copilot.listCommand,
+  ]);
+});
+
+test("accepts an already-installed Dataverse plugin", () => {
+  let call = 0;
+  const runCommand = () => {
+    call += 1;
+    return call === 1
+      ? { ok: false, output: "plugin already installed" }
+      : { ok: true, output: "dataverse@claude-plugins-official" };
+  };
+
+  assert.equal(installCanonicalDataverse("claude", runCommand), true);
+});
+
+test("reports installation or verification failures", () => {
+  assert.equal(
+    installCanonicalDataverse("copilot", () => ({ ok: false, output: "network error" })),
+    false
+  );
+
+  let call = 0;
+  assert.equal(
+    installCanonicalDataverse("copilot", () => {
+      call += 1;
+      return call === 1
+        ? { ok: true, output: "installed" }
+        : { ok: true, output: "canvas-apps" };
+    }),
+    false
+  );
+});

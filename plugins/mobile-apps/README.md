@@ -14,6 +14,21 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 Have questions or feedback? Join the [Native Apps Office Hours](OFFICE_HOURS.md).
 
+## Official Dataverse Companion
+
+Mobile Apps owns app planning, generated services, offline behavior, UI, build,
+and packaging. For general Dataverse schema, data, solutions, security,
+administration, environments, and custom API/action workflows, install the
+official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+```text
+GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
+Claude Code:        /plugin install dataverse@claude-plugins-official
+```
+
+The plugins are independently maintained. Installing Dataverse does not replace
+the Mobile Apps schema workflow or enable automatic delegation.
+
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.

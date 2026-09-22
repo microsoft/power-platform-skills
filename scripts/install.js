@@ -7,6 +7,7 @@
  *
  * Usage:
  *   node scripts/install.js                                              (from local clone)
+ *   node scripts/install.js --include-dataverse                          (include official Dataverse plugin)
  *   curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
  */
 
@@ -21,6 +22,19 @@ const REPO = "microsoft/power-platform-skills";
 const MARKETPLACE_NAME = "power-platform-skills";
 const GITHUB_RAW = `https://raw.githubusercontent.com/${REPO}/main`;
 const HOME = os.homedir();
+const DATAVERSE_PLUGIN = "dataverse";
+const DATAVERSE_INSTALLS = {
+  claude: {
+    command: `claude plugin install "${DATAVERSE_PLUGIN}@claude-plugins-official" --scope user`,
+    listCommand: "claude plugin list",
+    label: "Claude Code",
+  },
+  copilot: {
+    command: `copilot plugin install "${DATAVERSE_PLUGIN}@awesome-copilot"`,
+    listCommand: "copilot plugin list",
+    label: "GitHub Copilot CLI",
+  },
+};
 
 // ── Colors (disabled when output is piped) ────────────────────
 const tty = process.stdout.isTTY;
@@ -90,6 +104,41 @@ function parseMarketplaceManifest(raw) {
     );
   }
   return manifest;
+}
+
+function parseInstallerOptions(argv = process.argv.slice(2)) {
+  return {
+    includeDataverse: argv.includes("--include-dataverse"),
+  };
+}
+
+function installCanonicalDataverse(tool, runCommand = run) {
+  const config = DATAVERSE_INSTALLS[tool];
+  if (!config) {
+    throw new Error(`Unsupported Dataverse install target: ${tool}`);
+  }
+
+  header(`Official Dataverse companion (${config.label})`);
+  info("Installing from the canonical Dataverse marketplace...");
+  const installResult = runCommand(config.command);
+  if (!installResult.ok && !installResult.output.toLowerCase().includes("already installed")) {
+    fail(`Dataverse installation failed: ${installResult.output}`);
+    return false;
+  }
+
+  ok(installResult.ok ? "Dataverse installed" : "Dataverse already installed");
+  const listResult = runCommand(config.listCommand);
+  if (!listResult.ok) {
+    fail(`Could not verify Dataverse installation: ${listResult.output}`);
+    return false;
+  }
+  if (!listResult.output.toLowerCase().includes(DATAVERSE_PLUGIN)) {
+    fail("Dataverse was not found in the installed plugin list");
+    return false;
+  }
+
+  ok("Dataverse installation verified");
+  return true;
 }
 
 // ── Auto-update ──────────────────────────────────────────────
@@ -259,6 +308,8 @@ function installCopilot(plugins) {
 
 // ── Main ──────────────────────────────────────────────────────
 async function main() {
+  const options = parseInstallerOptions();
+
   console.log("");
   console.log(bold("Power Platform Skills — Installer"));
   console.log("──────────────────────────────────");
@@ -419,10 +470,22 @@ async function main() {
   if (tools.includes("claude")) installClaude(plugins);
   if (tools.includes("copilot")) installCopilot(plugins);
 
+  let dataverseInstallFailed = false;
+  if (options.includeDataverse) {
+    for (const tool of tools) {
+      if (!installCanonicalDataverse(tool)) {
+        dataverseInstallFailed = true;
+      }
+    }
+  }
+
   // ── Summary ────────────────────────────────────────────────
-  header("Done!");
+  header(dataverseInstallFailed ? "Completed with errors" : "Done!");
   console.log("");
   console.log("  Plugins will stay current via the marketplace auto-update mechanism.");
+  if (options.includeDataverse && !dataverseInstallFailed) {
+    console.log("  The official Dataverse companion is installed from its canonical marketplace.");
+  }
   console.log("  Run this script again anytime to re-install or update.");
   console.log("");
   console.log("  Get started:");
@@ -430,9 +493,21 @@ async function main() {
     console.log(`    ${tool} session  ->  /power-pages:create-site`);
   }
   console.log("");
+
+  if (dataverseInstallFailed) {
+    process.exitCode = 1;
+  }
 }
 
-main().catch((err) => {
-  fail(`Installation failed: ${err.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    fail(`Installation failed: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DATAVERSE_INSTALLS,
+  installCanonicalDataverse,
+  parseInstallerOptions,
+};

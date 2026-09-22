@@ -12,6 +12,22 @@ model: sonnet
 
 Router skill that understands the user's goal and connects them to the right data source — without requiring them to know Power Platform terminology.
 
+## Official Dataverse Companion
+
+This plugin owns Mobile Apps data-source wiring, generated services, and offline
+behavior. For broader Dataverse environment work -- general schema management,
+solutions, security, administration, data operations, or custom API/action
+workflows -- recommend the official
+[Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+```text
+GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
+Claude Code:        /plugin install dataverse@claude-plugins-official
+```
+
+This is discovery guidance only. Do not claim automatic delegation or replace
+the existing Mobile Apps Dataverse workflow.
+
 ## Workflow
 
 ### Check Memory Bank

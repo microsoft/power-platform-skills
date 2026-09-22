@@ -31,6 +31,21 @@ The installer automatically:
 - Registers the plugin marketplace and installs all listed plugins
 - Enables auto-update so plugins stay current
 
+To also install the independently maintained official Dataverse plugin, pass
+`--include-dataverse`:
+
+**Windows (PowerShell)**:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js --include-dataverse; del install.js
+```
+
+**Mac OS/Linux/Windows (cmd)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+```
+
 ### Manual Installation
 
 If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
@@ -53,6 +68,22 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
     ```
+
+## Official Dataverse Companion
+
+Use the app plugins in this marketplace for app UI, data-source bindings, build,
+and deployment. For general Dataverse schema, data, solutions, security,
+administration, environments, and custom API/action workflows, install the
+official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+```text
+GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
+Claude Code:        /plugin install dataverse@claude-plugins-official
+```
+
+The Dataverse plugin is independently maintained and installed from its canonical
+marketplaces. Installing both plugins does not yet make app workflows delegate to
+Dataverse automatically.
 
 ## Available Plugins
 

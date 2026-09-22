@@ -19,6 +19,15 @@ model: opus
 
 Two paths: **existing tables** (skip to Step 5) or **new tables** (full workflow).
 
+> **Official Dataverse companion:** This skill owns Code Apps table wiring,
+> generated TypeScript services, and its current app-local schema workflow. For
+> general Dataverse schema, data, solutions, security, administration,
+> environments, or custom API/action workflows, recommend
+> [Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
+> GitHub Copilot CLI `/plugin install dataverse@awesome-copilot`; Claude Code
+> `/plugin install dataverse@claude-plugins-official`. Installing it does not yet
+> delegate this workflow automatically.
+
 ## Workflow
 
 1. Plan → 2. Setup API Auth → 3. Review Existing Tables → 4. Create Tables → 5. Add Data Source → 6. Review Generated Files → 7. Build
