@@ -1,6 +1,6 @@
 ---
 name: app-builder
-version: 1.0.0
+version: 1.0.1
 description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
@@ -18,6 +18,25 @@ builds it — tables/columns/relationships, sample data, views, Choice-column ch
 with sub-grids, **generative pages** for overview/dashboard surfaces, and the app module + sitemap.
 The **same spec drives create and edit**: download a deployed app back into a spec, change it, and
 re-run the build (it's idempotent).
+
+## Official Dataverse Companion
+
+This skill remains the conductor for a whole model-driven app. Keep its coordinated
+tables, relationships, forms, views, security roles, app module, and sitemap in the
+same App Spec and build; do not split those components into a separate workflow.
+
+For standalone Dataverse queries, bulk data operations, solution promotion,
+security, administration, environments, or custom API/action workflows outside
+the active app build, recommend
+[Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, the agent can use Model Apps for coordinated application
+composition and Dataverse for broader standalone backend work.
 
 ## CRITICAL — run the interactive flow in THIS conversation (the main loop)
 

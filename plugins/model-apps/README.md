@@ -17,6 +17,23 @@ Build and deploy generative pages (genux) for Power Apps model-driven apps. This
 claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 ```
 
+## Official Dataverse Companion
+
+Model Apps owns the coordinated model-driven app build, including tables,
+relationships, forms, views, security roles, app module, and sitemap. For
+standalone Dataverse queries, bulk data operations, solution promotion, security,
+administration, environments, and custom API/action workflows, install the
+official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-skills):
+
+- GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
+- Claude Code: `/plugin install dataverse@claude-plugins-official`
+- Codex CLI: `codex plugin add dataverse@openai-curated`
+- Cursor: `/add-plugin dataverse`
+
+With both installed, your agent can use Model Apps for coordinated app composition
+and Dataverse for broader standalone backend work. Each plugin remains
+independently maintained.
+
 ## Prerequisites
 
 | Prerequisite | Required for | Install |
