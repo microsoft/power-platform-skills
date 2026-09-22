@@ -34,9 +34,14 @@ const DATAVERSE_INSTALLS = {
     listCommand: "copilot plugin list",
     label: "GitHub Copilot CLI",
   },
+  codex: {
+    prepareCommands: ['codex plugin marketplace add "microsoft/Dataverse-skills"'],
+    command: `codex plugin add "${DATAVERSE_PLUGIN}@dataverse-skills"`,
+    listCommand: "codex plugin list",
+    label: "Codex CLI",
+  },
 };
 const DATAVERSE_GUIDED_INSTALLS = [
-  "Codex CLI: codex plugin marketplace add microsoft/Dataverse-skills, then use /plugins to install dataverse",
   "Cursor: use /add-plugin dataverse in agent chat, or install Microsoft Dataverse from Settings > Plugins",
 ];
 
@@ -123,6 +128,13 @@ function installCanonicalDataverse(tool, runCommand = run) {
   }
 
   header(`Official Dataverse companion (${config.label})`);
+  for (const command of config.prepareCommands || []) {
+    const prepareResult = runCommand(command);
+    if (!prepareResult.ok && !prepareResult.output.toLowerCase().includes("already")) {
+      fail(`Dataverse marketplace setup failed: ${prepareResult.output}`);
+      return false;
+    }
+  }
   info("Installing from the canonical Dataverse marketplace...");
   const installResult = runCommand(config.command);
   if (!installResult.ok && !installResult.output.toLowerCase().includes("already installed")) {
@@ -336,6 +348,13 @@ async function main() {
     ok(`GitHub Copilot CLI ${ver.ok ? ver.output : "(version unknown)"}`);
   }
 
+  const dataverseTools = [...tools];
+  if (options.includeDataverse && hasCommand("codex")) {
+    const ver = run("codex --version");
+    dataverseTools.push("codex");
+    ok(`Codex CLI ${ver.ok ? ver.output : "(version unknown)"}`);
+  }
+
   if (tools.length === 0) {
     fail("Neither Claude Code nor GitHub Copilot CLI found in PATH.");
     console.log("");
@@ -476,7 +495,7 @@ async function main() {
 
   let dataverseInstallFailed = false;
   if (options.includeDataverse) {
-    for (const tool of tools) {
+    for (const tool of dataverseTools) {
       if (!installCanonicalDataverse(tool)) {
         dataverseInstallFailed = true;
       }

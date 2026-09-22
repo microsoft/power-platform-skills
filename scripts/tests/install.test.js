@@ -20,7 +20,10 @@ test("Dataverse companion is opt-in", () => {
 test("uses canonical Dataverse marketplace identifiers", () => {
   assert.match(DATAVERSE_INSTALLS.claude.command, /dataverse@claude-plugins-official/);
   assert.match(DATAVERSE_INSTALLS.copilot.command, /dataverse@awesome-copilot/);
-  assert.ok(DATAVERSE_GUIDED_INSTALLS.some((entry) => entry.includes("codex plugin marketplace add")));
+  assert.deepEqual(DATAVERSE_INSTALLS.codex.prepareCommands, [
+    'codex plugin marketplace add "microsoft/Dataverse-skills"',
+  ]);
+  assert.match(DATAVERSE_INSTALLS.codex.command, /dataverse@dataverse-skills/);
   assert.ok(DATAVERSE_GUIDED_INSTALLS.some((entry) => entry.includes("/add-plugin dataverse")));
 });
 
@@ -50,6 +53,21 @@ test("accepts an already-installed Dataverse plugin", () => {
   };
 
   assert.equal(installCanonicalDataverse("claude", runCommand), true);
+});
+
+test("registers the canonical Codex marketplace before installation", () => {
+  const commands = [];
+  const runCommand = (command) => {
+    commands.push(command);
+    return { ok: true, output: command.includes("list") ? "dataverse" : "ok" };
+  };
+
+  assert.equal(installCanonicalDataverse("codex", runCommand), true);
+  assert.deepEqual(commands, [
+    DATAVERSE_INSTALLS.codex.prepareCommands[0],
+    DATAVERSE_INSTALLS.codex.command,
+    DATAVERSE_INSTALLS.codex.listCommand,
+  ]);
 });
 
 test("reports installation or verification failures", () => {

@@ -28,7 +28,7 @@ security, administration, environments, or custom API/action workflows, recommen
 
 - GitHub Copilot CLI: `/plugin install dataverse@awesome-copilot`
 - Claude Code: `/plugin install dataverse@claude-plugins-official`
-- Codex CLI: `codex plugin marketplace add microsoft/Dataverse-skills`, then use `/plugins`
+- Codex CLI: `codex plugin marketplace add microsoft/Dataverse-skills`, then `codex plugin add dataverse@dataverse-skills`
 - Cursor: `/add-plugin dataverse`
 
 With both installed, the agent can use the canonical plugin for broader backend

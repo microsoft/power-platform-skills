@@ -23,7 +23,7 @@ recommend the official [Microsoft Dataverse plugin](https://github.com/microsoft
 GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 Codex CLI:           codex plugin marketplace add microsoft/Dataverse-skills
-                     Then use /plugins to install dataverse
+                     codex plugin add dataverse@dataverse-skills
 Cursor:              /add-plugin dataverse
 ```
 
