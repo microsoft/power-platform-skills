@@ -524,7 +524,9 @@ async function main() {
   // ── Summary ────────────────────────────────────────────────
   header(dataverseInstallFailed ? "Completed with errors" : "Done!");
   console.log("");
-  console.log("  Plugins will stay current via the marketplace auto-update mechanism.");
+  if (tools.length > 0) {
+    console.log("  Power Platform plugins will stay current via marketplace auto-update.");
+  }
   if (options.includeDataverse && !dataverseInstallFailed) {
     console.log("  The official Dataverse companion is installed from its canonical marketplace.");
   }
