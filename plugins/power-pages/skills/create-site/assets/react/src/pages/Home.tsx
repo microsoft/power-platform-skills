@@ -20,7 +20,7 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .loading-wrapper { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--pp-bg); }
 .ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
 .ambient::before {
-  content: ''; position: absolute; width: 160%; height: 160%; top: -30%; left: -30%;
+  content: ''; position: absolute; width: 160%; height: 160%; top: -30%; inset-inline-start: -30%;
   background:
     radial-gradient(ellipse 600px 600px at 25% 30%, rgba(167, 139, 219, 0.12) 0%, transparent 70%),
     radial-gradient(ellipse 500px 500px at 75% 70%, rgba(90, 155, 213, 0.08) 0%, transparent 70%),
@@ -83,10 +83,10 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 @keyframes spin { to { transform: rotate(360deg); } }
 .progress-container { width: 320px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
-.progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
-.progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
-@keyframes infiniteSlide { 0% { left: -40%; } 100% { left: 100%; } }
-.progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
+.progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; inset-inline-start: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+.progress-fill::after { content: ''; position: absolute; inset-inline-end: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
+@keyframes infiniteSlide { 0% { inset-inline-start: -40%; } 100% { inset-inline-start: 100%; } }
+.progress-track.complete .progress-fill { width: 100%; inset-inline-start: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
 .progress-track.complete .progress-fill::after { display: none; }
 .progress-label-text { font-size: 12px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
 .feature-cards { display: flex; gap: 16px; margin-top: 16px; opacity: 0; animation: fadeSlideUp 1s ease-out 2s forwards; }
@@ -98,7 +98,7 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .connector-lines { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
 .connector { position: absolute; height: 1px; background: linear-gradient(90deg, transparent, rgba(139, 111, 192, 0.12), transparent); animation: connectorSweep 6s ease-in-out infinite; }
 @keyframes connectorSweep { 0%, 100% { transform: translateX(-100%); opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translateX(100vw); opacity: 0; } }
-.scanline { position: fixed; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent 0%, var(--pp-lavender) 50%, transparent 100%); opacity: 0.06; z-index: 2; animation: scanDrop 8s linear infinite; pointer-events: none; }
+.scanline { position: fixed; inset-inline: 0; height: 1px; background: linear-gradient(90deg, transparent 0%, var(--pp-lavender) 50%, transparent 100%); opacity: 0.06; z-index: 2; animation: scanDrop 8s linear infinite; pointer-events: none; }
 @keyframes scanDrop { 0% { top: -2px; } 100% { top: 100%; } }
 .tip-area { text-align: center; margin-top: 12px; opacity: 0; animation: fadeSlideUp 1s ease-out 3s forwards; }
 .tip-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--pp-text-muted); margin-bottom: 8px; font-family: 'Outfit', sans-serif; }
@@ -106,7 +106,7 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 .center-stage.complete .main-heading { animation: completePulse 2s ease-in-out infinite alternate; }
 @keyframes completePulse { 0% { filter: brightness(1); } 100% { filter: brightness(1.15); } }
-.input-banner { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, #FFF4D6 0%, #FFE9B3 100%); border: 1px solid #F5B800; color: #5C3D00; padding: 12px 14px 12px 22px; border-radius: 999px; font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 500; box-shadow: 0 4px 16px rgba(245, 184, 0, 0.25); max-width: min(360px, calc(100vw - 48px)); animation: bannerEnter 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+.input-banner { position: fixed; top: 24px; inset-inline-end: 24px; z-index: 100; display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, #FFF4D6 0%, #FFE9B3 100%); border: 1px solid #F5B800; color: #5C3D00; padding-block: 12px; padding-inline: 22px 14px; border-radius: 999px; font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 500; box-shadow: 0 4px 16px rgba(245, 184, 0, 0.25); max-width: min(360px, calc(100vw - 48px)); animation: bannerEnter 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
 .input-banner[hidden] { display: none; }
 .input-banner-icon { font-size: 18px; animation: bannerPulse 1.5s ease-in-out infinite; flex-shrink: 0; }
 .input-banner-text { line-height: 1.4; flex: 1; min-width: 0; }
@@ -116,7 +116,7 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .input-banner-close:hover { background: rgba(92, 61, 0, 0.2); transform: scale(1.05); }
 @keyframes bannerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
 @keyframes bannerEnter { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
-@media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .input-banner { top: 12px; right: 12px; padding: 10px 12px 10px 16px; font-size: 13px; max-width: calc(100vw - 24px); } }
+@media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .input-banner { top: 12px; inset-inline-end: 12px; padding-block: 10px; padding-inline: 16px 12px; font-size: 13px; max-width: calc(100vw - 24px); } }
 `
 
 export default function Home() {
@@ -139,7 +139,7 @@ export default function Home() {
       const size = Math.random() * 3 + 1
       const colors = ['rgba(167,139,219,0.5)', 'rgba(128,136,217,0.5)', 'rgba(90,155,213,0.5)', 'rgba(139,111,192,0.5)']
       const color = colors[Math.floor(Math.random() * colors.length)]
-      p.style.cssText = `width:${size}px;height:${size}px;left:${Math.random() * 100}%;background:${color};box-shadow:0 0 ${size * 2}px ${color};animation-duration:${Math.random() * 15 + 12}s;animation-delay:${Math.random() * 10}s;`
+      p.style.cssText = `width:${size}px;height:${size}px;inset-inline-start:${Math.random() * 100}%;background:${color};box-shadow:0 0 ${size * 2}px ${color};animation-duration:${Math.random() * 15 + 12}s;animation-delay:${Math.random() * 10}s;`
       particlesEl.appendChild(p)
       timeouts.push(window.setTimeout(() => p.remove(), 30000))
     }

@@ -122,6 +122,20 @@ const ALM_PLAN_SKILLS = new Set([
   'force-link-environment',
 ]);
 
+// These workflows can add or change visible SPA source. Their skill-specific
+// validator still runs first; the shared integrity pass then catches localization
+// resource drift and bidirectional regressions across skill boundaries.
+const VISIBLE_SOURCE_SKILLS = new Set([
+  'create-site',
+  'add-localization',
+  'setup-auth',
+  'integrate-webapi',
+  'add-ai-webapi',
+  'add-cloud-flow',
+  'add-server-logic',
+  'add-seo',
+]);
+
 /**
  * True when `value` (a raw skill name, `/skill`, or `power-pages:skill`) resolves
  * to an ALM plan skill. Normalizes via `detectTrackedSkill`, so it also confirms
@@ -136,11 +150,24 @@ function isAlmPlanSkill(value) {
   return name != null && ALM_PLAN_SKILLS.has(name);
 }
 
+function modifiesVisibleSource(value) {
+  const name = detectTrackedSkill(value);
+  return name != null && VISIBLE_SOURCE_SKILLS.has(name);
+}
+
+function getBlockingSpawnStatus(result) {
+  if (!result || result.error || result.signal || result.status == null) return 2;
+  return result.status === 0 ? 0 : 2;
+}
+
 module.exports = {
   TRACKED_SKILLS,
   ALM_PLAN_SKILLS,
+  VISIBLE_SOURCE_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  getBlockingSpawnStatus,
   isAlmPlanSkill,
+  modifiesVisibleSource,
 };

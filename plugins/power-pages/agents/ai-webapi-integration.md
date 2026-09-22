@@ -40,6 +40,11 @@ wire into UI, no duplicate helpers). The Microsoft-shipped support-case Copilot 
 configuration of Data Summarization (specific entity set, `$select`/`$expand`, and prompt
 identifier), not a third endpoint.
 
+Before changing any page or component, read
+`${PLUGIN_ROOT}/references/site-modification-integrity.md`. Localize summary labels, loading,
+empty, error, citation, and remediation states across every configured locale, and keep the
+resulting UI bidirectional and safe for text expansion.
+
 ## Reference docs
 
 Read these first — they have the authoritative API shapes, headers, request bodies, and error
