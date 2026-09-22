@@ -194,24 +194,83 @@ declare global {
 `;
 }
 
-function writeIfAllowed(filePath, content, force) {
-  // Probed with `lstat`, NOT `existsSync`. `existsSync` FOLLOWS symlinks, so a DANGLING link — one
-  // whose target does not exist yet — reported "nothing here", skipped every check below, and
-  // `writeFileSync` then CREATED the file at the outside target. MEASURED: a `package.json`
-  // symlinked to a non-existent path outside the working directory was created there, which is worse
-  // than the overwrite this guard was first written for. `lstat` describes the LINK itself.
+function writeIfAllowed(filePath, content, force, approvedRoot) {
+  // Output confinement, in four parts. Each closes a hole the previous shape left open; a partial
+  // version of this check is worse than none, because it reads as a guarantee it does not give.
+  //
+  // 1. ANCESTOR RESOLUTION. A lexical `path.join(workingDir, 'package.json')` is meaningless if
+  //    `workingDir` — or anything above it — is a symlink: the join stays inside the *spelling* of
+  //    the root while the real file is somewhere else entirely. `realpath` the parent and compare
+  //    against a root that was itself realpath'd, so both sides are true locations. The parent is
+  //    resolved rather than the file, because the file legitimately may not exist yet.
+  const dir = path.dirname(filePath);
+  let realDir;
+  try {
+    realDir = fs.realpathSync(dir);
+  } catch (err) {
+    const e = new Error(`refusing to write ${filePath}: its directory could not be resolved (${err.code || err.message})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  // `realpath` succeeds on a REGULAR FILE — it only resolves links, it does not assert a kind. So a
+  // parent that is a file (or a link to one) passes resolution and the escape is caught only by the
+  // write failing, which is an I/O error rather than a safety refusal. MEASURED on Windows, where
+  // `lstat` of a child under a file reports ENOENT rather than ENOTDIR, so the fail-closed probe
+  // below never sees it either. Prove the parent is a directory here instead.
+  let dirSt;
+  try {
+    dirSt = fs.statSync(realDir);
+  } catch (err) {
+    const e = new Error(`refusing to write ${filePath}: its directory could not be inspected (${err.code || err.message})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  if (!dirSt.isDirectory()) {
+    const e = new Error(`refusing to write ${filePath}: ${realDir} is not a directory`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  const resolved = path.join(realDir, path.basename(filePath));
+  const rel = path.relative(approvedRoot, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    const e = new Error(`refusing to write ${filePath}: it resolves to ${resolved}, outside the working directory ${approvedRoot}`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  // 2. PROBE THE LINK, NOT THE TARGET, AND FAIL CLOSED. `existsSync` FOLLOWS symlinks, so a DANGLING
+  //    link — one whose target does not exist yet — reported "nothing here", skipped every check and
+  //    `writeFileSync` then CREATED the file at the outside target. MEASURED: a `package.json`
+  //    symlinked to a non-existent path outside the working directory was created there, which is
+  //    worse than the overwrite this guard was first written for.
+  //    Only ENOENT means "genuinely nothing there". Swallowing every error made EACCES/ENOTDIR — a
+  //    probe that could not determine safety — indistinguishable from a clear slot, so the write
+  //    proceeded on exactly the inputs least understood.
   let st = null;
-  try { st = fs.lstatSync(filePath); } catch { st = null; } // ENOENT => genuinely nothing there
+  try {
+    st = fs.lstatSync(filePath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      const e = new Error(`refusing to write ${filePath}: it could not be inspected (${err.code || err.message})`);
+      e.code = 'UNSAFE_OUTPUT';
+      throw e;
+    }
+  }
 
   if (st && !st.isFile()) {
     // `--force` may overwrite the file this tool OWNS, never whatever that name points at. A symlink,
-    // directory or special file is not ours, whether its target exists or not. This covers the
-    // escaping symlink completely: the leaf is refused before its target is ever resolved, so no
-    // separate "does the real path escape?" test is needed (and one is unreachable here — realpath
-    // resolves the same ancestors for both the file and its directory, so they can never disagree
-    // once the leaf is known to be a regular file).
+    // directory or special file is not ours, whether its target exists or not.
     const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'directory' : 'special file';
     const e = new Error(`refusing to overwrite ${filePath}: it is not a regular file (${kind})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  // 3. HARD LINKS. A hard link is a regular file and passes `isFile()`, but the inode is shared, so
+  //    writing through it edits the outside file just as surely as a symlink would. A file this tool
+  //    owns has exactly one name.
+  if (st && st.nlink > 1) {
+    const e = new Error(`refusing to overwrite ${filePath}: it is a hard link (${st.nlink} names share this file)`);
     e.code = 'UNSAFE_OUTPUT';
     throw e;
   }
@@ -220,9 +279,18 @@ function writeIfAllowed(filePath, content, force) {
     return { wrote: false, reason: 'exists (use --force to overwrite)' };
   }
 
+  // 4. ATOMIC REPLACE. The checks above describe the past: anything that can write this directory can
+  //    swap a symlink in between `lstat` and the write, and `writeFileSync` would follow it. Writing
+  //    a fresh temp file and RENAMING over the target replaces the directory ENTRY, so a link
+  //    installed after the checks is discarded rather than followed, and an existing hard link is
+  //    unlinked from this name instead of written through. `wx` fails rather than reuse a temp name
+  //    an attacker pre-created.
+  const tmp = path.join(realDir, `.${path.basename(filePath)}.${process.pid}.tmp`);
   try {
-    fs.writeFileSync(filePath, content);
+    fs.writeFileSync(tmp, content, { flag: 'wx', mode: 0o600 });
+    fs.renameSync(tmp, filePath);
   } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* the temp file may never have been created */ }
     const e = new Error(`failed to write ${filePath}: ${err.message}`);
     e.code = 'IO_ERROR';
     throw e;
@@ -242,6 +310,10 @@ function main() {
   const workingDir = path.resolve(args.positional[0]);
   const slug = args.positional[1];
 
+  // The root every output is confined to. Resolved ONCE, through `realpath`, because a symlinked
+  // working directory (or any symlinked ancestor) makes lexical containment meaningless — the join
+  // stays inside the spelling of the root while the real file lands elsewhere.
+  let approvedRoot;
   try {
     if (!fs.existsSync(workingDir)) {
       console.error(`error: working directory does not exist: ${workingDir}`);
@@ -251,6 +323,7 @@ function main() {
       console.error(`error: not a directory: ${workingDir}`);
       process.exit(2);
     }
+    approvedRoot = fs.realpathSync(workingDir);
   } catch (err) {
     console.error(`error: failed to stat working directory: ${err.message}`);
     process.exit(2);
@@ -266,10 +339,10 @@ function main() {
   try {
     const pkg = buildPackageJson(slug, args.features);
     const pkgPath = path.join(workingDir, 'package.json');
-    pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force);
+    pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force, approvedRoot);
 
     const dtsPath = path.join(workingDir, 'genpage.d.ts');
-    dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force);
+    dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force, approvedRoot);
   } catch (err) {
     console.error(`error: ${err.message}`);
     process.exit(2);

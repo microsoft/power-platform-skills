@@ -223,7 +223,7 @@ test('--force refuses to write through a symlink that escapes the working direct
     catch { return t.skip('cannot create a symlink on this machine (needs elevation/Developer Mode)'); }
 
     let threw = null;
-    try { writeIfAllowed(link, '{"overwritten":true}', true); } catch (e) { threw = e; }
+    try { writeIfAllowed(link, '{"overwritten":true}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
     assert.ok(threw, 'writing through the symlink must be refused');
     assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
     assert.strictEqual(fs.readFileSync(victim, 'utf8'), '{"keep":true}',
@@ -242,7 +242,7 @@ test('--force refuses a non-regular output file (needs no symlink privilege)', (
     const target = path.join(work, 'package.json');
     fs.mkdirSync(target);
     let threw = null;
-    try { writeIfAllowed(target, '{}', true); } catch (e) { threw = e; }
+    try { writeIfAllowed(target, '{}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
     assert.ok(threw, 'a non-regular target must be refused');
     assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
     assert.match(threw.message, /not a regular file/);
@@ -256,7 +256,7 @@ test('--force still overwrites an ordinary file in the working directory', () =>
   try {
     const target = path.join(work, 'package.json');
     fs.writeFileSync(target, '{"old":true}', 'utf8');
-    const r = writeIfAllowed(target, '{"new":true}', true);
+    const r = writeIfAllowed(target, '{"new":true}', true, fs.realpathSync(work));
     assert.strictEqual(r.wrote, true);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), '{"new":true}');
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
@@ -279,7 +279,7 @@ test('--force refuses a DANGLING symlink instead of creating its outside target'
       'precondition: existsSync follows the link, so a dangling one reads false');
 
     let threw = null;
-    try { writeIfAllowed(link, '{"escaped":true}', true); } catch (e) { threw = e; }
+    try { writeIfAllowed(link, '{"escaped":true}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
     assert.ok(threw, 'a dangling symlink must be refused');
     assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
     assert.strictEqual(fs.existsSync(victim), false,
@@ -298,7 +298,7 @@ test('without --force an existing ordinary file is preserved, not an error', () 
   try {
     const target = path.join(work, 'package.json');
     fs.writeFileSync(target, '{"old":true}', 'utf8');
-    const r = writeIfAllowed(target, '{"new":true}', false);
+    const r = writeIfAllowed(target, '{"new":true}', false, fs.realpathSync(work));
     assert.strictEqual(r.wrote, false);
     assert.match(r.reason, /exists/);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), '{"old":true}');
@@ -309,8 +309,102 @@ test('a brand-new file is written normally (the guard must not block the common 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-new-'));
   try {
     const target = path.join(work, 'package.json');
-    const r = writeIfAllowed(target, '{"fresh":true}', false);
+    const r = writeIfAllowed(target, '{"fresh":true}', false, fs.realpathSync(work));
     assert.strictEqual(r.wrote, true);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), '{"fresh":true}');
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+});
+
+// --- review follow-up: the leaf check alone did not confine anything --------------------------
+// Three separate escapes survived a guard that only lstat-ed the final path component.
+
+// 1. A HARD LINK is a regular file. `isFile()` is true, there is no link to notice, and the inode
+// is shared — so writing "the file in the working directory" edited the outside file just as
+// surely as a symlink would. A file this tool owns has exactly one name.
+test('--force refuses a hard link into a file outside the working directory', (t) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-hl-out-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-hl-work-'));
+  try {
+    const victim = path.join(outside, 'precious.json');
+    fs.writeFileSync(victim, '{"keep":true}', 'utf8');
+    const target = path.join(work, 'package.json');
+    try { fs.linkSync(victim, target); }
+    catch { return t.skip('cannot create a hard link on this filesystem'); }
+
+    assert.strictEqual(fs.lstatSync(target).isFile(), true,
+      'precondition: a hard link IS a regular file, which is why the isFile() check missed it');
+
+    let threw = null;
+    try { writeIfAllowed(target, '{"overwritten":true}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
+    assert.ok(threw, 'writing through a hard link must be refused');
+    assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
+    assert.match(threw.message, /hard link/);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), '{"keep":true}',
+      'the file outside the working directory must be untouched');
+    return undefined;
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// 2. A SYMLINKED ANCESTOR. The leaf is an ordinary file and passes every check; it is the
+// DIRECTORY that escapes. `path.join(workingDir, ...)` stays inside the SPELLING of the root while
+// the real file lands outside it, so a lexical containment claim is worthless without realpath.
+test('--force refuses a working directory that is itself a symlink out of the approved root', (t) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-anc-out-'));
+  const approved = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-anc-root-'));
+  try {
+    // `approved/work` is a LINK to a directory outside the approved root.
+    const linkedWork = path.join(approved, 'work');
+    try { fs.symlinkSync(outside, linkedWork, 'dir'); }
+    catch { return t.skip('cannot create a symlink on this machine (needs elevation/Developer Mode)'); }
+
+    const victim = path.join(outside, 'package.json');
+    fs.writeFileSync(victim, '{"keep":true}', 'utf8');
+    const target = path.join(linkedWork, 'package.json');
+    assert.strictEqual(fs.lstatSync(target).isFile(), true,
+      'precondition: the LEAF is an ordinary file — only the directory escapes');
+
+    let threw = null;
+    try { writeIfAllowed(target, '{"overwritten":true}', true, fs.realpathSync(approved)); } catch (e) { threw = e; }
+    assert.ok(threw, 'an output resolving outside the approved root must be refused');
+    assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
+    assert.match(threw.message, /outside the working directory/);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), '{"keep":true}');
+    return undefined;
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+    fs.rmSync(approved, { recursive: true, force: true });
+  }
+});
+
+// 3. FAIL CLOSED ON AN UNREADABLE PROBE. `catch { st = null; }` made "I could not determine what is
+// there" identical to "nothing is there", so the write proceeded on exactly the inputs least
+// understood. ENOTDIR is portable: a path whose PARENT is a regular file cannot be stat-ed.
+test('a probe failure that is not ENOENT is treated as unsafe, not as an empty slot', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-probe-'));
+  try {
+    const notADir = path.join(work, 'blocker');
+    fs.writeFileSync(notADir, 'i am a file', 'utf8');
+    const target = path.join(notADir, 'package.json'); // parent is a FILE -> ENOTDIR
+    let threw = null;
+    try { writeIfAllowed(target, '{}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
+    assert.ok(threw, 'an uninspectable output must be refused');
+    assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
+    assert.strictEqual(fs.readFileSync(notADir, 'utf8'), 'i am a file',
+      'and nothing may be written through it');
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+});
+
+// The write is a temp-file-and-rename, so it must leave no debris behind on the happy path.
+test('the atomic replace leaves no temp file behind', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-tmp-'));
+  try {
+    const target = path.join(work, 'package.json');
+    writeIfAllowed(target, '{"fresh":true}', false, fs.realpathSync(work));
+    const left = fs.readdirSync(work);
+    assert.deepStrictEqual(left, ['package.json'],
+      `only the intended output may remain; got ${JSON.stringify(left)}`);
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 });

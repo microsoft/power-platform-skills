@@ -68,12 +68,17 @@ function runPac(args) {
 //   'Page ID: 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35f'  (37 chars -> truncated to 36)
 // were accepted as identity.
 //
-// The group structure (8-4-4-4-12) is enforced, and the trailing boundary rejects a longer run so a
-// too-long token is REFUSED rather than trimmed. Returning null is the safe outcome: the caller
-// treats a zero exit with no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
+// The group structure (8-4-4-4-12) is enforced, and the trailing boundary rejects any contiguous
+// IDENTIFIER character so a too-long token is REFUSED rather than trimmed. Restricting the boundary
+// to the GUID alphabet was not enough: `6e0c28a2-cdbf-41ec-9186-d10fd5de6e35oops` has a non-hex
+// character next, so the lookahead passed and the id was accepted with the suffix silently dropped.
+// `[\w-]` is the right class — a following `.` or `,` or `)` genuinely ends the token (pac prints the
+// id inside prose), while any letter, digit, underscore or hyphen means the token continues.
+// Returning null is the safe outcome: the caller treats a zero exit with no parsable id as an
+// UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 function parsePageId(out) {
-  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![0-9a-fA-F-])').exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\w-])').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -133,14 +138,22 @@ function parseList(out) {
 // the "Found …" line as metadata; this reads its N so classifyListOutput can prove the listing is
 // COMPLETE (parsed page count == summary N).
 //
-// Matched as a STANDALONE LINE, not anywhere in the output. Scanning the whole text let a page
-// NAME supply the summary: pac prints names in a fixed-width table, so a page called
+// Matched as a STANDALONE, COMPLETE line, not anywhere in the output. Scanning the whole text let a
+// page NAME supply the summary: pac prints names in a fixed-width table, so a page called
 //   "Found 1 generated page"
 // made a listing with NO real summary line read as authoritative — and an authoritative-looking
-// but TRUNCATED listing is exactly what drives a duplicate CREATE. A table row always begins with
-// the page GUID, so requiring the line to START with "Found" cannot be spoofed by a name.
+// but TRUNCATED listing is exactly what drives a duplicate CREATE.
+//
+// Anchoring the START was still not enough: with the line-end unconstrained, a row whose name began
+// with the summary text — "Found 1 generated pagex", "Found 1 generated page(s) extra" — was accepted
+// just the same. The WHOLE line must be the summary grammar, so trailing content disqualifies it.
+// Every live-captured listing uses the exact form "Found N generated page(s):"; the small
+// tolerances here (optional "generated", "page"/"pages"/"page(s)", optional colon) cover plausible
+// pac wording drift without admitting arbitrary suffixes. Anything outside that returns null, which
+// classifyListOutput reports as 'unrecognized' — a failure, never "empty".
 function parseListCount(stdout) {
-  const m = /^[^\S\r\n]*found\s+(\d+)\s+(?:generated\s+)?page/im.exec(String(stdout || ''));
+  const m = /^[^\S\r\n]*found[^\S\r\n]+(\d+)[^\S\r\n]+(?:generated[^\S\r\n]+)?pages?(?:\(s\))?[^\S\r\n]*:?[^\S\r\n]*$/im
+    .exec(String(stdout || ''));
   return m ? Number(m[1]) : null;
 }
 
@@ -388,6 +401,7 @@ function makeGenpageCli(env, deps = {}) {
             }
             beforeIds = new Set(before.ids);
           }
+          const pidBeforeAttempt = pid;
           const r = await once(pid);
           if (r.status === 0) {
             const id = parsePageId(r.stdout);
@@ -436,10 +450,16 @@ function makeGenpageCli(env, deps = {}) {
           // caller's time and buries the real message under "after 3 attempt(s)". Break out and
           // report it immediately.
           //
-          // Placed AFTER the uncertain-create reconciliation on purpose: if the create actually
-          // landed, `pid` has just been adopted and the next attempt is a DIFFERENT command (an
-          // update by id), so the previous command's argument fault says nothing about it.
-          if (!pid && isDeterministic(lastErr)) break;
+          // The test is "will the NEXT attempt run the SAME command?", not "is this a create?".
+          // Keying on `!pid` got that wrong in one direction: an ordinary update — where the caller
+          // supplied `pageId`, so `pid` is truthy from the very first attempt — sat through all three
+          // attempts on a fault that could never resolve itself. The case the guard must NOT break is
+          // narrower than "pid is set": it is the single attempt in which an uncertain create was
+          // just ADOPTED, because the retry then becomes an update by id and the previous command's
+          // argument fault says nothing about it. Comparing `pid` across the attempt identifies
+          // exactly that transition.
+          const commandChanged = pid !== pidBeforeAttempt;
+          if (!commandChanged && isDeterministic(lastErr)) break;
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
         throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`);

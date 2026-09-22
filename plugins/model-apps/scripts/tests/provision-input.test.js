@@ -175,3 +175,27 @@ test('#537 review: provision-input reports the SAME invalid-LCID message as the 
   assert.match(msg, /1033|1031/, `should name a concrete LCID: ${msg}`);
   assert.match(msg, /language tag/, `should name the language-tag mistake: ${msg}`);
 });
+
+// --- review follow-up: the OTHER public provisioning entry point ------------------------------
+// The sample-data row-level gate was added to `validateAppSpec` only. `provision-entities` is a
+// separate CLI that seeds through the SAME loader, and it checked only that the value was an
+// array — so `null` still crashed at Object.keys and primitives were still spread into
+// index-keyed "columns", AFTER the solution and data model had already been written.
+test('sampleData rows get the same row-level gate as the app-builder path', () => {
+  const mk = (rows) => ({
+    solution: { uniqueName: 's', displayName: 'S', publisherPrefix: 'pp' },
+    entities: [{ schemaName: 'pp_t', displayName: 'T', pluralName: 'Ts',
+      primaryAttribute: { schemaName: 'pp_name', displayName: 'N' }, columns: [] }],
+    sampleData: { pp_t: rows },
+  });
+  for (const [rows, want] of [[[null], 'null'], [['abc'], 'string'], [[42], 'number'], [[['x']], 'an array']]) {
+    const r = validateProvisionInput(mk(rows));
+    const hit = r.errors.filter((e) => /sampleData\[/.test(e));
+    assert.strictEqual(hit.length, 1, `${JSON.stringify(rows)} must be rejected; got ${JSON.stringify(r.errors)}`);
+    assert.match(hit[0], new RegExp(`got ${want}$`), `the offending type must be named; got ${hit[0]}`);
+  }
+  // The control: a real record object produces no sampleData error.
+  const ok = validateProvisionInput(mk([{ pp_name: 'fine' }]));
+  assert.deepStrictEqual(ok.errors.filter((e) => /sampleData\[/.test(e)), [],
+    'a valid row must not be rejected');
+});

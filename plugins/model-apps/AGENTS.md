@@ -845,6 +845,39 @@ Residual limits, accepted deliberately:
 Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
 silently. If you hit one, widen the tests first.
 
+## Vendored SDK — known gaps (fix upstream, not here)
+
+`scripts/vendor/cds-maker-sdk.cjs` is a **build artefact** of the first-party maker SDK
+(`packages/cds-maker-sdk`), re-vendored wholesale and tracked by `PROVENANCE.json`. Never patch the
+bundle to work around a defect in it: the next re-vendor silently reverts the patch, and the hash in
+`PROVENANCE.json` stops matching. Fix it in the SDK, then re-vendor. Record the gap here so the next
+person does not re-diagnose it.
+
+Behaviours confirmed against the bundle at `81b2d6ed` that the plugin cannot correct from outside:
+
+- **BPF deactivation sits outside the create/repair recovery boundary.** A failure partway through
+  deactivation leaves the flow in a state the recovery path does not roll back, so a retry can act on
+  a half-deactivated process.
+- **`BPF_CREATE_NO_TOKEN` recovery does not adopt the server's version.** When the concurrency token
+  has to be recovered, the artefact keeps the version it had rather than the one the server now
+  holds, so the next conditional write can be rejected for a reason the caller cannot see.
+- **Business-process-flow ids are minted client-side.** The create posts a caller-generated
+  `workflowid` rather than adopting the server's, so `OData-EntityId` on the response is ignored.
+  This is legitimate Dataverse usage, but it means a create that *appears* to fail may already own a
+  known id — which is why the plugin's uncertain-create reconciliation is env-wide rather than
+  response-driven.
+
+The token-recovery ORDER is worth knowing because it is not obvious from the call site and it
+determines what a fixture has to suppress to exercise the read-back:
+
+```
+token = <etag from the activation PATCH> ?? <etag on the create response> ?? <read the record back>
+```
+
+An `Active` flow is activated by a PATCH whose response carries an etag, so only a **Draft** flow
+whose create returns no etag reaches the read-back. See
+`scripts/tests/business-process-flows.test.js`.
+
 ## Hooks & Validators
 
 Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin

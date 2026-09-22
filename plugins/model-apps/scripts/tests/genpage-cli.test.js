@@ -878,3 +878,82 @@ test('a flag-SHAPED sole diagnostic survives instead of being replaced by the ba
   assert.ok(!/Microsoft PowerPlatform CLI/.test(thrown.message),
     `the banner must not be reported as the diagnostic; got ${thrown.message}`);
 });
+
+// --- review follow-up: both boundaries were the wrong SHAPE, not just missing ------------------
+
+// The trailing boundary only rejected the GUID alphabet, so a suffix starting with any other
+// character passed the lookahead and the id was accepted with the rest silently dropped. This
+// value becomes DURABLE page identity, so a truncated id is a wrong-page write later.
+test('parsePageId refuses a GUID followed by any identifier character, not just hex', () => {
+  const G = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+  assert.strictEqual(parsePageId(`Page ID: ${G}`), G, 'the control: a clean id still parses');
+  for (const suffix of ['oops', 'f', '-', '_x', '0', 'Z']) {
+    assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), null,
+      `a token continuing with ${JSON.stringify(suffix)} must be refused, not trimmed to the GUID`);
+  }
+  // ...but punctuation genuinely ENDS the token — pac prints the id inside prose.
+  for (const suffix of ['.', ',', ')', ' ', '\n']) {
+    assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), G,
+      `${JSON.stringify(suffix)} terminates the id and must still parse`);
+  }
+});
+
+// Anchoring the START defeated the table-row spoof, but with the line END unconstrained a name
+// that merely BEGAN with the summary text was accepted just the same — and a listing that looks
+// authoritative but is truncated is exactly what drives a duplicate CREATE.
+test('parseListCount requires the WHOLE line to be the summary, not just its start', () => {
+  assert.strictEqual(parseListCount('Found 3 generated page(s):'), 3, 'the live-captured form still parses');
+  assert.strictEqual(parseListCount('Found 0 generated page(s):'), 0);
+  for (const bad of [
+    'Found 1 generated pagex',
+    'Found 1 generated page(s) extra',
+    'Found 1 generated page(s): and then some',
+  ]) {
+    assert.strictEqual(parseListCount(bad), null,
+      `${JSON.stringify(bad)} is not the summary grammar and must not supply a count`);
+  }
+});
+
+// And the whole point: an unparsable summary must make the listing UNRECOGNIZED, never "empty" —
+// "empty" is what authorises a create.
+test('a malformed summary line makes the listing unrecognized, not empty', () => {
+  const out = 'Connected as tester@contoso.com\nRetrieving generated pages...\nFound 0 generated pagex\n';
+  assert.strictEqual(classifyListOutput(out).kind, 'unrecognized',
+    'a summary that does not parse must fail closed');
+});
+
+// --- review follow-up: the retry guard was keyed on the wrong condition ------------------------
+// "Stop retrying a deterministic failure" was gated on `!pid`, i.e. only on a CREATE. An ordinary
+// update — where the caller supplies `pageId`, so `pid` is truthy from the first attempt — sat
+// through every attempt on a fault that can never resolve itself, burying the real message under
+// "after 3 attempt(s)". The correct test is whether the NEXT attempt runs the SAME command.
+test('a deterministic failure on an ORDINARY update stops after one attempt', async () => {
+  let attempts = 0;
+  const run = async () => {
+    attempts += 1;
+    // Real pac wording for an argument fault — retrying cannot change the outcome.
+    return { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} })
+      .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed/i);
+  assert.strictEqual(attempts, 1,
+    `a deterministic UPDATE fault must not be retried; ran ${attempts} attempt(s)`);
+});
+
+// The control: a TRANSIENT failure on the same ordinary update is still retried, so the guard did
+// not simply disable retries for updates.
+test('a transient failure on an ordinary update is still retried', async () => {
+  let attempts = 0;
+  const run = async () => {
+    attempts += 1;
+    return { status: 1, stdout: '', stderr: 'Error: The service is temporarily unavailable. Please try again.' };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} })
+      .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed/i);
+  assert.ok(attempts > 1,
+    `a transient fault must still be retried; ran ${attempts} attempt(s)`);
+});

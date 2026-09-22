@@ -4887,3 +4887,68 @@ test('form topology: the rowspan guard does not block an ordinary narrowing', as
     assert.ok(used <= 1, `row ${ri} must fit the 1-column grid; got ${JSON.stringify(r.cells)}`);
   }
 });
+
+// --- review follow-up: the OTHER repack route ---------------------------------------------------
+// The section-level guard only covers a grid CHANGE. A span change takes a different route —
+// `convergeCellSpans` -> `repackRowAt` — which re-lays a single row by reading order. On a maker
+// form holding `[A rowspan=2, B]`, widening `B` overflows the row and the split places `B` in the
+// row `A` reserves. The whole span change is skipped rather than half-applied: leaving an
+// OVERFLOWING row is worse than a form that merely does not match the spec, and `--verify` reports
+// the divergence either way.
+test('form topology: widening a cell beside a rowspan is skipped, not half-applied', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', { name: 'new_tier', colspan: 2 }] },
+  ] }]);
+  // Deployed: `[A rowspan=2, B]` in a 2-column section — widening B to 2 makes the row 1 + 2 = 3.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [
+          { cells: [{ id: 'cA', rowspan: 2, control: { fieldName: 'new_name' } }, { id: 'cB', control: { fieldName: 'new_tier' } }] },
+          { cells: [{ id: 'cSpacer' }] },
+        ] },
+    ] }] }], bag: { a: [], c: [] } };
+  const warnings = [];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(String(m)) });
+
+  // NOTE: with the change skipped there is NO form write at all, so the form is read by the mock's
+  // own id rather than via a call the fix is expected to suppress.
+  const finalForm = await sdk.getArtifact('form', 'form-existing');
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => [(c.control && c.control.fieldName) || '(spacer)', Number(c.colspan) || 1]));
+  assert.deepStrictEqual(shape,
+    [[['new_name', 1], ['new_tier', 1]], [['(spacer)', 1]]],
+    `the maker arrangement must be untouched — no widened span, no split row; got ${JSON.stringify(shape)}`);
+  assert.ok(warnings.some((w) => /row-spanning cell/.test(w)),
+    `the skip must be reported, not silent; saw ${JSON.stringify(warnings)}`);
+  // And nothing at all was written to the form — a half-applied span is the failure mode here.
+  assert.ok(!calls.some((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form'),
+    `no form write may be issued; got ${JSON.stringify(calls.filter((c) => c.args && c.args[0] === 'form').map((c) => c.name))}`);
+});
+
+// The control: the SAME widening with no rowspan present does apply and does repack, so the guard
+// is specific to the vertical reservation rather than a blanket refusal to change spans.
+test('form topology: the rowspan guard does not block an ordinary widening', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', { name: 'new_tier', colspan: 2 }] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [{ id: 'cA', control: { fieldName: 'new_name' } }, { id: 'cB', control: { fieldName: 'new_tier' } }] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
+  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  const sec = finalForm.tabs[0].columns[0].sections[0];
+  const tier = (sec.rows || []).flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_tier');
+  assert.strictEqual(Number(tier.colspan) || 1, 2, 'the authored widening must still apply');
+  for (const [ri, r] of (sec.rows || []).entries()) {
+    const used = (r.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+    assert.ok(used <= 2, `row ${ri} must fit the 2-column grid; got ${JSON.stringify(r.cells)}`);
+  }
+});

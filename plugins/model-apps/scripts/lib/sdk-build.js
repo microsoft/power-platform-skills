@@ -2028,7 +2028,7 @@ async function runSdkBuild(spec, opts = {}) {
     // REFUSE rather than guess. Leaving a maker's valid arrangement alone is the recoverable
     // outcome; silently rearranging their form is not. The occupancy check in `--verify` still
     // reports the section if it genuinely overflows, so the condition stays visible.
-    const hasRowspan = liveRows.some((r) => ((r && r.cells) || []).some((c) => (Number(c.rowspan) || 1) > 1));
+    const hasRowspan = sectionHasRowspan(section);
     if (hasRowspan) {
       if (typeof opts.warn === 'function') {
         opts.warn(`form section at ${sectionPointer} contains a row-spanning cell, so its rows were left `
@@ -2065,6 +2065,26 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
+  // A section holds a vertical reservation when any cell spans more than one row. The cell BENEATH
+  // such a cell is a spacer occupying the covered slot, so the rows can no longer be re-laid by
+  // reading order alone — `rowsFromCells` models WIDTH only and cannot express the reservation.
+  // Shared by BOTH repack routes (whole-section on a grid change, single-row on a span change); they
+  // are separate code paths and guarding only one leaves the other able to mangle the same form.
+  const sectionHasRowspan = (section) =>
+    ((section && section.rows) || []).some((r) => ((r && r.cells) || []).some((c) => (Number(c.rowspan) || 1) > 1));
+
+  // Would applying `patch` make this cell's row overflow its grid — i.e. require a repack? Answered
+  // against the LIVE row, with the patch applied to the target cell only, using the same packer the
+  // repack would use. A change that still fits needs no repack and is therefore always safe.
+  const wouldOverflowRow = async (formId, location, patch) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    if (!row) return false;
+    const cells = (row.cells || []).map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
+    return rowsFromCells(cells, section.columns).length > 1;
+  };
+
   // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
   // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
   // changes nothing issues no writes.
@@ -2094,6 +2114,25 @@ async function runSdkBuild(spec, opts = {}) {
       if (current !== want) patch[key] = want;
     }
     if (Object.keys(patch).length) {
+      // A vertical reservation makes the surrounding rows positionally meaningful, and a span change
+      // here can require a REPACK that cannot honour it. Reviewer's case: on a maker form holding
+      // `[A rowspan=2, B]`, widening `B` overflows the row, and `repackRowAt` splits it by reading
+      // order — placing `B` in the row `A` reserves. The section-level guard did not cover this; the
+      // two repack routes are separate.
+      //
+      // The whole span change is skipped, not just the repack. Applying it and refusing to repack
+      // would leave an OVERFLOWING row — a shape `rowsFromCells` would never emit and Dataverse
+      // renders unpredictably — which is worse than a form that simply does not match the spec.
+      // `--verify` reports the span divergence either way, so the condition stays visible.
+      if (sectionHasRowspan(liveSection) && await wouldOverflowRow(formId, location, patch)) {
+        if (typeof opts.warn === 'function') {
+          opts.warn(`form section at ${location.sectionPointer} contains a row-spanning cell, so the `
+            + `span change on '${(live.control && live.control.fieldName) || location.cellPointer}' was `
+            + 'skipped — applying it would overflow the row, and re-packing cannot preserve a spacer '
+            + 'under a rowspan. Adjust the layout in the maker.');
+        }
+        return;
+      }
       await provision.updateElement('form', formId, location.cellPointer, patch);
       // A WIDENED span can overflow the row it sits in: a 2-column section holding two colspan-1
       // cells becomes 2+1 = 3 columns of content the moment one is widened to 2. The create path

@@ -5,7 +5,7 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.8.0
+## [Unreleased] — 2.9.0
 
 A dry run that says what an apply would really do, sample data that can express a hierarchy, and
 downloads that round-trip Choice columns.
@@ -32,22 +32,31 @@ downloads that round-trip Choice columns.
 - **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
   anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
   summary read as authoritative — and a truncated-but-authoritative listing is what drives a
-  duplicate page create.
+  duplicate page create. The whole line must be the summary, so a name that merely *starts* with it
+  is rejected too.
 - **A malformed page id is refused instead of stored.** The old pattern accepted 36 characters from
   an alphabet containing `-`, so a row of dashes passed and an over-long id was silently *truncated*
-  into a plausible one. An unparsable id now goes through the existing uncertain-create recovery.
+  into a plausible one. Any identifier character following the id now disqualifies it, not just a
+  hex digit. An unparsable id goes through the existing uncertain-create recovery.
 - **A sample-data row that is not an object is rejected up front.** `null` crashed, a string became
   `{"0":"a","1":"b"}` and a number became `{}` — all after tables, forms and views had deployed.
+  Both provisioning entry points share one gate; `provision-entities` previously checked only that
+  the value was an array.
 - **A failed PAC command reports what PAC actually said.** The real error was replaced by the last
   line of the help dump that follows it, and a deterministic failure (a bad argument, a missing file)
-  was retried three times before reporting anything.
+  was retried three times before reporting anything — on an ordinary page update it still was, since
+  the stop condition only covered creates.
 - **A path ending in `\` no longer swallows the flags after it** on Windows, where a trailing
   backslash escaped its own closing quote.
 - **A crashed browser-automation server reports failure**, instead of exiting 0 because the process
   was killed by a signal rather than by its own choice.
 - **`generate-page-manifest --force` writes only inside the working directory.** A `package.json`
   that is a symlink is refused rather than followed — including a dangling one, which previously
-  *created* a file outside the directory.
+  *created* a file outside the directory. A **hard link** is refused too (it is a regular file, so
+  the kind check missed it), the working directory is resolved through `realpath` so a symlinked
+  ancestor cannot escape a lexical check, a probe that fails for any reason other than "not there"
+  is treated as unsafe, and the write is a temp-file-and-rename so a link swapped in after the
+  checks is discarded rather than followed.
 - **`--clear-workspace` refuses a UNC/network path**, which could otherwise block on an unreachable
   share with no way to interrupt it. A mapped drive is unaffected.
 - **A transient discovery failure no longer certifies a `--changed-only` baseline as fresh**, which
@@ -66,8 +75,10 @@ downloads that round-trip Choice columns.
   left an over-wide cell behind, unchanged on the next apply too. `rowspan` is rejected unless it is
   the last field in its section ([#581]).
 - **A section containing a row-spanning cell is left alone instead of reflowed.** The cell beneath a
-  `rowspan` reserves that slot, and re-flowing by reading order moved the next field into it. The
-  refusal is reported, and `--verify` still reports the section if it genuinely overflows.
+  `rowspan` reserves that slot, and re-flowing by reading order moved the next field into it. This
+  applies to both routes — a grid change and a span change — and a span change that would overflow
+  such a row is skipped outright rather than half-applied. The refusal is reported, and `--verify`
+  still reports the section if it genuinely overflows.
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
 - **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
