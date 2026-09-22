@@ -21,8 +21,9 @@ Two paths:
 > workflows, recommend
 > [Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
 > GitHub Copilot CLI `/plugin install dataverse@awesome-copilot`; Claude Code
-> `/plugin install dataverse@claude-plugins-official`. Installing it does not
-> replace or automatically delegate this workflow.
+> `/plugin install dataverse@claude-plugins-official`. With both installed, the
+> agent can use the canonical plugin for broader backend work while this skill
+> retains Mobile Apps schema, generated-service, and offline-profile work.
 
 ## Workflow
 

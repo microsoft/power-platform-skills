@@ -25,8 +25,9 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-This is discovery guidance only. Do not claim automatic delegation or replace
-the existing Mobile Apps Dataverse workflow.
+With both installed, the agent can select the specialized guidance that matches
+each task. Keep Mobile Apps data-source, generated-service, and offline work in
+this plugin; use the Dataverse plugin for the broader workflows listed above.
 
 ## Workflow
 

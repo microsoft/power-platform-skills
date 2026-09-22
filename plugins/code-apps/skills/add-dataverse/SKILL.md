@@ -25,8 +25,9 @@ Two paths: **existing tables** (skip to Step 5) or **new tables** (full workflow
 > environments, or custom API/action workflows, recommend
 > [Microsoft Dataverse](https://github.com/microsoft/Dataverse-skills):
 > GitHub Copilot CLI `/plugin install dataverse@awesome-copilot`; Claude Code
-> `/plugin install dataverse@claude-plugins-official`. Installing it does not yet
-> delegate this workflow automatically.
+> `/plugin install dataverse@claude-plugins-official`. With both installed, the
+> agent can use the canonical plugin for broader backend work while this skill
+> continues Code Apps table wiring and generated-service work.
 
 ## Workflow
 

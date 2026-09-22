@@ -81,9 +81,10 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-The Dataverse plugin is independently maintained and installed from its canonical
-marketplaces. Installing both plugins does not yet make app workflows delegate to
-Dataverse automatically.
+With both installed, your agent can combine the app-building plugins for UI,
+bindings, build, and deployment with the Dataverse plugin's broader backend
+capabilities in the same development session. Each plugin remains independently
+maintained and updates from its canonical marketplace.
 
 ## Available Plugins
 

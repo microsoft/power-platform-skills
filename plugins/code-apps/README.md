@@ -37,8 +37,9 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-The plugins are independently maintained. Installing Dataverse does not yet make
-Code Apps delegate schema work automatically.
+With both installed, your agent can use Dataverse for broader backend work and
+Code Apps for generated services, UI, build, and deployment. Each plugin remains
+independently maintained.
 
 ## Available Commands
 

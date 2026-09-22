@@ -79,8 +79,9 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-The plugins are independently maintained. Installing Dataverse does not yet make
-Canvas Apps delegate schema work automatically.
+With both installed, your agent can use Dataverse to prepare and manage the
+backend, then use Canvas Apps to attach those tables and build the app experience.
+Each plugin remains independently maintained.
 
 ## Connect to a Canvas App
 

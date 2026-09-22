@@ -24,9 +24,9 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-This is discovery guidance only; do not claim that installing Dataverse delegates
-the current Code Apps workflow automatically. App-local table/schema requirements
-continue through `/add-dataverse`.
+With both installed, the agent can select the specialized guidance that matches
+each task. App-local table/schema requirements continue through `/add-dataverse`;
+use the Dataverse plugin for the broader environment workflows listed above.
 
 ## Workflow
 

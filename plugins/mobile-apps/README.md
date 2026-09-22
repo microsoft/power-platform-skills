@@ -26,8 +26,9 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-The plugins are independently maintained. Installing Dataverse does not replace
-the Mobile Apps schema workflow or enable automatic delegation.
+With both installed, your agent can use Dataverse for broader backend work and
+Mobile Apps for generated services, offline behavior, UI, build, and packaging.
+Each plugin remains independently maintained.
 
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and

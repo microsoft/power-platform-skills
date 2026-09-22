@@ -23,9 +23,10 @@ GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
 ```
 
-Explain that installing the companion does not automatically delegate the current
-Canvas workflow. Stop and ask the user to return after the schema exists; then use
-the normal Studio attachment and verification phases below.
+Explain that the two plugins complement each other: Dataverse prepares the
+environment-level schema, and Canvas Apps attaches the resulting tables and builds
+the app experience. Stop and ask the user to return after the schema exists; then
+use the normal Studio attachment and verification phases below.
 
 If the table already exists and only needs to be attached to the Canvas App,
 continue directly to Phase 0.
