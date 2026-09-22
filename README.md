@@ -79,8 +79,7 @@ official [Microsoft Dataverse plugin](https://github.com/microsoft/Dataverse-ski
 ```text
 GitHub Copilot CLI: /plugin install dataverse@awesome-copilot
 Claude Code:        /plugin install dataverse@claude-plugins-official
-Codex CLI:           codex plugin marketplace add microsoft/Dataverse-skills
-                     codex plugin add dataverse@dataverse-skills
+Codex CLI:           codex plugin add dataverse@openai-curated
 Cursor:              /add-plugin dataverse
 ```
 

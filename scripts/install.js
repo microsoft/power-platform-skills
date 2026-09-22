@@ -35,8 +35,11 @@ const DATAVERSE_INSTALLS = {
     label: "GitHub Copilot CLI",
   },
   codex: {
-    prepareCommands: ['codex plugin marketplace add "microsoft/Dataverse-skills"'],
-    command: `codex plugin add "${DATAVERSE_PLUGIN}@dataverse-skills"`,
+    command: `codex plugin add "${DATAVERSE_PLUGIN}@openai-curated"`,
+    fallbackCommands: [
+      'codex plugin marketplace add "microsoft/Dataverse-skills"',
+      `codex plugin add "${DATAVERSE_PLUGIN}@dataverse-skills"`,
+    ],
     listCommand: "codex plugin list",
     label: "Codex CLI",
   },
@@ -137,12 +140,22 @@ function installCanonicalDataverse(tool, runCommand = run) {
   }
   info("Installing from the canonical Dataverse marketplace...");
   const installResult = runCommand(config.command);
-  if (!installResult.ok && !installResult.output.toLowerCase().includes("already installed")) {
+  const alreadyInstalled = installResult.output.toLowerCase().includes("already installed");
+  if (!installResult.ok && !alreadyInstalled && config.fallbackCommands) {
+    warn("Curated Dataverse listing unavailable; trying the canonical repository marketplace...");
+    for (const fallbackCommand of config.fallbackCommands) {
+      const fallbackResult = runCommand(fallbackCommand);
+      if (!fallbackResult.ok && !fallbackResult.output.toLowerCase().includes("already")) {
+        fail(`Dataverse fallback installation failed: ${fallbackResult.output}`);
+        return false;
+      }
+    }
+  } else if (!installResult.ok && !alreadyInstalled) {
     fail(`Dataverse installation failed: ${installResult.output}`);
     return false;
   }
 
-  ok(installResult.ok ? "Dataverse installed" : "Dataverse already installed");
+  ok(installResult.ok ? "Dataverse installed" : "Dataverse installation completed");
   const listResult = runCommand(config.listCommand);
   if (!listResult.ok) {
     fail(`Could not verify Dataverse installation: ${listResult.output}`);
