@@ -3,10 +3,20 @@
 Follow this workflow only after `create-site` routes the request to a Standard or Enhanced data
 model declarative site. The platform creates the baseline from a documented first-party template;
 the skill downloads that baseline rather than generating Power Pages metadata.
+Then coordinate a polished, image-rich design through the existing customization and styling
+owners, unless the user explicitly chooses to keep the bare template.
+Use approved direct HTTPS image URLs for image additions, not downloaded/imported Web Files.
+Existing template images may be reused without creating new files.
 
 ## Invariants
 
 - Require an explicit `MODEL_VERSION` of `Enhanced` or `Standard`; never choose a default.
+- Recommend **Enhanced with Bootstrap 5** for new sites. Set `BOOTSTRAP_VERSION=5` for this path.
+  Preserve an explicit Standard request as a Bootstrap 3 compatibility path
+  (`BOOTSTRAP_VERSION=3`); explain the tradeoff rather than silently changing the model.
+- Bootstrap 5 creation requires Enhanced and a documented supported template. Follow
+  [Microsoft's Bootstrap 5 creation guidance](https://learn.microsoft.com/power-pages/configure/bootstrap-version-5).
+  Verify the actual downloaded Bootstrap assets before version-specific authoring.
 - The environment EDM toggle has no documented public read or write API.
 - An environment administrator must verify **Switch to enhanced data model** is enabled for
   Enhanced creation or disabled for Standard creation. The skill never automates that shared
@@ -21,6 +31,8 @@ the skill downloads that baseline rather than generating Power Pages metadata.
 - Pass `--modelVersion "<MODEL_VERSION>"` to every status-page render.
 - Do not invoke `activate-site` or show a deploy-now prompt after creation. The Create Website API
   already provisions the cloud site.
+- No dev server, live preview, generated styling mockup, or browser inspection is required.
+  The existing provisioning-status and customization-approval HTML documents are not live previews.
 
 ## Progress Tracking
 
@@ -35,7 +47,7 @@ Create all eight tasks before starting:
 | Provision the declarative site | Provisioning the declarative site | Create the website and poll the accepted operation |
 | Download the declarative site | Downloading the declarative site | Verify and download explicitly with the selected model |
 | Validate the declarative baseline | Validating the declarative baseline | Validate declarative artifacts and initialize Git |
-| Complete declarative setup | Completing declarative setup | Present cloud/local results and optionally customize the downloaded template |
+| Complete declarative setup | Completing declarative setup | Present the baseline and continue into approved image-rich design unless the user opts out |
 
 ## Phase 1: Select the Model and Verify Prerequisites
 
@@ -54,9 +66,11 @@ Create all eight tasks before starting:
 
    | Question | Header | Options |
    |---|---|---|
-   | Which data model should the new declarative site use? | Data model | Enhanced, Standard, Cancel |
+   | Which data model should the new declarative site use? | Data model | Enhanced with Bootstrap 5 (Recommended), Standard with Bootstrap 3 compatibility, Cancel |
 
-   Do not recommend or preselect either model.
+   Explain the Bootstrap 5 prerequisites; recommend Enhanced, but do not preselect or silently
+   override the user's model. An explicit Standard request is not consent to migrate or change
+   the environment toggle. Set the corresponding `BOOTSTRAP_VERSION` from the confirmed choice.
 
 2. Run the plugin version check from the parent skill.
 3. Verify:
@@ -91,7 +105,7 @@ Create all eight tasks before starting:
 
    ```bash
    node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" \
-     --modelVersion "<MODEL_VERSION>"
+     --modelVersion "<MODEL_VERSION>" --bootstrapVersion "<BOOTSTRAP_VERSION>"
    ```
 
    The expected capability status is `indeterminate` because no documented API reads the toggle.
@@ -125,7 +139,7 @@ Create all eight tasks before starting:
 
    ```bash
    node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" \
-     --modelVersion "<MODEL_VERSION>" --administratorConfirmed
+     --modelVersion "<MODEL_VERSION>" --bootstrapVersion "<BOOTSTRAP_VERSION>" --administratorConfirmed
    ```
 
 ## Phase 2: Select a Documented Template
@@ -143,14 +157,12 @@ Present the returned templates with the disclosure:
 > **Why we ask:** Display names must never be guessed or converted into API identifiers.
 > **Cancel leaves:** Nothing — no site or local project exists.
 
-Use `AskUserQuestion` with:
-
-- Starter Layout 1
-- Blank page
-- Program Registration
-- Event Portal
-- Schedule and Manage Meetings
-- Cancel
+Build `AskUserQuestion` choices from the helper's filtered `catalog.templates`, plus Cancel. Show
+the `catalog.bootstrapCompatibility` disclosure when present, including the source and omitted
+template names. Do not
+offer the unfiltered catalog on the Bootstrap 5 path: not every template supports Bootstrap 5
+creation (for example, Event Portal is not on the documented supported list). Never infer
+compatibility from a display name or substitute another template automatically.
 
 Keep the exact `name` from the helper result as `TEMPLATE_NAME`.
 Show the selected template's description, capabilities, requirements, and warning from the helper
@@ -183,6 +195,7 @@ Show:
 ```text
 Site type: Declarative Power Pages site
 Data model: <MODEL_VERSION>
+Bootstrap target: <BOOTSTRAP_VERSION> (verified after download)
 Toggle confirmation: Switch to enhanced data model is <enabled for Enhanced|disabled for Standard>
 Environment URL: <environmentUrl>
 Environment ID: <environmentId>
@@ -227,7 +240,7 @@ Run the shared provisioner:
 node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --templateName "<templateName>" --selectedBaseLanguage "<lcid>"
 ```
 
-The documented Create Website request has no model field. `MODEL_VERSION` is enforced by the
+The documented Create Website request has no model or Bootstrap-version field. `MODEL_VERSION` is enforced by the
 administrator-confirmed environment toggle and the mandatory PAC verification before download,
 not by adding an undocumented request property. See:
 https://learn.microsoft.com/rest/api/power-platform/powerpages/websites/create-website
@@ -293,7 +306,7 @@ Update the status page with `--status "validation"` before running the validator
 Run the create-site validator against the resolved project:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" --projectRoot "<projectRoot>" --websiteRecordId "<websiteRecordId>" --skipGit true
+node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" --projectRoot "<projectRoot>" --websiteRecordId "<websiteRecordId>" --bootstrapVersion "<BOOTSTRAP_VERSION>" --skipGit true
 ```
 
 The declarative path must verify:
@@ -302,7 +315,14 @@ The declarative path must verify:
 - `.powerpages-site/website.yml` exists and is non-empty.
 - `website.yml` identifies the submitted website record ID.
 - The downloaded tree contains declarative assets in addition to identity metadata.
+- Bootstrap evidence is known, unambiguous, and matches `BOOTSTRAP_VERSION`; reuse the shared
+  classic-site inspector rather than inferring the version from the data model or template name.
 - Git is initialized.
+
+If Bootstrap is missing, conflicting, or mismatched, stop before customization and report the
+created cloud site and preserved local baseline. Do not recreate it, change the environment
+toggle, install another Bootstrap copy, or silently migrate it. Resolve the evidence or obtain
+separate consent for the existing migration workflow.
 
 Initialize Git only after the downloaded identity is confirmed:
 
@@ -317,7 +337,7 @@ git commit -m "Initial <MODEL_VERSION> declarative site from <template display n
 Run the validator again after Git initialization.
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" --projectRoot "<projectRoot>" --websiteRecordId "<websiteRecordId>"
+node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" --projectRoot "<projectRoot>" --websiteRecordId "<websiteRecordId>" --bootstrapVersion "<BOOTSTRAP_VERSION>"
 ```
 
 After the final validator succeeds, update the status page with terminal status `ready`. Include
@@ -337,11 +357,14 @@ Present:
 - Site URL
 - Local project path
 - Confirmed data model: `<MODEL_VERSION>`
+- Verified Bootstrap major: `<BOOTSTRAP_VERSION>`
 - Validation and Git baseline result
 - Creation status page URL
 
 Explain that the local files are the validated, committed baseline of the site already created in
-the environment. Do not ask to deploy the unchanged baseline.
+the environment, not yet the completed bespoke design. Do not ask to deploy the unchanged baseline.
+Recommend continuing with the user's original purpose, a cohesive visual direction, and meaningful
+hero/supporting imagery using the shared design-quality guidance.
 
 <!-- gate: create-site:declarative-8-customize | category=plan | cancel-leaves=declarative-baseline -->
 
@@ -358,7 +381,7 @@ Use `AskUserQuestion`:
 
 | Question | Header | Options |
 |---|---|---|
-| Would you like to customize the downloaded declarative template now? | Customize site | Customize now, Keep the template unchanged |
+| Would you like to customize the downloaded declarative template now? | Customize site | Customize now (Recommended), Keep the template unchanged |
 
 On **Customize now**, invoke `/customize-declarative-site` through the `Skill` tool and provide:
 
@@ -367,7 +390,16 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
 - environment URL;
 - `WEBSITE_RECORD_ID`;
 - configured base language;
-- the user's original site intent, when present.
+- the user's original site intent, when present;
+- `creationIntent: "new-site"` and `verifiedBootstrapMajor: <BOOTSTRAP_VERSION>` with the inspected
+  evidence; for the Standard path, include the user's explicit compatibility choice;
+- `imageDelivery: "external-url"`: record this as `newSiteDesign.imageDelivery` and use direct
+  approved HTTPS URLs for new images. Skip image staging/downloads, `author-web-file` image
+  imports, and fabricated import dependencies. Retain source/license, alt text, sizing/crop,
+  external-host/privacy/CSP review, and the native image-component contract;
+- the requirement for a coordinated design and meaningful images, unless the user explicitly
+  declines imagery. The customizer records these decisions in `newSiteDesign`, not an existing-site
+  preservation-only plan.
 
 The customization skill owns its own plan approval, authoring-skill coordination, local
 verification, commits, and deployment handoff. Do not duplicate those phases here.

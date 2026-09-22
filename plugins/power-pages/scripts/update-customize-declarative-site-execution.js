@@ -68,6 +68,13 @@ function updateExecution({
       runId: execution.runId,
       planHash: execution.planHash,
       operation,
+      ...(plan.newSiteDesign ? {
+        designContext: {
+          ...plan.newSiteDesign,
+          aesthetic: plan.aesthetic,
+          mood: plan.mood,
+        },
+      } : {}),
       resolvedInputs: {
         ...operation.inputs,
         ...resolveOutputBindings(operation, execution),

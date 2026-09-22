@@ -85,3 +85,67 @@ test('deploy-site keeps code and declarative upload commands isolated', () => {
   assert.match(declarative, /Do not invoke `activate-site`/);
   assert.match(declarative, /deploy-site:declarative-5.upload/);
 });
+
+test('classic creation uses verified Bootstrap 5 and image-rich design without SPA preview requirements', () => {
+  const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const common = skill.split('## Code-Site Workflow')[0];
+  assert.match(common, /references\/site-design-quality\.md/);
+  assert.match(common, /Classic sites need no dev server or live preview/);
+  assert.doesNotMatch(common, /dev server MUST|scaffold-status\.json|images\.unsplash\.com\/photo-/);
+  assert.match(workflow, /Enhanced with Bootstrap 5 \(Recommended\)/);
+  assert.match(workflow, /Standard with Bootstrap 3 compatibility/);
+  assert.match(workflow, /--bootstrapVersion "<BOOTSTRAP_VERSION>"/);
+  assert.match(workflow, /filtered `catalog\.templates`/);
+  assert.match(workflow, /catalog\.bootstrapCompatibility/);
+  assert.match(workflow, /no model or Bootstrap-version field/);
+  assert.match(workflow, /Do not recreate it/);
+  assert.match(workflow, /creationIntent: "new-site"/);
+  assert.match(workflow, /verifiedBootstrapMajor/);
+  assert.match(workflow, /imageDelivery: "external-url"/);
+  assert.match(workflow, /Skip image staging\/downloads/);
+  assert.match(customization, /newSiteDesign/);
+  assert.match(customization, /newSiteDesign\.imageDelivery: "external-url"/);
+  assert.match(customization, /exact URL in the consumer's static/);
+  assert.match(customization, /at least one relevant content photograph or original illustration/);
+  assert.match(customization, /`designContext` to its owning skill/);
+  assert.match(customization, /exact-diff\/hash approval is a separate binding/);
+  assert.match(customization, /No dev server, live preview/);
+});
+
+test('classic authors preserve Bootstrap conventions and do not gate CSS on display order', () => {
+  const webFile = read(path.join('skills', 'classic-site-skills', 'author-web-file',
+    'references', 'design-studio-web-file-authoring.md'));
+  const sections = read(path.join('skills', 'classic-site-skills', 'page-elements',
+    'references', 'design-studio-section-layouts.md'));
+  const content = read(path.join('skills', 'classic-site-skills', 'author-webpage-content', 'SKILL.md'));
+  assert.match(webFile, /higher priority than `theme\.css` and lower priority than `portalbasictheme\.css`/);
+  assert.match(webFile, /advisory, not an `adx_displayorder`\/`displayorder` constraint/);
+  assert.match(webFile, /Omit `displayorder` on new CSS Web Files/);
+  assert.doesNotMatch(webFile, /Keep display-order values deliberate|Update `adx_displayorder` after/);
+  assert.match(sections, /Bootstrap 5 new-section examples/);
+  assert.match(sections, /Bootstrap 3 site with no comparable section/);
+  assert.match(sections, /`text-left` rather than/);
+  assert.match(sections, /RTL\/language/);
+  assert.match(content, /verified Bootstrap major/);
+  assert.match(content, /return missing evidence to the caller/);
+});
+
+test('creation image URL policy reaches content planning and the classic design adapter', () => {
+  const assetGuide = read(path.join('skills', 'customize-declarative-site', 'references', 'visual-asset-planning.md'));
+  const contentGuide = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const designGuide = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  assert.match(assetGuide, /direct HTTPS URLs for added images/);
+  assert.match(assetGuide, /Power Pages permissions do not protect external URLs/);
+  assert.match(assetGuide, /Do not download it/);
+  assert.match(contentGuide, /approved direct HTTPS URL for a new-site image addition/);
+  assert.match(designGuide, /During creation, add images using direct approved HTTPS URLs/);
+  assert.match(contract, /"delivery": "external-url"/);
+  assert.match(contract, /"status": "remote"/);
+  assert.match(contract, /"heroImageUrl": "https:\/\/cdn\.example\.com\/images\/contact-team\.jpg"/);
+  for (const document of [assetGuide, contentGuide, designGuide]) {
+    assert.doesNotMatch(document, /Do not hotlink the Unsplash URL|Never place an Unsplash hotlink|Deliver locally staged\/imported Web Files, not Unsplash/);
+  }
+});

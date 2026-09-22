@@ -182,6 +182,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
         <div class="fact"><div class="label">Aesthetic</div><strong>__AESTHETIC__</strong></div>
         <div class="fact"><div class="label">Mood</div><strong>__MOOD__</strong></div>
       </div>
+      <div id="newSiteDesign"></div>
       <div id="styleChanges"></div>
     </section>
     <section class="view" id="review">
@@ -203,6 +204,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
 <script id="siteData" type="application/json">__JSON_SITE_DATA__</script>
 <script id="capabilitiesData" type="application/json">__JSON_CAPABILITIES_DATA__</script>
 <script id="assetsData" type="application/json">__JSON_ASSETS_DATA__</script>
+<script id="newSiteDesignData" type="application/json">__JSON_NEW_SITE_DESIGN_DATA__</script>
 <script id="operationsData" type="application/json">__JSON_OPERATIONS_DATA__</script>
 <script id="warningsData" type="application/json">__JSON_WARNINGS_DATA__</script>
 <script id="verificationData" type="application/json">__JSON_VERIFICATION_DATA__</script>
@@ -280,7 +282,18 @@ const renderCategory=(id,items,category,empty)=>{document.getElementById(id).inn
 renderCategory("pageChanges",categories.page,"page","No page or navigation changes are planned.");
 renderCategory("componentChanges",categories.component,"component","No content or reusable-component changes are planned.");
 renderCategory("styleChanges",categories.styling,"styling","The existing visual treatment will be preserved.");
+const design=read("newSiteDesignData");
+if(design){
+  const rows=[
+    ["Bootstrap",String(design.bootstrapMajor)+(design.compatibilityReason?` - ${design.compatibilityReason}`:"")],
+    ...["typography","palette","spacing","composition","responsive"].map(key=>[words(key),design[key]]),
+    ["Imagery",design.imagery==="user-declined"?`User declined: ${design.imageryReason}`:"Meaningful content imagery included; see Visual assets."]
+  ];
+  if(design.imageDelivery==="external-url")rows.push(["Image delivery","Direct HTTPS URLs; no image downloads or Web File imports."]);
+  document.getElementById("newSiteDesign").innerHTML=`<article class="card change styling"><h3>New-site design direction</h3><div class="change-detail">${rows.map(([label,value])=>`<div class="detail-row"><div class="detail-name">${esc(label)}</div><div class="detail-value">${esc(value)}</div></div>`).join("")}</div><p>This is an approval plan, not a live site preview.</p></article>`;
+}
 const assetPreview=asset=>{
+  if(asset.delivery==="external-url")return`<span>Externally hosted image</span>`;
   if(asset.source&&asset.source.type==="unsplash")return`<img src="${esc(asset.source.downloadUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
   return`<span>${esc(words(asset.kind))}</span>`;
 };
@@ -290,7 +303,9 @@ const assetCard=asset=>{
   const alt=Object.entries((asset.accessibility&&asset.accessibility.altByLocale)||{}).map(([locale,value])=>`${locale}: ${value||"Decorative image"}`).join(" · ");
   const details=[
     ["Source",source.type==="unsplash"?`Unsplash · ${source.photographer}`:words(source.type)],
-    ["Delivery",asset.delivery==="web-file"?"Local Power Pages Web File":words(asset.delivery)],
+    ["Delivery",asset.delivery==="external-url"?"Direct external HTTPS URL (not imported)":"Local Power Pages Web File"],
+    ["Image URL",asset.externalUrl],
+    ["Hosting",asset.delivery==="external-url"?"Remote availability, content changes, privacy, and site CSP require review. Power Pages permissions do not protect this URL.":null],
     ["Prepared file",prep.fileName||basename(asset.existingPublicUrl)],
     ["Crop / aspect",[asset.visual&&asset.visual.aspectRatio,asset.visual&&asset.visual.crop].filter(Boolean).join(" · ")],
     ["Accessibility",alt]

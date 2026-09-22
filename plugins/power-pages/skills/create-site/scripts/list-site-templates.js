@@ -7,6 +7,10 @@
 
 const {
   DECLARATIVE_SITE_TEMPLATES,
+  BOOTSTRAP_5_DOCUMENTATION_URL,
+  BOOTSTRAP_5_TEMPLATE_NAMES,
+  normalizeBootstrapVersion,
+  parseBootstrapVersionArgs,
   normalizeDeclarativeModelVersion,
 } = require('../../../scripts/lib/site-templates');
 
@@ -19,14 +23,23 @@ function parseArgs(argv) {
     administratorConfirmed:
       values.has('--administratorConfirmed') || values.has('--administrator-confirmed'),
     modelVersion: modelIndex >= 0 ? argv[modelIndex + 1] : null,
+    bootstrapVersion: parseBootstrapVersionArgs(argv) ?? null,
   };
 }
 
-function buildResult({ administratorConfirmed = false, modelVersion } = {}) {
+function buildResult({ administratorConfirmed = false, modelVersion, bootstrapVersion = null } = {}) {
   const selectedModel = normalizeDeclarativeModelVersion(modelVersion);
+  const selectedBootstrap = bootstrapVersion === null ? null : normalizeBootstrapVersion(bootstrapVersion);
+  if (selectedBootstrap === 5 && selectedModel !== 'Enhanced') {
+    throw new Error('New Bootstrap 5 sites require --modelVersion Enhanced');
+  }
   const requiredToggleState = selectedModel === 'Enhanced' ? 'enabled' : 'disabled';
+  const templates = selectedBootstrap === 5
+    ? DECLARATIVE_SITE_TEMPLATES.filter((template) => BOOTSTRAP_5_TEMPLATE_NAMES.includes(template.name))
+    : DECLARATIVE_SITE_TEMPLATES;
   return {
     modelVersion: selectedModel,
+    bootstrapVersion: selectedBootstrap,
     capability: administratorConfirmed
       ? {
           status: 'confirmed',
@@ -48,7 +61,19 @@ function buildResult({ administratorConfirmed = false, modelVersion } = {}) {
     catalog: {
       source: 'plugin-declarative-template-allowlist',
       environmentSpecific: false,
-      templates: DECLARATIVE_SITE_TEMPLATES.map((template) => ({ ...template })),
+      templates: templates.map((template) => ({ ...template })),
+      ...(selectedBootstrap === 5 ? {
+        bootstrapCompatibility: {
+          source: BOOTSTRAP_5_DOCUMENTATION_URL,
+          omittedTemplateNames: DECLARATIVE_SITE_TEMPLATES
+            .filter((template) => !BOOTSTRAP_5_TEMPLATE_NAMES.includes(template.name))
+            .map((template) => template.name),
+          reason:
+            'Only existing catalog entries in documented new Bootstrap 5 template families are included. ' +
+            'Administrator confirmation covers the Enhanced data model toggle, not the downloaded ' +
+            'Bootstrap assets; validate their version after download.',
+        },
+      } : {}),
     },
   };
 }

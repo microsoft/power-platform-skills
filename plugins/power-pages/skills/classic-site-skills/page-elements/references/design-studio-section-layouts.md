@@ -11,6 +11,24 @@ the user's prompt and existing markup; use engineering judgment for safe mechani
 details; ask only when component-to-column mapping or another structural choice is
 materially ambiguous.
 
+## Bootstrap version
+
+The examples below are **Bootstrap 5 new-section examples**, including `text-start`. Use them
+for a newly created site only after the creation workflow has verified Bootstrap 5 asset evidence.
+For an existing site, preserve its inspected native serialization and Bootstrap major; do not
+upgrade it or import another framework to match these examples.
+
+For a verified Bootstrap 3 site with no comparable section (for example an empty page), keep
+the native section/container/column structure but use its supported `text-left` rather than
+Bootstrap 5 `text-start` for the illustrated left-aligned LTR content. Honor existing RTL/language
+alignment instead of mechanically applying left alignment. Check any other version-specific
+utilities against the site's version. Unknown or conflicting Bootstrap evidence must be resolved
+before introducing version-specific markup, not guessed from the template or data model.
+
+Sources: [Power Pages Bootstrap 5](https://learn.microsoft.com/power-pages/configure/bootstrap-version-5),
+[Bootstrap 5 text](https://getbootstrap.com/docs/5.3/utilities/text/),
+[Bootstrap 3 text alignment](https://getbootstrap.com/docs/3.4/css/#type-alignment).
+
 ## Layout selection
 
 | Design Studio option | Bootstrap columns, in order |
@@ -141,7 +159,9 @@ layout and that the before/after component inventory has identical counts and id
 - Do not translate column widths into custom percentages.
 - Do not add Bootstrap `.row` elements inside the observed section.
 - Preserve the exact `container`, `sectionBlockLayout`, and `columnBlockLayout` classes.
-- Preserve the inline style order and values from the selected template.
+- Preserve native inline style order and values from the selected version-appropriate template
+  during structural authoring. An approved visual change belongs to `style-site`, which can
+  update the actual winning inline declaration without replacing the native structure.
 - Do not add content to unselected columns.
 - Do not leave the `<!-- COMPONENT_HTML -->` marker in the edited page.
 - If the target page already demonstrates a different serialization for the selected OOB

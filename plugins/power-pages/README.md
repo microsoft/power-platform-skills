@@ -59,12 +59,15 @@ site from a template accepted by the documented Power Platform Create Website AP
 - **Code sites:** choose React, Vue, Angular, or Astro; scaffold the complete SPA; apply a custom
   design with real imagery; build pages, components, and routing; preview live throughout
   development; validate the result; and commit implementation milestones.
-- **Declarative sites:** select Standard or Enhanced, confirm with an environment administrator
-  that **Switch to enhanced data model** is disabled for Standard or enabled for Enhanced, choose
-  a supported first-party template, follow template previews and live creation status in a
-  generated browser page, provision through the Power Platform API, verify the resulting model,
-  download with the explicit model, create a Git baseline, and optionally continue into
-  `/customize-declarative-site`.
+- **Classic/declarative sites:** recommend Enhanced with Bootstrap 5, confirm the selected model
+  and environment toggle with an administrator, and choose a Bootstrap-compatible first-party
+  template. Provision through the Power Platform API, verify the resulting model and downloaded
+  Bootstrap assets, and create a Git baseline. Continue through `/customize-declarative-site` for
+  cohesive typography, palette, responsive composition, and meaningful images using direct HTTPS
+  URLs without image downloads or Web File creation, or explicitly
+  keep the template unchanged. Standard/Bootstrap 3 remains an explicit compatibility option.
+  No dev server or live site preview is required; the browser documents show provisioning status
+  and the approval plan, not the site's final rendering.
 
 #### `/deploy-site`
 
@@ -93,7 +96,14 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
   one compact set of questions for genuinely missing business facts
 - Coordinates assets, snippets, Liquid/web templates, page layouts, webpages, localized content,
   and styling through their owning skills
-- Preserves the downloaded template intentionally and resolves dependencies before consumers run
+- Reuses the same visual-quality guidance as code-site creation, adapted to native Bootstrap and
+  Design Studio authoring rather than SPA theme replacement
+- New-site plans include an approved design brief and meaningful photographs or original
+  hosted illustrations using approved direct HTTPS URLs, not new image Web Files; imagery can
+  be explicitly declined. Existing template images can be reused, and explicit Web File imports
+  remain available for other customization work
+- Preserves platform behavior and existing-site visual intent, resolves dependencies before
+  consumers run, and applies guarded styling after structural authoring
 - Verifies and commits the combined local result, then optionally hands off to `/deploy-site`
 - Leaves narrow changes directly available through the individual authoring skills
 
@@ -597,8 +607,8 @@ Code site:
 13. /test-site              →  Runtime smoke test
 
 Declarative site:
-1.  /create-site                    →  Provision and download a Standard or Enhanced template
-2.  /customize-declarative-site     →  Plan and coordinate local declarative changes
+1.  /create-site                    →  Provision, download, and verify Bootstrap 5 (Enhanced recommended)
+2.  /customize-declarative-site     →  Approve and author coordinated design, content, and imagery
 3.  /deploy-site                    →  Verify identity/model and upload the declarative site
 
 ALM and release:

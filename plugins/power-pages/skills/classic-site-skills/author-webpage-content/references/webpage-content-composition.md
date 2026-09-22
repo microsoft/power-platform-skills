@@ -17,6 +17,7 @@ Normalize the request into this conceptual shape before editing:
 ```yaml
 targetFile: web-pages/contact/content-pages/Contact.en-US.webpage.copy.html
 locale: en-US
+bootstrapMajor: 5
 mode: create
 sections:
   - layout: two-equal-columns
@@ -39,6 +40,8 @@ preserve: []
 The request does not need to use YAML, but it must resolve the same decisions:
 
 - one exact existing localized target file and its resolved locale;
+- verified Bootstrap major for new/changed sections (the example is Bootstrap 5), including
+  the caller's approved `designContext` when supplied;
 - one operation mode;
 - ordered sections;
 - one supported layout for every new or structurally changed section;
@@ -51,6 +54,9 @@ The request does not need to use YAML, but it must resolve the same decisions:
 Reject a handoff that still contains unresolved design tokens such as `heroImage`,
 `primaryCtaUrl`, `TBD`, or `use the appropriate snippet`. Return those dependencies to
 the orchestrator rather than guessing their values.
+For a blank page, require the caller's actual Bootstrap evidence instead of inferring a version
+from absent markup. Existing-site content-only edits preserve native classes. Follow the section
+reference's version and RTL rules when a new section or utility is needed.
 
 ## Content ownership
 

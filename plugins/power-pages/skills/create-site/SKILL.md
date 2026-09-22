@@ -5,7 +5,8 @@ description: >-
   the full process from requirements discovery through scaffolding, component planning, design,
   implementation, validation, and deployment. For Standard or Enhanced data model declarative
   sites, provisions a documented Microsoft template, verifies the selected model, downloads the
-  site, and validates its identity and assets. Use when the user wants to create, build, or
+  site, validates its identity and Bootstrap assets, and coordinates approved image-rich design.
+  Use when the user wants to create, build, or
   scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
@@ -24,14 +25,9 @@ template-specific details.
 
 - **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
-- **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
-- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
-- **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
-- **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
-- **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
-
-**Code-site constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro).
-NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
+- **One design quality bar**: Read `${PLUGIN_ROOT}/references/site-design-quality.md` for coordinated typography, palette, composition, meaningful imagery, responsiveness, and accessibility. Reuse the appropriate code-site or classic adapter, not a second design workflow or an external design-plugin dependency.
+- **Image URLs during creation**: Add images using approved direct HTTPS URLs, not downloads or new image Web Files. Preserve suitable existing template images; do not upload local images or publish generated illustrations automatically.
+- **Classic sites need no dev server or live preview**: Use native Bootstrap-aware authoring and local verification. Provisioning status pages and approval documents are not site previews.
 
 **Initial request:** $ARGUMENTS
 
@@ -44,7 +40,7 @@ Determine the site type before creating the phase task list.
 Classify the signals in `$ARGUMENTS`:
 
 - React, Vue, Angular, Astro, SPA, or code site → **Code site**
-- EDM, enhanced data model, SDM, standard data model, Program Registration, Event Portal,
+- Classic, Liquid, EDM, enhanced data model, SDM, standard data model, Program Registration, Event Portal,
   Schedule Meetings, or Power Pages template → **Declarative site**
 
 Infer the route only when exactly one site type is indicated. If both types are indicated, treat the
@@ -110,6 +106,16 @@ load-bearing declarative question paired with the repository gate catalog.
 ---
 
 ## Code-Site Workflow
+
+The following server, preview, SPA asset, and scaffold instructions apply **only to code sites**.
+Only static SPA frameworks are supported here (React, Vue, Angular, Astro), not Next.js, Nuxt.js,
+Remix, SvelteKit, or Liquid. Classic Liquid sites use the declarative route above.
+
+- **Scaffold early, design with intention**: Get the dev server running immediately after discovery, then plan the design and features while the scaffold is live.
+- **Live preview feedback loop**: The dev server MUST be running before code-site customization. Use Playwright accessibility snapshots to verify significant changes, not screenshots.
+- **Keep the scaffold loader in sync**: Update `public/scaffold-status.json` before every `AskUserQuestion` and each Phase 5 implementation step. See [Live Preview Status Protocol](#live-preview-status-protocol).
+- **Use real images**: Source approved, relevant photos using exact discovered Unsplash IDs and sized/cropped URLs. Never leave placeholders or broken image references. Follow the code-site design adapter for asset delivery.
+- **Git checkpoints**: Commit after each page and component so coherent changes can be reverted.
 
 Guide the user through creating a complete, production-quality Power Pages code site from initial
 concept to deployed site. Discover requirements, scaffold and launch immediately, plan components

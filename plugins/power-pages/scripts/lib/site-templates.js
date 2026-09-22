@@ -115,10 +115,49 @@ const LEGACY_DOCUMENTED_TEMPLATE_NAMES = Object.freeze([
   'PowerPortals_BookMeeting',
 ]);
 
+const BOOTSTRAP_5_DOCUMENTATION_URL =
+  'https://learn.microsoft.com/en-us/power-pages/configure/bootstrap-version-5';
+
+// New Bootstrap 5 sites require Enhanced and a documented template family. Match
+// exact catalog/API identifiers, not display-name guesses. Include the documented
+// Program Registration/Meetings API aliases without adding new catalog choices.
+// Event Portal is not in the documented Bootstrap 5 creation list.
+// See: https://learn.microsoft.com/en-us/power-pages/configure/bootstrap-version-5
+const BOOTSTRAP_5_TEMPLATE_NAMES = Object.freeze([
+  'StarterLayout1',
+  'BlankPage',
+  'ProgramRegistration',
+  'PowerPortals_ProgramRegistration',
+  'BookMeetings',
+  'PowerPortals_BookMeeting',
+]);
+
 const CREATE_WEBSITE_TEMPLATE_NAMES = new Set([
   ...DECLARATIVE_SITE_TEMPLATES.map((template) => template.name),
   ...LEGACY_DOCUMENTED_TEMPLATE_NAMES,
 ]);
+
+function normalizeBootstrapVersion(value) {
+  if (value === 3 || value === 5) return value;
+  if (typeof value === 'string' && /^(?:3|5)$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  throw new Error('--bootstrapVersion must be 3 or 5');
+}
+
+function parseBootstrapVersionArgs(argv) {
+  let selected;
+  for (let index = 0; index < argv.length; index += 1) {
+    // Accept "--bootstrapVersion 5" and "--bootstrapVersion=5" (and kebab case),
+    // but never let an empty value or duplicate option become an omitted check.
+    const match = /^--(?:bootstrapVersion|bootstrap-version)(?:=(.*))?$/.exec(argv[index]);
+    if (!match) continue;
+    if (selected !== undefined) throw new Error('--bootstrapVersion must be specified only once');
+    const value = match[1] === undefined ? argv[++index] : match[1];
+    selected = normalizeBootstrapVersion(value);
+  }
+  return selected;
+}
 
 function normalizeDeclarativeModelVersion(value) {
   if (typeof value !== 'string') {
@@ -133,6 +172,10 @@ function normalizeDeclarativeModelVersion(value) {
 module.exports = {
   DECLARATIVE_SITE_TEMPLATES,
   LEGACY_DOCUMENTED_TEMPLATE_NAMES,
+  BOOTSTRAP_5_DOCUMENTATION_URL,
+  BOOTSTRAP_5_TEMPLATE_NAMES,
   CREATE_WEBSITE_TEMPLATE_NAMES,
+  normalizeBootstrapVersion,
+  parseBootstrapVersionArgs,
   normalizeDeclarativeModelVersion,
 };

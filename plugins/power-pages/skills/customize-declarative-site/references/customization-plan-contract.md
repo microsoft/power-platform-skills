@@ -82,6 +82,54 @@ The customization plan is data-model-neutral. Do not require or infer Standard v
 from the downloaded files. `/deploy-site` establishes the authoritative model from the exact
 website record in the selected environment immediately before upload.
 
+## New-site design brief
+
+For an explicit `creationIntent: "new-site"` handoff, include `newSiteDesign` in the same
+schema-version-1 plan. Omit it for ordinary existing-site edits; old plans remain valid.
+Read `${PLUGIN_ROOT}/references/site-design-quality.md` and choose actual design decisions,
+not placeholders or a fixed theme copied into every site.
+
+```json
+{
+  "newSiteDesign": {
+    "bootstrapMajor": 5,
+    "imageDelivery": "external-url",
+    "typography": "Existing approved serif headings paired with a readable sans-serif body; strong display-to-body scale.",
+    "palette": "Warm ivory surfaces, deep navy text, restrained teal actions; check every foreground/surface pair.",
+    "spacing": "Consistent 8px rhythm with generous section separation and tighter related content.",
+    "composition": "Asymmetric image-and-copy hero, service overview, editorial supporting image, clear final action.",
+    "responsive": "Stack native columns on narrow screens; preserve image focal points and readable line lengths.",
+    "imagery": "required"
+  }
+}
+```
+
+The validator requires:
+
+- numeric `bootstrapMajor` of 5, or 3 with a non-empty `compatibilityReason` recording the user's
+  explicit legacy choice. This is verified asset evidence, not a data-model inference;
+- non-empty `typography`, `palette`, `spacing`, `composition`, and `responsive` decisions,
+  plus the existing top-level `aesthetic` and `mood`;
+- `imageDelivery: "external-url"` on every new creation handoff. When present, the validator
+  rejects added image assets using Web File delivery; reuse of existing site assets and font
+  imports remain supported. Previously approved schema-1 plans without this policy still validate
+  and resume unchanged. Never remove the policy or rewrite old approval to change delivery;
+- `imagery: "required"` and at least one non-decorative `photograph`, `illustration`, or
+  `other-image` with an `informative` or `editorial` role in the validated asset manifest.
+  Logo/favicon/icon-only plans do not satisfy the new-site imagery requirement;
+- alternatively, `imagery: "user-declined"` with non-empty `imageryReason` recording the user's
+  explicit choice. Do not use this exception merely because sourcing is unfinished;
+- at least one `style-site` operation, with every styling operation depending directly or
+  transitively on all structural operations. This makes styling a final stage in resumable execution.
+
+The HTML approval document displays this brief, including any imagery opt-out. `--action resolve`
+returns it with `aesthetic` and `mood` as `designContext`, separate from owner-specific
+`resolvedInputs`, so every child receives the same approved direction without duplicating it in
+each operation. The brief is covered by the plan hash. It does not authorize CSS before
+`style-site`'s separate exact-diff approval, nor prove beauty, contrast, or Studio/runtime rendering.
+Verify approved image URLs, placement, any reused local assets, and every brief decision in the
+combined local result. The hash binds external URLs, not mutable remote image bytes.
+
 ## Capability records
 
 Capabilities describe readiness observed in the downloaded files:
@@ -101,7 +149,9 @@ prerequisite and a local remediation; it is not a permanent template limitation.
 
 ## Visual asset records
 
-Assets explain the approved visual decision while operations retain execution mechanics:
+Assets explain the approved visual decision while operations retain execution mechanics.
+New-site image additions use external URLs, as illustrated below; replace example placeholders
+with the actual discovered image and provenance:
 
 ```json
 {
@@ -113,11 +163,11 @@ Assets explain the approved visual decision while operations retain execution me
   "source": {
     "type": "unsplash",
     "sourcePage": "https://unsplash.com/photos/<photo>",
-    "downloadUrl": "https://images.unsplash.com/photo-<id>?w=1600&fit=crop&fm=jpg",
     "photographer": "<photographer>",
     "license": "Unsplash License"
   },
-  "delivery": "web-file",
+  "delivery": "external-url",
+  "externalUrl": "https://images.unsplash.com/photo-<id>?w=1600&fit=crop&fm=jpg",
   "placements": [
     {
       "page": "Home",
@@ -138,15 +188,8 @@ Assets explain the approved visual decision while operations retain execution me
     }
   },
   "preparation": {
-    "status": "staged",
-    "cachePath": ".powerpages-customization/assets/<sha256>-Home-Hero.jpg",
-    "sha256": "<64-lowercase-hex>",
-    "mimeType": "image/jpeg",
-    "fileName": "Home-Hero.jpg",
-    "width": 1600,
-    "height": 900
-  },
-  "webFileOperationId": "import-home-hero"
+    "status": "remote"
+  }
 }
 ```
 
@@ -156,9 +199,24 @@ Rules:
   `other-image`.
 - `role` is `brand`, `informative`, `editorial`, `structural`, `functional`, or `decorative`.
 - `source.type` is `existing-site`, `user-provided`, `agent-authored`, or `unsplash`.
-- `existing-site` sources use `preparation.status: "existing"`; every other source uses `staged`.
+- `delivery` is `external-url` or `web-file`. External delivery is for images, not fonts.
+- External images use `source.type: "user-provided"` (approved hosted/CDN image) or `"unsplash"`,
+  a non-empty license/ownership basis, an absolute HTTPS `externalUrl`, and
+  `preparation: { "status": "remote" }` only. Reject credentials, whitespace/backslashes and
+  non-HTTPS schemes; do not add cache paths, hashes, local URLs or `webFileOperationId`.
+- At least one non-`author-web-file` consumer must carry the exact external URL in its static
+  `inputs`, including nested component sources. No staging/import operation or output binding
+  is needed. Availability, actual image content, hotlink permission, privacy and CSP are reviewed
+  separately; schema validation neither fetches nor certifies the remote resource.
+- Unsplash external delivery uses `externalUrl` on `images.unsplash.com` plus its Unsplash photo
+  page, photographer and license. Legacy `source.downloadUrl`, if supplied too, must match
+  `externalUrl` exactly. Web File imports retain the required `source.downloadUrl`.
+- For `web-file` delivery, `existing-site` sources use `preparation.status: "existing"` and new
+  sources use `staged`.
 - Agent-authored assets are safe original SVGs, not raster images.
-- New files are staged outside the declarative root and delivered as local Web Files.
+- New files on the explicit Web File path are staged outside the declarative root with
+  `cachePath`, lowercase SHA-256, MIME type, filename and available dimensions. This is not the
+  new-site image URL path.
 - A staged asset references one `author-web-file` operation whose inputs contain the exact
   `cachePath` and whose outputs include `publicUrl`.
 - Existing assets use `preparation.status: "existing"` plus a site-root-relative
@@ -238,6 +296,7 @@ Use the canonical nested section structure expected by `author-webpage-content`:
   "locales": ["en-US"],
   "inputs": {
     "mode": "create",
+    "heroImageUrl": "https://cdn.example.com/images/contact-team.jpg",
     "sections": [
       {
         "layout": "two-equal-columns",
@@ -264,13 +323,8 @@ Use the canonical nested section structure expected by `author-webpage-content`:
       }
     ]
   },
-  "dependsOn": ["add-contact-hero"],
-  "outputBindings": {
-    "heroImageUrl": {
-      "sourceOperation": "add-contact-hero",
-      "output": "publicUrl"
-    }
-  },
+  "dependsOn": [],
+  "outputBindings": {},
   "preserve": [],
   "expectedOutputs": ["localizedTargetFile"]
 }
@@ -286,8 +340,10 @@ not a guessed value.
 
 ## Dependency execution
 
-The approved plan records logical dependencies. At execution time, the orchestrator passes actual
-verified outputs:
+For new-site image URLs, no asset dependency is needed: pass the approved static URL to the
+native content owner. Never create a fake Web File operation to obtain a URL that already exists.
+For explicit Web File delivery elsewhere, the approved plan records logical dependencies and
+the orchestrator passes actual verified outputs:
 
 ```text
 author-web-file creates /speaker-hero.jpg
