@@ -532,9 +532,12 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```bash
        node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
        ```
-       If the result is `ok: true`, use `localDir` as the seed directory:
+       If the result is `ok: true`, use `localDir` as the attachment base and `seedFile` as the only seed JSON:
        ```bash
-       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
+       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" \
+         --seedDir "<localDir>" \
+         --seedFile "<seedFile>" \
+         --envUrl "<environmentUrl>"
        ```
        Return the JSON summary (`inserted`, `failed`, `skipped`, `errors`) to the main conversation. Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`.
    11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.

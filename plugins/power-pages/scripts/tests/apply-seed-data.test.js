@@ -61,6 +61,47 @@ test('listSeedFiles sorts JSON files by filename and ignores non-json files', (t
   assert.deepEqual(listSeedFiles(dir).map((file) => path.basename(file)), ['010-categories.json', '020-posts.json']);
 });
 
+test('listSeedFiles uses an explicit seed file without treating JSON attachments as seeds', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const seedFile = path.join(dir, 'data.json');
+  fs.writeFileSync(seedFile, '{}');
+  fs.writeFileSync(path.join(dir, 'attachment.json'), '{"document":"content"}');
+
+  assert.deepEqual(listSeedFiles(dir, {}, seedFile), [seedFile]);
+});
+
+test('applySeedData ignores a JSON attachment when an explicit seed file is provided', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const seedFile = path.join(dir, 'data.json');
+  fs.writeFileSync(seedFile, JSON.stringify({
+    entitySetName: 'cr123_categories',
+    records: [{ cr123_name: 'Announcements' }],
+  }));
+  fs.writeFileSync(path.join(dir, 'attachment.json'), JSON.stringify({
+    entitySetName: 'cr123_unintended',
+    records: [{ cr123_name: 'Must not be inserted' }],
+  }));
+  const requestUrls = [];
+
+  const result = await applySeedData({
+    seedDir: dir,
+    seedFile,
+    envUrl: 'https://org.crm.dynamics.com',
+  }, {
+    token: 'token',
+    makeRequest: async ({ url }) => {
+      requestUrls.push(url);
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(result.inserted, 1);
+  assert.equal(requestUrls.length, 1);
+  assert.match(requestUrls[0], /\/cr123_categories$/);
+});
+
 test('listSeedFiles rejects symlinked seed roots and JSON files', (t) => {
   const parent = tempDir();
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
@@ -961,8 +1002,9 @@ test('createTokenProvider refreshes after the configured request cadence', () =>
 });
 
 test('apply-seed-data CLI parser and runner return best-effort summaries', async () => {
-  assert.deepEqual(parseArgs(['--seedDir', '/tmp/seed', '--envUrl', 'https://org.crm.dynamics.com']), {
+  assert.deepEqual(parseArgs(['--seedDir', '/tmp/seed', '--seedFile', '/tmp/seed/data.json', '--envUrl', 'https://org.crm.dynamics.com']), {
     seedDir: '/tmp/seed',
+    seedFile: '/tmp/seed/data.json',
     envUrl: 'https://org.crm.dynamics.com',
   });
   assert.deepEqual(await run([]), {

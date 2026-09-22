@@ -25,12 +25,21 @@ function emptySummary() {
   return { ok: true, inserted: 0, failed: 0, skipped: 0, errors: [] };
 }
 
-function listSeedFiles(seedDir, deps = {}) {
+function listSeedFiles(seedDir, deps = {}, seedFile = null) {
   const fsImpl = deps.fs || fs;
   if (!seedDir || !fsImpl.existsSync(seedDir)) return [];
   const rootStat = fsImpl.lstatSync(seedDir);
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     throw new Error('Seed directory must be a regular directory and not a symbolic link');
+  }
+  if (seedFile) {
+    const resolvedSeedFile = path.resolve(seedFile);
+    if (path.extname(resolvedSeedFile).toLowerCase() !== '.json') {
+      throw new Error(`Seed file must be JSON: ${seedFile}`);
+    }
+    const containmentError = validateContainedPath(seedDir, resolvedSeedFile, fsImpl);
+    if (containmentError) throw new Error(containmentError.replace(/^Attachment path/, 'Seed file'));
+    return [resolvedSeedFile];
   }
   return fsImpl.readdirSync(seedDir)
     .filter((name) => name.toLowerCase().endsWith('.json'))
@@ -536,12 +545,12 @@ function createTokenProvider({ envUrl, initialToken, resolveToken, refreshEvery 
   };
 }
 
-async function applySeedData({ seedDir, envUrl }, deps = {}) {
+async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
   const summary = emptySummary();
   try {
     envUrl = validateDataverseEnvironmentUrl(envUrl);
     const seedEntries = [];
-    for (const filePath of listSeedFiles(seedDir, deps)) {
+    for (const filePath of listSeedFiles(seedDir, deps, seedFile)) {
       try {
         const seed = readSeedFile(filePath, deps);
         for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {

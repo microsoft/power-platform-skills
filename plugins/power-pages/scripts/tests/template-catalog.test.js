@@ -1249,6 +1249,7 @@ test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __
           entitySetName: 'cr123_invoices',
           records: [
             { __files: { cr123_invoicepdf: 'files/invoice.pdf' } },
+            { __files: { cr123_metadata: 'files/metadata.json' } },
             { __files: { cr123_terms: 'files/terms.docx' } },
           ],
         }));
@@ -1260,7 +1261,8 @@ test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __
 
   assert.equal(result.ok, true);
   assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed'));
-  assert.deepEqual(downloaded, ['data.json', 'invoice.pdf', 'terms.docx']);
+  assert.equal(result.seedFile, path.join(dir, SHA, 'templates/spa/company/seed/data.json'));
+  assert.deepEqual(downloaded, ['data.json', 'invoice.pdf', 'metadata.json', 'terms.docx']);
 });
 
 test('downloadSeedDataDirectory rejects directory seed paths without calling the GitHub tree API', async () => {

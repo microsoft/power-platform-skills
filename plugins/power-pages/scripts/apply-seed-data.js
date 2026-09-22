@@ -6,6 +6,7 @@ const { formatJsonResult, runBestEffortJsonCli } = require('./lib/template-cli-a
 
 // Accepted argv shape:
 //   --seedDir ~/.power-platform-skills/template-cache/<sha>/templates/spa/<id>/seed-data
+//   [--seedFile ~/.power-platform-skills/template-cache/<sha>/templates/spa/<id>/seed-data/data.json]
 //   --envUrl https://org.crm.dynamics.com
 // Missing args are returned as `{ ok:false }` so create-site can continue to
 // activation; seeding is best-effort and must never block go-live.
@@ -14,6 +15,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--seedDir') args.seedDir = argv[++i];
+    else if (arg === '--seedFile') args.seedFile = argv[++i];
     else if (arg === '--envUrl') args.envUrl = argv[++i];
   }
   return args;

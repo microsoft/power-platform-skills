@@ -1063,7 +1063,12 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
       for (const artifactPath of attachmentPaths) {
         downloaded.push((await downloadArtifact({ owner, repo, sha, artifactPath, cacheRoot }, deps)).localPath);
       }
-      return { ok: true, localDir: path.dirname(seedFile), files: downloaded };
+      return {
+        ok: true,
+        localDir: path.dirname(seedFile),
+        seedFile,
+        files: downloaded,
+      };
     }
     return { ok: false, seedDataPath, error: `Seed data path must point to a JSON file: ${seedDataPath}` };
   } catch (err) {
