@@ -167,10 +167,23 @@ Do not fix unrelated pre-existing issues.
   complete mutation receipts. Apply the exact sizing, `FillPortions`, nested-width,
   overflow, and fixed-height rules from `${PLUGIN_ROOT}/references/LayoutGuide.md` and
   `${PLUGIN_ROOT}/references/QAChecks.md`.
+- Implement the screen's viewport-containment row exactly. The responsive AutoLayout root
+  is the sole top-level child; navigation, forms, alerts, receipts, confirmations, and
+  other conditional surfaces remain nested beneath it. Put state-driven `Visible` on the
+  whole conditional surface, not only on its children.
+- For each fixed-height text-bearing control, test the longest reachable value. A
+  multiword 112x44 button or badge is not safe merely because the parent wraps; either
+  allocate wrapped-line height or disable wrapping and provide sufficient width.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
   negative behavior rather than replacing it with explanatory copy.
+- Implement every Temporal Ordering Contract. Sort typed time directly, or parse and
+  validate input into the declared zero-padded 24-hour sort key. For canonical text evidence,
+  use the bounded direct form from `PowerFxGuide.md`: guard the same input for blank, then put
+  the direct declared-source `Patch` with `Text(TimeValue(same input), "HH:mm")` inside
+  `IfError`. Staged normalization can be legitimate, but the static validator reports it as
+  unverified. Keep display formatting separate and preserve the declared invalid/blank state.
 - For short finite-choice fields, use the radio, visible choice buttons, or directly
   selectable dropdown named by the brief, populate all concrete options, configure visible
   item text, and give required fields a valid default when the business rule permits one.
