@@ -45,14 +45,18 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
   // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
   //
-  // ⚠ 502/503/504 come from an INTERMEDIARY, so the write behind them may have COMMITTED. For a
-  // CONDITIONAL write that makes a blind retry harmful: it re-sends an `If-Match` the committed
-  // write has just made stale, and the ambiguity comes back as a definitive-looking 412. The
-  // vendored SDK settles those statuses itself for BPF deactivation (its bpf `update`/`delete`
-  // re-read the row to decide), which this retry would pre-empt. Nothing in this plugin issues
-  // those writes today — the build converges a reused flow with a plain record update and teardown
-  // deletes records directly — so the policy is unchanged; exempt conditional writes from it before
-  // anything starts editing flows through the SDK.
+  // ⚠ 502/503/504 come from an INTERMEDIARY, so the write behind them may have COMMITTED — and this
+  // retry then re-sends it. For a CONDITIONAL write (every SDK form, view, chart, dashboard and app
+  // update carries `If-Match`) or a KEYED create (a client-minted id, such as a business process
+  // flow), the re-send meets the row the first attempt already created or bumped, so the outcome
+  // comes back as a definitive-looking 412 — a version conflict, or "already exists" — for a write
+  // that succeeded. That is a spurious FAILURE, never a lost write, and the idempotent rebuild
+  // converges; without the retry the same commit would still fail (as a bare 502), while an attempt
+  // that genuinely did not commit would no longer recover. So the policy stays.
+  // It is NOT safe for a write whose failure path must know whether the first attempt landed: the
+  // SDK's business-process-flow `update`/`delete` settle an ambiguous deactivate by re-reading the
+  // row, and this retry pre-empts that. Nothing in this plugin issues those today; exempt such
+  // writes from the retry before anything does.
   const TRANSIENT = new Set([429, 500, 502, 503, 504]);
   // Jittered, capped exponential backoff. Metadata customizations serialize on a per-entity
   // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,

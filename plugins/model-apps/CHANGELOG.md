@@ -50,13 +50,10 @@ downloads that round-trip Choice columns.
   backslash escaped its own closing quote.
 - **A crashed browser-automation server reports failure**, instead of exiting 0 because the process
   was killed by a signal rather than by its own choice.
-- **`generate-page-manifest --force` writes only inside the working directory.** A `package.json`
-  that is a symlink is refused rather than followed — including a dangling one, which previously
-  *created* a file outside the directory. A **hard link** is refused too (it is a regular file, so
-  the kind check missed it), the working directory is resolved through `realpath` so a symlinked
-  ancestor cannot escape a lexical check, a probe that fails for any reason other than "not there"
-  is treated as unsafe, and the write is a temp-file-and-rename so a link swapped in after the
-  checks is discarded rather than followed.
+- **`generate-page-manifest --force` never writes outside the working directory or through a link.**
+  A `package.json` that is a symlink (even a dangling one) or a hard link is refused, and so is a
+  working directory that is itself a link or junction; a linked ancestor is still followed. A file is
+  replaced atomically and keeps its file mode, and a read-only one is refused rather than replaced.
 - **`--clear-workspace` refuses a UNC/network path**, which could otherwise block on an unreachable
   share with no way to interrupt it. A mapped drive is unaffected.
 - **A transient discovery failure no longer certifies a `--changed-only` baseline as fresh**, which
@@ -73,21 +70,22 @@ downloads that round-trip Choice columns.
   cell widened by hand survives. Clamping used the grid the spec compiled to rather than the live
   one, so an auto layout could narrow a maker's four-column cell to one; and narrowing a section
   left an over-wide cell behind, unchanged on the next apply too. `rowspan` is rejected unless it is
-  the last field in its section ([#581]).
-- **A section containing a row-spanning cell is left alone instead of reflowed.** The cell beneath a
-  `rowspan` reserves that slot, and re-flowing by reading order moved the next field into it. This
-  applies to both routes — a grid change and a span change — and a span change that would overflow
-  such a row is skipped outright rather than half-applied. The refusal is reported, and `--verify`
-  still reports the section if it genuinely overflows.
+  inline on the last field in its section ([#581]), and a form-level `fieldOptions` span is now
+  validated too instead of a bad value being dropped.
+- **Re-flowing a section no longer breaks a maker's row-spanning layout.** Once a field follows a
+  `rowspan`, re-flowing by reading order moved it into the reserved slot. Such a section now keeps
+  its grid when the rows cannot follow a narrowing, and a span change that would overflow its row is
+  skipped. Trailing spans (the stock-form shape) re-flow normally. Every refusal is reported and
+  recorded in the build result's `skipped.layout`.
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
 - **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
   row was not re-packed, leaving three columns of content in a two-column section. Displaced fields
   move down rather than to the bottom of the section; a span that still fits writes nothing.
-- **`--verify` no longer lets a too-narrow section excuse its own span.** The expected span was
-  computed from the width that deployed, so `columns: 4, colspan: 4` arriving as `columns: 1,
-  colspan: 1` verified PASS. Spans are judged against the authored width, and the width itself is
-  now checked separately.
+- **`--verify` judges widths and spans by the build's own rule.** It used to derive them separately:
+  a too-narrow section could excuse its own span (`columns: 4, colspan: 4` arriving as 1 and 1
+  verified PASS), while a section that omits `columns`, a QuickCreate section, or a span set through
+  `fieldOptions` was misjudged. Verify now uses the compiler's width and field-option rules.
 - **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
   containers and deliberately does not rename them (form scripts and business rules reference
   section names), but verify looked them up by the authored name — so a section it had just reused

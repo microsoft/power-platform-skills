@@ -15,6 +15,7 @@ const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -252,6 +253,7 @@ async function verifySpec(spec, read, opts = {}) {
       if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
+      const formFieldOptions = fieldOptionsMap(f);
       if (!canReadTopology) {
         add('form-topology', `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
@@ -336,16 +338,19 @@ async function verifySpec(spec, read, opts = {}) {
               return;
             }
             claimedSections.add(secHit.index);
-            // The AUTHORED grid width — the expectation. Absent means the author stated none, so the
-            // deployed width is not compared and a span is checked against its raw authored value.
-            const wantCols = Number(sec.columns);
-            const haveWantCols = Number.isFinite(wantCols) && wantCols >= 1;
+            // The grid width the COMPILER emits for this authored section — taken from the same
+            // function the compiler uses, never re-derived here. Reading the raw `columns` instead
+            // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
+            // and a QuickCreate section is capped at 1, so "the spec declares 2" was never what the
+            // build was asked to produce. It is still the AUTHORED width, not the deployed one — see
+            // the span comparison below for why that distinction matters.
+            const wantCols = sectionGridWidth(sec, f.formType || 'Main');
             // GRID WIDTH. Checked independently, because the span comparison below derives its
             // expectation from the AUTHORED width: without this, a section deployed narrower than
             // asked would go unreported AND would quietly lower the span expectation to match
             // itself.
             const secCols = Number(secHit.item.columns);
-            if (haveWantCols && Number.isFinite(secCols) && secCols !== wantCols) {
+            if (Number.isFinite(secCols) && secCols !== wantCols) {
               problems.push(`section '${secName}' is deployed ${secCols} column(s) wide, the spec declares ${wantCols}`);
             }
             // OCCUPANCY: no deployed row may carry more columns of content than its section has.
@@ -363,17 +368,22 @@ async function verifySpec(spec, read, opts = {}) {
             // A span the author DECLARED must be the deployed span. An UNDECLARED one is not
             // checked — the build never writes it, so a maker's hand-widened cell must survive
             // both the rebuild and the verification.
+            //
+            // "Declared" means what the COMPILER was asked for: the inline entry merged over the
+            // form's `fieldOptions`, by the compiler's own merge. Checking inline objects only left
+            // every `fieldOptions` span unverified — including one the build had to skip.
             const deployedCellOf = (logical) => (secHit.item.rows || [])
               .flatMap((r2) => r2.cells || [])
               .find((c) => c.control && c.control.fieldName === logical);
             for (const entry of (sec.fields || [])) {
-              if (!entry || typeof entry !== 'object') continue;
-              const fl = String(entry.name || '').toLowerCase();
+              const inline = normalizeFieldEntry(entry);
+              const fl = inline.name;
               if (!fl) continue;
+              const eff = mergeFieldOptions(formFieldOptions[fl], inline, fl);
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
               for (const key of ['colspan', 'rowspan']) {
-                const declared = Number(entry[key]);
+                const declared = Number(eff[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
                 // Compare the EFFECTIVE span, clamped against the AUTHORED grid width — never the
                 // deployed one. Deriving the expectation from what was deployed let a section that
@@ -383,7 +393,7 @@ async function verifySpec(spec, read, opts = {}) {
                 //
                 // Only `colspan` is bounded by the grid; `rowspan` has no such limit, so it is
                 // compared as authored.
-                const want = key === 'colspan' && haveWantCols ? Math.min(declared, wantCols) : declared;
+                const want = key === 'colspan' ? Math.min(declared, wantCols) : declared;
                 const got = Number(dc[key]) || 1;
                 if (got !== want) {
                   problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${declared}`

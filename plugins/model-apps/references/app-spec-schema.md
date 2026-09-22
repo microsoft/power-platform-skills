@@ -716,11 +716,15 @@ correctly; the compiler does not emit one yet. The restriction can be lifted onc
 in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
 
 A **deployed** `rowspan` — one a maker added by hand, which the authored restriction above cannot
-prevent — makes the rows of that section positionally meaningful in the same way. So when a section
-narrows, a section that contains one is **left exactly as it is** rather than re-flowed, and the
-refusal is reported. Re-flowing reads the cells in order and cannot tell a reserved slot from an
-empty one, which would move the next field into it. `--verify` still reports the section if it
-genuinely overflows its grid, so the condition stays visible.
+prevent — can make the rows of a section positionally meaningful in the same way: once any cell
+**follows** a row-spanning cell, re-flowing the section by reading order could move that cell into
+the reserved slot. In such a section the build therefore never re-flows. Narrowing its grid is
+applied only when every row already fits the new width; otherwise the section **keeps its current
+grid** and the refusal is reported. A span change that would overflow a row there is skipped (and
+reported), rather than applied without the re-flow. A section whose row spans are all **trailing**
+— stock Main forms put `rowspan` on the last cell — re-flows normally, because nothing comes after
+the span to land in its reservation. Every refusal is also recorded in the build result
+(`skipped.layout`), and `--verify` reports the divergence for an explicit layout.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a
@@ -749,7 +753,7 @@ reorder a subset without re-declaring every other field.
 
 ### Per-field control options — `readOnly`, `hidden`, `after`
 
-A form field can carry three per-control options. Declare them **form-level** in `fieldOptions`
+A form field can carry these per-control options. Declare them **form-level** in `fieldOptions`
 (keyed by column logical name) — the only route under an `auto` layout, which has no field list —
 or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readOnly": …, "hidden": … }`.
 Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
@@ -767,6 +771,11 @@ Where both apply to one field the inline entry wins; a plain string entry keeps 
   Two anchor shapes are **rejected**, because neither has a satisfiable answer: only **one** field may
   sit immediately after a given anchor (to place several in sequence, *chain* them — anchor the second
   after the first), and anchors may not form a **cycle**.
+- **`colspan: <n>`** widens the control to `n` of its section's columns (a whole number ≥ 1, clamped
+  to the section's width) — the same key an inline entry takes. An `auto` layout generates a
+  one-column section, so there it only widens a field on a deployed form whose section is wider (a
+  stock Main form the build reconciles). **`rowspan`** above 1 is accepted **inline only**, on the last
+  field of a section: a form-level option cannot see where its field lands, so it is rejected there.
 
 **Only the enabled state is ever written.** The build emits `readOnly`/`hidden` when you ask for
 them and writes *nothing* when you do not, so a rebuild never clears a lock or a hide someone applied

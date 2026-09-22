@@ -224,6 +224,23 @@ function fieldOptionsMap(formSpec) {
   return map;
 }
 
+// Merge a form-level `fieldOptions` default with an inline field entry: the inline entry wins
+// wherever it says something. Exported so `--verify` expects the span the compiler was ASKED to
+// emit, whichever surface declared it — re-deriving the precedence there left `fieldOptions` spans
+// unverified entirely, so a span the build had to skip went unreported.
+function mergeFieldOptions(base, inline, logical) {
+  if (!base) return inline || { name: logical, readOnly: false, hidden: false, after: undefined };
+  if (!inline) return base;
+  return {
+    name: logical,
+    readOnly: inline.readOnly || base.readOnly,
+    hidden: inline.hidden || base.hidden,
+    after: inline.after !== undefined ? inline.after : base.after,
+    colspan: inline.colspan !== undefined ? inline.colspan : base.colspan,
+    rowspan: inline.rowspan !== undefined ? inline.rowspan : base.rowspan,
+  };
+}
+
 // Cell for the Notes/activity-timeline control.
 //
 // The classId IS the intent for non-field controls (it identifies which PCF/built-in
@@ -425,6 +442,22 @@ function reorderCellsByAnchors(cells, positions) {
   return cells;
 }
 
+// The grid width the compiler EMITS for an authored section. This is the ONE place that rule lives:
+// the compiler lays a section out with it, and `--verify` must judge the deployed form against the
+// same value. A second derivation in the verifier drifted — it read the raw `columns`, so a section
+// that omits it (the compiler's default is 1) or one on a QuickCreate form (capped at 1) was reported
+// as wrong even though it deployed exactly as compiled.
+//
+// This is the AUTHORED effective width, not the live one: the reconcile deliberately clamps against
+// the section it is writing into (`convergeCellSpans`), which on an existing form can differ.
+//
+// Quick Create forms must use single-column sections. Dataverse rejects multi-column
+// (columns="11"/"111") quick-create sections with "Columns in a section must be set to '1'".
+function sectionGridWidth(section, formType) {
+  const maxCols = formType === 'QuickCreate' ? 1 : 4;
+  return Math.min((section && section.columns) || 1, maxCols);
+}
+
 // Compile an App Spec form entry into the SDK's canonical desired-state intent.
 //
 // NEW topology: tabs[] → columns[] → sections[] → rows[] → cells[].
@@ -451,9 +484,9 @@ function compileFormIntent(spec, formSpec, opts) {
   const entity = entityByLogical(spec, entityLogical);
   const formType = formSpec.formType || 'Main';
 
-  // Quick Create forms must use single-column sections. Dataverse rejects multi-column
-  // (columns="11"/"111") quick-create sections with "Columns in a section must be set
-  // to '1'". This cap also blocks notes — quick-create forms don't host the timeline.
+  // The QuickCreate single-column cap — the same rule `sectionGridWidth` applies to explicit
+  // sections; the auto layout below picks its own 1-or-2 within it. It also blocks notes:
+  // quick-create forms don't host the timeline.
   const maxCols = formType === 'QuickCreate' ? 1 : 4;
   const explicit = Array.isArray(formSpec.tabs) || formSpec.layout === 'explicit';
 
@@ -496,19 +529,9 @@ function compileFormIntent(spec, formSpec, opts) {
   const recordPosition = function (opt) {
     if (opt && opt.after && opt.name && opt.after !== opt.name) positions[opt.name] = opt.after;
   };
-  // Merge a form-level default with an inline override for one field.
+  // Merge a form-level default with an inline override for one field — see mergeFieldOptions.
   const optionsFor = function (logical, inline) {
-    const base = formOptions[logical];
-    if (!base) return inline || { name: logical, readOnly: false, hidden: false, after: undefined };
-    if (!inline) return base;
-    return {
-      name: logical,
-      readOnly: inline.readOnly || base.readOnly,
-      hidden: inline.hidden || base.hidden,
-      after: inline.after !== undefined ? inline.after : base.after,
-      colspan: inline.colspan !== undefined ? inline.colspan : base.colspan,
-      rowspan: inline.rowspan !== undefined ? inline.rowspan : base.rowspan,
-    };
+    return mergeFieldOptions(formOptions[logical], inline, logical);
   };
 
   let tabs;
@@ -541,7 +564,7 @@ function compileFormIntent(spec, formSpec, opts) {
                 recordRawSpan(opt);
                 return fieldCellIntent(inline.name, { isRequired: requiredFor(inline.name), readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan });
               });
-              const secCols = Math.min(s.columns || 1, maxCols);
+              const secCols = sectionGridWidth(s, formType);
               return {
                 // The generated fallback name is the form's identity for this section on a REBUILD
                 // (topology reconcile matches deployed sections by name). Shared with the spec gate
@@ -877,6 +900,8 @@ function findFieldCellPointer(formJson, logical) {
 
 module.exports = {
   compileFormIntent,
+  sectionGridWidth,
+  mergeFieldOptions,
   clampedCellSpan,
   cellFitsInRow,
   // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its

@@ -957,3 +957,31 @@ test('a transient failure on an ordinary update is still retried', async () => {
   assert.ok(attempts > 1,
     `a transient fault must still be retried; ran ${attempts} attempt(s)`);
 });
+
+// The ONE case the deterministic-failure stop must not break: an uncertain CREATE that actually
+// landed. Once the env diff adopts the new page, the next attempt is an UPDATE by id — a different
+// command — so the create's argument fault says nothing about it. Every other adoption test used a
+// transient error, so a guard that ignored the adoption transition survived the whole suite; and
+// that mutant is a duplicate-create hazard, because the call throws without returning the id the
+// create already minted.
+test('a deterministic-looking error on a CREATE that landed is still adopted and returned', async () => {
+  const uploads = [];
+  let listN = 0;
+  const run = async (args) => {
+    if (args[2] === 'list') {
+      listN += 1;
+      // before the create: empty; after it: the page exists — the create DID land.
+      return { status: 0, stdout: listN === 1 ? LIST_EMPTY : listText([{ pageId: GUID, name: 'Overview' }]), stderr: '' };
+    }
+    uploads.push(args);
+    return uploads.length === 1
+      ? { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." }
+      : { status: 0, stdout: `Successfully pushed page. Page ID: ${GUID}`, stderr: '' };
+  };
+  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} })
+    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
+  assert.strictEqual(r.pageId, GUID, 'the adopted page must be returned, not lost to a thrown error');
+  assert.strictEqual(uploads.length, 2, 'exactly one follow-up attempt — the UPDATE of the adopted page');
+  assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
+  assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
+});
