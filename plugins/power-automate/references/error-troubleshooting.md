@@ -25,17 +25,23 @@
 
 ## Auth and identity diagnostics
 
-FlowAgent rides whichever identity the Azure CLI is signed in as. When that is
-not the intended account, failures surface as permission or DNS errors that
-never mention identity. Three tools make it visible and recoverable in-session:
+FlowAgent uses Azure CLI for Flow, Dataverse and Graph calls, and a separate
+MSAL sign-in for Connectivity. A mismatch can surface as a permission or
+environment error. These tools distinguish the effective identity from the
+inventory of historical cached accounts:
 
 | Tool | Use it when |
 |------|-------------|
-| `whoami` | First stop for any auth-shaped failure — shows the active `az` account, the CLI profile dir (honours `AZURE_CONFIG_DIR`), the resolved cloud, the token cache location, and the tenant the token actually carries. |
+| `whoami` | Shows the active `az` account, CLI profile dir, cloud, token identity and `effectiveConnectivityIdentity`. `connectivityIdentity` remains the full cached-account inventory. |
 | `reconnect` | After `az login` / `az account set` switched accounts, or when a stale token is causing 401/403. Clears cached tokens and re-acquires. |
-| `doctor` | Full checklist: CLI present, signed in, config dir, cloud, token acquisition, token-vs-`az` identity agreement, current environment, environment reachability — each with a concrete fix. |
-| `list_accounts` | Connection commands sign in separately from `az`. This lists those cached accounts, their tenants, and which match the active `az` tenant. Acquires no token. |
-| `switch_account` | Choose the account connection commands sign in as. Clears the cached sign-in and pins the next one; omit `username` to get an account picker instead. |
+| `doctor` | Full checklist, including effective Connectivity username and tenant versus `az`. Different users within one tenant fail this check; inactive cache entries alone do not. |
+| `list_accounts` | Lists cached accounts separately from `effectiveConnectivityIdentity`, plus the stored preference and effective `nextSignIn` settings. Acquires no token. |
+| `switch_account` | Clears the cached sign-in and saves a username preference; omit `username` to clear it. Check `preferencePersisted` and `nextSignIn` before assuming the requested account will be targeted. |
+
+Interactive selection follows `PA_LOGIN_HINT`, then the stored preference,
+then `PA_NO_ACCOUNT_PICKER`, then the default picker. Environment overrides
+still apply after `switch_account` or `reconnect`; reconnect preserves the
+stored preference.
 
 ## Diagnostic Steps
 

@@ -103,17 +103,17 @@ Three tools cover this:
 
 | Tool | Use it to |
 |---|---|
-| `list_accounts` | See the cached Connectivity accounts, each one's tenant, and whether it matches the active Azure CLI tenant. Acquires no token, so it never opens a browser. |
-| `switch_account` | Choose the account the next Connectivity sign-in uses. Pass `username`, or omit it to be shown an account picker. |
-| `whoami` / `doctor` | See both identities side by side, with the mismatch called out. |
+| `list_accounts` | See the cached-account inventory, `effectiveConnectivityIdentity`, and `nextSignIn` settings. Inactive tenant caches do not count as identity mismatches. Acquires no token. |
+| `switch_account` | Save a preferred `username`, or omit it to clear the preference. Check `preferencePersisted` and `nextSignIn`: environment overrides still apply. |
+| `whoami` / `doctor` | Compare the effective Connectivity username and tenant with Azure CLI, including different users in the same tenant. |
 
-**When a connection tool fails with `ServiceToServiceEnvironmentNotFound`**, read
-it as an identity error before an environment one. Run `list_accounts`: if a
-cached account's tenant differs from the Azure CLI tenant, that is the cause.
-`switch_account` with the account you want fixes it — it both clears the cached
-sign-in and pins the next one, which is why it works where deleting the cache
-file by hand does not. A bare cache delete lands you back on whatever account
-the browser already has signed in.
+**When a connection tool fails with `ServiceToServiceEnvironmentNotFound`**,
+check identity before assuming the environment is missing. `list_accounts`
+distinguishes the effective account from historical cached accounts. A different
+username or tenant on the effective account indicates a mismatch; an unused
+tenant's cache alone does not. `switch_account` clears the cached sign-in and
+records the preferred username for reauthentication. It does not prove that
+the subsequent sign-in succeeded or that environment permissions are correct.
 
 `switch_account` does not change the Azure CLI identity. `az` is yours to set;
 where the two disagree, the tool says so rather than silently re-pointing one.
@@ -130,6 +130,10 @@ browser's currently-signed-in account is never used silently. Two overrides:
 
 Precedence, most specific first: `PA_LOGIN_HINT`, then a `switch_account`
 preference, then `PA_NO_ACCOUNT_PICKER`, then the picker.
+For example, `switch_account` with username B still targets A if
+`PA_LOGIN_HINT=A` is set. Omitting the username clears only the stored preference;
+it does not override `PA_LOGIN_HINT` or `PA_NO_ACCOUNT_PICKER`. The response
+reports the effective settings instead of promising a picker in those cases.
 
 ## Step 4: Check the FlowAgent tools are wired
 

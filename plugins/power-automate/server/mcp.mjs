@@ -14411,8 +14411,11 @@ function readCachedMsalIdentities(opts) {
   try {
     if (!fs2.existsSync(cacheDir))
       return out;
+    const only = opts?.identity ? `${safeIdentity(opts.identity)}.json` : null;
     for (const f of fs2.readdirSync(cacheDir)) {
       if (!isTokenCacheFile(f))
+        continue;
+      if (only && f !== only)
         continue;
       const full = path2.join(cacheDir, f);
       try {
@@ -14445,7 +14448,8 @@ var init_msal_disk_cache = __esm({
 var msal_auth_exports = {};
 __export(msal_auth_exports, {
   MsalTokenProvider: () => MsalTokenProvider,
-  resolveInteractiveAccountOptions: () => resolveInteractiveAccountOptions
+  resolveInteractiveAccountOptions: () => resolveInteractiveAccountOptions,
+  selectCachedMsalAccount: () => selectCachedMsalAccount
 });
 import { execFile as execFile2 } from "node:child_process";
 function escapeHtml(s) {
@@ -14465,6 +14469,11 @@ function resolveInteractiveAccountOptions(env = process.env, opts = {}) {
     return {};
   }
   return { prompt: "select_account" };
+}
+function selectCachedMsalAccount(accounts, identity) {
+  const byIdentity = identity !== "common" ? accounts.find((account) => account.tenantId === identity) : void 0;
+  const byEnv = process.env.PA_TENANT_ID ? accounts.find((account) => account.tenantId === process.env.PA_TENANT_ID) : void 0;
+  return byIdentity ?? byEnv ?? accounts[0] ?? null;
 }
 var DEFAULT_CLIENT_ID, MsalTokenProvider;
 var init_msal_auth = __esm({
@@ -14504,6 +14513,12 @@ var init_msal_auth = __esm({
         this.identity = tenant;
         this.pca = new PublicClientApplication(config3);
       }
+      getConnectivityAuthState() {
+        return {
+          cacheIdentity: this.identity,
+          account: this.account ? { username: this.account.username, tenantId: this.account.tenantId } : null
+        };
+      }
       /**
        * Drop the cached Connectivity identity so the next call re-authenticates.
        *
@@ -14541,9 +14556,7 @@ var init_msal_auth = __esm({
             const cache = this.pca.getTokenCache();
             const accounts = await cache.getAllAccounts();
             if (accounts.length > 0) {
-              const byIdentity = this.identity && this.identity !== "common" ? accounts.find((a) => a.tenantId === this.identity) : null;
-              const byEnv = process.env.PA_TENANT_ID ? accounts.find((a) => a.tenantId === process.env.PA_TENANT_ID) : null;
-              this.account = byIdentity ?? byEnv ?? accounts[0];
+              this.account = selectCachedMsalAccount(accounts, this.identity);
             }
           } catch {
           }
@@ -53807,6 +53820,9 @@ function buildCompositeAuth(opts = {}) {
     return msalAuth;
   }
   return {
+    getConnectivityAuthState() {
+      return msalAuth?.getConnectivityAuthState?.() ?? null;
+    },
     async getAccessToken(resource) {
       if (resource === connectivityResource || resource === CONNECTIVITY_RESOURCE_COMMERCIAL) {
         const provider = await getMsalAuth();
@@ -55830,6 +55846,28 @@ import fs4 from "node:fs";
 import path5 from "node:path";
 init_msal_disk_cache();
 init_msal_auth();
+function normalizeIdentity(value) {
+  return value?.trim().toLowerCase() ?? "";
+}
+function connectivityIdentityMismatch(identity, az) {
+  if (!identity || !az)
+    return false;
+  return Boolean(identity.tenantId && az.tenantId && normalizeIdentity(identity.tenantId) !== normalizeIdentity(az.tenantId) || identity.username && az.user && normalizeIdentity(identity.username) !== normalizeIdentity(az.user));
+}
+function effectiveConnectivityIdentity(az, opts = {}) {
+  const state = opts.auth?.getConnectivityAuthState?.();
+  if (state?.account)
+    return state.account;
+  if (["1", "true"].includes(process.env.FLOWAGENT_DISABLE_MSAL_CACHE ?? ""))
+    return null;
+  const identity = state?.cacheIdentity ?? az?.tenantId ?? process.env.PA_TENANT_ID ?? "common";
+  const cached3 = readCachedMsalIdentities({ cacheDir: opts.cacheDir, identity });
+  const selected = selectCachedMsalAccount(cached3, identity);
+  return selected?.username || selected?.tenantId ? selected : null;
+}
+function describeConnectivityIdentity(identity) {
+  return `${identity.username ?? "(unknown account)"} in tenant ${identity.tenantId ?? "unknown"}`;
+}
 async function readTokenIdentity(auth2, resource) {
   try {
     const token = await auth2.getAccessToken(resource);
@@ -55843,14 +55881,7 @@ async function whoAmI(auth2, config3, opts = {}) {
   const tokenIdentity = await readTokenIdentity(auth2, config3.cloudEndpoints.flowResource);
   const identityMismatch = Boolean(azIdentity?.tenantId && tokenIdentity?.tenantId && azIdentity.tenantId !== tokenIdentity.tenantId);
   const connectivityIdentity = readCachedMsalIdentities();
-  const azUser = azIdentity?.user?.trim().toLowerCase();
-  const connectivityIdentityMismatch = Boolean(connectivityIdentity.some((i) => {
-    if (azIdentity?.tenantId && i.tenantId && i.tenantId !== azIdentity.tenantId)
-      return true;
-    if (azUser && i.username && i.username.trim().toLowerCase() !== azUser)
-      return true;
-    return false;
-  }));
+  const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, { auth: auth2 });
   return {
     azIdentity,
     azureConfigDir: azureConfigDir(),
@@ -55860,8 +55891,9 @@ async function whoAmI(auth2, config3, opts = {}) {
     tokenIdentity,
     identityMismatch,
     connectivityIdentity,
+    effectiveConnectivityIdentity: effectiveIdentity,
     connectivityCacheDir: defaultMsalCacheDir(),
-    connectivityIdentityMismatch,
+    connectivityIdentityMismatch: connectivityIdentityMismatch(effectiveIdentity, azIdentity),
     currentEnv: opts.currentEnv ?? null
   };
 }
@@ -55886,7 +55918,7 @@ async function reconnect(auth2, config3) {
     reacquired = false;
   }
   const azIdentity = readActiveAzIdentity();
-  const connSuffix = clearedConnectivityEntries > 0 ? ` Connectivity sign-in cleared (${clearedConnectivityEntries} file${clearedConnectivityEntries === 1 ? "" : "s"}); ${describeNextConnectivitySignIn()}.` : "";
+  const connSuffix = ` Connectivity sign-in reset; ${describeNextConnectivitySignIn()}.`;
   return {
     clearedEntries,
     tokenCacheDir: dir,
@@ -55903,12 +55935,12 @@ function describeNextConnectivitySignIn(opts) {
   });
   if (resolved.loginHint) {
     const source = process.env.PA_LOGIN_HINT?.trim() ? "PA_LOGIN_HINT" : "your switch_account preference";
-    return `the next connection command will sign in as ${resolved.loginHint} (${source})`;
+    return `the next interactive Connectivity sign-in will target ${resolved.loginHint} (${source})`;
   }
   if (resolved.prompt === "select_account") {
-    return "the next connection command will show an account picker";
+    return "the next interactive Connectivity sign-in will show an account picker";
   }
-  return "the next connection command will use your browser's current account (PA_NO_ACCOUNT_PICKER is set)";
+  return "the next interactive Connectivity sign-in will use your browser's current account (PA_NO_ACCOUNT_PICKER is set)";
 }
 function azVersionInstalled() {
   try {
@@ -55993,15 +56025,16 @@ async function doctor(auth2, config3, opts = {}) {
       fix: match ? void 0 : "Call the reconnect tool (clears the token cache and re-acquires)."
     });
   }
-  const connectivityIdentities = readCachedMsalIdentities();
-  if (connectivityIdentities.length > 0 && azIdentity?.tenantId) {
-    const foreign = connectivityIdentities.filter((i) => i.tenantId && i.tenantId !== azIdentity.tenantId);
-    const describe3 = (i) => `${i.username ?? "(unknown account)"} in tenant ${i.tenantId ?? "unknown"}`;
+  const connectivityIdentity = effectiveConnectivityIdentity(azIdentity, { auth: auth2 });
+  if (connectivityIdentity) {
+    const mismatch = connectivityIdentityMismatch(connectivityIdentity, azIdentity);
+    const comparable = Boolean(azIdentity?.tenantId && azIdentity.user && connectivityIdentity.tenantId && connectivityIdentity.username);
+    const detail = `Effective Connectivity account: ${describeConnectivityIdentity(connectivityIdentity)}. Azure CLI account: ${azIdentity?.user ?? "(unknown account)"} in tenant ${azIdentity?.tenantId ?? "unknown"}.`;
     checks.push({
       name: "connectivity-identity",
-      status: foreign.length > 0 ? "fail" : "pass",
-      detail: foreign.length > 0 ? `Connection commands authenticate separately (MSAL, api.powerplatform.com) and that cache holds ${foreign.map(describe3).join("; ")} \u2014 not the az tenant ${azIdentity.tenantId}. Cache: ${defaultMsalCacheDir()}` : `Connectivity sign-in matches the az tenant (${connectivityIdentities.map(describe3).join("; ")}).`,
-      fix: foreign.length > 0 ? "Call switch_account with the account you want (it clears this cache and pins the next sign-in), or reconnect to clear it and be shown an account picker." : void 0
+      status: mismatch ? "fail" : comparable ? "pass" : "warn",
+      detail: mismatch ? `Connectivity identity mismatch. ${detail}` : comparable ? `Connectivity username and tenant match Azure CLI. ${detail}` : `Connectivity identity could not be fully compared. ${detail}`,
+      fix: mismatch ? "Call switch_account with the intended username, or reconnect. Check the returned account-selection settings for the next sign-in." : comparable ? void 0 : "Run whoami and check the Azure CLI profile and Connectivity sign-in."
     });
   }
   const envId = opts.currentEnv ?? null;
@@ -56051,6 +56084,8 @@ function listAccounts(opts) {
   const azIdentity = readActiveAzIdentity();
   const preferredAccount = readPreferredAccount(opts);
   const cached3 = readCachedMsalIdentities(opts);
+  const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, opts);
+  const nextSignIn = resolveInteractiveAccountOptions(process.env, { storedHint: preferredAccount });
   const accounts = cached3.map((i) => ({
     username: i.username,
     tenantId: i.tenantId,
@@ -56058,20 +56093,22 @@ function listAccounts(opts) {
     matchesAzTenant: Boolean(azIdentity?.tenantId && i.tenantId === azIdentity.tenantId),
     preferred: Boolean(preferredAccount && i.username?.toLowerCase() === preferredAccount.toLowerCase())
   }));
-  const azUserLc = azIdentity?.user?.trim().toLowerCase();
-  const identityMismatch = accounts.some((a) => a.tenantId && !a.matchesAzTenant || Boolean(azUserLc && a.username && a.username.trim().toLowerCase() !== azUserLc));
+  const identityMismatch = connectivityIdentityMismatch(effectiveIdentity, azIdentity);
   let message;
-  if (accounts.length === 0) {
-    message = preferredAccount ? `No Connectivity sign-in is cached. The next connection command will sign in as ${preferredAccount}.` : "No Connectivity sign-in is cached. The next connection command will show an account picker.";
+  if (!effectiveIdentity) {
+    message = `No effective Connectivity account could be read from the running provider or its cache partition; ${describeNextConnectivitySignIn(opts)}.`;
   } else if (identityMismatch) {
-    message = `Cached Connectivity account(s) do not all match the Azure CLI tenant (${azIdentity?.tenantId ?? "unknown"}). This is what surfaces as ServiceToServiceEnvironmentNotFound. Call switch_account with the account you want.`;
+    message = `Effective Connectivity account (${describeConnectivityIdentity(effectiveIdentity)}) differs from Azure CLI (${azIdentity?.user ?? "(unknown account)"} in tenant ${azIdentity?.tenantId ?? "unknown"}). Call switch_account with the intended username and check the returned account-selection settings.`;
   } else {
-    message = `${accounts.length} cached Connectivity account${accounts.length === 1 ? "" : "s"}, matching the Azure CLI tenant.`;
+    message = `Effective Connectivity account: ${describeConnectivityIdentity(effectiveIdentity)}. No known mismatch with Azure CLI.`;
   }
+  message += ` The ${accounts.length} cached account entr${accounts.length === 1 ? "y is" : "ies are"} an inventory; inactive entries do not determine the effective identity.`;
   return {
     accounts,
     azIdentity,
     preferredAccount,
+    nextSignIn,
+    effectiveConnectivityIdentity: effectiveIdentity,
     connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
     identityMismatch,
     message
@@ -56083,19 +56120,14 @@ function switchAccount(username, opts) {
   const clearedConnectivityEntries = clearMsalDiskCache(opts);
   opts?.auth?.resetConnectivityAuth?.();
   const azIdentity = readActiveAzIdentity();
-  let warning;
-  if (target && azIdentity?.user && azIdentity.user.includes("@") && target.includes("@")) {
-    const azDomain = azIdentity.user.split("@")[1]?.toLowerCase();
-    const targetDomain = target.split("@")[1]?.toLowerCase();
-    if (azDomain && targetDomain && azDomain !== targetDomain) {
-      warning = `The Azure CLI is signed in as ${azIdentity.user} but Connectivity will sign in as ${target}. That is supported, but if environment calls start failing, this difference is the first thing to check.`;
-    }
-  }
   const cleared = `Cleared ${clearedConnectivityEntries} cached Connectivity sign-in${clearedConnectivityEntries === 1 ? "" : "s"}.`;
+  const preferredAccount = readPreferredAccount(opts);
+  const nextSignIn = resolveInteractiveAccountOptions(process.env, { storedHint: preferredAccount });
   if (!persisted) {
     const failure = `${cleared} But the account preference could not be saved to ${opts?.cacheDir ?? defaultMsalCacheDir()}, so ${describeNextConnectivitySignIn(opts)}. ` + (target ? `To sign in as ${target} anyway, set PA_LOGIN_HINT=${target}, or fix the permissions on that directory and retry.` : "Check the permissions on that directory and retry.");
     return {
-      preferredAccount: null,
+      preferredAccount,
+      nextSignIn,
       clearedConnectivityEntries,
       connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
       azIdentity,
@@ -56104,9 +56136,16 @@ function switchAccount(username, opts) {
       message: failure
     };
   }
-  const message = target ? `${cleared} The next connection command will sign in as ${target}.` : `${cleared} The next connection command will show an account picker.`;
+  const message = `${cleared} ${target ? `Saved preference for ${target}` : "Cleared the stored account preference"}; ${describeNextConnectivitySignIn(opts)}.`;
+  let warning;
+  if (normalizeIdentity(nextSignIn.loginHint) !== normalizeIdentity(target) && nextSignIn.loginHint) {
+    warning = `PA_LOGIN_HINT overrides the stored preference: the next interactive sign-in targets ${nextSignIn.loginHint}, not ${target ?? "an account picker"}.`;
+  } else if (nextSignIn.loginHint && azIdentity?.user && normalizeIdentity(nextSignIn.loginHint) !== normalizeIdentity(azIdentity.user)) {
+    warning = `Azure CLI is signed in as ${azIdentity.user}; the next interactive Connectivity sign-in targets ${nextSignIn.loginHint}. These are separate identities.`;
+  }
   return {
     preferredAccount: target,
+    nextSignIn,
     clearedConnectivityEntries,
     connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
     azIdentity,
@@ -66496,7 +66535,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("reconnect", "Clear FlowAgent's cached tokens \u2014 both the Azure CLI token cache and the separate MSAL cache used for Connectivity (connection) commands \u2014 and re-acquire as the account the Azure CLI is currently signed in as. Use after `az login`/`az account set` switched accounts, or when a stale token is causing 401/403 failures \u2014 this avoids restarting the session. The next connection command will prompt for an account.", {}, { title: "Reconnect" }, async () => {
+  server2.tool("reconnect", "Clear FlowAgent's cached tokens \u2014 both the Azure CLI token cache and the separate MSAL cache used for Connectivity (connection) commands \u2014 and re-acquire the Flow token as the active Azure CLI account. Use after `az login`/`az account set` switched accounts, or for stale-token 401/403 failures. Connectivity reauthentication follows PA_LOGIN_HINT, the saved switch_account preference, PA_NO_ACCOUNT_PICKER, then the default picker; the response describes which applies.", {}, { title: "Reconnect" }, async () => {
     try {
       return safeResult(await reconnect(getActiveMcpContext().auth, config3));
     } catch (e) {
@@ -66514,15 +66553,15 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("list_accounts", "List the accounts FlowAgent has cached for Connectivity (api.powerplatform.com) calls \u2014 the separate sign-in that connection tools use and that does NOT follow `az login`/`az account set`. Shows each cached account's tenant, whether it matches the active Azure CLI tenant, and which one the next sign-in would use. Acquires no token, so it never opens a browser. Use alongside whoami when connection tools fail with ServiceToServiceEnvironmentNotFound.", {}, { readOnlyHint: true, title: "List Accounts" }, async () => {
+  server2.tool("list_accounts", "List cached Connectivity accounts separately from the effective account used by the running provider or selected cache partition. Reports username/tenant mismatches with Azure CLI and effective settings for the next interactive sign-in, including environment overrides. Historical cache entries alone are not a mismatch. Acquires no token and never opens a browser.", {}, { readOnlyHint: true, title: "List Accounts" }, async () => {
     try {
-      return safeResult(listAccounts());
+      return safeResult(listAccounts({ auth: getActiveMcpContext().auth }));
     } catch (e) {
       return safeError(e);
     }
   });
-  server2.tool("switch_account", "Choose which account Connectivity (connection) commands sign in as. Clears the cached Connectivity sign-in and records the account to use next, so the sign-in cannot silently reuse the browser's ambient session. Pass `username` to target an account, or omit it to be shown an account picker at the next sign-in. Does not change the Azure CLI identity \u2014 run `az login`/`az account set` for that.", {
-    username: external_exports.string().optional().describe("UPN to sign in as next (e.g. user@contoso.com). Omit to force an account picker instead.")
+  server2.tool("switch_account", "Clear the cached Connectivity sign-in and save a username preference for the next interactive sign-in. Omit username to clear that preference. PA_LOGIN_HINT overrides the preference; without either hint PA_NO_ACCOUNT_PICKER enables browser SSO, otherwise an account picker appears. Returns preferencePersisted and nextSignIn so an override or failed write is visible. Does not change the Azure CLI identity.", {
+    username: external_exports.string().optional().describe("Preferred UPN (e.g. user@contoso.com). Omit to clear the stored preference. Environment account-selection overrides still apply.")
   }, { title: "Switch Account" }, async ({ username }) => {
     try {
       return safeResult(switchAccount(username ?? null, { auth: getActiveMcpContext().auth }));
