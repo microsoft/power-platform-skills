@@ -2,7 +2,7 @@
 name: setup
 description: Set up Power Automate CLI prerequisites. Use when the user is new, something isn't working, or they need help getting started.
 user-invocable: true
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators, mcp__flowagent__whoami, mcp__flowagent__doctor, mcp__flowagent__reconnect, mcp__flowagent__list_accounts, mcp__flowagent__switch_account
 model: opus
 ---
 
@@ -85,13 +85,13 @@ detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 - **If it works**: Move on.
 - **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
 - **If it fails with other errors**: Show the error and suggest they contact IT support.
-- **If they're on a sovereign cloud and connection-management commands fail**: get
-  the actual error before assuming a cause. If Entra returns `AADSTS650057`
-  (invalid resource / app not preauthorized), they can register their own Azure AD
-  app with Power Platform Connectivity scopes and set `PA_CLIENT_ID=<app-id>`. Any
-  other failure is not a preauthorization problem — FlowAgent used to assert that
-  it was, for every non-commercial cloud, without ever attempting the call. Flow
-  management (list/create/run) works without `PA_CLIENT_ID` regardless.
+- **If they're on a sovereign cloud and connection-management commands fail**: keep
+  the original error and inspect its code. `AADSTS650057` can indicate an invalid
+  resource or missing app authorization; `AADSTS65001` can require admin consent.
+  An app-not-found or consent failure may require an appropriately authorized
+  public-client registration and `PA_CLIENT_ID=<app-id>`. Network, tenant-selection
+  and expired-session errors need different remediation. Do not infer missing
+  preauthorization from the cloud name or classify every other code as unrelated.
 
 ## Signing in to a specific account
 
@@ -119,6 +119,10 @@ the subsequent sign-in succeeded or that environment permissions are correct.
 where the two disagree, the tool says so rather than silently re-pointing one.
 `reconnect` keeps a recorded preference — it drops credentials, and the
 preference is a stated intent rather than a credential.
+It waits for pending token acquisition and cache cleanup, then clears in-memory
+tokens for all Azure CLI resources as well as Connectivity. A cleanup failure
+is an error, not a completed switch: fix the cache access problem and retry.
+Do not continue under the assumption that credentials changed when reset failed.
 
 On interactive sign-in FlowAgent forces the account picker by default, so the
 browser's currently-signed-in account is never used silently. Two overrides:

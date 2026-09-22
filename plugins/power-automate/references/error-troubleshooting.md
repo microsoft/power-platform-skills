@@ -21,6 +21,12 @@
 | `EnvironmentAccessDenied` / `ServiceToServiceEnvironmentNotFound` | FlowAgent is authenticated as a different account than intended, or a cached token outlived an `az logout`/`az login` | Run `whoami` to see the active identity and `list_accounts` to see the separate Connectivity one, then `switch_account` (or `reconnect`) to fix it. No session restart needed. |
 | Calls still succeed as the *old* account after `az login` | Stale disk token entry | Fixed: cache entries are now stamped with the active `az` identity and are rejected on mismatch. If you still see it, run `reconnect`. |
 | `az` account looks right but FlowAgent disagrees | `AZURE_CONFIG_DIR` points at a different CLI profile | `whoami` reports the profile directory in use; `doctor` flags a custom `AZURE_CONFIG_DIR`. |
+| `token-cache-clear-failed` | An explicit credential reset could not enumerate or delete cache files | Read the failed path in the error, close competing processes or fix directory permissions, then retry `reconnect` or `switch_account`. A persisted account preference alone does not mean credentials were reset. |
+| `auth-reset-required` | A token request crossed an account-reset boundary, or an earlier reset failed | Retry after the reset finishes. If cleanup failed, correct its reported cause and complete a new reset first; the provider will not silently reuse stale credentials. |
+| `DataversePickerUnavailable` / `DataverseLogicalNamesUnavailable` | The selected picker schema or logical-name metadata is unavailable | Inspect `get_operation_details` and `resolve_params` for the same environment, connection and organization. This is not evidence that the table is absent. |
+| `DataverseDiscoveryIncomplete` / `DataverseDiscoveryChanged` | Table discovery is incomplete or changed between related reads | Retry with the intended organization and a working connection. Do not infer absence, uniqueness, or a need to recreate a table. |
+| `ResponseTooLarge` | The response cannot fit without losing data | No partial success payload is returned. Use `resolve_params` filtering/paging, or `get_flow` with a supported `properties.definition...` path. |
+| `DiscoveryChanged` | A discovery cursor was used with different arguments or the catalog changed | Restart without `cursor`, then keep the environment, connector, operation, connection, inputs, parameter and query unchanged across pages. |
 | Machine-group calls return `400` on `$select` | Old builds selected a non-existent `grouptype` column | Fixed — the real column is `flowgrouptype` (label `flowgrouptypename`). Rebuild/update the plugin. |
 
 ## Auth and identity diagnostics
@@ -42,6 +48,44 @@ Interactive selection follows `PA_LOGIN_HINT`, then the stored preference,
 then `PA_NO_ACCOUNT_PICKER`, then the default picker. Environment overrides
 still apply after `switch_account` or `reconnect`; reconnect preserves the
 stored preference.
+Reset is awaited before reacquisition. `reconnect` clears all Azure CLI resource
+tokens, including Graph, API Hub and Dataverse, rather than only the Flow token.
+The returned counts describe files actually removed. Failed credential removal
+is reported as an error and must not be interpreted as a completed account switch.
+
+## Dataverse discovery and complete responses
+
+`resolve_entity` uses the Dataverse operation's schema-driven `entityName`
+picker. For a selected organization, pass
+`dependencies: {"organization": "https://contoso.crm.dynamics.com"}` along with
+the intended environment and existing connection. When omitted, the organization
+is discovered from that environment's linked Dataverse instance, rather than
+assuming a generic connection has an organization bound to it. Logical names, connector
+values and display labels are matched without guessing plural forms; the
+returned value is the connector's value, which may differ from the logical name.
+Raw metadata paths accept the service's camelCase keys when the connector schema
+declares the corresponding PascalCase paths.
+Authorization, malformed-response and incomplete-discovery errors are tool
+errors, not `not-found`.
+
+To inspect a large picker through MCP, use `resolve_params` with
+`parameter: "entityName"`, an optional `query`, and `pageSize` from 1 to 500.
+Use `operation: "ListRecordsWithOrganization"` and
+`currentInputs: {"organization": "https://contoso.crm.dynamics.com"}` when
+selecting an organization. Repeat the same request with `_page.nextCursor`
+as `cursor` until `_page.hasMore` is false.
+
+`_page.returned` counts entries in the current response; `_page.available`
+counts matching entries observed from the service. `_page.total` is `null`
+when discovery is incomplete. `_page.sourceComplete` must be true before
+absence can be inferred. `_page.complete` means the current response contains
+the entire filtered result, not that the current page is valid; later pages can
+therefore have `complete: false` with `hasMore: false`. A requested page can
+shrink to keep the returned JSON within the response-size limit.
+
+Small, healthy, unfiltered responses keep their existing envelope. Oversized
+results are never sliced into malformed JSON or described as a full result
+saved elsewhere.
 
 ## Diagnostic Steps
 
