@@ -168,8 +168,11 @@ downloads that round-trip Choice columns.
   reapplied, and that is now said out loud.
 - **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.**
 - **The vendored SDK is refreshed** for upstream wire-correctness fixes (view joins, `addElement`
-  re-keying, dashboard parsing, duplicate sort attributes, BPF `If-Match`). Measured against the
-  previous bundle, none of it changes this plugin's output today — it removes latent hazards.
+  re-keying, dashboard parsing, duplicate sort attributes, BPF `If-Match`, a flow left disabled when
+  an edit fails) and a patched `@xmldom/xmldom` (0.8.15, parser denial-of-service fixes). A business
+  process flow now receives its concurrency token with its own create, so no follow-up read is made.
+  Measured against the previous bundle, none of it changes this plugin's output today — it removes
+  latent hazards.
 
 ### Changed
 

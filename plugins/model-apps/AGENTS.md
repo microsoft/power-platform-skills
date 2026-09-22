@@ -845,38 +845,56 @@ Residual limits, accepted deliberately:
 Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
 silently. If you hit one, widen the tests first.
 
-## Vendored SDK — known gaps (fix upstream, not here)
+## Vendored SDK — gap log (fix upstream, not here)
 
 `scripts/vendor/cds-maker-sdk.cjs` is a **build artefact** of the first-party maker SDK
 (`packages/cds-maker-sdk`), re-vendored wholesale and tracked by `PROVENANCE.json`. Never patch the
 bundle to work around a defect in it: the next re-vendor silently reverts the patch, and the hash in
 `PROVENANCE.json` stops matching. Fix it in the SDK, then re-vendor. Record the gap here so the next
-person does not re-diagnose it.
+person does not re-diagnose it — and record only what was **measured**, with where it was measured.
 
-Behaviours confirmed against the bundle at `81b2d6ed` that the plugin cannot correct from outside:
+**Status at `29fdb172`: no open gap reachable from this plugin.** What was reported, and what held up:
 
-- **BPF deactivation sits outside the create/repair recovery boundary.** A failure partway through
-  deactivation leaves the flow in a state the recovery path does not roll back, so a retry can act on
-  a half-deactivated process.
-- **`BPF_CREATE_NO_TOKEN` recovery does not adopt the server's version.** When the concurrency token
-  has to be recovered, the artefact keeps the version it had rather than the one the server now
-  holds, so the next conditional write can be rejected for a reason the caller cannot see.
-- **Business-process-flow ids are minted client-side.** The create posts a caller-generated
-  `workflowid` rather than adopting the server's, so `OData-EntityId` on the response is ignored.
-  This is legitimate Dataverse usage, but it means a create that *appears* to fail may already own a
-  known id — which is why the plugin's uncertain-create reconciliation is env-wide rather than
-  response-driven.
+- **Fixed upstream (`e82444ab`): a failed edit or delete could leave an Active BPF disabled.** The
+  deactivate that precedes an edit could throw after it committed, outside the block that restores
+  the process. **Not reachable from this plugin** — the build never edits a flow through the SDK (a
+  reused flow's state is converged by a direct `workflow` record update) and teardown deletes with
+  direct record operations, so neither goes through the SDK's BPF `update`/`delete`.
+- **Reported as "`BPF_CREATE_NO_TOKEN` recovery does not adopt the server's version" — inaccurate
+  as stated; the real gap is next to it.** Measured against both `81b2d6ed` and `29fdb172`: when
+  recovery works, the next write IS conditioned on the server's current version. But the recovery
+  the error's own message prescribes, `fetchArtifact`, does not work on its own. The failed create
+  stored no metadata, and `fetchArtifact` deliberately stores none for a never-pushed local copy, so
+  the next push re-issues the create and the server refuses it (`412` → `ARTIFACT_ALREADY_EXISTS`,
+  `saved: false`). Discarding the local copy first (`deleteArtifact`, then `fetchArtifact`) makes the
+  next push an update. It fails closed, never silently. **Not reachable from this plugin** — a build
+  that hits it fails that step, and the next build's reuse query adopts the flow by name and table.
+- **A client-minted `workflowid` is not a defect.** It is the keyed-create contract: replaying a
+  create is refused with `412` rather than producing a second row.
 
-The token-recovery ORDER is worth knowing because it is not obvious from the call site and it
-determines what a fixture has to suppress to exercise the read-back:
+**The `workflows` write contract, measured live.** The fakes in
+`scripts/tests/business-process-flows.test.js` model exactly this:
 
-```
-token = <etag from the activation PATCH> ?? <etag on the create response> ?? <read the record back>
-```
+| Request | Response |
+|---|---|
+| plain `PATCH` | `204`, no `ETag`, no body |
+| `PATCH` + `Prefer: return=representation` | `200`, `ETag` header **and** `@odata.etag` |
+| `POST` + `Prefer: return=representation` | `201`, the token in the **body** only — no `ETag` header |
+| `POST` of an existing `workflowid` | `412`, `0x80040237` "A record with matching key values already exists." |
 
-An `Active` flow is activated by a PATCH whose response carries an etag, so only a **Draft** flow
-whose create returns no etag reaches the read-back. See
-`scripts/tests/business-process-flows.test.js`.
+The SDK asks every BPF write to echo, so a create takes its token from its own write. The by-id
+read-back is reached only in an environment that ignores `Prefer` — and then by an Active flow as
+much as a Draft one, because an un-echoed activation answers `204` with no `ETag` too. An earlier
+version of this section claimed only a Draft flow could reach it; that came from a fake that returned
+an `ETag` on every PATCH, not from Dataverse.
+
+**Before adopting the SDK's BPF `update`/`delete`,** note one interaction. `createAzHttpClient`
+retries `502`/`503`/`504` on POST and PATCH, which are exactly the statuses the SDK now treats as
+"outcome unknown" on a conditional deactivate and settles by re-reading. Retrying a deactivate that
+committed re-sends a now-stale `If-Match`, turning the ambiguity into a definitive-looking `412` that
+escapes the restore the fix added. Nothing here issues such a write today, so the transport is
+unchanged; a feature that starts editing flows through the SDK needs an exemption for conditional
+writes first.
 
 ## Hooks & Validators
 

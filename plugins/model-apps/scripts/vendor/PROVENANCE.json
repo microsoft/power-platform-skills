@@ -1,14 +1,14 @@
 {
-  "commit": "81b2d6ed10ad6dcf1a313b6890585770e7410e32",
-  "subject": "fix: initialize solution version for new-shell host slots",
+  "commit": "29fdb1725046204f0b773499722fe76f9c65d845",
+  "subject": "fix(ppac-components): stop environment groups gating the environments list first render",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-21T20:15:13.914Z",
-  "newestSrcAt": "2026-09-21T17:42:47.492Z",
+  "libBuiltAt": "2026-09-22T21:31:38.987Z",
+  "newestSrcAt": "2026-09-22T21:04:44.589Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-21T20:15:30.709Z",
-  "bundleSha256": "b6b93bbce9a68639189ace01ff3811430c7621f6ba7918495334326116ae3eb8",
-  "bundleBytes": 714498
+  "builtAt": "2026-09-22T21:32:09.517Z",
+  "bundleSha256": "851319b810ab64ec052c19fd5b29e363645c5130a4cbd5c58f2a8d056f901fcc",
+  "bundleBytes": 717726
 }
