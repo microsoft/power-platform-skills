@@ -109,11 +109,11 @@ function snapshotOrThrow(opts) {
     backupVersion: 1
   };
   const filename = `${timestampSlug(new Date(capturedAt))}.json`;
-  const path6 = join(dir, filename);
-  writeFileSync(path6, JSON.stringify(backup, null, 2), "utf-8");
-  logger.debug(`Backup written: ${path6}`);
+  const path7 = join(dir, filename);
+  writeFileSync(path7, JSON.stringify(backup, null, 2), "utf-8");
+  logger.debug(`Backup written: ${path7}`);
   pruneRetention(dir);
-  return path6;
+  return path7;
 }
 function pruneRetention(dir) {
   let entries;
@@ -148,28 +148,28 @@ function listBackups(envId, flowId) {
     return [];
   const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
   return files.map((filename) => {
-    const path6 = join(dir, filename);
+    const path7 = join(dir, filename);
     let capturedAt = "";
     let operation = "unknown";
     let sizeBytes = 0;
     try {
-      sizeBytes = statSync(path6).size;
-      const raw = readFileSync(path6, "utf-8");
+      sizeBytes = statSync(path7).size;
+      const raw = readFileSync(path7, "utf-8");
       const parsed = JSON.parse(raw);
       capturedAt = parsed.capturedAt ?? "";
       operation = parsed.operation ?? "unknown";
     } catch (err) {
       logger.warn(`Could not read backup ${filename}: ${err instanceof Error ? err.message : err}`);
     }
-    return { filename, capturedAt, operation, path: path6, sizeBytes };
+    return { filename, capturedAt, operation, path: path7, sizeBytes };
   }).sort((a, b) => b.capturedAt > a.capturedAt ? 1 : -1);
 }
 function readBackup(envId, flowId, filename) {
-  const path6 = join(flowDir(envId, flowId), filename);
-  if (!existsSync(path6)) {
-    throw new Error(`Backup not found: ${path6}`);
+  const path7 = join(flowDir(envId, flowId), filename);
+  if (!existsSync(path7)) {
+    throw new Error(`Backup not found: ${path7}`);
   }
-  const raw = readFileSync(path6, "utf-8");
+  const raw = readFileSync(path7, "utf-8");
   return JSON.parse(raw);
 }
 function latestBackup(envId, flowId) {
@@ -478,6 +478,257 @@ function validateDefinition(definition, connectionReferences) {
 var init_flow_definition = __esm({
   "packages/core/dist/validation/flow-definition.js"() {
     "use strict";
+  }
+});
+
+// packages/core/dist/auth/clear-cache-files.js
+import * as fs from "node:fs";
+import * as path from "node:path";
+function isMissing(error51) {
+  return error51 instanceof Error && "code" in error51 && error51.code === "ENOENT";
+}
+function clearCacheFiles(directory, include) {
+  let filenames;
+  try {
+    filenames = fs.readdirSync(directory);
+  } catch (error51) {
+    if (isMissing(error51))
+      return 0;
+    throw new TokenCacheClearError([directory], 0, error51);
+  }
+  let removed = 0;
+  const failed = [];
+  let firstError;
+  for (const filename of filenames) {
+    if (!include(filename))
+      continue;
+    const file2 = path.join(directory, filename);
+    try {
+      fs.unlinkSync(file2);
+      removed++;
+    } catch (error51) {
+      if (isMissing(error51))
+        continue;
+      failed.push(file2);
+      firstError ??= error51;
+    }
+  }
+  if (failed.length)
+    throw new TokenCacheClearError(failed, removed, firstError);
+  return removed;
+}
+var TokenCacheClearError;
+var init_clear_cache_files = __esm({
+  "packages/core/dist/auth/clear-cache-files.js"() {
+    "use strict";
+    TokenCacheClearError = class extends Error {
+      failedPaths;
+      removedCount;
+      code = "token-cache-clear-failed";
+      remediation = "Close other processes using the cache, check directory permissions, then retry reconnect or switch_account.";
+      constructor(failedPaths, removedCount, cause) {
+        super(`Authentication reset did not complete: removed ${removedCount} cache file(s), but could not remove or enumerate ${failedPaths.join(", ")}. Retry after fixing cache access.`, { cause });
+        this.failedPaths = failedPaths;
+        this.removedCount = removedCount;
+        this.name = "TokenCacheClearError";
+      }
+    };
+  }
+});
+
+// packages/core/dist/auth/auth-operation-queue.js
+var AuthResetRequiredError, AuthOperationQueue;
+var init_auth_operation_queue = __esm({
+  "packages/core/dist/auth/auth-operation-queue.js"() {
+    "use strict";
+    AuthResetRequiredError = class extends Error {
+      code = "auth-reset-required";
+      constructor(message, cause) {
+        super(message, { cause });
+        this.name = "AuthResetRequiredError";
+      }
+    };
+    AuthOperationQueue = class {
+      tail = Promise.resolve();
+      generation = 0;
+      resetFailure;
+      blocked = false;
+      run(operation) {
+        const generation = this.generation;
+        return this.enqueue(async () => {
+          if (this.blocked) {
+            throw new AuthResetRequiredError("The previous authentication reset failed. Retry reconnect or switch_account before acquiring another token.", this.resetFailure);
+          }
+          this.assertGeneration(generation);
+          const result = await operation();
+          this.assertGeneration(generation);
+          return result;
+        });
+      }
+      reset(operation) {
+        this.generation++;
+        return this.enqueue(async () => {
+          this.blocked = true;
+          try {
+            const result = await operation();
+            this.blocked = false;
+            this.resetFailure = void 0;
+            return result;
+          } catch (error51) {
+            this.resetFailure = error51;
+            throw error51;
+          }
+        });
+      }
+      assertGeneration(generation) {
+        if (generation !== this.generation) {
+          throw new AuthResetRequiredError("Authentication changed during token acquisition. Retry after reconnect or switch_account completes.");
+        }
+      }
+      enqueue(operation) {
+        const result = this.tail.then(operation);
+        this.tail = result.then(() => void 0, () => void 0);
+        return result;
+      }
+    };
+  }
+});
+
+// packages/core/dist/auth/msal-disk-cache.js
+import * as fs3 from "node:fs";
+import * as path3 from "node:path";
+import * as os2 from "node:os";
+function defaultMsalCacheDir() {
+  const envOverride = process.env.FLOWAGENT_MSAL_CACHE_DIR;
+  if (envOverride)
+    return envOverride;
+  const platform = process.platform;
+  if (platform === "win32") {
+    const base = process.env.LOCALAPPDATA || path3.join(os2.homedir(), "AppData", "Local");
+    return path3.join(base, "flowagent", "msal-cache");
+  }
+  if (platform === "darwin") {
+    return path3.join(os2.homedir(), "Library", "Caches", "flowagent", "msal-cache");
+  }
+  const xdg = process.env.XDG_CACHE_HOME || path3.join(os2.homedir(), ".cache");
+  return path3.join(xdg, "flowagent", "msal-cache");
+}
+function safeIdentity(identity) {
+  return identity.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64) || "common";
+}
+function isTokenCacheFile(name3) {
+  return name3.endsWith(".json") && name3 !== PREFERRED_ACCOUNT_FILE;
+}
+function createMsalDiskCachePlugin(opts) {
+  const cacheDir = opts.cacheDir ?? defaultMsalCacheDir();
+  const disabled = opts.disabled === true || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "1" || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "true";
+  const cacheFile = path3.join(cacheDir, `${safeIdentity(opts.identity)}.json`);
+  return {
+    beforeCacheAccess: async (ctx) => {
+      if (disabled)
+        return;
+      try {
+        if (fs3.existsSync(cacheFile)) {
+          const data = fs3.readFileSync(cacheFile, { encoding: "utf-8" });
+          if (data.trim().length > 0) {
+            ctx.tokenCache.deserialize(data);
+          }
+        }
+      } catch {
+      }
+    },
+    afterCacheAccess: async (ctx) => {
+      if (disabled)
+        return;
+      if (!ctx.cacheHasChanged)
+        return;
+      try {
+        fs3.mkdirSync(cacheDir, { recursive: true });
+        const serialized = ctx.tokenCache.serialize();
+        const tmp = `${cacheFile}.tmp`;
+        fs3.writeFileSync(tmp, serialized, { encoding: "utf-8", mode: 384 });
+        fs3.renameSync(tmp, cacheFile);
+      } catch {
+      }
+    }
+  };
+}
+function clearMsalDiskCache(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  const only = opts?.identity ? `${safeIdentity(opts.identity)}.json` : null;
+  return clearCacheFiles(cacheDir, (file2) => isTokenCacheFile(file2) && (!only || file2 === only));
+}
+function readPreferredAccount(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  try {
+    const file2 = path3.join(cacheDir, PREFERRED_ACCOUNT_FILE);
+    if (!fs3.existsSync(file2))
+      return null;
+    const parsed = JSON.parse(fs3.readFileSync(file2, { encoding: "utf-8" }));
+    const username = typeof parsed.username === "string" ? parsed.username.trim() : "";
+    return username.length > 0 ? username : null;
+  } catch {
+    return null;
+  }
+}
+function writePreferredAccount(username, opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  const file2 = path3.join(cacheDir, PREFERRED_ACCOUNT_FILE);
+  try {
+    if (username === null || username.trim().length === 0) {
+      if (fs3.existsSync(file2))
+        fs3.unlinkSync(file2);
+      return true;
+    }
+    fs3.mkdirSync(cacheDir, { recursive: true });
+    const tmp = `${file2}.tmp`;
+    fs3.writeFileSync(tmp, JSON.stringify({ username: username.trim() }, null, 2), {
+      encoding: "utf-8",
+      mode: 384
+    });
+    fs3.renameSync(tmp, file2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function readCachedMsalIdentities(opts) {
+  const cacheDir = opts?.cacheDir ?? defaultMsalCacheDir();
+  const out = [];
+  try {
+    if (!fs3.existsSync(cacheDir))
+      return out;
+    const only = opts?.identity ? `${safeIdentity(opts.identity)}.json` : null;
+    for (const f of fs3.readdirSync(cacheDir)) {
+      if (!isTokenCacheFile(f))
+        continue;
+      if (only && f !== only)
+        continue;
+      const full = path3.join(cacheDir, f);
+      try {
+        const parsed = JSON.parse(fs3.readFileSync(full, { encoding: "utf-8" }));
+        const accounts = Object.values(parsed.Account ?? {});
+        if (accounts.length === 0) {
+          out.push({ cacheFile: full });
+          continue;
+        }
+        for (const a of accounts) {
+          out.push({ cacheFile: full, username: a.username, tenantId: a.realm });
+        }
+      } catch {
+        out.push({ cacheFile: full });
+      }
+    }
+  } catch {
+  }
+  return out;
+}
+var PREFERRED_ACCOUNT_FILE;
+var init_msal_disk_cache = __esm({
+  "packages/core/dist/auth/msal-disk-cache.js"() {
+    "use strict";
+    init_clear_cache_files();
+    PREFERRED_ACCOUNT_FILE = "@preferred-account.json";
   }
 });
 
@@ -14290,74 +14541,36 @@ var init_dist = __esm({
   }
 });
 
-// packages/core/dist/auth/msal-disk-cache.js
-import * as fs2 from "node:fs";
-import * as path2 from "node:path";
-import * as os2 from "node:os";
-function defaultMsalCacheDir() {
-  const envOverride = process.env.FLOWAGENT_MSAL_CACHE_DIR;
-  if (envOverride)
-    return envOverride;
-  const platform = process.platform;
-  if (platform === "win32") {
-    const base = process.env.LOCALAPPDATA || path2.join(os2.homedir(), "AppData", "Local");
-    return path2.join(base, "flowagent", "msal-cache");
-  }
-  if (platform === "darwin") {
-    return path2.join(os2.homedir(), "Library", "Caches", "flowagent", "msal-cache");
-  }
-  const xdg = process.env.XDG_CACHE_HOME || path2.join(os2.homedir(), ".cache");
-  return path2.join(xdg, "flowagent", "msal-cache");
-}
-function createMsalDiskCachePlugin(opts) {
-  const cacheDir = opts.cacheDir ?? defaultMsalCacheDir();
-  const disabled = opts.disabled === true || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "1" || process.env.FLOWAGENT_DISABLE_MSAL_CACHE === "true";
-  const safeIdentity = opts.identity.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
-  const cacheFile = path2.join(cacheDir, `${safeIdentity || "common"}.json`);
-  return {
-    beforeCacheAccess: async (ctx) => {
-      if (disabled)
-        return;
-      try {
-        if (fs2.existsSync(cacheFile)) {
-          const data = fs2.readFileSync(cacheFile, { encoding: "utf-8" });
-          if (data.trim().length > 0) {
-            ctx.tokenCache.deserialize(data);
-          }
-        }
-      } catch {
-      }
-    },
-    afterCacheAccess: async (ctx) => {
-      if (disabled)
-        return;
-      if (!ctx.cacheHasChanged)
-        return;
-      try {
-        fs2.mkdirSync(cacheDir, { recursive: true });
-        const serialized = ctx.tokenCache.serialize();
-        const tmp = `${cacheFile}.tmp`;
-        fs2.writeFileSync(tmp, serialized, { encoding: "utf-8", mode: 384 });
-        fs2.renameSync(tmp, cacheFile);
-      } catch {
-      }
-    }
-  };
-}
-var init_msal_disk_cache = __esm({
-  "packages/core/dist/auth/msal-disk-cache.js"() {
-    "use strict";
-  }
-});
-
 // packages/core/dist/auth/msal-auth.js
 var msal_auth_exports = {};
 __export(msal_auth_exports, {
-  MsalTokenProvider: () => MsalTokenProvider
+  MsalTokenProvider: () => MsalTokenProvider,
+  resolveInteractiveAccountOptions: () => resolveInteractiveAccountOptions,
+  selectCachedMsalAccount: () => selectCachedMsalAccount
 });
 import { execFile as execFile2 } from "node:child_process";
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function resolveInteractiveAccountOptions(env = process.env, opts = {}) {
+  const hint = env.PA_LOGIN_HINT?.trim();
+  if (hint) {
+    return { loginHint: hint };
+  }
+  const stored = opts.storedHint?.trim();
+  if (stored) {
+    return { loginHint: stored };
+  }
+  const optOut = env.PA_NO_ACCOUNT_PICKER?.trim().toLowerCase();
+  if (optOut === "1" || optOut === "true" || optOut === "yes") {
+    return {};
+  }
+  return { prompt: "select_account" };
+}
+function selectCachedMsalAccount(accounts, identity) {
+  const byIdentity = identity !== "common" ? accounts.find((account) => account.tenantId === identity) : void 0;
+  const byEnv = process.env.PA_TENANT_ID ? accounts.find((account) => account.tenantId === process.env.PA_TENANT_ID) : void 0;
+  return byIdentity ?? byEnv ?? accounts[0] ?? null;
 }
 var DEFAULT_CLIENT_ID, MsalTokenProvider;
 var init_msal_auth = __esm({
@@ -14365,10 +14578,14 @@ var init_msal_auth = __esm({
     "use strict";
     init_dist();
     init_msal_disk_cache();
+    init_auth_operation_queue();
     DEFAULT_CLIENT_ID = "9cee029c-6210-4654-90bb-17e6e9d36617";
     MsalTokenProvider = class {
       pca;
       account = null;
+      operations = new AuthOperationQueue();
+      /** Cache identity this provider was constructed with (tenant id or "common"). */
+      identity;
       constructor(clientIdOrOpts, tenantId2) {
         let clientId;
         let tenant;
@@ -14392,9 +14609,45 @@ var init_msal_auth = __esm({
             cachePlugin: createMsalDiskCachePlugin({ identity: tenant })
           }
         };
+        this.identity = tenant;
         this.pca = new PublicClientApplication(config3);
       }
-      async getAccessToken(resource) {
+      getConnectivityAuthState() {
+        return {
+          cacheIdentity: this.identity,
+          account: this.account ? { username: this.account.username, tenantId: this.account.tenantId } : null
+        };
+      }
+      /**
+       * Drop the cached Connectivity identity so the next call re-authenticates.
+       *
+       * Without this, `reconnect` was a no-op for the Connectivity path: it
+       * cleared the az-CLI token cache, then called
+       * `msalAuth?.invalidateAccessToken?.()`, which optional-chained into
+       * nothing because this class did not implement the (optional) method. The
+       * stale MSAL account and its on-disk refresh token both survived, so the
+       * tool reported success while the next connectivity call reused exactly the
+       * identity the user was trying to get rid of. (#446)
+       *
+       * Clears in-memory account, MSAL's own cache, and the persisted file.
+       */
+      async invalidateAccessToken() {
+        await this.resetConnectivityAuth();
+      }
+      resetConnectivityAuth() {
+        return this.operations.reset(async () => {
+          this.account = null;
+          const cache = this.pca.getTokenCache();
+          for (const account of await cache.getAllAccounts()) {
+            await cache.removeAccount(account);
+          }
+          return clearMsalDiskCache({ identity: this.identity });
+        });
+      }
+      getAccessToken(resource) {
+        return this.operations.run(() => this.acquireAccessToken(resource));
+      }
+      async acquireAccessToken(resource) {
         const scopes = resource ? [`${resource}/.default`] : ["https://api.powerplatform.com/.default"];
         const resourceDisplay = resource ?? "https://api.powerplatform.com";
         if (!this.account) {
@@ -14402,8 +14655,7 @@ var init_msal_auth = __esm({
             const cache = this.pca.getTokenCache();
             const accounts = await cache.getAllAccounts();
             if (accounts.length > 0) {
-              const preferred = process.env.PA_TENANT_ID ? accounts.find((a) => a.tenantId === process.env.PA_TENANT_ID) : null;
-              this.account = preferred ?? accounts[0];
+              this.account = selectCachedMsalAccount(accounts, this.identity);
             }
           } catch {
           }
@@ -14438,6 +14690,10 @@ var init_msal_auth = __esm({
 </body></html>`;
         const result = await this.pca.acquireTokenInteractive({
           scopes,
+          // Account picker on by default; PA_LOGIN_HINT, a stored switch_account
+          // preference, or PA_NO_ACCOUNT_PICKER override it.
+          // See resolveInteractiveAccountOptions. (#446)
+          ...resolveInteractiveAccountOptions(process.env, { storedHint: readPreferredAccount() }),
           openBrowser: (url2) => this.openBrowser(url2),
           successTemplate,
           errorTemplate: '<!doctype html><html><body style="font-family:sans-serif;padding:2em"><h2 style="color:#a4262c">FlowAgent CLI sign-in failed</h2><p>Check the CLI output for details, then re-run the command.</p></body></html>'
@@ -17792,8 +18048,8 @@ var require_utils2 = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path6) {
-      let input = path6;
+    function removeDotSegments(path7) {
+      let input = path7;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -18045,8 +18301,8 @@ var require_schemes2 = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path6, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
+        const [path7, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -21439,12 +21695,12 @@ var require_dist2 = __commonJS({
         throw new Error(`Unknown format "${name3}"`);
       return f;
     };
-    function addFormats2(ajv, list, fs5, exportName) {
+    function addFormats2(ajv, list, fs6, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs5[f]);
+        ajv.addFormat(f, fs6[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -22275,10 +22531,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -22687,11 +22943,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -22838,16 +23094,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -22874,17 +23130,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -22916,8 +23172,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -35609,13 +35865,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path7[0] === defsKey) {
+    const key = path7[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -39582,9 +39838,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta3);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path6 = issue2.path.map(String);
-      const key = path6.length > 0 ? path6.join(".") : "_meta";
-      if (path6.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path7 = issue2.path.map(String);
+      const key = path7.length > 0 ? path7.join(".") : "_meta";
+      if (path7.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -40107,7 +40363,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node, path6, vendor, unsupported) {
+function walkProperty(node, path7, vendor, unsupported) {
   if (!isJsonObject(node)) return node;
   const allowedKeys = typeof node.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node.type) ? PROPERTY_KEYS_BY_TYPE[node.type] : void 0;
   if (allowedKeys === void 0) return node;
@@ -40115,8 +40371,8 @@ function walkProperty(node, path6, vendor, unsupported) {
   for (const [key, value] of Object.entries(node)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node.type === "string" && typeof node.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node.format, value, vendor)) unsupported.push(`${path6}.${key}`);
-  } else unsupported.push(`${path6}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node.format, value, vendor)) unsupported.push(`${path7}.${key}`);
+  } else unsupported.push(`${path7}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -40133,11 +40389,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node).success).map(([name3]) => `properties.${name3}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path6 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path6}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path7 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path7}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path6 ? `${path6}.${key}` : key;
+    const childPath = path7 ? `${path7}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -44150,8 +44406,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path6) {
-    let input = path6;
+  function removeDotSegments(path7) {
+    let input = path7;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -44304,8 +44560,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path6, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
+      const [path7, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -48293,11 +48549,11 @@ var require_dist = /* @__PURE__ */ __commonJSMin((exports, module) => {
     if (!f) throw new Error(`Unknown format "${name3}"`);
     return f;
   };
-  function addFormats2(ajv, list, fs5, exportName) {
+  function addFormats2(ajv, list, fs6, exportName) {
     var _a3;
     var _b;
     (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 || (_b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`);
-    for (const f of list) ajv.addFormat(f, fs5[f]);
+    for (const f of list) ajv.addFormat(f, fs6[f]);
   }
   module.exports = exports = formatsPlugin;
   Object.defineProperty(exports, "__esModule", { value: true });
@@ -49661,6 +49917,522 @@ async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES) {
   return allItems;
 }
 
+// packages/core/dist/api/picker-pagination.js
+var LINK_KEYS = ["@odata.nextLink", "odata.nextLink", "nextLink", "nextPageLink"];
+var TOKEN_KEYS = ["continuationToken", "nextPageToken"];
+var STATE_KEYS = [...LINK_KEYS, ...TOKEN_KEYS, "hasMore", "isComplete", "complete", "truncated", "moreRecords"];
+function paginationError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+function continuation(page) {
+  const fields = new Map(Object.entries(page));
+  for (const key of LINK_KEYS) {
+    const value = fields.get(key);
+    if (value == null || value === "")
+      continue;
+    if (typeof value !== "string")
+      throw paginationError("DynamicPickerMalformedResponse", "Picker next link must be a string.");
+    return { kind: "link", value };
+  }
+  for (const key of TOKEN_KEYS) {
+    const value = fields.get(key);
+    if (value == null || value === "")
+      continue;
+    if (typeof value !== "string")
+      throw paginationError("DynamicPickerMalformedResponse", "Picker continuation token must be a string.");
+    return { kind: "token", key, value };
+  }
+}
+function pickerNextLink(value, requestUrl) {
+  let next;
+  try {
+    next = new URL(value, requestUrl);
+  } catch {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker returned an invalid continuation URL.");
+  }
+  const original = new URL(requestUrl);
+  if (next.protocol !== "https:" || next.origin !== original.origin || next.pathname !== original.pathname || next.username || next.password || next.hash) {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker continuation changes the authenticated origin or picker path. Refusing to forward credentials; use the connector's supported scoped discovery operation.");
+  }
+  return next.href;
+}
+function bindPickerToken(extension, next) {
+  const parameters = extension.parameters;
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    throw paginationError("DynamicPickerContinuationUnsupported", "The picker returned an opaque continuation without a schema-declared paging parameter.");
+  }
+  const names = next.key === "nextPageToken" ? ["pagetoken", "nextpagetoken"] : ["continuationtoken"];
+  const matches = Object.keys(parameters).filter((key) => names.includes(key.toLowerCase()));
+  if (matches.length !== 1) {
+    throw paginationError("DynamicPickerContinuationUnsupported", `Cannot map ${next.key} to one schema-declared paging parameter. Discovery is incomplete; no absence claim can be made.`);
+  }
+  return { ...extension, parameters: { ...parameters, [matches[0]]: { value: next.value } } };
+}
+async function collectPickerPages(first, fetchNext, limits = {}) {
+  const maxPages = limits.maxPages ?? 100;
+  const maxItems = limits.maxItems ?? 1e5;
+  const maxChars = limits.maxChars ?? 1e7;
+  const values = [];
+  const seen = /* @__PURE__ */ new Set();
+  let page = first;
+  let pages = 0;
+  let chars = 0;
+  while (true) {
+    if (!page || !Array.isArray(page.value)) {
+      throw paginationError("DynamicPickerMalformedResponse", "An upstream picker page has no value array.");
+    }
+    if (Reflect.get(page, "error")) {
+      throw paginationError("DynamicPickerMalformedResponse", "An upstream picker page reported an error; discovery did not complete.");
+    }
+    pages++;
+    values.push(...page.value);
+    chars += JSON.stringify(page).length;
+    if (values.length > maxItems || chars > maxChars) {
+      throw paginationError("DynamicPickerPaginationLimit", "Upstream picker discovery exceeded its item or size bound. Narrow the connector inputs; no complete result was returned.");
+    }
+    const next = continuation(page);
+    if (!next) {
+      const result = { ...first, ...page, value: values };
+      for (const key2 of STATE_KEYS) {
+        Reflect.deleteProperty(result, key2);
+        if (Object.hasOwn(page, key2))
+          Reflect.set(result, key2, Reflect.get(page, key2));
+      }
+      return result;
+    }
+    const key = JSON.stringify(next);
+    if (seen.has(key))
+      throw paginationError("DynamicPickerPaginationLoop", "The picker repeated an upstream continuation. No complete result was returned.");
+    if (pages >= maxPages)
+      throw paginationError("DynamicPickerPaginationLimit", "Upstream picker discovery exceeded its page bound. Narrow the connector inputs; no complete result was returned.");
+    seen.add(key);
+    page = await fetchNext(next);
+  }
+}
+
+// packages/core/dist/api/dynamic-resolvers.js
+init_logger();
+function isPickerRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function labelStrings(label) {
+  if (typeof label === "string")
+    return label ? [label] : [];
+  if (!isPickerRecord(label))
+    return [];
+  const localizedLabels = label.LocalizedLabels ?? label.localizedLabels;
+  return [
+    ...labelStrings(label.Label ?? label.label),
+    ...labelStrings(label.UserLocalizedLabel ?? label.userLocalizedLabel),
+    ...Array.isArray(localizedLabels) ? localizedLabels.flatMap(labelStrings) : []
+  ];
+}
+function normalizePickerResponse(response) {
+  if (!isPickerRecord(response) || response.error || !Array.isArray(response.value)) {
+    throw Object.assign(new Error("Dynamic picker returned no value array; discovery did not complete."), { code: "DynamicPickerMalformedResponse" });
+  }
+  const result = response;
+  const values = response.value.map((item) => {
+    if (!isPickerRecord(item) || !Object.hasOwn(item, "value") || item.value == null) {
+      throw Object.assign(new Error("Dynamic picker returned an item without a connector value."), { code: "DynamicPickerMalformedResponse" });
+    }
+    const labels = [
+      ...labelStrings(item.displayName),
+      ...labelStrings(item.DisplayName),
+      ...labelStrings(item.DisplayCollectionName ?? item.displayCollectionName)
+    ];
+    const displayName = labels[0] ?? String(item.value);
+    const aliases = [.../* @__PURE__ */ new Set([
+      ...labels,
+      ...[item.LogicalName, item.logicalName, item.EntitySetName, item.entitySetName].filter((s) => typeof s === "string" && s.length > 0),
+      ...Array.isArray(item.aliases) ? item.aliases.filter((s) => typeof s === "string") : []
+    ])].filter((s) => s !== displayName && s !== item.value);
+    return { value: item.value, displayName, ...aliases.length ? { aliases } : {} };
+  });
+  const rawCount = result["@odata.count"] ?? result.totalCount;
+  const count = typeof rawCount === "string" && /^\d+$/.test(rawCount) ? Number(rawCount) : rawCount;
+  if (count != null && (typeof count !== "number" || !Number.isSafeInteger(count) || count < values.length)) {
+    throw Object.assign(new Error("Dynamic picker returned an invalid total count."), { code: "DynamicPickerMalformedResponse" });
+  }
+  const hasContinuation = ["@odata.nextLink", "odata.nextLink", "nextLink", "nextPageLink", "continuationToken", "nextPageToken"].some((key) => result[key] != null && result[key] !== "");
+  const incomplete = hasContinuation || result.hasMore === true || result.isComplete === false || result.complete === false || result.truncated === true || result.moreRecords === true || typeof count === "number" && count > values.length;
+  return {
+    values,
+    completeness: {
+      complete: !incomplete,
+      observed: values.length,
+      total: incomplete ? null : values.length,
+      ...incomplete ? { reason: "The upstream picker advertised more results or incomplete discovery. Unseen entries have not been searched." } : {}
+    }
+  };
+}
+var MAX_CANDIDATES = 500;
+async function fetchAllPages(client, envId, connector, connectionName, operation, params, opts) {
+  const maxPages = opts?.maxPages ?? 3;
+  const result = await client.invokeOperation(envId, connector, connectionName, operation, params);
+  let items = result?.value ?? (Array.isArray(result) ? result : []);
+  let nextLink = result?.["@odata.nextLink"] ?? result?.nextLink;
+  let page = 1;
+  while (nextLink && page < maxPages && items.length < MAX_CANDIDATES) {
+    try {
+      page++;
+      break;
+    } catch {
+      break;
+    }
+  }
+  return items.slice(0, MAX_CANDIDATES);
+}
+function exactMatch(items, query) {
+  return items.find((i) => i.name.toLowerCase() === query.toLowerCase()) ?? null;
+}
+function fuzzyMatch(items, query) {
+  const q = query.toLowerCase();
+  return items.map((i) => {
+    const n = i.name.toLowerCase();
+    let score = 0;
+    if (n === q)
+      score = 100;
+    else if (n === q + "s" || q === n + "s")
+      score = 95;
+    else if (n.startsWith(q) && n.length <= q.length * 1.5)
+      score = 90;
+    else if (n.startsWith(q))
+      score = 80 - (n.length - q.length);
+    else if (n.includes(q))
+      score = 60 - (n.length - q.length);
+    else if (q.split(/\s+/).every((w) => n.includes(w)))
+      score = 50;
+    return { ...i, score };
+  }).filter((i) => i.score > 0).sort((a, b) => b.score - a.score);
+}
+function resolveFromList(items, query, paramName) {
+  const exact = exactMatch(items, query);
+  if (exact) {
+    return { name: paramName, value: exact.id, displayName: exact.name, confidence: "exact" };
+  }
+  const fuzzy = fuzzyMatch(items, query);
+  if (fuzzy.length === 1) {
+    return { name: paramName, value: fuzzy[0].id, displayName: fuzzy[0].name, confidence: "fuzzy" };
+  }
+  if (fuzzy.length > 1) {
+    return {
+      name: paramName,
+      value: fuzzy[0].id,
+      displayName: fuzzy[0].name,
+      confidence: "ambiguous",
+      alternatives: fuzzy.slice(0, 5).map((f) => ({ value: f.id, displayName: f.name }))
+    };
+  }
+  return {
+    name: paramName,
+    value: "",
+    displayName: "",
+    confidence: "not-found",
+    alternatives: items.slice(0, 10).map((i) => ({ value: i.id, displayName: i.name }))
+  };
+}
+async function resolveOutlookFolder(ctx, folderName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerOpen", { operation: "MailFolders" });
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.Id ?? f.id,
+      name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
+    }));
+    const topMatch = resolveFromList(items, folderName, "folderPath");
+    if (topMatch.confidence === "exact" || topMatch.confidence === "fuzzy") {
+      return topMatch;
+    }
+    for (const parent of items) {
+      try {
+        const children = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerBrowse", { operation: "MailFolders", id: parent.id });
+        const childItems = (children?.value ?? []).map((f) => ({
+          id: f.Id ?? f.id,
+          name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
+        }));
+        const childMatch = resolveFromList(childItems, folderName, "folderPath");
+        if (childMatch.confidence === "exact" || childMatch.confidence === "fuzzy") {
+          return childMatch;
+        }
+      } catch {
+      }
+    }
+    return topMatch;
+  } catch (err) {
+    logger.warn(`resolveOutlookFolder failed: ${err.message}`);
+    return { name: "folderPath", value: "Inbox", displayName: "Inbox (fallback)", confidence: "not-found" };
+  }
+}
+async function resolveTeam(ctx, teamName) {
+  try {
+    const rawItems = await fetchAllPages(ctx.client, ctx.envId, "shared_teams", ctx.connectionName, "GetAllTeams", {});
+    const items = rawItems.map((t) => ({
+      id: t.id,
+      name: t.displayName ?? t.name ?? ""
+    }));
+    return resolveFromList(items, teamName, "groupId");
+  } catch (err) {
+    logger.warn(`resolveTeam failed: ${err.message}`);
+    return { name: "groupId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveChannel(ctx, teamId, channelName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChannelsForGroup", { groupId: teamId });
+    const items = (result?.value ?? []).map((c) => ({
+      id: c.id,
+      name: c.displayName ?? c.name ?? ""
+    }));
+    return resolveFromList(items, channelName, "channelId");
+  } catch (err) {
+    logger.warn(`resolveChannel failed: ${err.message}`);
+    return { name: "channelId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveChat(ctx, chatQuery) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChats", {});
+    const items = (result?.value ?? []).map((c) => ({
+      id: c.id,
+      name: c.topic ?? c.chatType ?? c.id
+    }));
+    return resolveFromList(items, chatQuery, "chatId");
+  } catch (err) {
+    logger.warn(`resolveChat failed: ${err.message}`);
+    return { name: "chatId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolvePlan(ctx, teamId, planName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListGroupPlans", { groupId: teamId });
+    const items = (result?.value ?? []).map((p) => ({
+      id: p.id,
+      name: p.title ?? p.name ?? ""
+    }));
+    return resolveFromList(items, planName, "planId");
+  } catch (err) {
+    logger.warn(`resolvePlan failed: ${err.message}`);
+    return { name: "planId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveBucket(ctx, planId, bucketName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListBuckets_V2", { id: planId });
+    const items = (result?.value ?? []).map((b) => ({
+      id: b.id,
+      name: b.name ?? ""
+    }));
+    return resolveFromList(items, bucketName, "bucketId");
+  } catch (err) {
+    logger.warn(`resolveBucket failed: ${err.message}`);
+    return { name: "bucketId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveForm(ctx, formTitle) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_microsoftforms", ctx.connectionName, "GetForms", {});
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.id,
+      name: f.title ?? f.name ?? ""
+    }));
+    return resolveFromList(items, formTitle, "form_id");
+  } catch (err) {
+    logger.warn(`resolveForm failed: ${err.message}`);
+    return { name: "form_id", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveDataverseTable(ctx, tableName, dependencies) {
+  if (!tableName.trim())
+    throw new Error("A non-empty Dataverse table name is required.");
+  if (dependencies && Object.hasOwn(dependencies, "organization") && !dependencies.organization?.trim()) {
+    throw Object.assign(new Error("An explicitly supplied Dataverse organization must not be empty."), { code: "InvalidOrganization" });
+  }
+  const organization = dependencies?.organization ?? await ctx.client.getDataverseInstanceUrl(ctx.envId);
+  const currentInputs = { ...dependencies, organization };
+  const operation = "ListRecordsWithOrganization";
+  const result = await ctx.client.resolveParams(ctx.envId, "shared_commondataserviceforapps", operation, {
+    connection: ctx.connectionName,
+    currentInputs,
+    parameter: "entityName",
+    strict: true
+  });
+  const picker = result.parameters.find((p) => p.name === "entityName");
+  if (!picker?.values || picker.error) {
+    throw Object.assign(new Error(picker?.error ?? "Dataverse entityName picker is missing from the operation schema."), { code: "DataversePickerUnavailable" });
+  }
+  if (picker.completeness?.complete !== true) {
+    throw Object.assign(new Error("Dataverse table discovery is incomplete; absence or uniqueness cannot be established."), {
+      code: "DataverseDiscoveryIncomplete",
+      remediation: "Use resolve_params with parameter: entityName to inspect discovery metadata. Check organization and connection before retrying."
+    });
+  }
+  let items = picker.values.map((v) => {
+    if (typeof v.value !== "string" || !v.value) {
+      throw Object.assign(new Error("Dataverse picker returned a non-string entityName value."), { code: "DynamicPickerMalformedResponse" });
+    }
+    return { id: v.value, name: v.displayName, aliases: v.aliases ?? [] };
+  });
+  const q = tableName.trim().toLowerCase();
+  const exactMatches = () => [...new Map(items.filter((i) => [i.id, i.name, ...i.aliases].some((s) => s.toLowerCase() === q)).map((i) => [i.id, i])).values()];
+  let matches = exactMatches();
+  if (matches.length === 0 && items.length > 0) {
+    const metadata = await ctx.client.getDataversePickerAliases(ctx.envId, ctx.connectionName, operation, currentInputs);
+    if (!metadata.completeness.complete) {
+      throw Object.assign(new Error("Dataverse logical-name discovery is incomplete; no-match cannot be established."), { code: "DataverseDiscoveryIncomplete" });
+    }
+    const byValue2 = new Map(metadata.values.map((v) => [v.value, v]));
+    items = items.map((item) => {
+      const full = byValue2.get(item.id);
+      if (!full)
+        throw Object.assign(new Error("Dataverse table picker and logical-name metadata disagree. Retry discovery."), { code: "DataverseDiscoveryChanged" });
+      return { ...item, aliases: [...item.aliases, full.displayName, ...full.aliases ?? []] };
+    });
+    matches = exactMatches();
+  }
+  if (matches.length === 1) {
+    return { name: "entityName", value: matches[0].id, displayName: matches[0].name, confidence: "exact" };
+  }
+  if (matches.length > 1) {
+    return {
+      name: "entityName",
+      value: "",
+      displayName: "",
+      confidence: "ambiguous",
+      alternatives: matches.slice(0, 5).map((i) => ({ value: i.id, displayName: i.name }))
+    };
+  }
+  const expanded = items.flatMap((i) => [.../* @__PURE__ */ new Set([i.id, i.name, ...i.aliases])].map((name3) => ({ id: i.id, name: name3 })));
+  const fuzzy = fuzzyMatch(expanded, tableName.trim());
+  const itemByValue = new Map(items.map((i) => [i.id, i]));
+  const byValue = [...new Map(fuzzy.map((i) => [i.id, itemByValue.get(i.id)])).values()];
+  if (byValue.length)
+    return {
+      name: "entityName",
+      value: byValue.length === 1 ? byValue[0].id : "",
+      displayName: byValue.length === 1 ? byValue[0].name : "",
+      confidence: byValue.length === 1 ? "fuzzy" : "ambiguous",
+      ...byValue.length > 1 ? { alternatives: byValue.slice(0, 5).map((i) => ({ value: i.id, displayName: i.name })) } : {}
+    };
+  return {
+    name: "entityName",
+    value: "",
+    displayName: "",
+    confidence: "not-found",
+    alternatives: items.slice(0, 10).map((i) => ({ value: i.id, displayName: i.name }))
+  };
+}
+async function resolveSharePointList(ctx, siteUrl, listName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_sharepointonline", ctx.connectionName, "GetTables", { dataset: siteUrl });
+    const items = (result?.value ?? []).map((l) => ({
+      id: l.Name ?? l.name,
+      name: l.DisplayName ?? l.displayName ?? l.Name ?? ""
+    }));
+    return resolveFromList(items, listName, "table");
+  } catch (err) {
+    logger.warn(`resolveSharePointList failed: ${err.message}`);
+    return { name: "table", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveOneDriveFolder(ctx, folderPath) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_onedriveforbusiness", ctx.connectionName, "ListRootFolder", {});
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.Id ?? f.id ?? f.Path,
+      name: f.DisplayName ?? f.Name ?? f.name ?? ""
+    }));
+    return resolveFromList(items, folderPath, "folderPath");
+  } catch (err) {
+    logger.warn(`resolveOneDriveFolder failed: ${err.message}`);
+    return { name: "folderPath", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+var RESOLVER_REGISTRY = [
+  {
+    connector: "shared_office365",
+    paramName: "folderPath",
+    resolve: (ctx, q) => resolveOutlookFolder(ctx, q)
+  },
+  {
+    connector: "shared_teams",
+    paramName: "groupId",
+    resolve: (ctx, q) => resolveTeam(ctx, q)
+  },
+  {
+    connector: "shared_teams",
+    paramName: "channelId",
+    resolve: (ctx, q, parent) => resolveChannel(ctx, parent?.groupId ?? "", q),
+    dependsOn: ["groupId"]
+  },
+  {
+    connector: "shared_teams",
+    paramName: "chatId",
+    resolve: (ctx, q) => resolveChat(ctx, q)
+  },
+  {
+    connector: "shared_planner",
+    paramName: "planId",
+    resolve: (ctx, q, parent) => resolvePlan(ctx, parent?.groupId ?? "", q),
+    dependsOn: ["groupId"]
+  },
+  {
+    connector: "shared_planner",
+    paramName: "bucketId",
+    resolve: (ctx, q, parent) => resolveBucket(ctx, parent?.planId ?? "", q),
+    dependsOn: ["planId"]
+  },
+  {
+    connector: "shared_microsoftforms",
+    paramName: "form_id",
+    resolve: (ctx, q) => resolveForm(ctx, q)
+  },
+  {
+    connector: "shared_commondataserviceforapps",
+    paramName: "entityName",
+    resolve: (ctx, q, parent) => resolveDataverseTable(ctx, q, parent)
+  },
+  {
+    connector: "shared_sharepointonline",
+    paramName: "table",
+    resolve: (ctx, q, parent) => resolveSharePointList(ctx, parent?.dataset ?? "", q),
+    dependsOn: ["dataset"]
+  },
+  {
+    connector: "shared_onedriveforbusiness",
+    paramName: "folderPath",
+    resolve: (ctx, q) => resolveOneDriveFolder(ctx, q)
+  }
+];
+async function resolveParams(ctx, connector, queries, staticValues) {
+  const specs = RESOLVER_REGISTRY.filter((r) => r.connector === connector);
+  const resolved = { ...staticValues ?? {} };
+  const results = [];
+  for (const spec of specs) {
+    const query = queries[spec.paramName];
+    if (!query)
+      continue;
+    if (spec.dependsOn) {
+      const unmet = spec.dependsOn.filter((d) => !resolved[d]);
+      if (unmet.length > 0) {
+        results.push({
+          name: spec.paramName,
+          value: "",
+          displayName: "",
+          confidence: "not-found",
+          alternatives: [{ value: "", displayName: `Depends on: ${unmet.join(", ")}` }]
+        });
+        continue;
+      }
+    }
+    const result = await spec.resolve(ctx, query, resolved);
+    results.push(result);
+    if (result.confidence === "exact" || result.confidence === "fuzzy") {
+      resolved[spec.paramName] = result.value;
+    }
+  }
+  return results;
+}
+
 // packages/core/dist/api/flow-diff.js
 import { createHash } from "node:crypto";
 function jsonEqual(a, b) {
@@ -49911,18 +50683,18 @@ function redeemToken(token, expected) {
 var FlowEditError = class extends Error {
   code;
   path;
-  constructor(code, message, path6) {
+  constructor(code, message, path7) {
     super(message);
     this.code = code;
-    this.path = path6;
+    this.path = path7;
     this.name = "FlowEditError";
   }
 };
 function isPlainObject3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function parsePath(path6) {
-  return path6.split("/").map((s) => s.trim()).filter((s) => s.length > 0);
+function parsePath(path7) {
+  return path7.split("/").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 function deepClone(v) {
   if (typeof structuredClone === "function")
@@ -49995,42 +50767,42 @@ function applyFlowEdits(definition, operations) {
   const next = deepClone(definition);
   const applied = [];
   for (const operation of operations) {
-    const { op, path: path6 } = operation;
+    const { op, path: path7 } = operation;
     if (op !== "set" && op !== "add" && op !== "remove" && op !== "merge") {
-      throw new FlowEditError("InvalidOp", `Unknown op "${op}". Use one of: set, add, remove, merge.`, path6);
+      throw new FlowEditError("InvalidOp", `Unknown op "${op}". Use one of: set, add, remove, merge.`, path7);
     }
-    const segments = parsePath(path6 ?? "");
+    const segments = parsePath(path7 ?? "");
     if (op === "merge") {
       const value = operation.value;
       if (!isPlainObject3(value)) {
-        throw new FlowEditError("MergeValueNotObject", `merge "${path6}" requires an object value.`, path6);
+        throw new FlowEditError("MergeValueNotObject", `merge "${path7}" requires an object value.`, path7);
       }
-      const targetNode = segments.length === 0 ? next : getNode(next, segments, path6);
+      const targetNode = segments.length === 0 ? next : getNode(next, segments, path7);
       if (!isPlainObject3(targetNode)) {
-        throw new FlowEditError("MergeTargetNotObject", `merge target "${path6}" is not an object.`, path6);
+        throw new FlowEditError("MergeTargetNotObject", `merge target "${path7}" is not an object.`, path7);
       }
       deepMerge(targetNode, value);
-      applied.push({ op, path: path6 });
+      applied.push({ op, path: path7 });
       continue;
     }
     if (segments.length === 0) {
-      throw new FlowEditError("EmptyPath", `"${op}" requires a non-empty path.`, path6);
+      throw new FlowEditError("EmptyPath", `"${op}" requires a non-empty path.`, path7);
     }
-    const { parent, key } = resolveParent(next, segments, path6);
+    const { parent, key } = resolveParent(next, segments, path7);
     if (op === "remove") {
       if (!(key in parent)) {
-        throw new FlowEditError("PathNotFound", `remove "${path6}" \u2014 key "${key}" does not exist.`, path6);
+        throw new FlowEditError("PathNotFound", `remove "${path7}" \u2014 key "${key}" does not exist.`, path7);
       }
       delete parent[key];
     } else if (op === "add") {
       if (key in parent) {
-        throw new FlowEditError("KeyExists", `add "${path6}" \u2014 key "${key}" already exists. Use op:"set" to overwrite.`, path6);
+        throw new FlowEditError("KeyExists", `add "${path7}" \u2014 key "${key}" already exists. Use op:"set" to overwrite.`, path7);
       }
       parent[key] = operation.value;
     } else {
       parent[key] = operation.value;
     }
-    applied.push({ op, path: path6 });
+    applied.push({ op, path: path7 });
   }
   assertNoOrphanRunAfter(next);
   return { definition: next, applied };
@@ -50316,16 +51088,16 @@ var FlowClient = class _FlowClient {
   // --- Flows ---
   async listFlows(envId, opts) {
     const qs2 = this.ppapiFlowQs({ $top: opts?.top?.toString(), $filter: opts?.filter });
-    const path6 = `/powerautomate/flows${qs2}`;
+    const path7 = `/powerautomate/flows${qs2}`;
     if (this.ppapiUnavailableEnvs.has(envId)) {
       return followPagination(async (nextUrl) => {
         if (nextUrl)
           return this.ppapiRequest("GET", nextUrl);
-        return this.ppapiRequestWithFallback(envId, path6, "GET");
+        return this.ppapiRequestWithFallback(envId, path7, "GET");
       });
     }
     const base = this.ppapiBase(envId);
-    const url2 = `${base}${path6}`;
+    const url2 = `${base}${path7}`;
     try {
       return await followPagination(async (nextUrl) => this.ppapiRequest("GET", nextUrl ?? url2));
     } catch (err) {
@@ -50335,15 +51107,15 @@ var FlowClient = class _FlowClient {
         return followPagination(async (nextUrl) => {
           if (nextUrl)
             return this.ppapiRequest("GET", nextUrl);
-          return this.classicFlowRpRequest(envId, path6, "GET");
+          return this.classicFlowRpRequest(envId, path7, "GET");
         });
       }
       throw err;
     }
   }
   async getFlow(envId, flowId) {
-    const path6 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    return this.ppapiRequestWithFallback(envId, path6, "GET");
+    const path7 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
+    return this.ppapiRequestWithFallback(envId, path7, "GET");
   }
   async createFlow(envId, body, opts = {}) {
     if (!opts.allowDuplicate) {
@@ -50367,8 +51139,8 @@ var FlowClient = class _FlowClient {
         }
       }
     }
-    const path6 = `/powerautomate/flows${this.ppapiFlowQs({})}`;
-    const created = await this.ppapiRequestWithFallback(envId, path6, "POST", body);
+    const path7 = `/powerautomate/flows${this.ppapiFlowQs({})}`;
+    const created = await this.ppapiRequestWithFallback(envId, path7, "POST", body);
     if (injected.length > 0) {
       created._autoInjected = injected;
       logger.info(`[create-flow] Auto-injected missing parameters: ${injected.join(", ")}. Pass autoInjectParams:false to opt out.`);
@@ -50422,8 +51194,8 @@ var FlowClient = class _FlowClient {
       }
     }
     this.rewriteConnectionNamesForPpapi(body);
-    const path6 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    const result = await this.ppapiRequestWithFallback(envId, path6, "PATCH", body);
+    const path7 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
+    const result = await this.ppapiRequestWithFallback(envId, path7, "PATCH", body);
     if (autoMerged.length)
       result._autoMergedConnectionRefs = autoMerged;
     return result;
@@ -50816,8 +51588,8 @@ var FlowClient = class _FlowClient {
   async deleteFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "delete_flow", opts);
     await this.snapshotBeforeMutation(envId, flowId, "delete_flow", opts);
-    const path6 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path6, "DELETE");
+    const path7 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path7, "DELETE");
   }
   /**
    * Copy a flow: reads the source flow's definition + connection references,
@@ -50907,10 +51679,10 @@ var FlowClient = class _FlowClient {
   }
   async publishFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "publish_flow", opts);
-    const path6 = `/powerautomate/flows/${flowId}/start${this.ppapiFlowQs({})}`;
+    const path7 = `/powerautomate/flows/${flowId}/start${this.ppapiFlowQs({})}`;
     let alreadyStarted = false;
     try {
-      await this.ppapiRequestWithFallback(envId, path6, "POST");
+      await this.ppapiRequestWithFallback(envId, path7, "POST");
     } catch (err) {
       if (err instanceof FlowApiError && err.statusCode === 409) {
         alreadyStarted = true;
@@ -50943,14 +51715,14 @@ var FlowClient = class _FlowClient {
   }
   async disableFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "disable_flow", opts);
-    const path6 = `/powerautomate/flows/${flowId}/stop${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path6, "POST");
+    const path7 = `/powerautomate/flows/${flowId}/stop${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path7, "POST");
   }
   // --- Runs ---
   async runFlow(envId, flowId, triggerBody, triggerName) {
     const resolvedTrigger = triggerName ?? await this.resolveTriggerName(envId, flowId);
-    const path6 = `/powerautomate/flows/${flowId}/triggers/${resolvedTrigger}/run${this.ppapiFlowQs({})}`;
-    return this.ppapiRequestWithFallback(envId, path6, "POST", triggerBody ?? {});
+    const path7 = `/powerautomate/flows/${flowId}/triggers/${resolvedTrigger}/run${this.ppapiFlowQs({})}`;
+    return this.ppapiRequestWithFallback(envId, path7, "POST", triggerBody ?? {});
   }
   /**
    * Trigger a run, choosing the correct transport for the trigger kind. (#435)
@@ -50993,7 +51765,7 @@ var FlowClient = class _FlowClient {
     const directApi = isDirectApiTriggerKind(trigger.kind);
     const gated = isGatedTriggerKind(trigger);
     assertTriggerInputsSatisfied(trigger, body);
-    const done = (path6, response) => ({ triggered: true, triggerName: trigger.name, triggerKind: trigger.kind, path: path6, response });
+    const done = (path7, response) => ({ triggered: true, triggerName: trigger.name, triggerKind: trigger.kind, path: path7, response });
     const autoRoute = directApi || opts.useCallbackUrl === void 0;
     if (gated && body !== void 0 && autoRoute) {
       try {
@@ -51078,8 +51850,8 @@ var FlowClient = class _FlowClient {
     return { name: preferName ?? "manual" };
   }
   async getTriggerCallbackUrl(envId, flowId, triggerName) {
-    const path6 = `/powerautomate/flows/${flowId}/triggers/${triggerName ?? "manual"}/listCallbackUrl${this.ppapiFlowQs({})}`;
-    const raw = await this.ppapiRequestWithFallback(envId, path6, "POST");
+    const path7 = `/powerautomate/flows/${flowId}/triggers/${triggerName ?? "manual"}/listCallbackUrl${this.ppapiFlowQs({})}`;
+    const raw = await this.ppapiRequestWithFallback(envId, path7, "POST");
     const data = "response" in raw && raw.response ? raw.response : raw;
     return data.value;
   }
@@ -51175,17 +51947,17 @@ var FlowClient = class _FlowClient {
     };
   }
   async getRunHistory(envId, flowId, opts) {
-    const path6 = `/powerautomate/flows/${flowId}/runs${this.ppapiFlowQs({ $top: opts?.top?.toString(), $filter: opts?.filter })}`;
+    const path7 = `/powerautomate/flows/${flowId}/runs${this.ppapiFlowQs({ $top: opts?.top?.toString(), $filter: opts?.filter })}`;
     let all;
     if (this.ppapiUnavailableEnvs.has(envId)) {
       all = await followPagination(async (nextUrl) => {
         if (nextUrl)
           return this.ppapiRequest("GET", nextUrl);
-        return this.classicFlowRpRequest(envId, path6, "GET");
+        return this.classicFlowRpRequest(envId, path7, "GET");
       });
     } else {
       const base = this.ppapiBase(envId);
-      const url2 = `${base}${path6}`;
+      const url2 = `${base}${path7}`;
       try {
         all = await followPagination(async (nextUrl) => this.ppapiRequest("GET", nextUrl ?? url2));
       } catch (err) {
@@ -51195,7 +51967,7 @@ var FlowClient = class _FlowClient {
           all = await followPagination(async (nextUrl) => {
             if (nextUrl)
               return this.ppapiRequest("GET", nextUrl);
-            return this.classicFlowRpRequest(envId, path6, "GET");
+            return this.classicFlowRpRequest(envId, path7, "GET");
           });
         } else {
           throw err;
@@ -51207,20 +51979,20 @@ var FlowClient = class _FlowClient {
     return all;
   }
   async getRunDetails(envId, flowId, runId) {
-    const path6 = `/powerautomate/flows/${flowId}/runs/${runId}${this.ppapiFlowQs({})}`;
-    return this.ppapiRequestWithFallback(envId, path6, "GET");
+    const path7 = `/powerautomate/flows/${flowId}/runs/${runId}${this.ppapiFlowQs({})}`;
+    return this.ppapiRequestWithFallback(envId, path7, "GET");
   }
   async getRunActionDetails(envId, flowId, runId) {
-    const path6 = `/powerautomate/flows/${flowId}/runs/${runId}/actions${this.ppapiFlowQs({})}`;
+    const path7 = `/powerautomate/flows/${flowId}/runs/${runId}/actions${this.ppapiFlowQs({})}`;
     if (this.ppapiUnavailableEnvs.has(envId)) {
       return followPagination(async (nextUrl) => {
         if (nextUrl)
           return this.ppapiRequest("GET", nextUrl);
-        return this.classicFlowRpRequest(envId, path6, "GET");
+        return this.classicFlowRpRequest(envId, path7, "GET");
       });
     }
     const base = this.ppapiBase(envId);
-    const url2 = `${base}${path6}`;
+    const url2 = `${base}${path7}`;
     try {
       return await followPagination(async (nextUrl) => this.ppapiRequest("GET", nextUrl ?? url2));
     } catch (err) {
@@ -51230,7 +52002,7 @@ var FlowClient = class _FlowClient {
         return followPagination(async (nextUrl) => {
           if (nextUrl)
             return this.ppapiRequest("GET", nextUrl);
-          return this.classicFlowRpRequest(envId, path6, "GET");
+          return this.classicFlowRpRequest(envId, path7, "GET");
         });
       }
       throw err;
@@ -51238,8 +52010,8 @@ var FlowClient = class _FlowClient {
   }
   // --- Run Management (cancel, resubmit, diagnose) ---
   async cancelRun(envId, flowId, runId) {
-    const path6 = `/powerautomate/flows/${flowId}/runs/${runId}/cancel${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path6, "POST");
+    const path7 = `/powerautomate/flows/${flowId}/runs/${runId}/cancel${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path7, "POST");
     return { cancelled: true, runId };
   }
   async resubmitRun(envId, flowId, runId, opts) {
@@ -51250,16 +52022,16 @@ var FlowClient = class _FlowClient {
       if (!triggerName)
         throw new Error("Could not detect trigger name from run. Provide it explicitly.");
     }
-    const path6 = `/powerautomate/flows/${flowId}/triggers/${triggerName}/histories/${runId}/resubmit${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path6, "POST");
+    const path7 = `/powerautomate/flows/${flowId}/triggers/${triggerName}/histories/${runId}/resubmit${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path7, "POST");
     return { resubmitted: true, triggerName };
   }
   async getRunActionRepetitions(envId, flowId, runId, actionName) {
-    const path6 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
+    const path7 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
     return followPagination(async (nextUrl) => {
       if (nextUrl)
         return this.ppapiRequest("GET", nextUrl);
-      return this.ppapiRequestWithFallback(envId, path6, "GET");
+      return this.ppapiRequestWithFallback(envId, path7, "GET");
     });
   }
   /** Diagnose a failed run: classify each failed/timed-out action with an actionable remediation. */
@@ -51789,7 +52561,7 @@ var FlowClient = class _FlowClient {
     const swagger = connector.properties.swagger;
     const operations = [];
     if (swagger?.paths) {
-      for (const [path6, methods] of Object.entries(swagger.paths)) {
+      for (const [path7, methods] of Object.entries(swagger.paths)) {
         for (const [method, op] of Object.entries(methods)) {
           if (!op.operationId)
             continue;
@@ -51801,7 +52573,7 @@ var FlowClient = class _FlowClient {
             operationId: op.operationId,
             summary: op.summary ?? op.description,
             method: method.toUpperCase(),
-            path: path6,
+            path: path7,
             parameters: params
           });
         }
@@ -51813,7 +52585,7 @@ var FlowClient = class _FlowClient {
       operations
     };
   }
-  async invokeOperation(envId, connectorName, connectionId, operationId, params) {
+  async invokeOperation(envId, connectorName, connectionId, operationId, params, continuation2) {
     const connectorUrl = ppapiConnectorUrl(envId, connectorName, { expand: "swagger" });
     const connector = await this.ppapiRequest("GET", connectorUrl);
     const runtimeUrl = connector.properties.primaryRuntimeUrl;
@@ -51830,11 +52602,11 @@ var FlowClient = class _FlowClient {
     }
     let opMethod = "GET";
     let opPath = "";
-    for (const [path6, methods] of Object.entries(swagger.paths)) {
+    for (const [path7, methods] of Object.entries(swagger.paths)) {
       for (const [method, op] of Object.entries(methods)) {
         if (op.operationId === operationId) {
           opMethod = method.toUpperCase();
-          opPath = path6;
+          opPath = path7;
           break;
         }
       }
@@ -51847,6 +52619,8 @@ var FlowClient = class _FlowClient {
     let operationPath = opPath.replace(/^\/?{connectionId}\/?/, "");
     const opDef = swagger.paths[opPath][opMethod.toLowerCase()];
     const queryParamNames = /* @__PURE__ */ new Set();
+    const headerParams = {};
+    let operationBody;
     if (opDef?.parameters) {
       for (let p of opDef.parameters) {
         if (p.$ref && swagger.parameters) {
@@ -51856,6 +52630,12 @@ var FlowClient = class _FlowClient {
         }
         if (p.in === "query")
           queryParamNames.add(p.name);
+        if (p.in === "header" && params?.[p.name] !== void 0) {
+          headerParams[p.name] = String(params[p.name]);
+        }
+        if (p.in === "body" && params?.[p.name] !== void 0) {
+          operationBody = params[p.name];
+        }
       }
     }
     const queryParams = {};
@@ -51875,7 +52655,11 @@ var FlowClient = class _FlowClient {
       invokeUrl += (invokeUrl.includes("?") ? "&" : "?") + qs2;
     }
     const apihubToken = await this.auth.getAccessToken(APIHUB_RESOURCE);
-    return this.requestWithToken(opMethod, invokeUrl, apihubToken);
+    if (continuation2) {
+      const nextUrl = pickerNextLink(continuation2.nextLink, invokeUrl);
+      return this.requestWithToken("GET", nextUrl, apihubToken, void 0, headerParams);
+    }
+    return this.requestWithToken(opMethod, invokeUrl, apihubToken, operationBody, headerParams);
   }
   // --- PPAPI (PowerPlatform API) ---
   async searchOperations(envId, opts) {
@@ -51896,7 +52680,7 @@ var FlowClient = class _FlowClient {
     } else {
       body.anyTagsToExclude = ["Deprecated"];
     }
-    const data = await this.ppapiRequest("POST", url2, body);
+    const data = await this.ppapiOperationRequest(envId, "POST", url2, body);
     let results = data.value.map((item) => ({
       name: item.name,
       displayName: item.properties.summary,
@@ -51915,7 +52699,25 @@ var FlowClient = class _FlowClient {
   async getOperationSchema(envId, connector, operation) {
     const base = this.ppapiBase(envId);
     const url2 = ppapiOperationSchemaUrl(base, connector, operation);
-    return this.ppapiRequest("GET", url2);
+    return this.ppapiOperationRequest(envId, "GET", url2);
+  }
+  /**
+   * This client's operation catalog/schema path has no classic Flow RP fallback.
+   * Return an actionable error when per-environment PPAPI DNS is unavailable
+   * instead of exposing a generic ENOTFOUND or attempting an invalid fallback.
+   */
+  async ppapiOperationRequest(envId, method, url2, body) {
+    try {
+      return await this.ppapiRequest(method, url2, body);
+    } catch (error51) {
+      if (!this.isPpapiDnsFailure(error51))
+        throw error51;
+      throw Object.assign(new FlowApiError(0, "OperationDiscoveryUnavailable", `Operation discovery requires the per-environment Power Platform API endpoint for ${envId}, but that endpoint is unavailable and this client has no classic Flow RP fallback for this operation. Verify the environment ID, cloud-specific PPAPI configuration, and network/DNS access.`, url2), {
+        code: "OperationDiscoveryUnavailable",
+        cause: error51,
+        remediation: "Check the environment ID, configured cloud, and per-environment PPAPI endpoint. This operation requires PPAPI availability; a classic Flow RP fallback is not implemented."
+      });
+    }
   }
   /**
    * Per-process cache of operation schemas. The same `getOperationSchema` call
@@ -51941,7 +52743,99 @@ var FlowClient = class _FlowClient {
     };
     if (params)
       body.parameters = params;
-    return this.ppapiRequest("POST", url2, body);
+    const first = await this.ppapiRequest("POST", url2, body);
+    return collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return this.ppapiRequest("GET", pickerNextLink(next.value, url2));
+      }
+      return this.ppapiRequest("POST", url2, {
+        ...body,
+        dynamicInvocationDefinition: bindPickerToken(extension, next)
+      });
+    });
+  }
+  /**
+   * PPAPI can project a table picker down to value/displayName, dropping its
+   * logical name. Read the SAME schema-declared picker for aliases when needed;
+   * never infer a logical name by singularizing an entity-set name.
+   */
+  async getDataversePickerAliases(envId, connection, operation, currentInputs) {
+    const connector = "shared_commondataserviceforapps";
+    const schema = await this.cachedOperationSchema(envId, connector, operation);
+    const inputs = schema.properties.inputsDefinition;
+    const definitions = isPickerRecord(inputs) ? isPickerRecord(inputs.properties) ? inputs.properties : inputs.parameters : void 0;
+    const parameter = isPickerRecord(definitions) ? definitions.entityName : void 0;
+    const extension = isPickerRecord(parameter) ? parameter["x-ms-dynamic-list"] ?? parameter["x-ms-dynamic-values"] : void 0;
+    const unavailable = () => Object.assign(new Error("The schema-declared Dataverse picker does not expose complete logical-name metadata. Use an exact connector value or display name from resolve_params."), { code: "DataverseLogicalNamesUnavailable" });
+    if (!isPickerRecord(extension) || typeof extension.operationId !== "string")
+      throw unavailable();
+    const params = {};
+    const bindings = extension.parameters ?? {};
+    if (!isPickerRecord(bindings))
+      throw unavailable();
+    for (const [key, binding] of Object.entries(bindings)) {
+      if (isPickerRecord(binding)) {
+        const reference = binding.parameterReference ?? binding.parameter;
+        if (typeof reference === "string") {
+          if (!Object.hasOwn(currentInputs, reference)) {
+            if (binding.required !== true && /^(pageToken|nextPageToken|continuationToken)$/i.test(key))
+              continue;
+            throw Object.assign(new Error(`Missing picker dependency "${reference}". Pass it via dependencies.`), { code: "MissingPickerDependency" });
+          }
+          params[key] = currentInputs[reference];
+        } else if (Object.hasOwn(binding, "value"))
+          params[key] = binding.value;
+        else
+          throw unavailable();
+      } else
+        params[key] = binding;
+    }
+    const atPath = (value, path7) => path7.split(/[/.]/).filter(Boolean).reduce((v, key) => {
+      if (!isPickerRecord(v))
+        return void 0;
+      if (Object.hasOwn(v, key))
+        return v[key];
+      const matches = Object.keys(v).filter((candidate) => candidate.toLowerCase() === key.toLowerCase());
+      return matches.length === 1 ? v[matches[0]] : void 0;
+    }, value);
+    const collectionPath = extension.itemsPath ?? extension["value-collection"];
+    const valuePath = extension.itemValuePath ?? extension["value-path"];
+    const titlePath = extension.itemTitlePath ?? extension["value-title"];
+    if (typeof valuePath !== "string")
+      throw unavailable();
+    const normalizePage = (raw) => {
+      const envelope = isPickerRecord(raw) ? raw : {};
+      const rows = typeof collectionPath === "string" ? atPath(raw, collectionPath) : envelope.value ?? raw;
+      if (!Array.isArray(rows) || !rows.every(isPickerRecord))
+        throw unavailable();
+      if (!rows.every((row) => typeof (row.LogicalName ?? row.logicalName) === "string") && !/^(LogicalName|logicalName)$/.test(valuePath))
+        throw unavailable();
+      return {
+        ...envelope,
+        value: rows.map((row) => ({
+          ...row,
+          value: atPath(row, valuePath),
+          displayName: typeof titlePath === "string" ? atPath(row, titlePath) : row.DisplayCollectionName ?? row.DisplayName
+        }))
+      };
+    };
+    const operationId = extension.operationId;
+    const first = normalizePage(await this.invokeOperation(envId, connector, connection, operationId, params));
+    const complete = await collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return normalizePage(await this.invokeOperation(envId, connector, connection, operationId, params, { nextLink: next.value }));
+      }
+      const bound = bindPickerToken(extension, next);
+      if (!isPickerRecord(bound.parameters))
+        throw unavailable();
+      const nextParams = { ...params };
+      for (const [key, binding] of Object.entries(bound.parameters)) {
+        if (isPickerRecord(binding) && Object.hasOwn(binding, "value"))
+          nextParams[key] = binding.value;
+      }
+      return normalizePage(await this.invokeOperation(envId, connector, connection, operationId, nextParams));
+    });
+    return normalizePickerResponse(complete);
   }
   async getDynamicTreeValues(envId, connector, connection, extension, params, selection) {
     const base = this.ppapiBase(envId);
@@ -51953,7 +52847,16 @@ var FlowClient = class _FlowClient {
       body.parameters = params;
     if (selection)
       body.selectionState = selection;
-    return this.ppapiRequest("POST", url2, body);
+    const first = await this.ppapiRequest("POST", url2, body);
+    return collectPickerPages(first, async (next) => {
+      if (next.kind === "link") {
+        return this.ppapiRequest("GET", pickerNextLink(next.value, url2));
+      }
+      return this.ppapiRequest("POST", url2, {
+        ...body,
+        dynamicInvocationDefinition: bindPickerToken(extension, next)
+      });
+    });
   }
   async getDynamicSchema(envId, connector, connection, extension, params, alias, location) {
     const base = this.ppapiBase(envId);
@@ -51987,7 +52890,7 @@ var FlowClient = class _FlowClient {
         lastError = err;
         if (err instanceof FlowApiError) {
           if (err.statusCode === 401 && attempt === 0) {
-            this.auth.invalidateAccessToken?.();
+            await this.auth.invalidateAccessToken?.();
             logger.debug("PPAPI 401 \u2014 invalidated token, retrying");
             continue;
           }
@@ -52474,9 +53377,15 @@ var FlowClient = class _FlowClient {
     await progress2?.send(10, 100, `Fetching schema ${connector}/${operation}\u2026`);
     const opSchema = await this.cachedOperationSchema(envId, connector, operation);
     const inputsDef = opSchema.properties?.inputsDefinition;
+    if (!inputsDef || typeof inputsDef !== "object" || Array.isArray(inputsDef)) {
+      throw Object.assign(new Error("Operation schema has no valid inputsDefinition."), { code: "DynamicPickerMalformedSchema" });
+    }
     const paramDefs = inputsDef?.properties ?? inputsDef?.parameters ?? {};
     const requiredParams = inputsDef?.required ?? [];
-    const paramEntries = Object.entries(paramDefs);
+    const paramEntries = Object.entries(paramDefs).filter(([name3]) => !opts.parameter || name3 === opts.parameter);
+    if (opts.parameter && paramEntries.length === 0) {
+      throw Object.assign(new Error(`Parameter "${opts.parameter}" is not present in operation "${operation}".`), { code: "ParameterNotFound" });
+    }
     const total = paramEntries.length;
     const tasks = paramEntries.map(async ([paramName, paramDef], idx) => {
       const title = paramDef["title"] ?? paramDef["x-ms-summary"];
@@ -52497,7 +53406,7 @@ var FlowClient = class _FlowClient {
             required: required2,
             type,
             dynamicType: "dropdown",
-            values: listResult.value.map((v) => ({ value: v.value, displayName: v.displayName }))
+            ...normalizePickerResponse(listResult)
           };
         }
         if (dynTree) {
@@ -52509,10 +53418,10 @@ var FlowClient = class _FlowClient {
             required: required2,
             type,
             dynamicType: "tree",
-            values: treeResult.value.map((v) => ({
-              value: v.value,
-              displayName: `${v.displayName}${v.isParent ? " (folder)" : ""}`
-            }))
+            ...normalizePickerResponse({
+              ...treeResult,
+              value: treeResult.value.map((v) => ({ ...v, displayName: `${v.displayName}${v.isParent ? " (folder)" : ""}` }))
+            })
           };
         }
         if (dynProps) {
@@ -52537,6 +53446,8 @@ var FlowClient = class _FlowClient {
           values: enumDisplays ?? enumValues?.map((v) => ({ value: v, displayName: String(v) }))
         };
       } catch (err) {
+        if (opts.strict)
+          throw err;
         const msg = err instanceof Error ? err.message : String(err);
         let hint = "Try passing concrete values for any parent parameters via currentInputs.";
         if (msg.includes("BadRequest"))
@@ -53102,11 +54013,12 @@ var FlowClient = class _FlowClient {
     await this.request("DELETE", url2);
   }
   async requestWithToken(method, url2, token, body, extraHeaders) {
+    const safeExtraHeaders = Object.fromEntries(Object.entries(extraHeaders ?? {}).filter(([name3]) => name3.toLowerCase() !== "authorization"));
     const headers = {
-      Authorization: `Bearer ${token}`,
       Accept: "application/json",
       "User-Agent": "power-automate-plugin/2.4.2",
-      ...extraHeaders
+      ...safeExtraHeaders,
+      Authorization: `Bearer ${token}`
     };
     if (body !== void 0) {
       headers["Content-Type"] = "application/json";
@@ -53310,20 +54222,21 @@ function searchExpressionHelp(opts = {}) {
 import { spawnSync } from "node:child_process";
 
 // packages/core/dist/auth/disk-token-cache.js
-import * as fs from "node:fs";
-import * as path from "node:path";
+init_clear_cache_files();
+import * as fs2 from "node:fs";
+import * as path2 from "node:path";
 import * as os from "node:os";
 import { createHash as createHash2 } from "node:crypto";
 var SCHEMA_VERSION = 2;
 function azureConfigDir() {
-  return process.env.AZURE_CONFIG_DIR || path.join(os.homedir(), ".azure");
+  return process.env.AZURE_CONFIG_DIR || path2.join(os.homedir(), ".azure");
 }
 function readActiveAzIdentity() {
   try {
-    const file2 = path.join(azureConfigDir(), "azureProfile.json");
-    if (!fs.existsSync(file2))
+    const file2 = path2.join(azureConfigDir(), "azureProfile.json");
+    if (!fs2.existsSync(file2))
       return null;
-    const raw = fs.readFileSync(file2, "utf-8").replace(/^\uFEFF/, "");
+    const raw = fs2.readFileSync(file2, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     const subs = Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
     const active = subs.find((s) => s?.isDefault) ?? subs[0];
@@ -53346,14 +54259,14 @@ function defaultCacheDir() {
     return envOverride;
   const platform = process.platform;
   if (platform === "win32") {
-    const base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-    return path.join(base, "flowagent", "tokens");
+    const base = process.env.LOCALAPPDATA || path2.join(os.homedir(), "AppData", "Local");
+    return path2.join(base, "flowagent", "tokens");
   }
   if (platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Caches", "flowagent", "tokens");
+    return path2.join(os.homedir(), "Library", "Caches", "flowagent", "tokens");
   }
-  const xdg = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
-  return path.join(xdg, "flowagent", "tokens");
+  const xdg = process.env.XDG_CACHE_HOME || path2.join(os.homedir(), ".cache");
+  return path2.join(xdg, "flowagent", "tokens");
 }
 function parseJwtClaims(token) {
   try {
@@ -53373,11 +54286,11 @@ function parseJwtClaims(token) {
 function cacheKeyFile(cacheDir, resource, tenantId2, accountId) {
   const composite = `${resource}\0${tenantId2 ?? ""}\0${accountId ?? ""}`;
   const hash2 = createHash2("sha256").update(composite).digest("hex").slice(0, 32);
-  return path.join(cacheDir, `${hash2}.json`);
+  return path2.join(cacheDir, `${hash2}.json`);
 }
 function unkeyedFile(cacheDir, resource) {
   const hash2 = createHash2("sha256").update(resource).digest("hex").slice(0, 32);
-  return path.join(cacheDir, `_unknown-${hash2}.json`);
+  return path2.join(cacheDir, `_unknown-${hash2}.json`);
 }
 var DiskTokenCache = class {
   cacheDir;
@@ -53422,12 +54335,12 @@ var DiskTokenCache = class {
           this.identityHints.delete(resource);
         }
       }
-      if (!fs.existsSync(this.cacheDir))
+      if (!fs2.existsSync(this.cacheDir))
         return null;
-      const files = fs.readdirSync(this.cacheDir).filter((f) => f.endsWith(".json"));
+      const files = fs2.readdirSync(this.cacheDir).filter((f) => f.endsWith(".json"));
       let bestMatch = null;
       for (const f of files) {
-        const entry = readEntry(path.join(this.cacheDir, f));
+        const entry = readEntry(path2.join(this.cacheDir, f));
         if (!entry)
           continue;
         if (entry.resource !== resource)
@@ -53457,7 +54370,7 @@ var DiskTokenCache = class {
     if (this.disabled)
       return;
     try {
-      fs.mkdirSync(this.cacheDir, { recursive: true });
+      fs2.mkdirSync(this.cacheDir, { recursive: true });
       const { tenantId: tenantId2, accountId } = parseJwtClaims(token.token);
       this.identityHints.set(resource, { tenantId: tenantId2, accountId });
       const entry = {
@@ -53475,22 +54388,16 @@ var DiskTokenCache = class {
     } catch {
     }
   }
-  /** Remove all cached entries (used by sign-out flows + tests). */
-  clear() {
+  /** Remove all entries, or one resource's entries. Explicit failures propagate. */
+  clear(resource) {
     try {
-      if (!fs.existsSync(this.cacheDir))
-        return;
-      for (const f of fs.readdirSync(this.cacheDir)) {
-        if (f.endsWith(".json")) {
-          try {
-            fs.unlinkSync(path.join(this.cacheDir, f));
-          } catch {
-          }
-        }
-      }
-    } catch {
+      return clearCacheFiles(this.cacheDir, (file2) => file2.endsWith(".json") && (resource === void 0 || readEntry(path2.join(this.cacheDir, file2))?.resource === resource));
+    } finally {
+      if (resource === void 0)
+        this.identityHints.clear();
+      else
+        this.identityHints.delete(resource);
     }
-    this.identityHints.clear();
   }
   /** Test/debug accessor. */
   get directory() {
@@ -53501,11 +54408,11 @@ var DiskTokenCache = class {
   }
 };
 function readEntry(file2) {
-  if (!fs.existsSync(file2))
+  if (!fs2.existsSync(file2))
     return null;
   let raw;
   try {
-    raw = fs.readFileSync(file2, "utf-8");
+    raw = fs2.readFileSync(file2, "utf-8");
   } catch {
     return null;
   }
@@ -53522,21 +54429,23 @@ function readEntry(file2) {
 }
 function atomicWrite(dest, contents) {
   const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, contents, { encoding: "utf-8", mode: 384 });
+  fs2.writeFileSync(tmp, contents, { encoding: "utf-8", mode: 384 });
   try {
-    fs.chmodSync(tmp, 384);
+    fs2.chmodSync(tmp, 384);
   } catch {
   }
-  fs.renameSync(tmp, dest);
+  fs2.renameSync(tmp, dest);
 }
 
 // packages/core/dist/auth/az-cli-auth.js
+init_auth_operation_queue();
 var REFRESH_BUFFER_MS = 5 * 60 * 1e3;
 var DEFAULT_RESOURCE = "https://service.flow.microsoft.com";
 var AzCliTokenProvider = class {
   tokenCache = /* @__PURE__ */ new Map();
   diskCache;
   defaultResource;
+  resetFailed = false;
   constructor(opts = {}) {
     this.defaultResource = opts.defaultResource ?? DEFAULT_RESOURCE;
     if (opts.diskCache === false) {
@@ -53548,6 +54457,9 @@ var AzCliTokenProvider = class {
     }
   }
   async getAccessToken(resource) {
+    if (this.resetFailed) {
+      throw new AuthResetRequiredError("A token-cache reset failed. Retry reconnect before acquiring another token.");
+    }
     const res = resource ?? this.defaultResource;
     const memHit = this.tokenCache.get(res);
     if (memHit && Date.now() < memHit.expiresAt - REFRESH_BUFFER_MS) {
@@ -53605,6 +54517,19 @@ ${stdout}`.trim();
   invalidateAccessToken(resource) {
     const res = resource ?? this.defaultResource;
     this.tokenCache.delete(res);
+    try {
+      this.diskCache?.clear(res);
+    } catch (error51) {
+      this.resetFailed = true;
+      throw error51;
+    }
+  }
+  invalidateAllAccessTokens() {
+    this.resetFailed = true;
+    this.tokenCache.clear();
+    const removed = this.diskCache?.clear() ?? 0;
+    this.resetFailed = false;
+    return removed;
   }
 };
 var AzCliAuthError = class extends Error {
@@ -53619,7 +54544,8 @@ var cachedTenantId = null;
 function getAzTenantId() {
   if (cachedTenantId !== null)
     return cachedTenantId ?? void 0;
-  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { encoding: "utf-8", shell: false });
+  const isWindows = process.platform === "win32";
+  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { encoding: "utf-8", shell: isWindows, windowsHide: true });
   if (result.status === 0 && result.stdout) {
     cachedTenantId = result.stdout.trim() || void 0;
   } else {
@@ -53627,8 +54553,13 @@ function getAzTenantId() {
   }
   return cachedTenantId;
 }
+function resetAzTenantIdCache() {
+  cachedTenantId = null;
+}
 
 // packages/core/dist/auth/composite-auth.js
+init_auth_operation_queue();
+init_msal_disk_cache();
 var CONNECTIVITY_RESOURCE_COMMERCIAL = "https://api.powerplatform.com";
 function buildCompositeAuth(opts = {}) {
   const azOpts = {
@@ -53637,8 +54568,11 @@ function buildCompositeAuth(opts = {}) {
   };
   const azAuth = opts.azProvider ?? new AzCliTokenProvider(azOpts);
   let msalAuth = null;
+  const azOperations = new AuthOperationQueue();
+  const connectivityOperations = new AuthOperationQueue();
   const cloud = opts.cloud ?? "commercial";
   const connectivityResource = opts.cloudEndpoints?.powerPlatformApiUrl ?? CONNECTIVITY_RESOURCE_COMMERCIAL;
+  const isConnectivityResource = (resource) => resource === connectivityResource || resource === CONNECTIVITY_RESOURCE_COMMERCIAL;
   async function getMsalAuth() {
     if (msalAuth)
       return msalAuth;
@@ -53647,9 +54581,6 @@ function buildCompositeAuth(opts = {}) {
       return msalAuth;
     }
     const customClientId = process.env.PA_CLIENT_ID;
-    if (cloud !== "commercial" && !customClientId) {
-      throw new Error(`Connection management commands require MSAL authentication, but the PAC CLI app (9cee029c) is not preauthorized in ${cloud.toUpperCase()} tenants. To use connection commands, register your own Azure AD app with Power Platform Connectivity scopes and set PA_CLIENT_ID=<your-app-id>. Flow management commands (list, create, run flows) work without this.`);
-    }
     const tenantId2 = getAzTenantId();
     const authorityHost = opts.cloudEndpoints?.authorityHost ?? "https://login.microsoftonline.com";
     const mod = await Promise.resolve().then(() => (init_msal_auth(), msal_auth_exports));
@@ -53661,21 +54592,85 @@ function buildCompositeAuth(opts = {}) {
     });
     return msalAuth;
   }
+  async function clearAzTokens() {
+    if (azAuth.invalidateAllAccessTokens)
+      return await azAuth.invalidateAllAccessTokens();
+    await azAuth.invalidateAccessToken?.();
+    return new DiskTokenCache().clear();
+  }
+  async function resetConnectivity() {
+    let removed = 0;
+    if (msalAuth?.resetConnectivityAuth) {
+      removed = await msalAuth.resetConnectivityAuth() ?? 0;
+    } else {
+      await msalAuth?.invalidateAccessToken?.();
+    }
+    removed += clearMsalDiskCache();
+    msalAuth = null;
+    resetAzTenantIdCache();
+    return removed;
+  }
   return {
-    async getAccessToken(resource) {
-      if (resource === connectivityResource || resource === CONNECTIVITY_RESOURCE_COMMERCIAL) {
-        const provider = await getMsalAuth();
-        return provider.getAccessToken(resource);
-      }
-      return azAuth.getAccessToken(resource);
+    getConnectivityAuthState() {
+      return msalAuth?.getConnectivityAuthState?.() ?? null;
     },
-    // Without this, the `reconnect` tool could clear the disk cache but the
-    // in-memory copy would keep serving the stale token. (#434)
+    getAccessToken(resource) {
+      const operations = isConnectivityResource(resource) ? connectivityOperations : azOperations;
+      return operations.run(async () => {
+        if (isConnectivityResource(resource)) {
+          const provider = await getMsalAuth();
+          try {
+            return await provider.getAccessToken(resource);
+          } catch (err) {
+            throw enrichConnectivityAuthError(err, cloud);
+          }
+        }
+        return await azAuth.getAccessToken(resource);
+      });
+    },
     invalidateAccessToken(resource) {
-      azAuth.invalidateAccessToken?.(resource);
-      msalAuth?.invalidateAccessToken?.(resource);
+      const operations = isConnectivityResource(resource) ? connectivityOperations : azOperations;
+      return operations.run(async () => {
+        if (isConnectivityResource(resource)) {
+          await resetConnectivity();
+        } else {
+          await azAuth.invalidateAccessToken?.(resource);
+        }
+      });
+    },
+    invalidateAllAccessTokens() {
+      return azOperations.reset(clearAzTokens);
+    },
+    resetConnectivityAuth() {
+      return connectivityOperations.reset(resetConnectivity);
+    },
+    async resetAuth() {
+      const [az, connectivity] = await Promise.allSettled([
+        azOperations.reset(clearAzTokens),
+        connectivityOperations.reset(resetConnectivity)
+      ]);
+      if (az.status === "rejected")
+        throw az.reason;
+      if (connectivity.status === "rejected")
+        throw connectivity.reason;
+      return { clearedEntries: az.value, clearedConnectivityEntries: connectivity.value };
     }
   };
+}
+function enrichConnectivityAuthError(err, cloud) {
+  if (cloud === "commercial")
+    return err;
+  if (process.env.PA_CLIENT_ID)
+    return err;
+  const message = err instanceof Error ? err.message : String(err);
+  const looksLikeAppProblem = /AADSTS(700016|650057|65001|500011)/i.test(message) || /not\s+(found|preauthoriz|authoriz)/i.test(message) || /consent/i.test(message);
+  if (!looksLikeAppProblem)
+    return err;
+  const enriched = new Error(`${message}
+
+Connection commands authenticate against the Power Platform API with a first-party client ID that may not be preauthorized in ${cloud.toUpperCase()} tenants. Register an Azure AD app in this tenant with Power Platform API permissions and set PA_CLIENT_ID=<your-app-id>. Flow commands (list, create, run) do not need this.`);
+  enriched.cause = err;
+  return enriched;
 }
 
 // packages/core/dist/index.js
@@ -53685,7 +54680,7 @@ init_msal_disk_cache();
 // packages/core/dist/config.js
 init_logger();
 import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 import { spawnSync as spawnSync2 } from "node:child_process";
 var CLOUD_ENDPOINTS = {
@@ -53710,16 +54705,28 @@ var CLOUD_ENDPOINTS = {
     flowBaseUrl: "https://high.api.flow.microsoft.us",
     flowResource: "https://high.service.flow.microsoft.us",
     bapBaseUrl: "https://high.api.bap.microsoft.us",
-    powerPlatformApiUrl: "https://high.api.powerplatform.microsoft.us",
+    // `api.high.` - not `high.api.`, which has no DNS record. The segment
+    // order here is the opposite of the flow/bap hosts above, and matches
+    // ppapiSuffix below, which already had it right.
+    powerPlatformApiUrl: "https://api.high.powerplatform.microsoft.us",
     ppapiSuffix: "environment.api.high.powerplatform.microsoft.us"
   },
+  // DoD does not use the powerplatform.microsoft.us domain at all - it is
+  // served from appsplatform.us. The previously shipped `dod.*.microsoft.us`
+  // values were pattern-extended from gcc/gcchigh and none of them resolve.
+  // Corroborated by the power-pages plugin (organization.api.appsplatform.us)
+  // and the canvas-apps maker host table (make.apps.appsplatform.us), then
+  // DNS-verified here.
   dod: {
     authorityHost: "https://login.microsoftonline.us",
-    flowBaseUrl: "https://dod.api.flow.microsoft.us",
-    flowResource: "https://dod.service.flow.microsoft.us",
-    bapBaseUrl: "https://dod.api.bap.microsoft.us",
-    powerPlatformApiUrl: "https://dod.api.powerplatform.microsoft.us",
-    ppapiSuffix: "environment.api.dod.powerplatform.microsoft.us"
+    flowBaseUrl: "https://api.flow.appsplatform.us",
+    // The Flow audience is an App ID URI rather than a network address, so it
+    // cannot be inferred from DNS. Require PA_FLOW_RESOURCE until a DoD tenant
+    // holder validates the audience instead of shipping a guessed credential.
+    flowResource: "",
+    bapBaseUrl: "https://api.bap.appsplatform.us",
+    powerPlatformApiUrl: "https://api.appsplatform.us",
+    ppapiSuffix: "environment.api.appsplatform.us"
   }
 };
 function detectAzureCloud() {
@@ -53780,7 +54787,7 @@ function getCloudEndpoints(cloud) {
   return CLOUD_ENDPOINTS[cloud];
 }
 function loadFileConfig(configDir) {
-  const configPath = join4(configDir, "config.json");
+  const configPath = join5(configDir, "config.json");
   try {
     const raw = readFileSync4(configPath, "utf-8");
     return JSON.parse(raw);
@@ -53790,7 +54797,7 @@ function loadFileConfig(configDir) {
   }
 }
 function loadConfig() {
-  const configDir = join4(homedir3(), ".power-automate-cli");
+  const configDir = join5(homedir3(), ".power-automate-cli");
   const fileConfig = loadFileConfig(configDir);
   let cloud;
   if (process.env.PA_CLOUD) {
@@ -53800,7 +54807,16 @@ function loadConfig() {
   } else {
     cloud = resolveCloud();
   }
-  const cloudEndpoints = getCloudEndpoints(cloud);
+  const baseCloudEndpoints = getCloudEndpoints(cloud);
+  const flowResourceOverride = process.env.PA_FLOW_RESOURCE?.trim();
+  if (cloud === "dod" && !flowResourceOverride) {
+    throw Object.assign(new Error("DoD Flow authentication requires an explicit PA_FLOW_RESOURCE token audience. The DoD audience has not been validated, so FlowAgent will not use a guessed default."), { code: "UnsupportedCloudConfiguration" });
+  }
+  const cloudEndpoints = {
+    ...baseCloudEndpoints,
+    ...flowResourceOverride ? { flowResource: flowResourceOverride } : {},
+    ...process.env.PA_PPAPI_RESOURCE ? { powerPlatformApiUrl: process.env.PA_PPAPI_RESOURCE } : {}
+  };
   return {
     defaultEnvironmentId: process.env.PA_DEFAULT_ENVIRONMENT ?? fileConfig.defaultEnvironmentId,
     baseUrl: process.env.PA_BASE_URL ?? fileConfig.baseUrl ?? cloudEndpoints.flowBaseUrl,
@@ -53817,7 +54833,7 @@ import { fileURLToPath } from "node:url";
 
 // packages/core/dist/telemetry/config.js
 import os3 from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 var TELEMETRY_PLUGIN_NAME = "flow-agent";
 var TELEMETRY_PLUGIN_VERSION = "2.0.0";
 var TELEMETRY_SCHEMA_VERSION = "1.0";
@@ -53830,7 +54846,7 @@ function resolveLocalLogPath() {
   const override = process.env.FLOWAGENT_TELEMETRY_LOG;
   if (override)
     return override;
-  return path3.join(os3.homedir(), ".flowagent", "telemetry.jsonl");
+  return path4.join(os3.homedir(), ".flowagent", "telemetry.jsonl");
 }
 var cached2;
 function getTelemetryConfig() {
@@ -53986,12 +55002,12 @@ function buildEvent(eventName, fields) {
 }
 
 // packages/core/dist/telemetry/local-log.js
-import fs3 from "node:fs";
-import path4 from "node:path";
+import fs4 from "node:fs";
+import path5 from "node:path";
 function appendLocal(logPath, record2) {
-  const dir = path4.dirname(logPath);
-  fs3.mkdirSync(dir, { recursive: true });
-  fs3.appendFileSync(logPath, JSON.stringify(record2) + "\n", "utf8");
+  const dir = path5.dirname(logPath);
+  fs4.mkdirSync(dir, { recursive: true });
+  fs4.appendFileSync(logPath, JSON.stringify(record2) + "\n", "utf8");
 }
 
 // packages/core/dist/templates.js
@@ -55632,8 +56648,32 @@ init_trigger_emulators();
 
 // packages/core/dist/diagnostics.js
 import { spawnSync as spawnSync3 } from "node:child_process";
-import fs4 from "node:fs";
-import path5 from "node:path";
+import fs5 from "node:fs";
+import path6 from "node:path";
+init_msal_disk_cache();
+init_msal_auth();
+function normalizeIdentity(value) {
+  return value?.trim().toLowerCase() ?? "";
+}
+function connectivityIdentityMismatch(identity, az) {
+  if (!identity || !az)
+    return false;
+  return Boolean(identity.tenantId && az.tenantId && normalizeIdentity(identity.tenantId) !== normalizeIdentity(az.tenantId) || identity.username && az.user && normalizeIdentity(identity.username) !== normalizeIdentity(az.user));
+}
+function effectiveConnectivityIdentity(az, opts = {}) {
+  const state = opts.auth?.getConnectivityAuthState?.();
+  if (state?.account)
+    return state.account;
+  if (["1", "true"].includes(process.env.FLOWAGENT_DISABLE_MSAL_CACHE ?? ""))
+    return null;
+  const identity = state?.cacheIdentity ?? az?.tenantId ?? process.env.PA_TENANT_ID ?? "common";
+  const cached3 = readCachedMsalIdentities({ cacheDir: opts.cacheDir, identity });
+  const selected = selectCachedMsalAccount(cached3, identity);
+  return selected?.username || selected?.tenantId ? selected : null;
+}
+function describeConnectivityIdentity(identity) {
+  return `${identity.username ?? "(unknown account)"} in tenant ${identity.tenantId ?? "unknown"}`;
+}
 async function readTokenIdentity(auth2, resource) {
   try {
     const token = await auth2.getAccessToken(resource);
@@ -55646,6 +56686,8 @@ async function whoAmI(auth2, config3, opts = {}) {
   const azIdentity = readActiveAzIdentity();
   const tokenIdentity = await readTokenIdentity(auth2, config3.cloudEndpoints.flowResource);
   const identityMismatch = Boolean(azIdentity?.tenantId && tokenIdentity?.tenantId && azIdentity.tenantId !== tokenIdentity.tenantId);
+  const connectivityIdentity = readCachedMsalIdentities();
+  const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, { auth: auth2 });
   return {
     azIdentity,
     azureConfigDir: azureConfigDir(),
@@ -55654,20 +56696,32 @@ async function whoAmI(auth2, config3, opts = {}) {
     tokenCacheDir: defaultCacheDir(),
     tokenIdentity,
     identityMismatch,
+    connectivityIdentity,
+    effectiveConnectivityIdentity: effectiveIdentity,
+    connectivityCacheDir: defaultMsalCacheDir(),
+    connectivityIdentityMismatch: connectivityIdentityMismatch(effectiveIdentity, azIdentity),
     currentEnv: opts.currentEnv ?? null
   };
 }
+async function resetConnectivityCredentials(auth2, opts) {
+  const removed = await auth2?.resetConnectivityAuth?.();
+  return typeof removed === "number" ? removed : clearMsalDiskCache(opts);
+}
 async function reconnect(auth2, config3) {
   const dir = defaultCacheDir();
-  let clearedEntries = 0;
-  try {
-    if (fs4.existsSync(dir)) {
-      clearedEntries = fs4.readdirSync(dir).filter((f) => f.endsWith(".json")).length;
+  let clearedEntries;
+  let clearedConnectivityEntries;
+  if (auth2.resetAuth) {
+    ({ clearedEntries, clearedConnectivityEntries } = await auth2.resetAuth());
+  } else {
+    if (auth2.invalidateAllAccessTokens) {
+      clearedEntries = await auth2.invalidateAllAccessTokens();
+    } else {
+      await auth2.invalidateAccessToken?.();
+      clearedEntries = new DiskTokenCache().clear();
     }
-  } catch {
+    clearedConnectivityEntries = await resetConnectivityCredentials(auth2);
   }
-  new DiskTokenCache().clear();
-  auth2.invalidateAccessToken?.();
   let reacquired = false;
   try {
     await auth2.getAccessToken(config3.cloudEndpoints.flowResource);
@@ -55676,13 +56730,29 @@ async function reconnect(auth2, config3) {
     reacquired = false;
   }
   const azIdentity = readActiveAzIdentity();
+  const connSuffix = ` Connectivity sign-in reset; ${describeNextConnectivitySignIn()}.`;
   return {
     clearedEntries,
     tokenCacheDir: dir,
+    clearedConnectivityEntries,
+    connectivityCacheDir: defaultMsalCacheDir(),
     azIdentity,
     reacquired,
-    message: reacquired ? `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) and a fresh token acquired as ${azIdentity?.user ?? "(unknown)"}.` : `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) but re-acquisition failed. Run: az login`
+    message: reacquired ? `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) and a fresh token acquired as ${azIdentity?.user ?? "(unknown)"}.${connSuffix}` : `Token cache cleared (${clearedEntries} entr${clearedEntries === 1 ? "y" : "ies"}) but re-acquisition failed. Run: az login${connSuffix}`
   };
+}
+function describeNextConnectivitySignIn(opts) {
+  const resolved = resolveInteractiveAccountOptions(process.env, {
+    storedHint: readPreferredAccount(opts)
+  });
+  if (resolved.loginHint) {
+    const source = process.env.PA_LOGIN_HINT?.trim() ? "PA_LOGIN_HINT" : "your switch_account preference";
+    return `the next interactive Connectivity sign-in will target ${resolved.loginHint} (${source})`;
+  }
+  if (resolved.prompt === "select_account") {
+    return "the next interactive Connectivity sign-in will show an account picker";
+  }
+  return "the next interactive Connectivity sign-in will use your browser's current account (PA_NO_ACCOUNT_PICKER is set)";
 }
 function azVersionInstalled() {
   try {
@@ -55708,7 +56778,7 @@ async function doctor(auth2, config3, opts = {}) {
     fix: "Install it from https://aka.ms/installazurecli, then run: az login"
   });
   const configDir = azureConfigDir();
-  const profileExists = fs4.existsSync(path5.join(configDir, "azureProfile.json"));
+  const profileExists = fs5.existsSync(path6.join(configDir, "azureProfile.json"));
   const azIdentity = readActiveAzIdentity();
   if (!profileExists) {
     checks.push({
@@ -55767,6 +56837,25 @@ async function doctor(auth2, config3, opts = {}) {
       fix: match ? void 0 : "Call the reconnect tool (clears the token cache and re-acquires)."
     });
   }
+  const connectivityIdentity = effectiveConnectivityIdentity(azIdentity, { auth: auth2 });
+  if (connectivityIdentity) {
+    const mismatch = connectivityIdentityMismatch(connectivityIdentity, azIdentity);
+    const comparable = Boolean(azIdentity?.tenantId && azIdentity.user && connectivityIdentity.tenantId && connectivityIdentity.username);
+    const detail = `Effective Connectivity account: ${describeConnectivityIdentity(connectivityIdentity)}. Azure CLI account: ${azIdentity?.user ?? "(unknown account)"} in tenant ${azIdentity?.tenantId ?? "unknown"}.`;
+    checks.push({
+      name: "connectivity-identity",
+      status: mismatch ? "fail" : comparable ? "pass" : "warn",
+      detail: mismatch ? `Connectivity identity mismatch. ${detail}` : comparable ? `Connectivity username and tenant match Azure CLI. ${detail}` : `Connectivity identity could not be fully compared. ${detail}`,
+      fix: mismatch ? "Call switch_account with the intended username, or reconnect. Check the returned account-selection settings for the next sign-in." : comparable ? void 0 : "Run whoami and check the Azure CLI profile and Connectivity sign-in."
+    });
+  } else if ((!azIdentity?.tenantId || !azIdentity.user) && readCachedMsalIdentities().length > 0) {
+    checks.push({
+      name: "connectivity-identity",
+      status: "warn",
+      detail: "Cached Connectivity accounts exist, but the active Azure CLI identity and effective Connectivity account could not be established. Historical entries are not treated as the active account.",
+      fix: "Use list_accounts to inspect the cache inventory, then sign in to the intended Azure CLI account and reconnect."
+    });
+  }
   const envId = opts.currentEnv ?? null;
   if (!envId) {
     checks.push({
@@ -55809,6 +56898,79 @@ async function doctor(auth2, config3, opts = {}) {
   const failed = checks.filter((c) => c.status !== "pass");
   const summary = status === "pass" ? "All checks passed." : `${failed.length} check${failed.length === 1 ? "" : "s"} need attention: ${failed.map((c) => c.name).join(", ")}.`;
   return { status, checks, summary };
+}
+function listAccounts(opts) {
+  const azIdentity = readActiveAzIdentity();
+  const preferredAccount = readPreferredAccount(opts);
+  const cached3 = readCachedMsalIdentities(opts);
+  const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, opts);
+  const nextSignIn = resolveInteractiveAccountOptions(process.env, { storedHint: preferredAccount });
+  const accounts = cached3.map((i) => ({
+    username: i.username,
+    tenantId: i.tenantId,
+    cacheFile: i.cacheFile,
+    matchesAzTenant: Boolean(azIdentity?.tenantId && i.tenantId === azIdentity.tenantId),
+    preferred: Boolean(preferredAccount && i.username?.toLowerCase() === preferredAccount.toLowerCase())
+  }));
+  const identityMismatch = connectivityIdentityMismatch(effectiveIdentity, azIdentity);
+  let message;
+  if (!effectiveIdentity) {
+    message = `No effective Connectivity account could be read from the running provider or its cache partition; ${describeNextConnectivitySignIn(opts)}.`;
+  } else if (identityMismatch) {
+    message = `Effective Connectivity account (${describeConnectivityIdentity(effectiveIdentity)}) differs from Azure CLI (${azIdentity?.user ?? "(unknown account)"} in tenant ${azIdentity?.tenantId ?? "unknown"}). Call switch_account with the intended username and check the returned account-selection settings.`;
+  } else {
+    message = `Effective Connectivity account: ${describeConnectivityIdentity(effectiveIdentity)}. No known mismatch with Azure CLI.`;
+  }
+  message += ` The ${accounts.length} cached account entr${accounts.length === 1 ? "y is" : "ies are"} an inventory; inactive entries do not determine the effective identity.`;
+  return {
+    accounts,
+    azIdentity,
+    preferredAccount,
+    nextSignIn,
+    effectiveConnectivityIdentity: effectiveIdentity,
+    connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+    identityMismatch,
+    message
+  };
+}
+async function switchAccount(username, opts) {
+  const target = username?.trim() ? username.trim() : null;
+  const persisted = writePreferredAccount(target, opts);
+  const clearedConnectivityEntries = await resetConnectivityCredentials(opts?.auth, opts);
+  const azIdentity = readActiveAzIdentity();
+  const cleared = `Cleared ${clearedConnectivityEntries} cached Connectivity sign-in${clearedConnectivityEntries === 1 ? "" : "s"}.`;
+  const preferredAccount = readPreferredAccount(opts);
+  const nextSignIn = resolveInteractiveAccountOptions(process.env, { storedHint: preferredAccount });
+  if (!persisted) {
+    const failure = `${cleared} But the account preference could not be saved to ${opts?.cacheDir ?? defaultMsalCacheDir()}, so ${describeNextConnectivitySignIn(opts)}. ` + (target ? `To sign in as ${target} anyway, set PA_LOGIN_HINT=${target}, or fix the permissions on that directory and retry.` : "Check the permissions on that directory and retry.");
+    return {
+      preferredAccount,
+      nextSignIn,
+      clearedConnectivityEntries,
+      connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+      azIdentity,
+      preferencePersisted: false,
+      warning: failure,
+      message: failure
+    };
+  }
+  const message = `${cleared} ${preferredAccount ? `Stored preference is ${preferredAccount}` : "No stored account preference"}; ${describeNextConnectivitySignIn(opts)}.`;
+  let warning;
+  if (normalizeIdentity(nextSignIn.loginHint) !== normalizeIdentity(target) && nextSignIn.loginHint) {
+    warning = process.env.PA_LOGIN_HINT?.trim() ? `PA_LOGIN_HINT overrides the stored preference: the next interactive sign-in targets ${nextSignIn.loginHint}, not ${target ?? "an account picker"}.` : `The effective account preference now targets ${nextSignIn.loginHint}, rather than the requested ${target ?? "account picker"}.`;
+  } else if (nextSignIn.loginHint && azIdentity?.user && normalizeIdentity(nextSignIn.loginHint) !== normalizeIdentity(azIdentity.user)) {
+    warning = `Azure CLI is signed in as ${azIdentity.user}; the next interactive Connectivity sign-in targets ${nextSignIn.loginHint}. These are separate identities.`;
+  }
+  return {
+    preferredAccount,
+    nextSignIn,
+    clearedConnectivityEntries,
+    connectivityCacheDir: opts?.cacheDir ?? defaultMsalCacheDir(),
+    azIdentity,
+    preferencePersisted: true,
+    warning,
+    message
+  };
 }
 
 // packages/core/dist/index.js
@@ -56176,8 +57338,8 @@ function getErrorMap2() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path6, errorMaps, issueData } = params;
-  const fullPath = [...path6, ...issueData.path || []];
+  const { data, path: path7, errorMaps, issueData } = params;
+  const fullPath = [...path7, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -56292,11 +57454,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path6, key) {
+  constructor(parent, value, path7, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path6;
+    this._path = path7;
     this._key = key;
   }
   get path() {
@@ -65523,10 +66685,9 @@ var EMPTY_COMPLETION_RESULT = {
 init_flow_definition();
 
 // packages/core/dist/mcp/response.js
+import { createHash as createHash3 } from "node:crypto";
 var MAX_RESPONSE_CHARS = 5e4;
 var MAX_SINGLE_ITEM_CHARS = 2e5;
-var TRUNCATION_NOTICE = "\n\n[Response truncated. Use more specific filters or get individual items for full details.]";
-var SINGLE_ITEM_TRUNCATION_NOTICE = '\n\n[Response truncated due to size. Use get_flow with a `path` parameter to retrieve specific sections, e.g. path: "definition.actions.MyAction" or path: "properties.connectionReferences".]';
 function safeResult(data, opts) {
   let text;
   try {
@@ -65534,16 +66695,93 @@ function safeResult(data, opts) {
       text = JSON.stringify({ ok: true });
     } else {
       text = JSON.stringify(data, null, 2);
+      if (text === void 0)
+        throw new Error("Not JSON serializable");
     }
   } catch {
-    text = JSON.stringify({ error: "Failed to serialize response" });
+    return safeError({ code: "ResponseSerializationFailed", message: "Failed to serialize response" });
   }
   const limit = opts?.singleItem ? MAX_SINGLE_ITEM_CHARS : MAX_RESPONSE_CHARS;
-  const notice = opts?.singleItem ? SINGLE_ITEM_TRUNCATION_NOTICE : TRUNCATION_NOTICE;
   if (text.length > limit) {
-    text = text.slice(0, limit - notice.length) + notice;
+    return safeError({
+      code: "ResponseTooLarge",
+      message: `Response has ${text.length} characters; the limit is ${limit}. No partial result was returned.`,
+      remediation: opts?.retrievalHint ?? (opts?.singleItem ? 'Use get_flow with path, e.g. "properties.definition.actions.MyAction" or "properties.connectionReferences", to retrieve a smaller section.' : "Narrow the request using filters or paging exposed by the tool. For connector dropdowns, use resolve_params with parameter, query, pageSize, and cursor.")
+    });
   }
   return { content: [{ type: "text", text }] };
+}
+function pageResolvedParams(result, options, context) {
+  const { parameter, query, cursor } = options;
+  if (parameter && !result.parameters.some((p) => p.name === parameter)) {
+    throw Object.assign(new Error(`Unknown parameter "${parameter}". Inspect get_operation_details for parameter names.`), { code: "ParameterNotFound" });
+  }
+  const pageSize = options.pageSize ?? 100;
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
+    throw Object.assign(new Error("pageSize must be an integer from 1 to 500."), { code: "InvalidPageSize" });
+  }
+  const selected = result.parameters.filter((p) => !parameter || p.name === parameter);
+  const q = query?.trim().toLowerCase();
+  const filtered = selected.map((p) => ({
+    ...p,
+    ...p.values ? { values: p.values.filter((v) => !q || [String(v.value), v.displayName, ...v.aliases ?? []].some((s) => s.toLowerCase().includes(q))) } : {}
+  }));
+  const totalAvailable = filtered.reduce((n, p) => n + (p.values?.length ?? 0), 0);
+  const sourceComplete = result.connectionSource !== "not-found" && filtered.every((p) => !p.error && p.completeness?.complete !== false);
+  if (!parameter && !query && !cursor && options.pageSize === void 0 && sourceComplete && JSON.stringify(result, null, 2).length <= MAX_RESPONSE_CHARS)
+    return result;
+  const fingerprint = createHash3("sha256").update(JSON.stringify({ context, parameter, query, result })).digest("hex");
+  let offset = 0;
+  if (cursor) {
+    let decoded;
+    try {
+      if (cursor.length > 512)
+        throw new Error();
+      decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+      if (!decoded || typeof decoded !== "object")
+        throw new Error();
+    } catch {
+      throw Object.assign(new Error("Invalid discovery cursor. Restart resolve_params without cursor."), { code: "InvalidCursor" });
+    }
+    if (typeof decoded.offset !== "number" || !Number.isSafeInteger(decoded.offset) || decoded.offset < 0 || decoded.offset > totalAvailable) {
+      throw Object.assign(new Error("Invalid discovery offset. Restart without cursor."), { code: "InvalidCursor" });
+    }
+    if (decoded.fingerprint !== fingerprint) {
+      throw Object.assign(new Error("The catalog or request changed. Restart resolve_params without cursor and use the same environment, operation, connection, inputs, parameter, and query for subsequent pages."), { code: "DiscoveryChanged" });
+    }
+    offset = decoded.offset;
+  }
+  let count = Math.min(pageSize, totalAvailable - offset);
+  while (true) {
+    let skipped = 0;
+    const parameters = filtered.map((p) => {
+      if (!p.values)
+        return p;
+      const start = Math.max(0, offset - skipped);
+      const end = Math.max(0, offset + count - skipped);
+      skipped += p.values.length;
+      return { ...p, values: p.values.slice(start, end) };
+    });
+    const hasMore = offset + count < totalAvailable;
+    const paged = {
+      ...result,
+      parameters,
+      _page: {
+        offset,
+        returned: count,
+        total: sourceComplete ? totalAvailable : null,
+        available: totalAvailable,
+        sourceComplete,
+        complete: sourceComplete && offset === 0 && !hasMore,
+        hasMore,
+        ...hasMore ? { nextCursor: Buffer.from(JSON.stringify({ offset: offset + count, fingerprint })).toString("base64url") } : {},
+        ...!sourceComplete ? { warning: "Upstream discovery is incomplete or a parameter failed. total is unknown; no match is not proof of absence." } : {}
+      }
+    };
+    if (JSON.stringify(paged, null, 2).length <= MAX_RESPONSE_CHARS || count <= 1)
+      return paged;
+    count = Math.max(1, Math.floor(count / 2));
+  }
 }
 function safeError(err, enhance) {
   let payload;
@@ -65596,9 +66834,9 @@ function summarizeList(items, fields, rename) {
     return summary;
   });
 }
-function getNestedValue(obj, path6) {
+function getNestedValue(obj, path7) {
   let current = obj;
-  for (const segment of path6.split(".")) {
+  for (const segment of path7.split(".")) {
     if (current == null)
       return void 0;
     current = current[segment];
@@ -65655,310 +66893,6 @@ function progress(extra) {
 // packages/core/dist/mcp/server.js
 init_backups();
 init_logger();
-
-// packages/core/dist/api/dynamic-resolvers.js
-init_logger();
-var MAX_CANDIDATES = 500;
-async function fetchAllPages(client, envId, connector, connectionName, operation, params, opts) {
-  const maxPages = opts?.maxPages ?? 3;
-  const result = await client.invokeOperation(envId, connector, connectionName, operation, params);
-  let items = result?.value ?? (Array.isArray(result) ? result : []);
-  let nextLink = result?.["@odata.nextLink"] ?? result?.nextLink;
-  let page = 1;
-  while (nextLink && page < maxPages && items.length < MAX_CANDIDATES) {
-    try {
-      page++;
-      break;
-    } catch {
-      break;
-    }
-  }
-  return items.slice(0, MAX_CANDIDATES);
-}
-function exactMatch(items, query) {
-  return items.find((i) => i.name.toLowerCase() === query.toLowerCase()) ?? null;
-}
-function fuzzyMatch(items, query) {
-  const q = query.toLowerCase();
-  return items.map((i) => {
-    const n = i.name.toLowerCase();
-    let score = 0;
-    if (n === q)
-      score = 100;
-    else if (n === q + "s" || q === n + "s")
-      score = 95;
-    else if (n.startsWith(q) && n.length <= q.length * 1.5)
-      score = 90;
-    else if (n.startsWith(q))
-      score = 80 - (n.length - q.length);
-    else if (n.includes(q))
-      score = 60 - (n.length - q.length);
-    else if (q.split(/\s+/).every((w) => n.includes(w)))
-      score = 50;
-    return { ...i, score };
-  }).filter((i) => i.score > 0).sort((a, b) => b.score - a.score);
-}
-function resolveFromList(items, query, paramName) {
-  const exact = exactMatch(items, query);
-  if (exact) {
-    return { name: paramName, value: exact.id, displayName: exact.name, confidence: "exact" };
-  }
-  const fuzzy = fuzzyMatch(items, query);
-  if (fuzzy.length === 1) {
-    return { name: paramName, value: fuzzy[0].id, displayName: fuzzy[0].name, confidence: "fuzzy" };
-  }
-  if (fuzzy.length > 1) {
-    return {
-      name: paramName,
-      value: fuzzy[0].id,
-      displayName: fuzzy[0].name,
-      confidence: "ambiguous",
-      alternatives: fuzzy.slice(0, 5).map((f) => ({ value: f.id, displayName: f.name }))
-    };
-  }
-  return {
-    name: paramName,
-    value: "",
-    displayName: "",
-    confidence: "not-found",
-    alternatives: items.slice(0, 10).map((i) => ({ value: i.id, displayName: i.name }))
-  };
-}
-async function resolveOutlookFolder(ctx, folderName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerOpen", { operation: "MailFolders" });
-    const items = (result?.value ?? []).map((f) => ({
-      id: f.Id ?? f.id,
-      name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
-    }));
-    const topMatch = resolveFromList(items, folderName, "folderPath");
-    if (topMatch.confidence === "exact" || topMatch.confidence === "fuzzy") {
-      return topMatch;
-    }
-    for (const parent of items) {
-      try {
-        const children = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerBrowse", { operation: "MailFolders", id: parent.id });
-        const childItems = (children?.value ?? []).map((f) => ({
-          id: f.Id ?? f.id,
-          name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
-        }));
-        const childMatch = resolveFromList(childItems, folderName, "folderPath");
-        if (childMatch.confidence === "exact" || childMatch.confidence === "fuzzy") {
-          return childMatch;
-        }
-      } catch {
-      }
-    }
-    return topMatch;
-  } catch (err) {
-    logger.warn(`resolveOutlookFolder failed: ${err.message}`);
-    return { name: "folderPath", value: "Inbox", displayName: "Inbox (fallback)", confidence: "not-found" };
-  }
-}
-async function resolveTeam(ctx, teamName) {
-  try {
-    const rawItems = await fetchAllPages(ctx.client, ctx.envId, "shared_teams", ctx.connectionName, "GetAllTeams", {});
-    const items = rawItems.map((t) => ({
-      id: t.id,
-      name: t.displayName ?? t.name ?? ""
-    }));
-    return resolveFromList(items, teamName, "groupId");
-  } catch (err) {
-    logger.warn(`resolveTeam failed: ${err.message}`);
-    return { name: "groupId", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveChannel(ctx, teamId, channelName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChannelsForGroup", { groupId: teamId });
-    const items = (result?.value ?? []).map((c) => ({
-      id: c.id,
-      name: c.displayName ?? c.name ?? ""
-    }));
-    return resolveFromList(items, channelName, "channelId");
-  } catch (err) {
-    logger.warn(`resolveChannel failed: ${err.message}`);
-    return { name: "channelId", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveChat(ctx, chatQuery) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChats", {});
-    const items = (result?.value ?? []).map((c) => ({
-      id: c.id,
-      name: c.topic ?? c.chatType ?? c.id
-    }));
-    return resolveFromList(items, chatQuery, "chatId");
-  } catch (err) {
-    logger.warn(`resolveChat failed: ${err.message}`);
-    return { name: "chatId", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolvePlan(ctx, teamId, planName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListGroupPlans", { groupId: teamId });
-    const items = (result?.value ?? []).map((p) => ({
-      id: p.id,
-      name: p.title ?? p.name ?? ""
-    }));
-    return resolveFromList(items, planName, "planId");
-  } catch (err) {
-    logger.warn(`resolvePlan failed: ${err.message}`);
-    return { name: "planId", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveBucket(ctx, planId, bucketName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListBuckets_V2", { id: planId });
-    const items = (result?.value ?? []).map((b) => ({
-      id: b.id,
-      name: b.name ?? ""
-    }));
-    return resolveFromList(items, bucketName, "bucketId");
-  } catch (err) {
-    logger.warn(`resolveBucket failed: ${err.message}`);
-    return { name: "bucketId", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveForm(ctx, formTitle) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_microsoftforms", ctx.connectionName, "GetForms", {});
-    const items = (result?.value ?? []).map((f) => ({
-      id: f.id,
-      name: f.title ?? f.name ?? ""
-    }));
-    return resolveFromList(items, formTitle, "form_id");
-  } catch (err) {
-    logger.warn(`resolveForm failed: ${err.message}`);
-    return { name: "form_id", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveDataverseTable(ctx, tableName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_commondataserviceforapps", ctx.connectionName, "GetEntities", {});
-    const items = (result?.value ?? []).map((t) => ({
-      id: t.name ?? t.LogicalName,
-      name: t.displayName ?? t.DisplayCollectionName ?? t.name ?? ""
-    }));
-    return resolveFromList(items, tableName, "entityName");
-  } catch (err) {
-    logger.warn(`resolveDataverseTable failed: ${err.message}`);
-    return { name: "entityName", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveSharePointList(ctx, siteUrl, listName) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_sharepointonline", ctx.connectionName, "GetTables", { dataset: siteUrl });
-    const items = (result?.value ?? []).map((l) => ({
-      id: l.Name ?? l.name,
-      name: l.DisplayName ?? l.displayName ?? l.Name ?? ""
-    }));
-    return resolveFromList(items, listName, "table");
-  } catch (err) {
-    logger.warn(`resolveSharePointList failed: ${err.message}`);
-    return { name: "table", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-async function resolveOneDriveFolder(ctx, folderPath) {
-  try {
-    const result = await ctx.client.invokeOperation(ctx.envId, "shared_onedriveforbusiness", ctx.connectionName, "ListRootFolder", {});
-    const items = (result?.value ?? []).map((f) => ({
-      id: f.Id ?? f.id ?? f.Path,
-      name: f.DisplayName ?? f.Name ?? f.name ?? ""
-    }));
-    return resolveFromList(items, folderPath, "folderPath");
-  } catch (err) {
-    logger.warn(`resolveOneDriveFolder failed: ${err.message}`);
-    return { name: "folderPath", value: "", displayName: "", confidence: "not-found" };
-  }
-}
-var RESOLVER_REGISTRY = [
-  {
-    connector: "shared_office365",
-    paramName: "folderPath",
-    resolve: (ctx, q) => resolveOutlookFolder(ctx, q)
-  },
-  {
-    connector: "shared_teams",
-    paramName: "groupId",
-    resolve: (ctx, q) => resolveTeam(ctx, q)
-  },
-  {
-    connector: "shared_teams",
-    paramName: "channelId",
-    resolve: (ctx, q, parent) => resolveChannel(ctx, parent?.groupId ?? "", q),
-    dependsOn: ["groupId"]
-  },
-  {
-    connector: "shared_teams",
-    paramName: "chatId",
-    resolve: (ctx, q) => resolveChat(ctx, q)
-  },
-  {
-    connector: "shared_planner",
-    paramName: "planId",
-    resolve: (ctx, q, parent) => resolvePlan(ctx, parent?.groupId ?? "", q),
-    dependsOn: ["groupId"]
-  },
-  {
-    connector: "shared_planner",
-    paramName: "bucketId",
-    resolve: (ctx, q, parent) => resolveBucket(ctx, parent?.planId ?? "", q),
-    dependsOn: ["planId"]
-  },
-  {
-    connector: "shared_microsoftforms",
-    paramName: "form_id",
-    resolve: (ctx, q) => resolveForm(ctx, q)
-  },
-  {
-    connector: "shared_commondataserviceforapps",
-    paramName: "entityName",
-    resolve: (ctx, q) => resolveDataverseTable(ctx, q)
-  },
-  {
-    connector: "shared_sharepointonline",
-    paramName: "table",
-    resolve: (ctx, q, parent) => resolveSharePointList(ctx, parent?.dataset ?? "", q),
-    dependsOn: ["dataset"]
-  },
-  {
-    connector: "shared_onedriveforbusiness",
-    paramName: "folderPath",
-    resolve: (ctx, q) => resolveOneDriveFolder(ctx, q)
-  }
-];
-async function resolveParams(ctx, connector, queries, staticValues) {
-  const specs = RESOLVER_REGISTRY.filter((r) => r.connector === connector);
-  const resolved = { ...staticValues ?? {} };
-  const results = [];
-  for (const spec of specs) {
-    const query = queries[spec.paramName];
-    if (!query)
-      continue;
-    if (spec.dependsOn) {
-      const unmet = spec.dependsOn.filter((d) => !resolved[d]);
-      if (unmet.length > 0) {
-        results.push({
-          name: spec.paramName,
-          value: "",
-          displayName: "",
-          confidence: "not-found",
-          alternatives: [{ value: "", displayName: `Depends on: ${unmet.join(", ")}` }]
-        });
-        continue;
-      }
-    }
-    const result = await spec.resolve(ctx, query, resolved);
-    results.push(result);
-    if (result.confidence === "exact" || result.confidence === "fuzzy") {
-      resolved[spec.paramName] = result.value;
-    }
-  }
-  return results;
-}
-
-// packages/core/dist/mcp/server.js
 var jsonRecord = external_exports.preprocess((v) => {
   if (typeof v === "string") {
     try {
@@ -66183,7 +67117,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return origTool(...newArgs);
     };
   }
-  server2.tool("whoami", "Show which identity FlowAgent is authenticated as: the active Azure CLI account, the Azure CLI profile directory (honours AZURE_CONFIG_DIR), the resolved cloud, the token cache location, and the tenant the token actually carries. Use this first when calls fail with EnvironmentAccessDenied, ServiceToServiceEnvironmentNotFound, or an ENOTFOUND on *.environment.api.powerplatform.com.", {}, { readOnlyHint: true, title: "Who Am I" }, async () => {
+  server2.tool("whoami", "Show which identity FlowAgent is authenticated as: the active Azure CLI account, the Azure CLI profile directory (honours AZURE_CONFIG_DIR), the resolved cloud, the token cache location, the tenant the token actually carries, and the separately-cached Connectivity identity used by connection commands in the configured cloud. Use this first when calls fail with EnvironmentAccessDenied, ServiceToServiceEnvironmentNotFound, or an ENOTFOUND on an environment API hostname.", {}, { readOnlyHint: true, title: "Who Am I" }, async () => {
     try {
       const cur = getActiveMcpContext().currentEnv.get();
       return safeResult(await whoAmI(getActiveMcpContext().auth, config3, { currentEnv: cur.envId ?? null }));
@@ -66191,7 +67125,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("reconnect", "Clear FlowAgent's cached tokens and re-acquire as the account the Azure CLI is currently signed in as. Use after `az login`/`az account set` switched accounts, or when a stale token is causing 401/403 failures \u2014 this avoids restarting the session.", {}, { title: "Reconnect" }, async () => {
+  server2.tool("reconnect", "Clear FlowAgent's cached tokens \u2014 both the Azure CLI token cache and the separate MSAL cache used for Connectivity (connection) commands \u2014 and re-acquire the Flow token as the active Azure CLI account. Use after `az login`/`az account set` switched accounts, or for stale-token 401/403 failures. Connectivity reauthentication follows PA_LOGIN_HINT, the saved switch_account preference, PA_NO_ACCOUNT_PICKER, then the default picker; the response describes which applies.", {}, { title: "Reconnect" }, async () => {
     try {
       return safeResult(await reconnect(getActiveMcpContext().auth, config3));
     } catch (e) {
@@ -66205,6 +67139,22 @@ async function createMcpServer(authProvider, deps = {}) {
         currentEnv: cur.envId ?? null,
         listEnvironments: () => ctx.getClient().listEnvironments()
       }));
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("list_accounts", "List cached Connectivity accounts separately from the effective account used by the running provider or selected cache partition. Reports username/tenant mismatches with Azure CLI and effective settings for the next interactive sign-in, including environment overrides. Historical cache entries alone are not a mismatch. Acquires no token and never opens a browser.", {}, { readOnlyHint: true, title: "List Accounts" }, async () => {
+    try {
+      return safeResult(listAccounts({ auth: getActiveMcpContext().auth }));
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("switch_account", "Clear the cached Connectivity sign-in and save a username preference for the next interactive sign-in. Omit username to clear that preference. PA_LOGIN_HINT overrides the preference; without either hint PA_NO_ACCOUNT_PICKER enables browser SSO, otherwise an account picker appears. Returns preferencePersisted and nextSignIn so an override or failed write is visible. Does not change the Azure CLI identity.", {
+    username: external_exports.string().optional().describe("Preferred UPN (e.g. user@contoso.com). Omit to clear the stored preference. Environment account-selection overrides still apply.")
+  }, { title: "Switch Account" }, async ({ username }) => {
+    try {
+      return safeResult(await switchAccount(username ?? null, { auth: getActiveMcpContext().auth }));
     } catch (e) {
       return safeError(e);
     }
@@ -66298,7 +67248,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("get_flow", 'Get a flow\'s full definition + connection refs + metadata. Use this when you need to inspect or modify a specific flow. For large flows, use `path` to scope the response (e.g. path: "definition.actions.MyAction" or path: "properties.connectionReferences"). For metadata across many flows, prefer list_flows (4\xD7 faster \u2014 doesn\'t fetch the full definition per row).', { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), path: external_exports.string().optional().describe('Dot-separated path to extract a sub-section of the response (e.g. "definition.actions", "properties.connectionReferences"). Omit for the full flow.') }, { readOnlyHint: true, title: "Get Flow" }, async ({ env, flow, path: subPath }) => {
+  server2.tool("get_flow", 'Get a flow\'s full definition + connection refs + metadata. Use this when you need to inspect or modify a specific flow. For large flows, use `path` to scope the response (e.g. path: "properties.definition.actions.MyAction" or path: "properties.connectionReferences"). For metadata across many flows, prefer list_flows (4\xD7 faster \u2014 doesn\'t fetch the full definition per row).', { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), path: external_exports.string().optional().describe('Dot-separated path to extract a sub-section of the response (e.g. "properties.definition.actions", "properties.connectionReferences"). Omit for the full flow.') }, { readOnlyHint: true, title: "Get Flow" }, async ({ env, flow, path: subPath }) => {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
@@ -66732,24 +67682,34 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("resolve_params", "Designer-emulating dropdown resolver: returns every parameter for a connector operation with its dynamic values (lists, trees, dynamic-schemas) already resolved. Replaces N round-trips of get_dynamic_list/tree/schema with one. Auto-discovers a connection if none passed (Dataverse\u2192PPAPI fallback \u2014 handles Dataverse-only orgs). Per-dropdown errors are returned per-parameter; the call never fails wholesale. Schema is cached per session for 5 min. Use before create_flow when you don't yet know the dropdown values to pass.", {
+  server2.tool("resolve_params", "Designer-emulating dropdown resolver: returns every parameter for a connector operation with its dynamic values (lists, trees, dynamic-schemas) already resolved. Replaces N round-trips of get_dynamic_list/tree/schema with one. Auto-discovers a connection if none passed (Dataverse\u2192PPAPI fallback \u2014 handles Dataverse-only orgs). Per-dropdown errors are returned per-parameter; connection/schema failures are tool errors. Use parameter to select one dropdown and query to search values/display names. Large catalogs are paged; repeat the same arguments with _page.nextCursor as cursor. _page reports returned/total/complete/sourceComplete; total is unknown when upstream discovery is incomplete. Never infer absence from an incomplete catalog. Schema is cached per session for 5 min. Use before create_flow when you don't yet know the dropdown values to pass.", {
     env: external_exports.string().optional().describe("Environment ID"),
     connector: external_exports.string().describe("Connector name (e.g. shared_sharepointonline)"),
     operation: external_exports.string().describe("Operation ID (e.g. GetItems, PostMessageToChannel)"),
     connection: external_exports.string().optional().describe("Connection name; if omitted, auto-discovered via Dataverse\u2192PPAPI"),
-    currentInputs: jsonRecord.optional().describe("Concrete values for parent params (e.g. siteUrl, listId) so child dropdowns can resolve")
-  }, { readOnlyHint: true, title: "Resolve Connector Params" }, async ({ env, connector, operation, connection, currentInputs }, extra) => {
+    currentInputs: jsonRecord.optional().describe("Concrete values for parent params (e.g. siteUrl, listId) so child dropdowns can resolve"),
+    parameter: external_exports.string().optional().describe("Only resolve this parameter (e.g. entityName)"),
+    query: external_exports.string().optional().describe("Case-insensitive substring search across values, display names, and available aliases"),
+    pageSize: external_exports.number().int().min(1).max(500).optional().describe("Values per page, across selected parameters (default 100 for large responses)"),
+    cursor: external_exports.string().max(512).optional().describe("Continuation from _page.nextCursor. Keep other request arguments unchanged.")
+  }, { readOnlyHint: true, title: "Resolve Connector Params" }, async ({ env, connector, operation, connection, currentInputs, parameter, query, pageSize, cursor }, extra) => {
     try {
       const envId = ctx.resolveEnv(env);
       const c = ctx.getClient();
       const prog = progress(extra);
-      const result = await c.resolveParams(envId, connector, operation, { connection, currentInputs }, prog.enabled ? prog : void 0);
-      return safeResult(result);
+      const result = await c.resolveParams(envId, connector, operation, { connection, currentInputs, ...parameter ? { parameter } : {} }, prog.enabled ? prog : void 0);
+      return safeResult(pageResolvedParams(result, { parameter, query, pageSize, cursor }, {
+        envId,
+        connector,
+        operation,
+        connection,
+        currentInputs
+      }), { retrievalHint: "Use resolve_params with parameter and query to narrow the result, or reduce pageSize. Use _page.nextCursor as cursor with the same request arguments to retrieve later values." });
     } catch (e) {
       return safeError(e);
     }
   });
-  server2.tool("resolve_entity", "Resolve display names to IDs for dynamic connector parameters (folders, teams, channels, lists, tables). Uses the connector's own picker APIs via API Hub \u2014 works where resolve_params fails (Outlook folders, Teams locations). Pass the connector, entity type, display name query, and optionally dependencies (e.g. team name for channel resolution). Returns: resolved ID + confidence (exact/fuzzy/ambiguous/not-found) + alternatives when ambiguous. **Fail-closed**: ambiguous results should be confirmed with the user before using in a flow definition.", {
+  server2.tool("resolve_entity", "Resolve display names to IDs for dynamic connector parameters (folders, teams, channels, lists, tables). Uses the connector's own picker APIs via API Hub \u2014 works where resolve_params fails (Outlook folders, Teams locations). Pass the connector, entity type, display name query, and optionally dependencies (e.g. team name for channel resolution). Dataverse uses the operation's schema-driven entityName picker; pass dependencies.organization for a selected organization. Dataverse matches connector values, display labels, and available logical/entity-set aliases; returns the connector's value unchanged. Picker failures or incomplete results are tool errors, not not-found. Returns: resolved ID + confidence (exact/fuzzy/ambiguous/not-found) + alternatives when ambiguous. **Fail-closed**: ambiguous results should be confirmed with the user before using in a flow definition.", {
     env: external_exports.string().optional().describe("Environment ID"),
     connector: external_exports.string().describe("Connector name (e.g. shared_office365, shared_teams)"),
     entityType: external_exports.string().describe("Parameter/entity type to resolve (e.g. folderPath, groupId, channelId, entityName, table, form_id, planId, bucketId)"),
@@ -67367,15 +68327,15 @@ async function createMcpServer(authProvider, deps = {}) {
     };
   });
   server2.resource("recipe-content", new ResourceTemplate("flowagent://recipes/{slug}", { list: void 0 }), { description: "Full markdown content of a specific recipe by slug.", mimeType: "text/markdown" }, async (uri, { slug }) => {
-    const fs5 = await import("node:fs");
-    const path6 = await import("node:path");
+    const fs6 = await import("node:fs");
+    const path7 = await import("node:path");
     const fileURLToPath2 = (await import("node:url")).fileURLToPath;
-    const here = path6.dirname(fileURLToPath2(import.meta.url));
-    const recipesDir = path6.resolve(here, "..", "..", "docs", "recipes");
+    const here = path7.dirname(fileURLToPath2(import.meta.url));
+    const recipesDir = path7.resolve(here, "..", "..", "docs", "recipes");
     const safeSlug = String(slug).replace(/[^a-z0-9-]/gi, "");
-    const file2 = path6.join(recipesDir, `${safeSlug}.md`);
+    const file2 = path7.join(recipesDir, `${safeSlug}.md`);
     try {
-      const text = fs5.readFileSync(file2, "utf-8");
+      const text = fs6.readFileSync(file2, "utf-8");
       return { contents: [{ uri: uri.href, mimeType: "text/markdown", text }] };
     } catch {
       return { contents: [{ uri: uri.href, mimeType: "text/plain", text: `Recipe '${safeSlug}' not found. Available recipes: see flowagent://recipes/index` }] };
