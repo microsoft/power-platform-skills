@@ -28,11 +28,9 @@ Anything else is **complex**.
    touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
    sizing, scrolling, or color.
 2. Use `describe_control` before adding a property not already present on that control,
-   or before adding a control. For a new control, copy its creation keywords exactly and
-   choose an app-wide unique control name.
+   or before adding a control. Choose an app-wide unique control name.
 3. Apply targeted edits directly to the `[working directory]` folder. Insert a new leaf
-   control into the existing screen or container without rebuilding the surrounding
-   hierarchy.
+   control without rebuilding the surrounding hierarchy.
 4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 5. Stop after the final summary; do not invoke planner or builder agents.
 
