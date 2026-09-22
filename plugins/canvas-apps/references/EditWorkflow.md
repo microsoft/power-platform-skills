@@ -8,10 +8,17 @@ Read all `[working directory]/*.pa.yaml` files.
 
 Treat the edit as **simple** only when all are true:
 
-- At most two property mutations in total, across at most two existing controls
+- At most two property mutations in total, across at most two existing controls, and at
+  most one new leaf control
 - At most one screen changes
 - No new screen, data source, or connector
-- No structural layout change
+- No control is removed or reparented, and no container, layout mode, or existing control
+  hierarchy changes
+
+Adding one leaf control to the `Children` of an existing screen or container is not a
+structural layout change by itself. Keep that edit simple when the insertion can preserve
+the current hierarchy and layout strategy. Adding a container, moving existing controls,
+or reorganizing the hierarchy is a complex edit.
 
 Anything else is **complex**.
 
@@ -20,8 +27,10 @@ Anything else is **complex**.
 1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit
    touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
    sizing, scrolling, or color.
-2. Use `describe_control` before adding a property not already present on that control.
-3. Apply targeted edits directly to the `[working directory]` folder.
+2. Use `describe_control` before adding a property not already present on that control,
+   or before adding a control. Choose an app-wide unique control name.
+3. Apply targeted edits directly to the `[working directory]` folder. Insert a new leaf
+   control without rebuilding the surrounding hierarchy.
 4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 5. Stop after the final summary; do not invoke planner or builder agents.
 
