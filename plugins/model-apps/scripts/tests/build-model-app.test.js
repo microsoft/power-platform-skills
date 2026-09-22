@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
@@ -612,7 +612,9 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
   assert.ok(returned, 'expected makeSdk to return an object literal');
-  const destructured = /const \{ ([^}]*) \} = makeSdk\(/.exec(src);
+  // `await` is optional in the pattern: `makeSdk` became async when the SDK's workspace calls did,
+  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped.
+  const destructured = /const \{ ([^}]*) \} = (?:await\s+)?makeSdk\(/.exec(src);
   assert.ok(destructured, 'expected main to destructure makeSdk()');
   const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
   assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
@@ -1249,4 +1251,62 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
   assert.doesNotMatch(cap.logs.join('\n'), /not applicable on this environment/,
     'and must NOT blame the environment, which is working fine');
   assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
+});
+
+// #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`
+// result and swallowed any throw, under a "never block a build" rationale. That is not cosmetic:
+// the snapshot is what a later `--changed-only` run trusts to decide what it may SKIP, so an
+// eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
+// apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
+//
+// The first version of this test was SOURCE-LEVEL, and an adversarial review proved it worthless:
+// both `if (false && …)` and a catch manufacturing `{ ok: true }` left all 74 tests green. The
+// guard is now an exported function, so it is tested by BEHAVIOUR instead.
+test('#587 the snapshot guard refuses every outcome that is not a definite success', () => {
+  const calls = [];
+  const storeReturning = (value) => ({
+    invalidateSnapshot: (dir) => { calls.push(dir); if (typeof value === 'function') return value(); return value; },
+  });
+
+  // The only accepted outcome, including the "nothing to invalidate" case an ordinary first build
+  // produces — so this is not a blanket refusal.
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, generation: 'g1' }), 'WS'),
+    { ok: true, generation: 'g1' });
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, reason: 'no snapshot to invalidate', generation: null }), 'WS').ok,
+    true);
+  assert.deepStrictEqual(calls, ['WS', 'WS'], 'the workspace dir must be passed through');
+
+  // Everything else must halt BEFORE the mutation engine runs.
+  for (const [label, value] of [
+    ['lease contention', { ok: false, reason: 'workspace lease held by pid 123' }],
+    ['a thrown error', () => { throw new Error('EACCES: permission denied'); }],
+    ['undefined', undefined],
+    ['null', null],
+    ['a malformed return', { status: 'fine' }],
+    ['ok as a truthy non-true', { ok: 'yes' }],
+  ]) {
+    assert.throws(
+      () => assertSnapshotInvalidated(storeReturning(value), 'WS'),
+      /refusing to apply/,
+      `${label} must halt the apply`);
+  }
+
+  // The reason reaches the operator — "it failed" without saying why is not actionable when the
+  // realistic cause is another run holding the lease.
+  assert.throws(
+    () => assertSnapshotInvalidated(storeReturning({ ok: false, reason: 'workspace lease held by pid 123' }), 'WS'),
+    /workspace lease held by pid 123/);
+});
+
+// …and the WIRING, which a behavioural test of the function alone cannot cover: main() must
+// actually call it, and only when applying.
+test('#587 a plain --apply calls the snapshot guard before building', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const i = src.indexOf('r = await buildModelApp(spec, opts, deps);');
+  assert.ok(i > -1, 'the build call must still be findable for this check to mean anything');
+  const before = src.slice(Math.max(0, i - 1500), i);
+  assert.match(before, /if \(opts\.apply\) assertSnapshotInvalidated\(applySnapshotStore, workspaceDir\);/,
+    'the guard must run, gated on apply, immediately before the mutation engine');
 });

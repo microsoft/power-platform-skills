@@ -106,7 +106,17 @@ test('apply --allow-destructive performs the deletes', async () => {
   assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
 });
 
-test('deleteAppCascade rejection is reported as a failed app step and teardown continues', async () => {
+// REVERSED by #587 item 5, deliberately. This test used to assert that teardown CONTINUES after a
+// failed app delete ("later steps still run after the app refusal"), on a best-effort rationale:
+// one failure should not strand the rest. Deep lifecycle testing showed that is the wrong rule for
+// THIS step specifically — the app module is the dependency ROOT, and tables/forms/views/charts are
+// its components. Continuing strips a LIVE app of everything it renders and leaves it broken in the
+// environment, which is strictly worse than stopping and leaving a consistent app to retry against.
+//
+// Continue-on-error still applies to every step after the root is gone, and to the case where the
+// app row WAS deleted and only a cascade cleanup step failed (see the `success:false` test below,
+// which still expects later steps to run).
+test('deleteAppCascade rejection is reported as a failed app step and dependent teardown STOPS', async () => {
   const sdk = presentSdk();
   sdk.deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
     sdk.calls.push({ method: 'deleteAppCascade', appModuleId, appModuleIdUnique });
@@ -119,7 +129,10 @@ test('deleteAppCascade rejection is reported as a failed app step and teardown c
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => e.step === 'app module "Support Desk"' && /delete not confirmed/.test(e.message)));
   assert.ok(cap.logs.some((l) => /✗ app module "Support Desk" — delete not confirmed/.test(l)));
-  assert.ok(sdk.calls.some((c) => c.method === 'deleteSolution'), 'later steps still run after the app refusal');
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteSolution'),
+    'the app was not deleted, so nothing that depends on it may be torn down');
+  assert.ok(!sdk.calls.some((c) => /^delete/.test(c.method) && c.method !== 'deleteAppCascade'),
+    'no dependent delete of any kind may run');
   assert.ok(cap.logs.some((l) => /teardown finished with errors/.test(l)), 'the summary stays visibly non-clean');
 });
 
@@ -199,6 +212,9 @@ function loadTeardownCli({
   workspaceExists = true,
   invokeAsMain = false,
   emitThrows = false,
+  // #587 item 8 — lets a test drive the destructive-cleanup guard both ways. `null` means the
+  // guard accepts (the ordinary case); a string is the refusal reason.
+  clearRefusedBecause = null,
 }) {
   const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
@@ -243,6 +259,17 @@ function loadTeardownCli({
     if (id === './lib/op-diff.js') {
       return { classifyOps: () => ({ hasDestructive: false, destructive: [] }) };
     }
+    if (id === './lib/workspace-paths.js') {
+      return {
+        WORKSPACE_DIR_NAME: '.maker-workspace',
+        checkWorkspaceClearable: (dir) => {
+          events.push({ type: 'checkWorkspaceClearable', dir });
+          return clearRefusedBecause
+            ? { ok: false, reason: clearRefusedBecause }
+            : { ok: true, target: dir };
+        },
+      };
+    }
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };
     }
@@ -271,7 +298,11 @@ function loadTeardownCli({
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
-      return {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
@@ -336,7 +367,7 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
   const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === workspaceDir);
 
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === harness.sdkTemp));
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
   assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
   assert.ok(harness.events.some((e) => e.type === 'deleteSnapshot' && e.workspaceDir === workspaceDir));
@@ -344,6 +375,42 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex, 'emitResult exits, so SDK cleanup must happen first');
   assert.match(harness.stderr.join(''), /cleared workspace/);
   assert.strictEqual(harness.events[emitIndex].ok, true);
+});
+
+// #587 item 8 — the destructive half of the same flag. Cleanup runs right after a SUCCESSFUL
+// teardown, so an unguarded recursive delete on a caller-supplied `--workspace` destroys data at
+// the moment an operator is least expecting it. When the guard refuses, NOTHING may be removed —
+// and the teardown must still report success, because the teardown itself did succeed and failing
+// it would push the operator to re-run a destructive command.
+test('teardown CLI does not delete a workspace the safety guard refuses', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\not-a-workspace';
+  const harness = loadTeardownCli({
+    clearRefusedBecause: "refusing to delete 'D:\\src': only a directory named '.maker-workspace' may be cleared",
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(harness.events.some((e) => e.type === 'checkWorkspaceClearable' && e.dir === workspaceDir),
+    'the guard must be consulted before any delete');
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir),
+    'a refused workspace must NOT be removed');
+  const err = harness.stderr.join('');
+  assert.match(err, /skipped --clear-workspace/, 'the refusal must be reported, not silent');
+  assert.doesNotMatch(err, /cleared workspace/, 'and it must not claim to have cleared anything');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, true,
+    'the teardown succeeded; refusing an unsafe cleanup must not turn it into a failure');
 });
 
 test('teardown CLI dry-runs a positional spec with the default workspace and no destructive cleanup', async () => {

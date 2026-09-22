@@ -23,8 +23,8 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
 
 // A real SDK bound to a capturing httpClient. `meta` maps a logical entity name -> attribute-type map
 // so the adapter's push-time metadata defaulting (T4) resolves a field's control classId.
-function freshSdk(capture, meta) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(capture, meta) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h2-real-'));
   tempDirs.push(dir);
   const httpClient = {
@@ -42,15 +42,15 @@ function freshSdk(capture, meta) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
 // Mirror the engine's createFormShell sequence: minimal create, append each compiled tab (ids minted
 // by addElement), drop the seed tab. Returns the form id.
 async function buildFormShell(sdk, intent) {
-  const art = sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
+  const art = await sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
   for (const tab of intent.tabs) await sdk.addElement('form', art.id, '/tabs', tab);
   await sdk.removeElement('form', art.id, '/tabs/0');
   return art.id;
@@ -67,7 +67,7 @@ const custSpec = {
 test('PARITY: the rewired form path reproduces the pre-swap golden facts (fields, order, required, notes)', async () => {
   const golden = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'parity-golden.json'), 'utf8')).form;
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
@@ -87,7 +87,7 @@ test('multi-tab / multi-section explicit layout serializes every tab, section an
     ] }],
   };
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   assert.strictEqual(intent.tabs.length, 2, 'two tabs compiled');
   const id = await buildFormShell(sdk, intent);
@@ -118,7 +118,7 @@ test('#8 authored column width: a synthesized form column with NO explicit width
     ] }],
   };
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   // Remove the plugin-set width from every tab column so ONLY the SDK default can supply it.
   for (const tab of intent.tabs) for (const col of (tab.columns || [])) delete col.width;
@@ -137,7 +137,7 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
   const spec = { entities: [{ schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
     forms: [{ entity: 'new_customer', name: 'M', tabs: [{ label: 'G', sections: [{ label: 'S', columns: 1, fields: ['new_name', 'new_ownerid'] }] }] }] };
   const cap = [];
-  const sdk = freshSdk(cap, meta);
+  const sdk = await freshSdk(cap, meta);
   const intent = ai.compileFormIntent(spec, spec.forms[0], {});
   const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
@@ -154,7 +154,7 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
 
 test('#5 sub-grid is added as its OWN full-width section and serializes relationship, target, view id + title', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   // The engine now appends a whole sub-grid SECTION to a column's /sections (not a cell into an
@@ -171,7 +171,7 @@ test('#5 sub-grid is added as its OWN full-width section and serializes relation
 
 test('events author + MERGE at /bag/c: appending to an existing <events> region adds a second handler without a duplicate root', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   // First handler -> new region.
@@ -191,7 +191,7 @@ test('events author + MERGE at /bag/c: appending to an existing <events> region 
 
 test('field removal: removeElement on the cell pointer drops the field from the pushed formxml', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   const ptr = ai.findFieldCellPointer(await sdk.getArtifact('form', id), 'new_tier');
@@ -204,7 +204,7 @@ test('field removal: removeElement on the cell pointer drops the field from the 
 });
 
 test('412 conflict: pushArtifact resolves to { success:false, error } (the signal requireSuccessfulPush halts on)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h2-412-'));
   tempDirs.push(dir);
   const FID = '22222222-2222-2222-2222-222222222222';
@@ -216,8 +216,8 @@ test('412 conflict: pushArtifact resolves to { success:false, error } (the signa
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
   await sdk.updateElement('form', FID, '/tabs/0', { expanded: false });
   const result = await sdk.pushArtifact('form', FID);
@@ -238,7 +238,7 @@ const fcell = (fn) => ({ control: { fieldName: fn, isRequired: false } });
 const META3 = { new_customer: { new_name: 'String', new_tier: 'Picklist', new_note: 'Memo', new_amt: 'Money' } };
 
 async function seedTwoSectionForm(sdk) {
-  const art = sdk.createArtifact('form', { name: 'T', entityLogicalName: 'new_customer', formType: 'Main' });
+  const art = await sdk.createArtifact('form', { name: 'T', entityLogicalName: 'new_customer', formType: 'Main' });
   await sdk.addElement('form', art.id, '/tabs', { name: 'tab_general', label: 'General', expanded: true, visible: true,
     columns: [{ width: '100%', sections: [
       secIntent('section_general', 'General', 1, [fcell('new_name'), fcell('new_tier')]),
@@ -249,7 +249,7 @@ async function seedTwoSectionForm(sdk) {
 }
 
 test('REAL BUNDLE topology: an existing form gains a tab and a section, and a section widens in place', async () => {
-  const sdk = freshSdk(null, META3);
+  const sdk = await freshSdk(null, META3);
   const id = await seedTwoSectionForm(sdk);
   await sdk.addElement('form', id, '/tabs', { name: 'tab_audit', label: 'Audit', expanded: true, visible: true,
     columns: [{ width: '100%', sections: [secIntent('section_audit', 'Audit', 2, [])] }] });
@@ -265,7 +265,7 @@ test('REAL BUNDLE topology: an existing form gains a tab and a section, and a se
 
 test('REAL BUNDLE topology: a field cell moves between sections and serializes under the new one', async () => {
   const cap = [];
-  const sdk = freshSdk(cap, META3);
+  const sdk = await freshSdk(cap, META3);
   const id = await seedTwoSectionForm(sdk);
   // section_more is deployed EMPTY, so a row must be seeded before a cell can move into it.
   await sdk.addElement('form', id, '/tabs/0/columns/0/sections/1/rows', { cells: [] });
@@ -285,8 +285,8 @@ test('REAL BUNDLE topology: a field cell moves between sections and serializes u
 
 test('REAL BUNDLE layout: multi-column tabs and cell spans reach the serialized formxml', async () => {
   const cap = [];
-  const sdk = freshSdk(cap, META3);
-  const art = sdk.createArtifact('form', { name: 'W', entityLogicalName: 'new_customer', formType: 'Main' });
+  const sdk = await freshSdk(cap, META3);
+  const art = await sdk.createArtifact('form', { name: 'W', entityLogicalName: 'new_customer', formType: 'Main' });
   await sdk.addElement('form', art.id, '/tabs', { name: 'tab_w', label: 'W', expanded: true, visible: true, columns: [
     { width: '60%', sections: [secIntent('sec_l', 'L', 2, [Object.assign(fcell('new_name'), { colspan: 2 }), fcell('new_tier')])] },
     { width: '40%', sections: [secIntent('sec_r', 'R', 1, [Object.assign(fcell('new_note'), { rowspan: 2 })])] },
@@ -300,4 +300,144 @@ test('REAL BUNDLE layout: multi-column tabs and cell spans reach the serialized 
   const nameCell = /<cell[^>]*colspan="2"[^>]*>[\s\S]*?datafieldname="new_name"/.exec(formxml);
   assert.ok(nameCell, 'an authored colspan reaches the cell attribute');
   assert.ok(/<cell[^>]*rowspan="2"[^>]*>[\s\S]*?datafieldname="new_note"/.test(formxml), 'an authored rowspan reaches the cell attribute');
+});
+
+// ---------------------------------------------------------------------------
+// UNKNOWN FORM KEYS. The SDK now REFUSES a tab/section property it does not recognise instead of
+// dropping it at serialization. `validateFormLayoutKeys` (app-spec.js) rejects the same keys at
+// author time, and the two are deliberately kept BOTH: the spec gate fails before any workspace or
+// network call and names the real mechanism, while this upstream check is the backstop for anything
+// that reaches the SDK by another route.
+//
+// Pinned here because the refusal lives in the VENDORED BUNDLE: a re-vendor that lost it would
+// silently reopen the silent-drop hole, and every spec-level test would still pass.
+// ---------------------------------------------------------------------------
+
+test('REAL BUNDLE: an unrecognised tab or section property is refused, not silently dropped', async () => {
+  const baseSection = { name: 's0', label: 'S', visible: true, showLabel: true, columns: 1, rows: [] };
+  const attempt = async (tabExtra, sectionExtra) => {
+    const sdk = await freshSdk(null, META3);
+    const art = await sdk.createArtifact('form', { name: 'K', entityLogicalName: 'new_customer', formType: 'Main' });
+    try {
+      await sdk.addElement('form', art.id, '/tabs', Object.assign(
+        { name: 't0', label: 'T', visible: true, columns: [{ width: '100%', sections: [Object.assign({}, baseSection, sectionExtra)] }] },
+        tabExtra));
+      return null;
+    } catch (e) { return String(e && e.message); }
+  };
+
+  // The four keys app-spec.js names in FORM_LAYOUT_KEY_HINTS, i.e. the ones an author actually
+  // reaches for. Each must be refused rather than accepted-and-dropped.
+  for (const [what, tabExtra, sectionExtra] of [
+    ['tab showLabel', { showLabel: false }, null],
+    ['tab labelPosition', { labelPosition: 'top' }, null],
+    ['section labelPosition', null, { labelPosition: 'top' }],
+    ['section locked', null, { locked: true }],
+  ]) {
+    const err = await attempt(tabExtra, sectionExtra);
+    assert.ok(err, `${what}: the SDK must refuse it, not accept and drop it`);
+    assert.match(err, /not a (tab|section) property/, `${what}: refusal should name the offending property — got ${err}`);
+  }
+
+  // And the converse, which is what keeps the plugin's allow-list from being over-restrictive: every
+  // key the compiler actually emits is still accepted.
+  assert.strictEqual(await attempt({ expanded: true }, { columns: 2 }), null,
+    'the properties the compiler emits must remain accepted');
+});
+// --- The real SDK's addElement POSITION contract -------------------------------------------------
+// The row re-pack that follows a span widening inserts a row immediately below the widened one. It
+// does that with `addElement(..., { position: { index } })`, and the SDK resolves position as
+// `undefined | 'end' | 'start' | { index } | { before } | { after } ` — testing `'index' in position`.
+//
+// A BARE NUMBER therefore throws, and the test mock originally accepted one: the whole suite passed
+// green while every real insertion failed with "Cannot use 'in' operator to search for 'index' in 1".
+// Only the real bundle can hold this contract honest, so it is pinned here.
+test('real SDK: addElement inserts at { position: { index } } and REJECTS a bare number', async () => {
+  const sdk = await freshSdk(null, null);
+  const art = await sdk.createArtifact('form', {
+    name: 'PositionContract', entityLogicalName: 'new_customer', formType: 'Main', status: 'Draft',
+  });
+  await sdk.addElement('form', art.id, '/tabs', {
+    name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+      rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }, { cells: [{ control: { fieldName: 'new_tier' } }] }] }] }],
+  });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+  const rowsPtr = '/tabs/0/columns/0/sections/0/rows';
+
+  // Insert BETWEEN the two existing rows — the case the re-pack depends on.
+  await sdk.addElement('form', art.id, rowsPtr, { cells: [] }, { position: { index: 1 } });
+  let form = await sdk.getArtifact('form', art.id);
+  let rows = form.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 3, 'a row was inserted');
+  assert.strictEqual((rows[0].cells[0].control || {}).fieldName, 'new_name');
+  assert.strictEqual((rows[1].cells || []).length, 0, 'the NEW row lands at index 1, between the two');
+  assert.strictEqual((rows[2].cells[0].control || {}).fieldName, 'new_tier');
+
+  // The contract the mock got wrong: a bare number is not a position. Written as an explicit
+  // try/catch with a real `await` so the repo's "every SDK call is awaited" guard still sees it —
+  // an `assert.rejects(() => sdk...)` thunk hides the call from that check.
+  let threw = null;
+  try {
+    await sdk.addElement('form', art.id, rowsPtr, { cells: [] }, { position: 1 });
+  } catch (e) { threw = e; }
+  assert.ok(threw && /index/.test(String(threw.message)),
+    `a bare numeric position must be rejected, not silently appended; got ${threw && threw.message}`);
+
+  // Omitting position still appends, which is what every other call site relies on.
+  await sdk.addElement('form', art.id, rowsPtr, { cells: [] });
+  form = await sdk.getArtifact('form', art.id);
+  rows = form.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 4, 'an omitted position appends');
+  assert.strictEqual((rows[3].cells || []).length, 0);
+});
+
+// The row re-pack moves existing cells between rows with `updateElement`, having created the new row
+// EMPTY with `addElement`. That strategy rests on two real-engine behaviours the mock cannot prove:
+// `updateElement` must REPLACE a cells array rather than merge it, and a cell object moved between
+// rows must keep its id (a re-keyed cell loses maker-edited control state). Pinned against the real
+// bundle because the mock's permissiveness already hid one contract bug on this exact call.
+test('real SDK: the row re-pack sequence preserves cell identity and lands the rows correctly', async () => {
+  const sdk = await freshSdk(null, null);
+  const art = await sdk.createArtifact('form', {
+    name: 'RepackSequence', entityLogicalName: 'new_customer', formType: 'Main', status: 'Draft',
+  });
+  await sdk.addElement('form', art.id, '/tabs', {
+    name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+      rows: [{ cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] }] }] }],
+  });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+
+  const secPtr = '/tabs/0/columns/0/sections/0';
+  const before = await sdk.getArtifact('form', art.id);
+  const [cellA, cellB] = before.tabs[0].columns[0].sections[0].rows[0].cells;
+  assert.ok(cellA.id && cellB.id, 'the engine assigned cell ids');
+
+  // 1. Widen the first cell — the row now holds 2 + 1 = 3 columns of content in a 2-column section.
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/0/cells/0`, { colspan: 2 });
+  // 2. Re-pack exactly as `repackRowAt` does: new EMPTY row directly below, then fill it, then
+  //    rewrite the original row.
+  await sdk.addElement('form', art.id, `${secPtr}/rows`, { cells: [] }, { position: { index: 1 } });
+  const widened = await sdk.getArtifact('form', art.id);
+  const live = widened.tabs[0].columns[0].sections[0].rows[0].cells;
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/1`, { cells: [live[1]] });
+  await sdk.updateElement('form', art.id, `${secPtr}/rows/0`, { cells: [live[0]] });
+
+  const after = await sdk.getArtifact('form', art.id);
+  const rows = after.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows.length, 2, `the row split in two; got ${JSON.stringify(rows)}`);
+  assert.strictEqual(rows[0].cells.length, 1, 'updateElement REPLACED the cells array rather than merging it');
+  assert.strictEqual(rows[0].cells[0].control.fieldName, 'new_name');
+  assert.strictEqual(rows[0].cells[0].colspan, 2, 'the widened span survives the re-pack');
+  assert.strictEqual(rows[0].cells[0].id, cellA.id, 'the widened cell keeps its identity');
+  assert.strictEqual(rows[1].cells.length, 1);
+  assert.strictEqual(rows[1].cells[0].control.fieldName, 'new_tier');
+  assert.strictEqual(rows[1].cells[0].id, cellB.id, 'the displaced cell is MOVED, not re-keyed');
+
+  // Occupancy is now legal in every row — the defect was 3 columns of content in a 2-column section.
+  for (const r of rows) {
+    const used = r.cells.reduce((n, c) => n + (c.colspan || 1), 0);
+    assert.ok(used <= 2, `row exceeds the section width: ${JSON.stringify(r.cells)}`);
+  }
 });

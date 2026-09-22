@@ -81,7 +81,11 @@ function fireAndForget(event, opts = {}) {
   const optOutValue = optOutName ? env[optOutName] || '' : '';
 
   try {
-    const child = spawn(process.execPath, [__filename], {
+    const spawnProcess = opts.spawn || spawn;
+    const child = spawnProcess(process.execPath, [__filename], {
+      // Detached dispatch can outlive checkpoint CLIs. Inheriting the project
+      // cwd would keep that directory locked against deletion on Windows.
+      cwd: os.tmpdir(),
       detached: true,
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {

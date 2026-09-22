@@ -6,10 +6,10 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 - Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 - Push setup checks prerequisites only when their lifecycle stage is selected.
-  Firebase client setup requires the official Firebase MCP but not gcloud.
-  WIF additionally requires Azure MCP and a working Google Cloud CLI executed
+ Firebase client setup requires the official Firebase MCP but not gcloud.
+ WIF additionally requires Azure MCP and a working Google Cloud CLI executed
   only through the checked-in allowlisted wrapper. Power Automate flow stages require the separately
   installed `power-automate@power-platform-skills` plugin and connected
   FlowAgent tools. Manual installation/restart paths pause and recheck the
@@ -29,6 +29,8 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 ## Setup
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
+
+Have questions or feedback? Join the [Native Apps Office Hours](OFFICE_HOURS.md).
 
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
@@ -126,11 +128,10 @@ connector wiring.
     The Metro config removes sensitive lines before writing logs. The complete
     `.powernative/` folder is ignored by the template's `.gitignore`.
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    - Play store: (coming soon)
-    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## License and notices
 

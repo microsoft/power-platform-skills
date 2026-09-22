@@ -322,9 +322,10 @@ the regex also catches quoted keys and whitespace before the colon. Replace ever
 
 ## Edit Phase 6: Deploy Updated Page
 
-This is an **update** (existing page-id), so `--prompt` must describe the
+This is an **update** (existing page-id), so the prompt must describe the
 **delta of changes only** — not a re-statement of the original page description.
-See SKILL.md Phase 6 "`--prompt` semantics".
+It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
+"Prompt semantics".
 
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
@@ -353,20 +354,29 @@ Custom API binding rules for edit deploy (identical matrix, `--actions` for
   clears `config.json.actionBindings`.
 
 ```powershell
-pac model genpage upload `
+# The edit request is arbitrary user text, and a downloaded prompt is a multi-line
+# conversation transcript. Both go to pac BY FILE via scripts/genpage-upload.js, never on a
+# command line, so quotes/newlines/metacharacters cannot be reinterpreted by the shell.
+Set-Content -Path "<working-dir>/prompt.txt" -Value $editRequest -Encoding UTF8 -NoNewline
+Set-Content -Path "<working-dir>/agent-message.txt" -Value $changeSummary -Encoding UTF8 -NoNewline
+
+node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
+  --env <org-url> `
   --app-id <app-id> `
   --page-id <page-id> `
   --code-file <working-dir>/<page-id>/page.tsx `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
   --actions "<working-dir>/actions.json" `
-  --prompt "<User's edit request — only the changes, not the full page>" `
+  --prompt-file "<working-dir>/prompt.txt" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed in this upload"
+  --agent-message-file "<working-dir>/agent-message.txt"
 ```
 
+The prompt file holds the user's edit request — **only the changes, not the full page**.
+
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
-the sitemap).
+the sitemap; the wrapper refuses the combination anyway).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when Custom API bindings are unchanged.

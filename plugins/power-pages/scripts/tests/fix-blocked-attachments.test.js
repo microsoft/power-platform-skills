@@ -76,6 +76,7 @@ test('passes --environment as a literal argv value with shell disabled', async (
     envUrl: 'https://staging.crm.dynamics.com',
     extensions: ['js'],
     quiet: true,
+    platform: 'linux',
     execImpl: (file, args, options) => {
       calls.push({ file, args, options });
       if (args.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
@@ -91,6 +92,22 @@ test('passes --environment as a literal argv value with shell disabled', async (
       ['--environment', 'https://staging.crm.dynamics.com'],
     );
   }
+});
+
+test('invokes pac.exe directly on Windows', async () => {
+  const calls = [];
+  await fixBlockedAttachments({
+    extensions: ['css'],
+    quiet: true,
+    platform: 'win32',
+    execImpl: (file, args, options) => {
+      calls.push({ file, args, options });
+      return SAMPLE_PAC_OUTPUT;
+    },
+  });
+
+  assert.equal(calls[0].file, 'pac.exe');
+  assert.equal(calls[0].options.shell, false);
 });
 
 test('passes Dataverse-derived setting metacharacters as one literal argv value', async () => {

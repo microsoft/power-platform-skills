@@ -72,8 +72,11 @@ const {
   formEventsRegionIntent,
   viewColumnsIntent,
   firstColumnSectionsPointer,
+  cellFitsInRow,
+  rowsFromCells,
 } = require('./artifact-intent.js');
-const { makeGenpageCli } = require('./genpage-cli.js');
+const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
+const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1017,9 +1020,42 @@ function formIdentityKey(f) {
 // `valueType` is always `'Value'`: the SDK's other axes (`Field`, `Lookup`, `Expression`, `Clear`)
 // need shapes the App Spec does not model, so exposing the name would offer authors a choice they
 // cannot use. The App Spec calls the type hint `dataType` rather than the SDK's `valueWorkflowType`,
-// because `valueType` already means that other thing here — and note it is currently DECORATIVE:
-// measured across every accepted token, on both the condition and the action path, the SDK types
-// every literal as String. See BUSINESS_RULE_DATA_TYPES in app-spec.js.
+// because `valueType` already means that other thing here. See BUSINESS_RULE_DATA_TYPES in
+// app-spec.js.
+//
+// `dataType` is NO LONGER decorative on the CONDITION path, and that changed under us in the SDK
+// uptake. The previous bundle consulted `valueWorkflowType` only for `valueType: 'Clear'` and
+// hard-typed every ordinary literal as `WorkflowAttributeType.String`; the current bundle uses the
+// field for ALL value types, VERBATIM, with no name -> enum mapping of its own
+// (`… : e.valueWorkflowType ?? WorkflowAttributeType.String`).
+//
+// `WorkflowAttributeType` is a NUMERIC-STRING enum — `{ Boolean:'0' … Money:'7', Picklist:'10',
+// String:'14' … }` — so passing the App Spec's human token would put an out-of-domain value on the
+// wire. MEASURED against the vendored bundle before this mapping existed, the condition literal
+// carried `"String"`, `"Money"`, and even `"NotAWorkflowType"` straight through, while the SDK's own
+// fallback for the same field is `'14'`. Note this hit EVERY rule, not only ones that authored a
+// `dataType`, because the default below is the token `'String'` rather than the enum value.
+//
+// LIVE-MEASURED that this fails SILENTLY rather than loudly: a build carrying the raw tokens
+// deployed all four probe rules with 0 failures and activated them. The platform does not reject the
+// value, so nothing upstream of a user noticing the rule never fires would surface it — and
+// `--verify` cannot, because it checks existence, duplicate count and statecode, never the rule's
+// WFOM.
+//
+// The ACTION path still types every literal as String on the SDK side, so it is unaffected — the
+// asymmetry is deliberate and pinned in business-rules.test.js.
+const WORKFLOW_ATTRIBUTE_TYPE = {
+  boolean: '0', customer: '1', datetime: '2', decimal: '3', float: '4', double: '4', integer: '5',
+  lookup: '6', money: '7', owner: '8', partylist: '9', picklist: '10', key: '11', state: '12',
+  status: '13', string: '14', memo: '14', uniqueidentifier: '15', entitynamereference: '16',
+  entity: '17', entitycollection: '18', multiselectpicklist: '23',
+};
+// Unknown tokens fall back to String rather than being forwarded. The spec gate already restricts
+// `dataType` to BUSINESS_RULE_DATA_TYPES, so this is unreachable from a valid spec; forwarding an
+// unmapped token would reopen exactly the out-of-domain write this mapping exists to close.
+function workflowAttributeType(dataType) {
+  return WORKFLOW_ATTRIBUTE_TYPE[String(dataType || 'String').toLowerCase()] || '14';
+}
 function businessRuleDef(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
   const clauseId = ids('c');
@@ -1043,14 +1079,14 @@ function businessRuleDef(rule) {
         field: String(c.field).toLowerCase(),
         operator: c.operator,
         valueType: 'Value',
-        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: workflowAttributeType(c.dataType) }),
       })),
       trueBranch: (rule.actions || []).map((a) => {
         const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
         if (a.type === 'SetVisibility') node.visible = a.visible;
         else if (a.type === 'LockUnlock') node.lock = a.lock;
         else if (a.type === 'SetBusinessRequired') node.required = a.required;
-        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = workflowAttributeType(a.dataType); }
         return node;
       }),
       falseBranch: [],
@@ -1530,7 +1566,7 @@ async function runSdkBuild(spec, opts = {}) {
     // `description` is new on forms in this SDK uptake (dashboards, rows in the same systemform
     // table, always had it). Passed only when the spec sets one: omitted on push it is not written,
     // so an existing server-side description survives an edit that did not set one.
-    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
+    const art = await provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
     const tabs = def.tabs || [];
     // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
     for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
@@ -1719,7 +1755,7 @@ async function runSdkBuild(spec, opts = {}) {
   //     imposes no row/cell cardinality rule, only "a cell control must be an object or null"), and
   //     Dataverse accepts the push; how UCI lays the overflow out is NOT verified here. A row
   //     emptied by the move is removed so blank rows cannot accumulate.
-  const applyFieldPositions = async (formId, def) => {
+  const applyFieldPositions = async (formId, def, vacated) => {
     const positions = def.__fieldPositions || {};
     for (const logical of Object.keys(positions)) {
       const anchor = positions[logical];
@@ -1738,6 +1774,16 @@ async function runSdkBuild(spec, opts = {}) {
       // reported such a field as misplaced and moved it on every rebuild — the auto layout switches
       // to 2 columns above 6 fields, so this was the common case, not an edge case.
       if (from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + 1) continue;
+
+      // A positioning move can CROSS sections (`fieldOptions[x].after` may anchor to a field in
+      // another one), which empties the source just as a layout move does. Recording it here is what
+      // keeps the vacated-section sweep honest: without it, a source section emptied by this pass —
+      // and then stripped of its last field by the prune pass — survived as an orphan, because no
+      // one ever added its name to the set.
+      if (vacated && from.sectionPointer !== to.sectionPointer) {
+        const src = sectionAt(form, from.sectionPointer);
+        if (src && src.name) vacated.add(String(src.name).toLowerCase());
+      }
 
       // Which mechanic can actually SATISFY that check?
       //
@@ -1807,37 +1853,6 @@ async function runSdkBuild(spec, opts = {}) {
   //
   // `skip` hides containers the weaker passes must not claim. Only NAME may match them, because a
   // name is positive evidence and a label/position is not.
-  const matchContainer = (list, want, wantIndex, opts) => {
-    const items = list || [];
-    const claimed = (opts && opts.claimed) || null;
-    const skip = (opts && opts.skip) || (() => false);
-    const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
-    const free = (i) => !claimed || !claimed.has(i);
-    let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
-    if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
-    if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
-    return idx < 0 ? null : { index: idx, item: items[idx] };
-  };
-
-  // A section the ENGINE owns rather than one the author laid out: a sub-grid host, or the
-  // notes/timeline section. `addSubgrids` appends one such section per authored sub-grid on EVERY
-  // layout (auto included), and `compileFormIntent` appends the notes section — so they sit in the
-  // same `sections[]` array as the author's own, just after them.
-  //
-  // They must be invisible to the LABEL and POSITION passes. Otherwise, as soon as an explicit
-  // layout declares as many sections as the index of the first appended one, the positional fallback
-  // claims the sub-grid: it gets relabelled to the author's section title, bound field controls are
-  // injected into the row holding the grid control, and the author's section is never created. The
-  // build is green and a rebuild converges on the same wrong shape, so nothing downstream reports it.
-  //
-  // Detected structurally (every cell carries a control with no `fieldName`) rather than by name, so
-  // it holds for a sub-grid whose section the author renamed in Maker. An EMPTY section has no cells
-  // and is deliberately NOT engine-owned — it stays matchable so a vacated section can be reused.
-  const isEngineOwnedSection = (s) => {
-    const cells = ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
-    return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
-  };
-
   // Send only the keys that actually differ, so a rebuild that changes nothing issues no writes.
   const diffPatch = (live, want, keys) => {
     const patch = {};
@@ -1870,7 +1885,11 @@ async function runSdkBuild(spec, opts = {}) {
     // fields, so a notes/timeline section created empty would deploy a visible section header
     // promising a control that nothing ever adds.
     const stripRows = (section) => (isEngineOwnedSection(section) ? Object.assign({}, section) : Object.assign({}, section, { rows: [] }));
-    const sectionTargets = {};
+    // Null-prototype, because this map is keyed by AUTHOR-CONTROLLED section names. On a plain
+    // object a section legitimately named `__proto__` would mutate the prototype instead of becoming
+    // an own enumerable property, so it would be invisible to `Object.values` — and the
+    // vacated-section sweep would then treat a section the layout explicitly claimed as unclaimed.
+    const sectionTargets = Object.create(null);
     const wantTabs = def.tabs || [];
     // Indices already taken by an earlier want, so two wants can never converge on one container.
     const claimedTabs = new Set();
@@ -1989,7 +2008,43 @@ async function runSdkBuild(spec, opts = {}) {
       const current = live[key] === undefined ? 1 : live[key];
       if (current !== want) patch[key] = want;
     }
-    if (Object.keys(patch).length) await provision.updateElement('form', formId, location.cellPointer, patch);
+    if (Object.keys(patch).length) {
+      await provision.updateElement('form', formId, location.cellPointer, patch);
+      // A WIDENED span can overflow the row it sits in: a 2-column section holding two colspan-1
+      // cells becomes 2+1 = 3 columns of content the moment one is widened to 2. The create path
+      // packs rows by WIDTH (`rowsFromCells`), but an in-place span change never re-ran that
+      // packing, so the row was left overflowing — a shape `rowsFromCells` would never emit, and one
+      // Dataverse renders unpredictably. Live-reproduced: widening a field left three columns of
+      // content in a two-column row across two applies.
+      await repackRowAt(formId, location);
+    }
+  };
+
+  // Re-pack the row a span change just overflowed, using the create path's own packer so both routes
+  // produce the same shape. The displaced cells move DOWN into rows inserted immediately below,
+  // rather than to the bottom of the section, so the author's field order survives.
+  //
+  // The cells are moved by `updateElement` (the same mechanism `appendCellPacked` uses to write a
+  // cells array), and the new rows are created EMPTY first — an existing cell carries an `id`, and
+  // handing one to `addElement` risks re-keying the node rather than moving it.
+  const repackRowAt = async (formId, location) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    if (!row) return;
+    const packed = rowsFromCells(row.cells || [], section.columns);
+    if (packed.length <= 1) return; // still fits — nothing to do
+    for (let k = 1; k < packed.length; k += 1) {
+      await provision.addElement('form', formId, location.sectionPointer + '/rows', { cells: [] },
+        // The SDK's position resolver accepts `undefined | 'end' | 'start' | {index} | {before} |
+        // {after}` and tests `'index' in position`, so a BARE NUMBER throws
+        // "Cannot use 'in' operator to search for 'index' in 1".
+        { position: { index: location.rowIndex + k } });
+      await provision.updateElement('form', formId,
+        `${location.sectionPointer}/rows/${location.rowIndex + k}`, { cells: packed[k].cells });
+    }
+    await provision.updateElement('form', formId,
+      `${location.sectionPointer}/rows/${location.rowIndex}`, { cells: packed[0].cells });
   };
 
   // The live cell a findFieldCellLocation result points at.
@@ -2004,7 +2059,32 @@ async function runSdkBuild(spec, opts = {}) {
   // A field whose declared section could not be resolved falls back to the form's first section —
   // exactly the pre-existing behavior. A layout the topology pass could not materialize must still
   // never lose a field.
-  const placeFieldInSection = async (formId, logical, wantCell, target) => {
+  // Append a cell to a section, PACKING it the way the create path does.
+  //
+  // `rowsFromCells` fills a row until the section's grid width is used, so a 2-column section holds
+  // two single-width fields per row. The reconcile path used to ignore that entirely — every ADDED
+  // field became its own single-cell row and every MOVED field was appended to the last row whatever
+  // its width — so the same spec deployed a different shape depending only on whether the form
+  // already existed. `cellFitsInRow` is the create path's own rule, shared rather than restated.
+  //
+  // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
+  // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
+  // row is rewritten instead — `updateElement` replaces the `cells` array, and re-sending the
+  // existing cell objects carries their `id` and `control.id` through verbatim (measured), so this
+  // neither mints new ids nor drops adapter-derived control state.
+  const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
+    const section = sectionAt(form, sectionPointer) || {};
+    const rows = section.rows || [];
+    const lastIndex = rows.length - 1;
+    if (lastIndex >= 0 && cellFitsInRow(rows[lastIndex], wantCell, section.columns)) {
+      await provision.updateElement('form', formId, sectionPointer + '/rows/' + lastIndex,
+        { cells: [...(rows[lastIndex].cells || []), wantCell] });
+      return;
+    }
+    await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
+  };
+
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2012,7 +2092,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (!existing) {
       const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
       if (!rowsPtr) return;
-      await provision.addElement('form', formId, rowsPtr, { cells: [wantCell] });
+      await appendCellPacked(formId, form, rowsPtr.slice(0, -'/rows'.length), wantCell);
       return;
     }
     // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
@@ -2022,20 +2102,45 @@ async function runSdkBuild(spec, opts = {}) {
     // Only spans the author EXPLICITLY set are written. `fieldCellIntent` omits a span of 1, so an
     // absent span means "no opinion" and leaves a cell a maker widened by hand alone — the same rule
     // that keeps `isReadOnly: false` from ever being written.
-    await convergeCellSpans(formId, form, existing, wantCell);
-
-    // Already on the form and already in the right section (or we have no opinion) — leave it be,
-    // so a rebuild converges instead of reshuffling the form on every run.
-    if (!targetPointer || existing.sectionPointer === targetPointer) return;
+    //
+    // Converging BEFORE a relocation would clamp the span against the section the cell is LEAVING:
+    // a `colspan: 4` bound for a 4-column destination was cut to the 2-column source's width and
+    // then moved, arriving narrower than authored (and only widening on a second apply). So when the
+    // cell is staying, converge here; when it is moving, converge in the DESTINATION after the move.
+    const staying = !targetPointer || existing.sectionPointer === targetPointer;
+    if (staying) {
+      await convergeCellSpans(formId, form, existing, wantCell);
+      // Already on the form and already in the right section (or we have no opinion) — leave it be,
+      // so a rebuild converges instead of reshuffling the form on every run.
+      return;
+    }
 
     // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
     // adapter-derived or maker-edited control state survive the move.
-    let rowIndex = ((sectionAt(form, targetPointer) || {}).rows || []).length - 1;
-    if (rowIndex < 0) {
-      // A section this run just created has no row to move into. The SDK accepts a row with an
-      // empty cells array and serializes it correctly, so seed one and target that.
+    //
+    // Record the section this cell is LEAVING. That is what makes the vacated-section sweep precise:
+    // "empty" alone cannot distinguish a section this run emptied from one a maker created empty and
+    // may reference from a form script.
+    const sourceSection = sectionAt(form, existing.sectionPointer);
+    if (vacated && sourceSection && sourceSection.name) vacated.add(String(sourceSection.name).toLowerCase());
+    //
+    // The destination ROW is chosen by the same packing rule the create path uses, not simply the
+    // last one: appending every relocated field to `rows.length - 1` piled four fields into a single
+    // row of a 2-column section, a shape `rowsFromCells` would never emit.
+    const targetSection = sectionAt(form, targetPointer) || {};
+    const targetRows = targetSection.rows || [];
+    // Captured BEFORE the add below. `getArtifact` can hand back a live reference to the artifact
+    // tree rather than a copy, so `targetRows` may be the very array `addElement` pushes into —
+    // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
+    // which silently skips the move (the `if (!row) return` guard below).
+    const priorRowCount = targetRows.length;
+    let rowIndex = priorRowCount - 1;
+    if (rowIndex < 0 || !cellFitsInRow(targetRows[rowIndex], wantCell, targetSection.columns)) {
+      // Either the section this run just created has no row yet, or the last row is full. The SDK
+      // accepts a row with an empty cells array and serializes it correctly, so seed one and target
+      // it. `addElement` appends, so the new row's index is the PRE-add length.
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      rowIndex = 0;
+      rowIndex = priorRowCount;
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2054,6 +2159,13 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.removeElement('form', formId, from.rowPointer);
       }
     }
+
+    // Converge the span NOW, in the destination, so it is clamped and packed against the section the
+    // cell actually landed in rather than the one it left. Re-resolve the location: the move (and a
+    // possible stranded-row removal) invalidated every pointer computed above.
+    const settledForm = await provision.getArtifact('form', formId) || {};
+    const settled = findFieldCellLocation(settledForm, logical);
+    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell);
   };
 
   const reconcileForm = async (formId, def) => {
@@ -2071,13 +2183,21 @@ async function runSdkBuild(spec, opts = {}) {
     // and no authored structure to honor, so it keeps the additive first-section behavior —
     // reshaping a form a maker built by hand is not something an auto layout ever asked for.
     let declaredSection = {};
-    let sectionTargets = {};
+    // Null-prototype: keyed by AUTHOR-CONTROLLED section names, so a section legitimately named
+    // `__proto__` must land as an own enumerable property. On a plain object that assignment mutates
+    // the prototype instead, leaving the claimed-set lookup below blind to it — and the sweep then
+    // deleted a section the layout had explicitly asked for.
+    let sectionTargets = Object.create(null);
+    // Sections this run EMPTIED, by deployed name. The vacated-section sweep considers only these:
+    // "holds no cells" cannot tell a section we just emptied from one a maker created empty and may
+    // show/hide from a form script, and deleting the latter is invisible to the destructive preflight.
+    const vacatedSections = new Set();
     if (def.__explicitLayout) {
       declaredSection = declaredSectionByField(def.tabs);
       sectionTargets = await reconcileFormTopology(formId, def);
     }
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]]);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -2091,7 +2211,7 @@ async function runSdkBuild(spec, opts = {}) {
     await applyFieldControlOptions(formId, def, want, wantCellByLogical);
     // Reposition any field the spec anchors after another (`fieldOptions[x].after`). Runs AFTER the
     // add/attribute passes so a field created in this same run can be positioned in the same run.
-    await applyFieldPositions(formId, def);
+    await applyFieldPositions(formId, def, vacatedSections);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.
@@ -2104,8 +2224,71 @@ async function runSdkBuild(spec, opts = {}) {
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
-        const ptr = findFieldCellPointer(await provision.getArtifact('form', formId) || {}, logical);
+        const pruneForm = await provision.getArtifact('form', formId) || {};
+        const loc = findFieldCellLocation(pruneForm, logical);
+        // Pruning can empty a section too, so it feeds the vacated set on the same terms as a move.
+        if (loc) {
+          const sec = sectionAt(pruneForm, loc.sectionPointer);
+          if (sec && sec.name) vacatedSections.add(String(sec.name).toLowerCase());
+        }
+        const ptr = loc ? loc.cellPointer : findFieldCellPointer(pruneForm, logical);
         if (ptr) await provision.removeElement('form', formId, ptr);
+      }
+    }
+    // Reclaim a section the layout VACATED (#581). A generated section name encodes position
+    // (`section_<tab>[_<column>]_<index>`), so moving a section between form-columns or tabs under a
+    // generated name changes its identity: the topology pass creates a new one and the old one is
+    // never matched again. The field pass then empties it, leaving a deployed form with two sections
+    // headed the same thing, one of them blank — stable across rebuilds and permanently wrong.
+    //
+    // Runs LAST, after the field placement and prune passes, because only then is a vacated section
+    // actually empty. Four conditions, each load-bearing:
+    //   · explicit layout + prune ON — the same gate the field prune uses. An `auto` layout has no
+    //     authored shape to vacate, and `prune: false` means "leave what I did not re-declare".
+    //   · THIS RUN emptied it. `vacatedSections` records every section a cell was moved or pruned
+    //     out of. Without this the sweep deleted a section a maker had created empty and may
+    //     show/hide from a form script — an unchanged layout would silently destroy it, and the
+    //     destructive preflight cannot see it because that compares fields, not containers.
+    //   · the section is NOT one the authored layout claimed (by pointer or by deployed name).
+    //   · it holds NO cells at all — not merely no bound fields. A section can carry a spacer or a
+    //     control this reader does not model, and an empty-LOOKING section is not an empty one.
+    //
+    // That last test is also what protects the ENGINE's own sections. An explicit
+    // `isEngineOwnedSection` check was written here first and then removed as dead: that predicate is
+    // `cells.length > 0 && every cell unbound`, so anything it calls engine-owned already has cells
+    // and is spared above. Mutation testing proved it unkillable, and a guard that cannot fail
+    // implies coverage that does not exist.
+    if (def.__explicitLayout && def.__prune !== false) {
+      const claimedPointers = new Set();
+      const claimedNames = new Set();
+      for (const t of Object.values(sectionTargets || {})) {
+        if (!t) continue;
+        if (t.pointer) claimedPointers.add(t.pointer);
+        if (t.name) claimedNames.add(String(t.name).toLowerCase());
+      }
+      // Collected from a single read and removed from the BACK, because removeElement shifts the
+      // indices of later siblings — deleting front-first would silently target the wrong section.
+      const orphans = [];
+      const live = await provision.getArtifact('form', formId) || {};
+      (live.tabs || []).forEach((tab, ti) => {
+        (tab.columns || []).forEach((col, ci) => {
+          (col.sections || []).forEach((sec, si) => {
+            const pointer = `/tabs/${ti}/columns/${ci}/sections/${si}`;
+            if (claimedPointers.has(pointer)) return;
+            const secName = sec && sec.name ? String(sec.name).toLowerCase() : null;
+            if (secName && claimedNames.has(secName)) return;
+            if (!secName || !vacatedSections.has(secName)) return;
+            const cells = ((sec && sec.rows) || []).flatMap((r) => (r && r.cells) || []);
+            if (cells.length) return;
+            orphans.push({ pointer, name: (sec && sec.name) || '(unnamed)', label: (sec && sec.label) || '' });
+          });
+        });
+      });
+      for (const o of orphans.slice().reverse()) {
+        await provision.removeElement('form', formId, o.pointer);
+        if (typeof opts.warn === 'function') {
+          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it. Give a section an explicit \`name\` if you intend to move it between tabs or form-columns.`);
+        }
       }
     }
     requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
@@ -2238,10 +2421,10 @@ async function runSdkBuild(spec, opts = {}) {
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
       const existingId = await resolveExistingFormId(provision, def);
-      if (existingId) return reconcileForm(existingId, def);
+      if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
-      if (existingId) return reconcileView(existingId, def, !!(meta && meta.authoredQuery));
+      if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
     // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
@@ -2252,7 +2435,7 @@ async function runSdkBuild(spec, opts = {}) {
       id = await createFormShell(def);
       await addSubgrids(id, def.__subgrids);
     } else {
-      id = provision.createArtifact(type, def).id;
+      id = (await provision.createArtifact(type, def)).id;
     }
     const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
@@ -2367,7 +2550,7 @@ async function runSdkBuild(spec, opts = {}) {
         return existingId;
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
-        const art = provision.createArtifact('chart', def);
+        const art = await provision.createArtifact('chart', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         // Created here, so it IS workspace-resident and publishable.
@@ -2694,45 +2877,33 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
-        const art = provision.createArtifact('businessRule', def);
+        const art = await provision.createArtifact('businessRule', def);
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
-        // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
-        // node, ignored by the serializer, and written as a rule with no clauses and no actions:
-        // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
-        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring") and, until this
-        // SDK, the spec gate was the only thing standing in front of it.
+        // The push USED to be unable to tell you a rule was wrong: a mis-shaped condition tree was
+        // MERGED onto the node, ignored by the serializer, and written as a rule with no clauses and
+        // no actions — HTTP 204, activated, and it never fired.
         //
-        // The SDK now exposes the business-rule designer's OWN completeness validator — the same one
-        // the designer gates its Save button on — and states plainly that nothing on the push path
-        // runs it, so run it here, BEFORE the write.
+        // That trap is CLOSED at the source as of the injected-storage re-vendor. The SDK now runs
+        // the business-rule designer's own completeness validator internally on EVERY save — create
+        // and update, Active and Draft — so an incomplete or mis-shaped rule is REFUSED by
+        // `pushArtifact` below, naming the offending clause, and nothing reaches the wire.
+        // Measured and pinned in sdk-uptake-contract.test.js ("a wrongly-shaped condition is now
+        // REFUSED at push, closing the empty-rule trap"), which asserts both the refusal and that no
+        // request was made.
         //
-        // Strict about FINDINGS, best-effort about the VALIDATOR. Findings halt: a rule that reports
-        // success and never fires is exactly the silent-wrong-artifact class this engine exists to
-        // prevent, and it is invisible afterwards. But a bundle without the method, or a validator
-        // that throws, must not block a build it cannot judge.
+        // ⚠ The explicit validation call that used to sit HERE is therefore gone, and its removal is
+        // a TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
+        // validator method, which no longer exists. The old call was best-effort by design (a bundle
+        // without the method must not block a build it cannot judge), so it silently degraded to NO
+        // validation whenever the vendored bundle predated it. Re-adding a defensive
+        // `typeof ... === 'function'` block would now be dead code that never runs and implies
+        // coverage living elsewhere.
         //
-        // Field metadata is deliberately NOT passed: without it the SDK SUPPRESSES the
-        // metadata-dependent checks (Clear eligibility, value-type compatibility, max length) rather
-        // than failing them, and the structural checks are the ones that close the trap above.
-        // Passing them would cost an attribute read per rule for checks the spec gate already covers.
-        //
-        // MEASURED against this bundle: every shape this spec surface can author — all 16 operators,
-        // all 4 action types, every scope and status, multi-condition and multi-action — reports zero
-        // issues, so this cannot reject a rule that was previously buildable.
-        if (typeof provision.validateBusinessRule === 'function') {
-          let issues = null;
-          try {
-            issues = provision.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
-          } catch { /* a diagnostic that cannot run must never fail the build */ }
-          if (Array.isArray(issues) && issues.length) {
-            const detail = issues.map((i) => `${(i && i.rule) || 'issue'}: ${(i && i.message) || ''}`.trim()).join('; ');
-            throw new BuildHalt(
-              `business rule "${rule.name}" on ${rule.entity} is incomplete and would deploy as a rule that never fires — ${detail}`,
-              { phase: 'business-rules', code: 'business-rule-incomplete', recoverable: false });
-          }
-        }
+        // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
+        // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
+        // mention in prose as a live call, then demand it back on the vendored bundle.
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
@@ -2928,7 +3099,7 @@ async function runSdkBuild(spec, opts = {}) {
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
         // condition tree there is no element-surface follow-up to make.
-        const art = provision.createArtifact('bpf', bpfDef(flow));
+        const art = await provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
         // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
@@ -2961,7 +3132,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
-        const art = provision.createArtifact('command', def);
+        const art = await provision.createArtifact('command', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`, opts.warn);
         result.created.commands[entityLogical] = pushed.id;
       });
@@ -2988,7 +3159,7 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
-        const art = provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
+        const art = await provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
         // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
         // without awaiting them — the push below could then race an unfinished tile insert.
         const tiles = dash.tiles || [];
@@ -3066,7 +3237,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
-      const art = provision.createArtifact('app', def);
+      const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
@@ -3203,6 +3374,17 @@ async function runSdkBuild(spec, opts = {}) {
         else runner.skip('pages', `page "${p.name}" (no tsx source)`);
       }
 
+      // A page that SUPPLIES an empty prompt or agent message would otherwise have generated text
+      // deployed in its place. Checked here, before ANY upload, so a bad spec fails whole rather than
+      // leaving half the pages deployed. Absent keys are untouched — only a present-but-blank value is
+      // an authoring mistake. Same rule as the standalone CLI, via the same predicate.
+      for (const p of implemented) {
+        for (const [field, value] of [['prompt', p.prompt], ['agentMessage', p.agentMessage]]) {
+          if (suppliedButBlank(value)) {
+            throw new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false });
+          }
+        }
+      }
       // (1) STRUCTURAL SCAN of every implemented canonical source BEFORE any write (C1/C4), via the single
       //     nav oracle (extractNavTargets). Reject a malformed (non-canonical) nav PAGEREF and enforce EXACT
       //     parity between declared navigatesTo targetKeys and the keys the source references at REAL nav

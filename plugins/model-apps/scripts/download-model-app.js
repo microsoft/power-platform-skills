@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -274,7 +274,27 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
           note(r.SchemaName, lc(logical), `it links '${e1}' to '${e2}' and this app does not include both tables`);
           continue;
         }
-        relationships.push({ type: 'ManyToMany', entity1: e1, entity2: e2 });
+        // The deployed schema name is emitted ONLY when it differs from the one the build would
+        // generate anyway AND it satisfies the publisher-prefix rule the lint enforces — the same
+        // rule the 1:N branch above applies, for the same two reasons: a foreign-prefix name would
+        // hand back a spec that fails its own lint, while omitting a DIVERGENT name makes a rebuild
+        // into this same environment create a SECOND intersect relationship beside the existing one
+        // instead of matching it.
+        //
+        // `manyToManySchemaName` SORTS the two entity names before composing, so `auto` is computed
+        // from the same pair that is emitted rather than from the order Dataverse happened to report.
+        const rel = { type: 'ManyToMany', entity1: e1, entity2: e2 };
+        const auto = manyToManySchemaName({ entity1: e1, entity2: e2 }, publisherPrefix);
+        const deployed = r.SchemaName;
+        if (deployed && lc(deployed) !== lc(auto)) {
+          if (!publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) rel.schemaName = deployed;
+          else if (typeof warn === 'function') {
+            // RENAMED, not skipped — this relationship IS carried into the spec, so recording it as
+            // skipped would claim it was absent from the rebuildable spec, the opposite of the truth.
+            warn(`relationship '${deployed}' between '${e1}' and '${e2}' does not start with this solution's publisher prefix '${publisherPrefix}_', so the spec rebuilds it under the generated name '${auto}' instead`);
+          }
+        }
+        relationships.push(rel);
       }
     } catch (e) {
       note('(many-to-many)', lc(logical), `their metadata could not be read (${e && e.message})`);
@@ -308,12 +328,12 @@ function relationshipsSkippedWarning(skipped) {
   return `${lines.join('\n')}\n`;
 }
 
-function makeProvision(env, workspaceDir) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeProvision(env, workspaceDir) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
@@ -705,7 +725,13 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
 
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
 // pages[] entries with codeFile paths relative to `outDir`.
-function parseDownloadedPages(pagesRoot, outDir, nameById) {
+//
+// `unreadable` collects pages whose config.json EXISTS but could not be parsed. That distinction is
+// load-bearing: a MISSING config is genuinely optional, but a present-and-unparseable one means the
+// page's `dataSources` are unknown — and defaulting them to `[]` writes a spec that rebuilds the
+// page with NO table bindings while its source still queries the table. Silent, and only visible
+// once the rebuilt page returns nothing.
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   for (const entry of fs.readdirSync(pagesRoot)) {
@@ -714,9 +740,37 @@ function parseDownloadedPages(pagesRoot, outDir, nameById) {
     const tsx = path.join(dir, 'page.tsx');
     if (!fs.existsSync(tsx)) continue;
     let config = {};
-    try { config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')); } catch { /* optional */ }
-    let prompt = '';
-    try { prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').trim(); } catch { /* optional */ }
+    const configPath = path.join(dir, 'config.json');
+    // Read DIRECTLY and let ENOENT — and ONLY ENOENT — mean "absent, therefore optional".
+    // `existsSync` returns false for a file that exists but cannot be OPENED (permissions/ACL), which
+    // made an unreadable config indistinguishable from a missing one: the page was emitted with no
+    // bindings and never recorded as unreadable, so it slipped past the --allow-lossy-download gate
+    // this very function exists to feed.
+    try {
+      // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+      // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
+      // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
+      // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
+    } catch (e) {
+      config = {};
+      // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
+      // config is optional by contract and is NOT reported.
+      if (!(e && e.code === 'ENOENT') && unreadable) {
+        unreadable.push({ pageId: entry, reason: e && e.message ? e.message : String(e) });
+      }
+    }
+    // A MISSING prompt.txt is an OMISSION, not an empty prompt. Emitting '' made every downloaded
+    // page lacking that optional file look like an explicitly blank prompt, which the build's
+    // blank-provenance guard then refuses — aborting the rebuild of a perfectly good downloaded app.
+    // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
+    let prompt;
+    try {
+      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim();
+    } catch (e) {
+      prompt = (e && e.code === 'ENOENT') ? undefined : '';
+    }
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
@@ -1789,7 +1843,18 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       const id = String(p.pageId).toLowerCase();
       return [id, envNameById.get(id) || p.title || p.pageId];
     }));
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById);
+    const unreadableConfigs = [];
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs);
+    // A page whose config.json could not be read has UNKNOWN data sources, and the spec would claim
+    // it has none — rebuilding it with no table bindings while its source still queries the table.
+    // That is exactly the class of silent loss `--allow-lossy-download` exists to gate.
+    if (unreadableConfigs.length) {
+      const detail = unreadableConfigs.map((u) => `${u.pageId} (${u.reason})`).join(', ');
+      if (!allowLossy) {
+        return { ok: false, error: `could not read config.json for page(s): ${detail} — their data-source bindings are unknown, so refusing to write a spec that would silently rebuild them unbound. Re-run with --allow-lossy-download to accept the loss.` };
+      }
+      process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
+    }
 
     // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means pac
     // fetched a different set than the sitemap declares — rebuilding from this spec would silently
@@ -2111,7 +2176,7 @@ async function main() {
   // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would
   // have succeeded. Surface it and continue.
   if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
-  const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
+  const sdk = await makeProvision(env, path.join(outDir, '.maker-workspace'));
   const resolved = await resolveAppId(sdk, appArg);
   if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
   const appId = resolved.appId;

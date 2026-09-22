@@ -85,7 +85,7 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
-  assert.match(createSkill, /12\. Start Metro \(`npm run dev`\)/);
+  assert.match(createSkill, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
   assert.match(createSkill, /createPowerAppsMetroConfig/);
   assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);

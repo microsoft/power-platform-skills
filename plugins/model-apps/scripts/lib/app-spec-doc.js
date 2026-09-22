@@ -90,6 +90,19 @@ function jobsSection(spec) {
     }
   }
   out.push('');
+  // Deliberate exclusions, rendered beside the traceability table so scope is REVIEWED rather than
+  // assumed (#583). What an app leaves out is what distinguishes two apps built over the same tables,
+  // and a reviewer cannot approve an omission they were never shown.
+  const excluded = personas
+    .map((p) => ({ persona: p.persona, items: arr(p.excludes).filter((x) => typeof x === 'string' && x.trim()) }))
+    .filter((e) => e.items.length);
+  if (excluded.length) {
+    out.push('**Deliberately out of scope**', '');
+    for (const e of excluded) {
+      for (const x of e.items) out.push(`- ${cell(e.persona)} — ${cell(x)}`);
+    }
+    out.push('');
+  }
   const unmapped = personas.flatMap((p) => objs(p.jobs).filter((j) => !arr(j.surfaces).length).map((j) => `${p.persona} → ${j.name}`));
   if (unmapped.length) {
     out.push(

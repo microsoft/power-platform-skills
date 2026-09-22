@@ -40,8 +40,8 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
  *   failProof     - throw from the /appsettings query (models missing read access).
  *   failWrite     - throw from POST /SaveSettingValue.
  */
-function freshSdk(opts = {}) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(opts = {}) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-real-'));
   tempDirs.push(dir);
   const calls = [];
@@ -79,15 +79,15 @@ function freshSdk(opts = {}) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, calls, proofCount: () => proofAttempts };
 }
 // `verifyDelayMs: 0` keeps the retry budget instant — the real default backs off up to ~3s.
 const FAST = { verifyDelayMs: 0 };
 
 test('REAL BUNDLE: a proven app-scope override row is the only thing that yields `applied`', async () => {
-  const { sdk } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
+  const { sdk } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.applied, ['formFill']);
   assert.deepStrictEqual([r.notPersisted, r.unverified, r.failed], [[], [], []]);
@@ -101,7 +101,7 @@ test('REAL BUNDLE: an ENV-fallback match with NO override row is notPersisted, n
   // that is what makes the env-fallback read look like success. So `effective` must be the value the
   // request resolves to ('2' = enabled for this family); stubbing '1' would mean the read disagrees
   // with the request anyway, and the test would pass for the wrong reason.
-  const { sdk } = freshSdk({ gate: '2', effective: '2', overrideRows: [] });
+  const { sdk } = await freshSdk({ gate: '2', effective: '2', overrideRows: [] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.applied, [], 'an env-fallback read must never count as applied');
   assert.deepStrictEqual(r.notPersisted, ['formFill']);
@@ -111,7 +111,7 @@ test('REAL BUNDLE: an ENV-fallback match with NO override row is notPersisted, n
 test('REAL BUNDLE: a write that becomes visible late is retried and reported applied', async () => {
   // Eventual consistency: an immediate read can miss a write that DID land. Reporting that as failed
   // produced a false `notPersisted` on first apply (a re-run then looked clean).
-  const { sdk, proofCount } = freshSdk({ gate: '2', effective: '2', overrideRows: (n) => (n >= 3 ? [{ value: '2' }] : []) });
+  const { sdk, proofCount } = await freshSdk({ gate: '2', effective: '2', overrideRows: (n) => (n >= 3 ? [{ value: '2' }] : []) });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.applied, ['formFill'], 'the retry budget must absorb read lag');
   assert.strictEqual(proofCount(), 3, 'stops as soon as the override is observed');
@@ -123,7 +123,7 @@ test('REAL BUNDLE: an unreadable override row is `unverified`, never applied and
   // decides whether this path is reached at all — since AB#6688904 the write and the proof always
   // run — so `gate` here is inert and `'2'` is used purely so a fixture for a `formFill: true`
   // request does not read as "disabled".
-  const { sdk } = freshSdk({ gate: '2', effective: '2', failProof: true });
+  const { sdk } = await freshSdk({ gate: '2', effective: '2', failProof: true });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.unverified, ['formFill']);
   assert.deepStrictEqual([r.applied, r.notPersisted], [[], []]);
@@ -131,7 +131,7 @@ test('REAL BUNDLE: an unreadable override row is `unverified`, never applied and
 });
 
 test('REAL BUNDLE: a throwing write lands in `failed` and does not abort the batch', async () => {
-  const { sdk } = freshSdk({ gate: '2', effective: '2', failWrite: true });
+  const { sdk } = await freshSdk({ gate: '2', effective: '2', failWrite: true });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true, nlChart: true }, FAST);
   assert.deepStrictEqual(r.failed.sort(), ['formFill', 'nlChart'], 'every feature still reports');
   assert.deepStrictEqual(r.applied, []);
@@ -149,7 +149,7 @@ test('REAL BUNDLE: a throwing write lands in `failed` and does not abort the bat
 test('REAL BUNDLE: a gate that is off no longer pre-empts the write — it is issued, then explained as `skipped`', async () => {
   // `nlSearch` has a genuinely distinct gate (`EnableNLGridSearch`) from its per-app setting
   // (`NLGridSearchSetting`), so a gate-off diagnosis is meaningful for it.
-  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const { sdk, calls } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
   const r = await sdk.setAppAiFeatures(APP, { nlSearch: true }, FAST);
   assert.deepStrictEqual(r.skipped, ['nlSearch'], 'an absent override plus a gate reading off is `skipped`');
   const writes = calls.filter((c) => c.method === 'POST' && c.url.includes('SaveSettingValue'));
@@ -163,7 +163,7 @@ test('REAL BUNDLE: a SELF-GATED feature has no gate to blame — an absent overr
   // `formFill` reads `FormFillBarUXEnabled` for BOTH its gate and its per-app value. `0` there is the
   // platform default on a new app, not an admin saying no, so there is nothing to diagnose with and
   // the honest bucket is `notPersisted`. Reporting `skipped` here would re-tell the AB#6688904 story.
-  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const { sdk, calls } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.skipped, [], 'a self-gated feature can never be `skipped`');
   assert.deepStrictEqual(r.notPersisted, ['formFill']);
@@ -171,7 +171,7 @@ test('REAL BUNDLE: a SELF-GATED feature has no gate to blame — an absent overr
 });
 
 test('REAL BUNDLE: disabling is never gated — it writes even when the org gate is off', async () => {
-  const { sdk, calls } = freshSdk({ gate: '0', effective: '1', overrideRows: [{ value: '1' }] });
+  const { sdk, calls } = await freshSdk({ gate: '0', effective: '1', overrideRows: [{ value: '1' }] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: false }, FAST);
   assert.deepStrictEqual(r.applied, ['formFill'], 'an explicit disable must always be applied');
   const write = calls.find((c) => c.method === 'POST' && c.url.includes('SaveSettingValue'));
@@ -181,7 +181,7 @@ test('REAL BUNDLE: disabling is never gated — it writes even when the org gate
 test('REAL BUNDLE: an explicit integer value (2 = on for everyone) is written verbatim', async () => {
   // The plugin's spec schema allows this precisely because the SDK does; a boolean-only contract made
   // the platform's documented `2` inexpressible (ADO 6560699).
-  const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
+  const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: 2 }, FAST);
   assert.deepStrictEqual(r.applied, ['formFill']);
   assert.strictEqual(calls.find((c) => c.method === 'POST' && c.url.includes('SaveSettingValue')).body.Value, '2');
@@ -190,7 +190,7 @@ test('REAL BUNDLE: an explicit integer value (2 = on for everyone) is written ve
 test('REAL BUNDLE: an out-of-range or non-numeric value throws BEFORE any write is issued', async () => {
   // The plugin's validateAppSpec bound mirrors this, so a spec never reaches a half-applied batch.
   for (const bad of [-1, 1.5, 1000001, 'off']) {
-    const { sdk, calls } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+    const { sdk, calls } = await freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
     await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: bad }, FAST), /must be a boolean or an integer/, `expected ${bad} to be rejected`);
     assert.strictEqual(calls.filter((c) => c.method === 'POST').length, 0, `no write may be issued for ${bad}`);
   }
@@ -199,7 +199,7 @@ test('REAL BUNDLE: an out-of-range or non-numeric value throws BEFORE any write 
 test('REAL BUNDLE: an empty appUniqueName throws rather than writing at ORGANIZATION scope', async () => {
   // Silently omitting AppUniqueName changes the feature for the WHOLE environment. The plugin always
   // passes appUniqueName(spec), but this is the backstop that makes a regression there loud.
-  const { sdk, calls } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const { sdk, calls } = await freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   await assert.rejects(() => sdk.setAppAiFeatures('', { formFill: true }, FAST), /non-empty appUniqueName/);
   assert.strictEqual(calls.filter((c) => c.method === 'POST').length, 0);
 });
@@ -208,7 +208,7 @@ test('REAL BUNDLE: the override proof is scoped to THIS app and THIS setting', a
   // '2' (enabled), not '1' (disabled), for a `formFill: true` request — see the note above on the
   // gate vs per-app encodings. Measured to behave identically; this only removes the contradiction
   // between what the fixture says and what the request asks for.
-  const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
+  const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
   await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   const proof = calls.find((c) => c.url.includes('/appsettings'));
   assert.ok(proof, 'the override row must actually be queried');
@@ -230,7 +230,7 @@ test('REAL BUNDLE: the override proof is scoped to THIS app and THIS setting', a
 test('REAL BUNDLE: a supplied appModuleId proves the override PRE-PUBLISH (app not yet listable)', async () => {
   // `noApp: true` models the pre-publish reality: the by-name appmodule query returns NO rows.
   // Without appModuleId this is unverifiable; with it, the proof succeeds.
-  const { sdk } = freshSdk({ noApp: true, gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
+  const { sdk } = await freshSdk({ noApp: true, gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID });
   assert.deepStrictEqual(r.applied, ['formFill'], `expected applied, got ${JSON.stringify(r)}`);
   assert.deepStrictEqual([r.notPersisted, r.unverified, r.failed], [[], [], []]);
@@ -240,7 +240,7 @@ test('REAL BUNDLE: a supplied appModuleId proves the override PRE-PUBLISH (app n
 test('REAL BUNDLE: WITHOUT appModuleId the same pre-publish app cannot be proven (regression witness)', async () => {
   // The behaviour the build worked around. Kept so a future SDK change that makes the by-name
   // lookup work pre-publish is noticed here rather than silently making the option pointless.
-  const { sdk } = freshSdk({ noApp: true, gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const { sdk } = await freshSdk({ noApp: true, gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.applied, [], `a pre-publish app must not be provable by name: ${JSON.stringify(r)}`);
   assert.ok(
@@ -252,7 +252,7 @@ test('REAL BUNDLE: WITHOUT appModuleId the same pre-publish app cannot be proven
 test('REAL BUNDLE: a supplied appModuleId that DISAGREES with the published app is rejected, not trusted', async () => {
   // Fail-closed identity check: if the app IS readable by name and resolves to a different id, the
   // caller's id is stale/wrong and writing under it would configure the wrong app.
-  const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const { sdk } = await freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   await assert.rejects(
     () => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: '99999999-9999-9999-9999-999999999999' }),
     /INVALID_ARGUMENT|different|mismatch/i
@@ -260,7 +260,7 @@ test('REAL BUNDLE: a supplied appModuleId that DISAGREES with the published app 
 });
 
 test('REAL BUNDLE: a malformed appModuleId is rejected up front', async () => {
-  const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const { sdk } = await freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: 'not-a-guid' }));
 });
 
@@ -283,7 +283,7 @@ test('REAL BUNDLE: the boolean-to-numeric mapping is per-family, not a flat 1/0'
   for (const [feature, want] of Object.entries(EXPECTED)) {
     for (const [flag, expected] of [[true, want.onValue], [false, want.offValue]]) {
       // Gate reported ON so the SDK writes in both directions (enabling is gated; disabling is not).
-      const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: expected }] });
+      const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: expected }] });
       await sdk.setAppAiFeatures(APP, { [feature]: flag }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
       const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
       assert.ok(save, `${feature}=${flag}: a SaveSettingValue must be issued`);
@@ -296,7 +296,7 @@ test('REAL BUNDLE: the boolean-to-numeric mapping is per-family, not a flat 1/0'
 
 test('REAL BUNDLE: disabling is NOT gated — a false is written even when the org gate is off', async () => {
   // This asymmetry is why an incorrect `false` is the more damaging mistake: it always lands.
-  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
+  const { sdk, calls } = await freshSdk({ gate: '0', effective: '0', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
   await sdk.setAppAiFeatures(APP, { formFill: false }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
   const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
   assert.ok(save, 'a disable must be written even with the gate off');

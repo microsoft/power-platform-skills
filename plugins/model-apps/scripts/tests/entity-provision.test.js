@@ -720,7 +720,8 @@ test('#544 a cross-entity $parent does not trigger wave splitting', async () => 
   assert.strictEqual(orgCalls.length, 1, 'both org rows seed in one call');
 });
 
-test('#544 a self-reference CYCLE fails with a message naming the rows, not a hang', async () => {  const spec = hierarchySpec();
+test('#544 a self-reference CYCLE fails with a message naming the rows, not a hang', async () => {
+  const spec = hierarchySpec();
   spec.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Grandchild' } };
   await assert.rejects(runHierarchy(spec), (err) => {
     assert.match(err.message, /cycle/i);

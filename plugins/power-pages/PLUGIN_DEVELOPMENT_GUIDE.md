@@ -52,11 +52,11 @@ When a skill deploys a site or audits permissions across many tables, the termin
 
 ### The Solution
 
-Every skill must implement **task-based progress tracking** using `TaskCreate` and `TaskUpdate`. Tasks are created upfront at Phase 1, one per phase, and marked `in_progress` / `completed` as the skill progresses.
+Every skill must implement **task-based progress tracking** using `TaskCreate` and `TaskUpdate`. Tasks are created upfront at Phase 1, one per phase, and marked `in_progress` / `completed` as the skill progresses. For a skill with mutually exclusive branches, create the path-agnostic tasks upfront, then append the branch-specific phase tasks immediately after the branch is selected so the user never sees permanently skipped work.
 
 ### Implementation Pattern
 
-Every skill creates all phase tasks at the start:
+Default pattern: every linear skill creates all phase tasks at the start:
 
 ```
 Phase 1: TaskCreate → subject: "Verify prerequisites", activeForm: "Verifying prerequisites"
@@ -72,7 +72,7 @@ Each task has three fields:
 - `activeForm` — Present continuous (shown in the spinner)
 - `description` — Brief explanation of the phase
 
-For skills that process multiple entities (e.g., audit-permissions auditing many tables), create **per-entity sub-tasks** dynamically within the relevant phase.
+For skills that process multiple entities (e.g., audit-permissions auditing many tables), create **per-entity sub-tasks** dynamically within the relevant phase. For skills that choose between mutually exclusive paths (for example, a template-backed path vs. a from-scratch path), create the common discovery/selection tasks first and append only the selected path's phases after the routing decision.
 
 ### What This Means in Practice
 
@@ -83,7 +83,7 @@ For skills that process multiple entities (e.g., audit-permissions auditing many
 | `/audit-permissions` | 7 phases (prereqs → discover → analyze → audit → cross-check → report → present) | Per-table tasks in Phase 4 (checklist A-K) |
 | `/create-site` | 8 phases (prereqs → gather → plan → scaffold → implement → validate → deploy → summarize) | None |
 
-> **Acceptance criterion:** Every skill must create all phase tasks upfront at Phase 1 start. Each task must have `subject`, `activeForm`, and `description`. Tasks must be marked `in_progress` when starting and `completed` when done.
+> **Acceptance criterion:** Every linear skill must create all phase tasks upfront at Phase 1 start. A branching skill must create all path-agnostic tasks upfront and append the selected branch's tasks as soon as the branch is known. Each task must have `subject`, `activeForm`, and `description`. Tasks must be marked `in_progress` when starting and `completed` when done.
 
 ---
 

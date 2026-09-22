@@ -153,17 +153,17 @@ async function main() {
   let result;
   let error;
   try {
-    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
     const httpClient = createAzHttpClient(envUrl);
     const sdk = createMakerSdk({
-      workspacePath: sdkTempDir, // unused workspace (no metadata persistence needed)
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused workspace (no metadata persistence needed)
       instanceUrl: envUrl,
       httpClient,
     });
     // initWorkspace() is INSIDE the try so the finally below always removes the temp workspace, even
     // if SDK construction or init itself throws (otherwise a failed constructor leaked sdkTempDir).
     // Consistent with teardown-model-app's fail-safe pattern; harmless for the Dataverse-only ops here.
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     result = await runProvisionSolution(
       {
         envUrl,

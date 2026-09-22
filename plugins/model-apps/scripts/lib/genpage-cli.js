@@ -215,7 +215,8 @@ function makeGenpageCli(env, deps = {}) {
     //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
     // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
     // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
-    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources }) {
+    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
+      addToSitemap, model, connectors, actions }) {
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
@@ -224,7 +225,14 @@ function makeGenpageCli(env, deps = {}) {
       // stray newline can't truncate the Windows command line) and silently loses every line break on
       // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
       const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
-      const agentMessageText = agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by app-builder';
+      // The default applies only when NO agent message was supplied. An explicitly EMPTY one (a
+      // zero-byte --agent-message-file) used to be replaced by this fallback, so the deployed page
+      // carried provenance the caller never wrote — the same fabrication the empty-prompt check
+      // already refuses. `undefined` means "not supplied"; a supplied empty string is the caller's
+      // problem to fix, and is rejected by genpage-upload.js before reaching here.
+      const agentMessageText = agentMessage === undefined || agentMessage === null
+        ? 'Authored by app-builder'
+        : String(agentMessage);
       // Write both files ONCE, before the retry loop, into a unique temp dir. mkdtempSync's random
       // suffix keeps concurrent uploads from colliding on a fixed filename. UTF-8 because prompts carry
       // non-ASCII (pac reads these back as UTF-8). The try/finally guarantees the dir is removed on
@@ -246,21 +254,41 @@ function makeGenpageCli(env, deps = {}) {
           // prompt/agent-message round-trips intact instead of being newline-collapsed.
           args.push('--prompt-file', promptFile);
           args.push('--agent-message-file', agentMessageFile);
-          if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
+          // Accept an ARRAY (how the build passes it) or a CSV STRING (how a CLI caller does).
+          // `dataSources.join` on a string would throw, and a bare `.length` check passes for both,
+          // so the shape has to be normalized rather than assumed.
+          const ds = Array.isArray(dataSources) ? dataSources.join(',') : String(dataSources || '');
+          if (ds) args.push('--data-sources', ds);
+          // OPT-IN extras, for the standalone /genpage skill (#589). They default to absent because
+          // /app-builder must NOT send them: `--add-to-sitemap` in particular is deliberately omitted
+          // there, since the SDK owns the sitemap and writes the GenPage subareas itself — letting pac
+          // add one too would produce a duplicate subarea. Unlike the prompt these are short,
+          // caller-controlled values (a model id, file paths, a bare switch), so they are safe inline.
+          if (model) args.push('--model', model);
+          if (connectors) args.push('--connectors', connectors);
+          if (actions) args.push('--actions', actions);
+          // Only ever on a CREATE. pac rejects the combination, and the skills' own rule is
+          // "use --page-id, omit --add-to-sitemap" — enforcing it here keeps every caller honest
+          // instead of repeating the rule in prose at each call site.
+          if (addToSitemap && !pid) args.push('--add-to-sitemap');
           return run(args);
         };
         let pid = pageId;
         let lastErr = '';
+        // Set when a CREATE asked for sitemap placement but recovery adopted an existing page id,
+        // turning the retry into an UPDATE — which cannot carry --add-to-sitemap. The page then
+        // exists but is UNPLACED, and reporting plain success would hide that.
+        let sitemapPending = false;
         // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
         // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
         let beforeIds = null;
         for (let i = 0; i < attempts; i += 1) {
-          if (!pid && name && beforeIds === null) {
+          if (!pid && beforeIds === null) {
             const before = await enumerateEnv();
             if (!before.ok) {
               throw new Error(
-                `pac genpage upload for '${name}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
+                `pac genpage upload for '${name || '(unnamed)'}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
               );
             }
             beforeIds = new Set(before.ids);
@@ -275,10 +303,10 @@ function makeGenpageCli(env, deps = {}) {
               // Case-insensitive: PAC can normalize GUID casing across writes.
               if (pid && id.toLowerCase() !== pid.toLowerCase()) {
                 throw new Error(
-                  `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
+                  `pac genpage upload for '${name || '(unnamed)'}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
-              return { pageId: id };
+              return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
             }
             lastErr = `returned no Page ID: ${lastLine(r)}`;
           } else {
@@ -287,27 +315,31 @@ function makeGenpageCli(env, deps = {}) {
           // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
           // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
           // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
-          if (!pid && name) {
+          if (!pid) {
             const after = await enumerateEnv();
             if (!after.ok) {
               throw new Error(
-                `pac genpage upload for '${name}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
+                `pac genpage upload for '${name || '(unnamed)'}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
               );
             }
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
             if (newIds.length === 1) {
               pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
+              // The adopted retry runs as an UPDATE, so `--add-to-sitemap` is no longer emitted.
+              // Record that the placement the caller asked for did not happen rather than letting
+              // a successful-looking result imply a page that is actually unreachable from the nav.
+              if (addToSitemap) sitemapPending = true;
             } else if (newIds.length === 0) {
               // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
             } else {
               throw new Error(
-                `pac genpage upload for '${name}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
+                `pac genpage upload for '${name || '(unnamed)'}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
               );
             }
           }
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
-        throw new Error(`pac genpage upload failed for '${name}' after ${attempts} attempt(s): ${lastErr}`);
+        throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}' after ${attempts} attempt(s): ${lastErr}`);
       } finally {
         // Best-effort cleanup on EVERY exit path (success return, retry-exhaustion throw, mid-loop
         // throws). A cleanup failure (e.g. a transient Windows file lock) must NEVER mask the upload's
@@ -317,6 +349,13 @@ function makeGenpageCli(env, deps = {}) {
     },
     list({ appId }) {
       return listPages(appId);
+    },
+    // Env-wide, INCLUDING unpublished pages — the only listing that can answer "does this page id
+    // exist at all", since an app-scoped list is derived from the sitemap and so misses a page that
+    // was created but never placed. Exposed so the standalone CLI can verify an update target
+    // without reimplementing pac listing, retry and output classification.
+    enumerateEnvironment() {
+      return enumerateEnv();
     },
     enumerate({ appId }) {
       return enumeratePages(appId);
@@ -338,4 +377,11 @@ function makeGenpageCli(env, deps = {}) {
   };
 }
 
-module.exports = { makeGenpageCli, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
+// A provenance value the caller SUPPLIED but left blank. `undefined`/`null` mean "not supplied", and
+// the wrapper's defaults then apply legitimately. A present-but-blank value is different: the caller
+// asked for THAT text, so substituting generated provenance deploys words nobody wrote. Whitespace-,
+// newline- and BOM-only files are the realistic ways an empty value arrives.
+function suppliedButBlank(value) {
+  return value !== undefined && value !== null && !String(value).trim();
+}
+module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
