@@ -494,10 +494,12 @@ test('#564 a GLOBAL-bound picklist emits a globalChoice reference instead of inl
   assert.strictEqual(status.type, 'Choice');
   assert.strictEqual(status.globalChoice, 'shared_stage');
   assert.strictEqual(status.options, undefined, 'a global-bound column must not ALSO carry inline options');
-  // The shared set itself has to be declared, or a fresh-environment rebuild has nothing to bind to.
+  // The shared set itself has to be declared, or a fresh-environment rebuild has nothing to bind to —
+  // and declared `existing: true`, so a teardown does not delete an org-wide set it cannot prove this
+  // app created (#587 item 6).
   const decls = new Map();
   collectGlobalChoices(meta, decls);
-  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Draft', 'Final'] }]);
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Draft', 'Final'], existing: true }]);
 });
 
 test('#564 a MultiSelect picklist downloads as MultiChoice', async () => {
@@ -531,7 +533,7 @@ test('#564 inline options keep their localizations, but a global declaration is 
   assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, [{ 1033: 'Open', 3082: 'Abierto' }]);
   const decls = new Map();
   collectGlobalChoices(meta, decls);
-  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Open'] }]);
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Open'], existing: true }]);
 });
 
 test('#564 one global set bound by two columns is declared exactly once', async () => {
@@ -649,6 +651,49 @@ test('readDashboards reconstructs supported tile shapes and skips unreadable das
     { type: 'iframe', name: 'Portal', url: 'https://contoso.example' },
     { type: 'webresource', name: 'Help', webResource: 'new_help.htm' },
   ]);
+});
+
+// #586 item 4: an App Spec refers to a dashboard by NAME (the sitemap subarea, and the build's lookup
+// of an existing one), so two different dashboards whose names Dataverse compares equal collapse into
+// one on rebuild and the other silently leaves the nav. They are withheld — which drops their
+// subareas and trips the lossy-download gate — and the reason names both.
+test('readDashboards withholds dashboards whose names Dataverse treats as one, and says why', async () => {
+  const A = '{AAAAAAAA-0000-4000-8000-00000000000A}';
+  const B = '{BBBBBBBB-0000-4000-8000-00000000000B}';
+  const C = '{CCCCCCCC-0000-4000-8000-00000000000C}';
+  const bare = (g) => String(g).replace(/[{}]/g, '').toLowerCase();
+  // The REAL names come from systemform; the subarea titles differ on purpose, so this proves the
+  // clash is judged on the dashboard's own name and not on whatever the nav entry happens to say.
+  // Case, an accent and a trailing space all compare equal on the server — a leading space would not.
+  const names = { [bare(A)]: 'Overview', [bare(B)]: 'OVERVIÉW ', [bare(C)]: 'Pipeline' };
+  // C sits behind TWO subareas (its id in two cases): one dashboard, which must not clash with itself.
+  const subAreas = [[A, 'Nav A'], [B, 'Nav B'], [C, 'Nav C'], [C.toLowerCase(), 'Nav C again']]
+    .map(([id, title]) => ({ type: 'DashBoard', dashboardId: id, title }));
+  const app = { siteMap: { areas: [{ groups: [{ subAreas }] }] } };
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
+    queryRecords: async (_set, q) => {
+      const hit = Object.keys(names).find((k) => bare(q.filter).includes(k));
+      assert.ok(hit, `name query must target a known dashboard: ${q.filter}`);
+      return [{ name: names[hit] }];
+    },
+  };
+  const warnings = [];
+  const dashboards = await readDashboards(sdk, app, (m) => warnings.push(m));
+  assert.deepStrictEqual(dashboards.map((d) => d.name), ['Pipeline'], 'only the uniquely named dashboard round-trips');
+  const clash = warnings.filter((w) => /share the name/.test(w));
+  assert.strictEqual(clash.length, 1, JSON.stringify(warnings));
+  assert.ok(bare(clash[0]).includes(bare(A)) && bare(clash[0]).includes(bare(B)), clash[0]);
+  assert.ok(clash[0].includes("('Overview')") && clash[0].includes("('OVERVIÉW ')") && /rename one in Maker/.test(clash[0]), clash[0]);
+  // And their subareas are then reported as dropped rather than silently re-pointed.
+  const spec = await hydrateSpec({
+    app: async () => ({ name: 'A', description: '', uniquename: 'p_a', siteMap: app.siteMap }),
+    pages: async () => [], entities: async () => [], webResources: async () => [],
+    solution: async () => ({ uniqueName: 'S', publisherPrefix: 'p' }),
+    dashboards: async () => dashboards,
+  });
+  assert.strictEqual(spec.droppedSubareas, 2, 'both ambiguous subareas are counted as not round-tripped');
+  assert.deepStrictEqual(spec.appShell.areas[0].groups[0].subAreas.map((s) => s.dashboard), ['Pipeline', 'Pipeline']);
 });
 
 // A chart tile renders a visualization OVER a view. A deployed component that carries a ViewId but no
@@ -789,6 +834,7 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   const FORM_ID_RESTRICTED = '5111e0f2-0000-4000-8000-000000000007';
   const RULE_COPY_ID = '5111e0f2-0000-4000-8000-000000000008';
   const CLASSIC_ID = '5111e0f2-0000-4000-8000-000000000009';
+  const OPTIONSET_ID = '5111e0f2-0000-4000-8000-00000000000a';
   const calls = [];
   const sdk = {
     // A real table logical name is the ONLY thing queryRecords can take: it resolves its argument
@@ -818,6 +864,8 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
         ];
       }
       if (set === 'solution') return [{ solutionid: SOL_ID }];
+      // Component type 9 is OptionSet, whose objectid is the set's MetadataId (#586 item 5).
+      if (set === 'solutioncomponent' && /componenttype eq 9\b/.test(filter)) return [{ objectid: `{${OPTIONSET_ID.toUpperCase()}}` }];
       if (set === 'solutioncomponent') return [{ objectid: RULE_ID, componenttype: 29 }];
       if (set === 'workflow') {
         return [
@@ -837,7 +885,12 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
       get: async (url) => {
         calls.push({ get: url });
         if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
-          return { status: 200, headers: {}, body: { value: [{ Name: 'new_priority', Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }] } };
+          return { status: 200, headers: {}, body: { value: [
+            { Name: 'new_priority', MetadataId: OPTIONSET_ID, Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } },
+            // Unmanaged, but neither in the app's solution nor bound by anything it emits: org-wide
+            // metadata the app has nothing to do with, which must not be reported as the app's.
+            { Name: 'contoso_unrelated', MetadataId: '5111e0f2-0000-4000-8000-00000000000b', IsManaged: false },
+          ] } };
         }
         return { status: 404, headers: {}, body: {} };
       },
@@ -868,13 +921,14 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
     `only the type-1 category-2 definition may be listed; got ${JSON.stringify(inv.businessRules.map((r) => r.name))}`);
   assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('category') && c.opts.select.includes('type')),
     'category and type must be REQUESTED, or the filter decides on undefined');
-  assert.deepStrictEqual(inv.globalChoices[0], { name: 'new_priority', description: 'Shared priority choices.' });
+  assert.deepStrictEqual(inv.globalChoices, [{ name: 'new_priority', description: 'Shared priority choices.' }],
+    'only the set the app\'s solution owns — matched on its MetadataId despite the braces and casing');
+  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged,MetadataId'),
+    `global choices must be read through the RAW client (queryRecords cannot take a metadata path), selecting IsManaged so managed sets can be excluded and MetadataId so they can be joined to the solution; calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
   assert.ok(calls.some((c) => c.set === 'savedquery' && c.opts.select.includes('description')), 'view read selects description');
   assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
   assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
   assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
-  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged'),
-    `global choices must be read through the RAW client (queryRecords cannot take a metadata path), selecting IsManaged so managed sets can be excluded; calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
 });
 
 test('the global-choice inventory excludes MANAGED option sets but keeps an unknown flag', async () => {
@@ -885,8 +939,15 @@ test('the global-choice inventory excludes MANAGED option sets but keeps an unkn
   //
   // `$filter` cannot do this server-side: GlobalOptionSetDefinitions answers HTTP 405
   // (0x80060888) for `?$filter=IsManaged eq false`, which is why the filter is client-side.
+  // All three sets are OWNED by the app's solution, so the only thing deciding their fate here is the
+  // IsManaged filter under test — not the app scoping (#586 item 5) that runs alongside it.
+  const ids = { new_priority: 'a1a1a1a1-0000-4000-8000-000000000001', msdyn_solutionhealthruleseverity: 'a1a1a1a1-0000-4000-8000-000000000002', legacy_noflag: 'a1a1a1a1-0000-4000-8000-000000000003' };
   const sdk = {
-    queryRecords: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set === 'solution') return [{ solutionid: 'b2b2b2b2-0000-4000-8000-000000000001' }];
+      if (set === 'solutioncomponent' && /componenttype eq 9\b/.test((opts && opts.filter) || '')) return Object.values(ids).map((objectid) => ({ objectid }));
+      return [];
+    },
     dataverse: {
       get: async (url) => {
         if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
@@ -895,9 +956,9 @@ test('the global-choice inventory excludes MANAGED option sets but keeps an unkn
             headers: {},
             body: {
               value: [
-                { Name: 'new_priority', IsManaged: false },
-                { Name: 'msdyn_solutionhealthruleseverity', IsManaged: true },
-                { Name: 'legacy_noflag' }, // IsManaged absent — must be KEPT, not silently dropped
+                { Name: 'new_priority', MetadataId: ids.new_priority, IsManaged: false },
+                { Name: 'msdyn_solutionhealthruleseverity', MetadataId: ids.msdyn_solutionhealthruleseverity, IsManaged: true },
+                { Name: 'legacy_noflag', MetadataId: ids.legacy_noflag }, // IsManaged absent — must be KEPT, not silently dropped
               ],
             },
           };
@@ -915,6 +976,92 @@ test('the global-choice inventory excludes MANAGED option sets but keeps an unkn
     names.includes('legacy_noflag'),
     'an ABSENT IsManaged must keep the row — this inventory must not assert an absence it cannot substantiate'
   );
+});
+
+// #586 item 5: the option-set collection is ORG-wide, so an unscoped read reported an isolated app as
+// leaving behind global choices it never had. Scoped to the app: its solution's sets (component type
+// 9) plus the ones its emitted columns bind.
+test('the global-choice inventory is scoped to the app: its solution\'s sets and the ones its columns bind', async () => {
+  const OWNED = 'c3c3c3c3-0000-4000-8000-000000000001';
+  const sdkFor = ({ owned = [OWNED], throwOnSolution = false, gets = [] } = {}) => ({
+    queryRecords: async (set, opts) => {
+      if (set === 'solution') {
+        if (throwOnSolution) throw new Error('HTTP 403 on solution');
+        return [{ solutionid: 'd4d4d4d4-0000-4000-8000-000000000001' }];
+      }
+      if (set === 'solutioncomponent' && /componenttype eq 9\b/.test((opts && opts.filter) || '')) return owned.map((objectid) => ({ objectid }));
+      return [];
+    },
+    dataverse: {
+      get: async (url) => {
+        gets.push(url);
+        return { status: 200, headers: {}, body: { value: [
+          { Name: 'contoso_owned', MetadataId: OWNED, IsManaged: false },
+          { Name: 'contoso_bound', MetadataId: 'c3c3c3c3-0000-4000-8000-000000000002', IsManaged: false },
+          { Name: 'contoso_unrelated', MetadataId: 'c3c3c3c3-0000-4000-8000-000000000003', IsManaged: false },
+        ] } };
+      },
+    },
+  });
+  const names = (inv) => (inv.globalChoices || []).map((g) => g.name).sort();
+  const unknown = (inv) => (inv.incomplete || []).filter((i) => i.kind === 'globalChoices');
+
+  assert.deepStrictEqual(names(await readDescriptionInventory(sdkFor(), 'app-1', 'ContosoSolution', new Set(['Contoso_Bound']))),
+    ['contoso_bound', 'contoso_owned'], 'owned by the solution, or bound by an emitted column — never the unrelated one');
+
+  // Nothing in scope — no solution that could own a set, and nothing bound — is nothing of THIS app's
+  // to find: not an unknown, and not worth an org-wide read.
+  for (const [what, sln] of [['no solution', null], ['a built-in container', 'Default']]) {
+    const gets = [];
+    const inv = await readDescriptionInventory(sdkFor({ gets }), 'app-1', sln, new Set());
+    assert.deepStrictEqual(names(inv), [], what);
+    assert.deepStrictEqual(unknown(inv), [], what);
+    assert.deepStrictEqual(gets.filter((u) => /GlobalOptionSetDefinitions/.test(u)), [], `${what}: the org-wide read is skipped`);
+  }
+  const ownsNone = await readDescriptionInventory(sdkFor({ owned: [] }), 'app-1', 'ContosoSolution', new Set());
+  assert.deepStrictEqual([names(ownsNone), unknown(ownsNone)], [[], []], 'a solution that owns no set is a real "none"');
+
+  // A FAILED solution lookup is an unknown for every class it scopes — never an empty one.
+  const failed = await readDescriptionInventory(sdkFor({ throwOnSolution: true }), 'app-1', 'ContosoSolution', new Set(['contoso_bound']));
+  assert.deepStrictEqual((failed.incomplete || []).filter((i) => /403/.test(i.reason)).map((i) => i.kind).sort(), ['businessRules', 'globalChoices']);
+
+  // A FULL page of owned sets is indistinguishable from a truncated one: say so, and keep what was read.
+  const full = Array.from({ length: 1000 }, (_, i) => (i === 0 ? OWNED : `e5e5e5e5-0000-4000-8000-${String(i).padStart(12, '0')}`));
+  const truncated = await readDescriptionInventory(sdkFor({ owned: full }), 'app-1', 'ContosoSolution', new Set());
+  assert.deepStrictEqual(names(truncated), ['contoso_owned']);
+  assert.match((unknown(truncated)[0] || {}).reason || '', /truncated/);
+});
+
+// An app in several solutions (#587 item 9) is inventoried across EVERY candidate — each contains the
+// app — and a built-in container among them scopes nothing and is dropped. An Error scope means the
+// membership could not be read: unknown, never empty.
+test('the global-choice inventory unions the owned sets of every candidate solution', async () => {
+  const OWN = { SolA: 'f6f6f6f6-0000-4000-8000-00000000000a', SolB: 'f6f6f6f6-0000-4000-8000-00000000000b' };
+  const looked = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (set === 'solution') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        looked.push(m && m[1]);
+        return m && OWN[m[1]] ? [{ solutionid: `sol-${m[1]}` }] : [];
+      }
+      const own = filter.match(/_solutionid_value eq sol-(\w+) and componenttype eq 9/);
+      if (set === 'solutioncomponent' && own) return [{ objectid: OWN[own[1]] }];
+      return [];
+    },
+    dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [
+      { Name: 'set_a', MetadataId: OWN.SolA, IsManaged: false },
+      { Name: 'set_b', MetadataId: OWN.SolB, IsManaged: false },
+      { Name: 'set_elsewhere', MetadataId: 'f6f6f6f6-0000-4000-8000-00000000000c', IsManaged: false },
+    ] } }) },
+  };
+  const inv = await readDescriptionInventory(sdk, 'app-1', ['SolA', 'Default', 'SolB'], new Set());
+  assert.deepStrictEqual((inv.globalChoices || []).map((g) => g.name).sort(), ['set_a', 'set_b']);
+  assert.deepStrictEqual(looked, ['SolA', 'SolB'], 'the built-in Default container is never looked up');
+  const unread = await readDescriptionInventory(sdk, 'app-1', new Error('membership unreadable'), new Set(['set_a']));
+  assert.deepStrictEqual((unread.incomplete || []).map((i) => i.kind).filter((k) => k !== 'views' && k !== 'charts' && k !== 'forms').sort(), ['businessRules', 'globalChoices']);
+  assert.strictEqual(unread.globalChoices, undefined, 'nothing is claimed about a scope that could not be read');
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
@@ -1234,9 +1381,120 @@ test('recoverAppSolution returns null when the app has no solution components (c
   assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
 });
 
-test('recoverAppSolution never throws — a query error resolves to null (best-effort)', async () => {
-  const sdk = { queryRecords: async () => { throw new Error('boom'); } };
-  assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
+// A read failure is not "no solution": the caller has to be able to say it could not look.
+test('recoverAppSolution never throws — a failed membership read is reported as unreadable, not as "no solution"', async () => {
+  const sdk = { queryRecords: async () => { throw new Error('HTTP 403 on solutioncomponent'); } };
+  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app'), { unreadable: 'HTTP 403 on solutioncomponent' });
+});
+
+// #587 item 9: an app in several unmanaged solutions used to resolve to whichever row the server returned
+// first, from a capped first page — so two downloads of one app could name different solutions. That is
+// not cosmetic: a rebuild adds to the spec's solution and teardown deletes it.
+const twoSolutionSdk = (order, prefixOf) => ({
+  queryRecords: async (set, opts) => {
+    if (set === 'solutioncomponent') {
+      assert.strictEqual(opts.paginate, true, 'every membership page must be read');
+      assert.strictEqual(opts.top, undefined, 'a $top is a hard cap with no nextLink, so it cannot be combined with paging');
+      return order.map((id) => ({ _solutionid_value: id }));
+    }
+    if (set === 'solution') return order.map((id) => ({ solutionid: id, uniquename: { a: 'ContosoRelease', b: 'ContosoApp' }[id], ismanaged: false }));
+    return [];
+  },
+  getSolution: async (uniqueName) => {
+    const prefix = prefixOf(uniqueName);
+    if (prefix instanceof Error) throw prefix;
+    return { uniqueName, publisherPrefix: prefix };
+  },
+});
+
+test('recoverAppSolution never picks between several unmanaged solutions, whatever the row order (#587 item 9)', async () => {
+  for (const order of [['a', 'b'], ['b', 'a']]) {
+    // Not even the one whose publisher matches the app name's prefix: that is the unreliable app-name
+    // guess, and teardown deletes whatever solution the spec names.
+    assert.deepStrictEqual(await recoverAppSolution(twoSolutionSdk(order, (u) => (u === 'ContosoApp' ? 'contoso' : 'fabrikam')), 'app-1'),
+      { ambiguous: ['ContosoApp', 'ContosoRelease'] }, `row order ${order.join(',')}: the publishers disagree, so no prefix either`);
+    assert.deepStrictEqual(await recoverAppSolution(twoSolutionSdk(order, () => 'contoso'), 'app-1'),
+      { ambiguous: ['ContosoApp', 'ContosoRelease'], publisherPrefix: 'contoso' }, 'every candidate agrees on its publisher, so that prefix is still authoritative');
+    assert.deepStrictEqual(await recoverAppSolution(twoSolutionSdk(order, (u) => (u === 'ContosoApp' ? new Error('boom') : 'contoso')), 'app-1'),
+      { ambiguous: ['ContosoApp', 'ContosoRelease'] }, 'a failed read never counts as agreement');
+  }
+});
+
+// A mock SDK for runDownload over an app in the two solutions above. Solution `a` (ContosoRelease) holds a
+// business rule; `members` overrides the membership read (e.g. to make it fail).
+function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members } = {}) {
+  const base = twoSolutionSdk(['a', 'b'], () => 'contoso');
+  const RULE = '5111e0f2-0000-4000-8000-0000000000d9';
+  return {
+    fetchArtifact: async () => ({ name: 'Ambig', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-0000000000d3' }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-0000000000d3', uniquename: APP_UNIQUE }];
+      }
+      if (logical === 'appmodulecomponent') return [{ objectid: '5111e0f2-0000-4000-8000-0000000000d2', componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }];
+      if (logical === 'solutioncomponent' && filter === `objectid eq ${APP_ID}`) return members ? members() : base.queryRecords(logical, opts);
+      if (logical === 'solution' && /solutionid eq/.test(filter)) return base.queryRecords(logical, opts);
+      if (logical === 'solution') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        return m ? [{ solutionid: { ContosoRelease: 'a', ContosoApp: 'b' }[m[1]] }].filter((r) => r.solutionid) : [];
+      }
+      if (logical === 'solutioncomponent' && filter === '_solutionid_value eq a and componenttype eq 29') return [{ objectid: RULE, componenttype: 29 }];
+      if (logical === 'workflow') return [{ workflowid: RULE, name: 'Lock Closed', primaryentity: 'contoso_item', category: 2, type: 1 }];
+      return [];
+    },
+    getSolution: base.getSolution,
+    fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [] }),
+    dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) },
+  };
+}
+
+async function runCapturing(sdk, APP_ID, APP_UNIQUE) {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-amb-'));
+  const written = [];
+  const origWrite = process.stderr.write;
+  try {
+    process.stderr.write = (chunk) => { written.push(String(chunk)); return true; };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+    const res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    return { res, written };
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+}
+
+test('runDownload does not guess between unmanaged solutions, and still reports what they hold (#587 item 9)', async () => {
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000d1';
+  // The app name's prefix differs from the publishers' on purpose, so the prefix below provably comes
+  // from the agreeing publishers and not from the app-name guess.
+  const APP_UNIQUE = 'zz_ambig';
+  const { res, written } = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE), APP_ID, APP_UNIQUE);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.strictEqual(res.spec.solution.uniqueName, 'Default', 'no guess — and Default is the one solution a teardown never deletes');
+  assert.strictEqual(res.spec.solution.publisherPrefix, 'contoso', 'every candidate shares this publisher, so its prefix survives the ambiguity');
+  assert.deepStrictEqual(res.solutionCandidates, ['ContosoApp', 'ContosoRelease']);
+  assert.ok(written.some((w) => /ContosoApp, ContosoRelease/.test(w) && /solution\.uniqueName/.test(w)), written.join(''));
+  // Scoped by EVERY candidate: the rule in ContosoRelease is still reported. Scoping by the 'Default'
+  // placeholder instead said "no business rules" without having looked.
+  assert.deepStrictEqual(((res.spec.descriptionInventory || {}).businessRules || []).map((r) => r.name), ['Lock Closed']);
+  assert.ok((res.notRoundTripped && res.notRoundTripped.classes || []).some((c) => c.kind === 'businessRules' && c.count === 1), JSON.stringify(res.notRoundTripped));
+});
+
+test('runDownload reports an unreadable solution membership as unknown, not as "no solution"', async () => {
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000e1';
+  const APP_UNIQUE = 'contoso_unread';
+  const members = () => { throw new Error('HTTP 503 Service Unavailable'); };
+  const { res, written } = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { members }), APP_ID, APP_UNIQUE);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.strictEqual(res.spec.solution.uniqueName, 'Default');
+  assert.strictEqual(res.solutionCandidates, undefined);
+  assert.ok(written.some((w) => /could not be read \(HTTP 503/.test(w) && /solution\.uniqueName/.test(w)), written.join(''));
+  const unknown = ((res.notRoundTripped && res.notRoundTripped.incomplete) || []).map((i) => i.kind).sort();
+  assert.deepStrictEqual(unknown.filter((k) => k === 'businessRules' || k === 'globalChoices'), ['businessRules', 'globalChoices'], JSON.stringify(res.notRoundTripped));
 });
 
 // ── OOB-table round-trip fixes (ADO 6603392 / 6603390 / 6603388) ───────────────────────────────
@@ -2254,6 +2512,8 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
   const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000c1';
   const APP_UNIQUE = 'test_gcwiring';
   const SM_ID = '5111e0f2-0000-4000-8000-0000000000c2';
+  const SOL_ID = '5111e0f2-0000-4000-8000-0000000000c4';
+  const MID = { bound_set: '5111e0f2-0000-4000-8000-0000000000c5', orphan_set: '5111e0f2-0000-4000-8000-0000000000c6', unrelated_set: '5111e0f2-0000-4000-8000-0000000000c7' };
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gc-'));
   try {
     const sdk = {
@@ -2267,6 +2527,11 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
         }
         if (logical === 'appmodulecomponent') return [{ objectid: SM_ID, componenttype: 62 }];
         if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }];
+        // The app's solution is recoverable and OWNS `orphan_set` (#586 item 5); `bound_set` is only
+        // BOUND, so it can reach the inventory through the emitted column alone.
+        if (logical === 'solutioncomponent' && filter === `objectid eq ${APP_ID}`) return [{ _solutionid_value: SOL_ID }];
+        if (logical === 'solution') return [{ solutionid: SOL_ID, uniquename: 'GcSln', ismanaged: false }];
+        if (logical === 'solutioncomponent' && /componenttype eq 9\b/.test(filter)) return [{ objectid: MID.orphan_set }];
         return [];
       },
       fetchEntityMetadata: async (logical) => ({
@@ -2292,7 +2557,9 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
               { LogicalName: 'sys_theirs', AttributeTypeName: { Value: 'PicklistType' } },
             ] } };
           }
-          if (/GlobalOptionSetDefinitions/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+          if (/GlobalOptionSetDefinitions/.test(url)) {
+            return { status: 200, headers: {}, body: { value: Object.entries(MID).map(([Name, MetadataId]) => ({ Name, MetadataId, IsManaged: false })) } };
+          }
           return { status: 200, headers: {}, body: {} };
         },
       },
@@ -2304,6 +2571,19 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
       'a set bound only by a filtered SYSTEM attribute must not be declared — the build writes every declaration into the target org');
     const col = res.spec.entities[0].columns.find((c) => c.schemaName === 'contoso_mine');
     assert.strictEqual(col.globalChoice, 'bound_set');
+    // The report subtracts what the spec DECLARES. `orphan_set` is a raw candidate (its metadata was
+    // read) that is never declared, so subtracting the candidates hid it; and the org-wide
+    // `unrelated_set` is not the app's at all (#586 item 5).
+    const gc = ((res.notRoundTripped && res.notRoundTripped.orgScoped) || []).find((c) => c.kind === 'globalChoices');
+    assert.deepStrictEqual(gc && gc.names, ['orphan_set'], JSON.stringify(res.notRoundTripped));
+    // The inventory still carries the BOUND set (its description is kept) though the solution does
+    // not own it — which is only possible if the wiring hands the emitted columns' bindings through.
+    assert.deepStrictEqual(((res.spec.descriptionInventory || {}).globalChoices || []).map((g) => g.name).sort(), ['bound_set', 'orphan_set']);
+    // And tearing down this downloaded spec RETAINS the set it declares, as it retains the tables —
+    // an org-wide option set this download cannot prove the app created (#587 item 6).
+    const { planTeardown } = require('../lib/sdk-teardown.js');
+    const gcSteps = planTeardown(res.spec).filter((s) => s.kind === 'globalChoice');
+    assert.deepStrictEqual(gcSteps.map((s) => [s.target.name, s.target.existing]), [['bound_set', true]]);
     // And the emitted spec must still validate.
     assert.deepStrictEqual(validateAppSpec(res.spec, { profile: 'plan' }).errors, []);
   } finally {

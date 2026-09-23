@@ -53,7 +53,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -226,7 +226,24 @@ const KIND_HANDLERS = {
     // not-found failure means the row already cascaded away (not a leftover), so it is tolerated —
     // the same best-effort spirit as the step-level isNotFound handling in deleteStep.
     async del(sdk, item) {
-      const result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
+      let result;
+      try {
+        result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
+      } catch (err) {
+        // A rejection does not mean the app survived. The SDK's deleteAppCascade runs the remote
+        // cascade and THEN tidies its local workspace copy (`workspace.readArtifact`/`deleteArtifact`),
+        // so a failure in that local step arrives after the app is already gone — and reading it as
+        // "not deleted" abandoned every dependent step while reporting a deleted app as still there.
+        // The PLATFORM decides, not the exception: if the app row is gone the delete happened, so the
+        // dependents must go too (`appDeleted`, as for a cascade-cleanup failure below). It stays an
+        // error, because what failed after the delete cannot be known from here. A 404 is left to
+        // deleteStep, which asks the same question and treats a confirmed absence as a clean delete.
+        if (isNotFound(err) || !(await KIND_HANDLERS.app.confirmAbsent(sdk, item))) throw err;
+        const e = new Error(`app "${item.name}" was deleted, but the delete call then failed: ${errMsg(err)} — its dependents are torn down anyway`);
+        e.cause = err;
+        e.appDeleted = true;
+        throw e;
+      }
       const failures = (result && Array.isArray(result.failures) ? result.failures : []).filter(
         (f) => !isNotFound(f && f.error)
       );
@@ -327,8 +344,43 @@ const KIND_HANDLERS = {
   },
   dashboard: {
     async resolve(sdk, target) {
-      const items = await sdk.resolveArtifact('dashboard', { name: target.name });
-      return (items || []).map((x) => ({ id: x.id, name: x.name }));
+      const items = await findDashboardsByName(sdk, target.name);
+      if (!items.length) return [];
+      // Found by NAME, and Dataverse neither keeps names unique nor compares them exactly (it ignores
+      // case, most accents and trailing spaces), so a match may be another app's dashboard — deleting
+      // every match took those with it. The app's own are the ones its solution holds (every dashboard
+      // the build creates is added to it), so only those are deleted. With no real solution to ask —
+      // the built-in container a download may leave, or a named solution already gone — nothing proves
+      // a match is this app's, and none is deleted: an orphaned dashboard is recoverable; another app's
+      // deleted one is not. (runTeardown keeps the solution while an earlier step failed, so a re-run
+      // still has it to ask.)
+      let members;
+      try {
+        members = await dashboardsInSolution(sdk, target.solutionUniqueName, items.map((x) => x.id));
+      } catch (err) {
+        return { items: [], skipReason: `could not read solution '${target.solutionUniqueName}' to tell whether a dashboard named '${target.name}' is this app's (${errMsg(err)}), so none is deleted` };
+      }
+      const bare = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
+      if (members) {
+        const ours = items.filter((x) => members.has(bare(x.id)));
+        if (!ours.length) {
+          return { items: [], skipReason: `${items.length} dashboard(s) match the name '${target.name}', but none is in this app's solution '${target.solutionUniqueName}' — not created by this build, so none is deleted` };
+        }
+        return ours.map((x) => ({ id: x.id, name: x.name }));
+      }
+      // The spec names a real solution that no longer exists — a re-run after a completed teardown, or
+      // a build that never got that far. Every dashboard this build created was in it, so a name match
+      // now can only be proven to be somebody else's, not this app's.
+      if (target.solutionUniqueName && !isRestrictedSolution(target.solutionUniqueName)) {
+        return { items: [], skipReason: `solution '${target.solutionUniqueName}' no longer exists, so nothing proves a dashboard named '${target.name}' is this app's — none is deleted` };
+      }
+      // No real solution at all: a built-in container (Default — what a download leaves when it cannot
+      // tell which solution owns the app — Active or Basic) holds every unmanaged dashboard, so it
+      // proves nothing. A lone match used to be deleted here, and a re-run after this app's own was
+      // gone then deleted another app's namesake. Kept instead, as a download keeps a table whose
+      // ownership it cannot prove (`existing: true`).
+      const container = target.solutionUniqueName ? `this spec's solution '${target.solutionUniqueName}' is a built-in container that holds every dashboard` : 'this spec names no solution';
+      return { items: [], skipReason: `${container}, so nothing proves a dashboard named '${target.name}' is this app's — none is deleted; remove it in Maker if it is` };
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('dashboard', item.id),
   },
@@ -671,7 +723,12 @@ const KIND_HANDLERS = {
   },
   relationship: {
     // No pre-resolve: delete by schema name directly (like the table handler's synthetic item).
+    // A relationship flagged `existing: true` is RETAINED, on the same terms as a table (#587 item 6):
+    // this build cannot prove it created it — a download flags every relationship it recovers that way
+    // — and deleting one removes its lookup column, with that column's data, from a table that may
+    // itself be retained.
     async resolve(sdk, target) {
+      if (target.existing) return { items: [], skipReason: 'reused relationship (existing: true) — not created by this build' };
       return [{ id: target.schemaName, schemaName: target.schemaName }];
     },
     async del(sdk, item) {
@@ -775,7 +832,10 @@ const KIND_HANDLERS = {
   globalChoice: {
     // Deleted by name (the SDK has no id lister); a synthetic item drives deleteStep, mirroring
     // the table/relationship handlers. Runs AFTER tables so no column still binds the option set.
+    // Retained when flagged `existing: true` (#587 item 6): a global option set is org-wide and may be
+    // shared with other apps, and a download cannot prove this build created the ones it declares.
     async resolve(sdk, target) {
+      if (target.existing) return { items: [], skipReason: 'reused global choice (existing: true) — not created by this build' };
       return [{ id: target.name, name: target.name }];
     },
     del: (sdk, item) => sdk.deleteGlobalOptionSet(item.name),
@@ -841,7 +901,9 @@ function planTeardown(spec) {
   // original constraint that put roles early — a role holding a table's privileges can block that
   // table's delete — is still satisfied, because forms are themselves deleted well before tables.
   for (const d of spec.dashboards || []) {
-    steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name } });
+    // The solution travels with the step so the resolver can tell this app's dashboards from other
+    // apps' that share the name (see KIND_HANDLERS.dashboard).
+    steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name, solutionUniqueName: spec.solution && spec.solution.uniqueName } });
   }
   // Command bars: FAIL-CLOSED (data-loss guard, PR #229 review). Only tear down the bar for a table
   // THIS spec CREATES (existing !== true) — a brand-new table has no pre-existing foreign buttons, and
@@ -920,17 +982,27 @@ function planTeardown(spec) {
   }
   // Gap 6: before deleting relationships, reset each child entity's built-in default views to a
   // lookup-free column set — the build surfaces parent lookups there, and a lookup column on an
-  // un-deletable default view blocks the relationship's delete. Only entities that actually have a
-  // 1:N lookup need it. Pure: defaultViewColumns(...,{includeLookups:false}) computes the reset set.
+  // un-deletable default view blocks the relationship's delete. Pure: defaultViewColumns(...,
+  // {includeLookups:false}) computes the reset set.
+  //
+  // Only where there is something of THIS build's to undo (#587 item 6): the build enriched the
+  // table's default views (`enrichesDefaultViews` — the build's own predicate, so the two cannot
+  // disagree), AND a relationship teardown will actually delete puts its lookup on the table. The
+  // reset REPLACES a view's column set, so running it anywhere else rewrites views nobody asked it
+  // to touch — every retained table of a downloaded spec, whose relationships are retained too.
   for (const e of spec.entities || []) {
     const logical = e.schemaName.toLowerCase();
     if (!lookupColumnsFor(spec, logical).length) continue;
+    if (!enrichesDefaultViews(spec, e)) continue;
+    const deletesALookupHere = (spec.relationships || []).some((r) => r && r.type === 'OneToMany' && r.existing !== true
+      && String(r.referencing || '').toLowerCase() === logical);
+    if (!deletesALookupHere) continue;
     steps.push({ kind: 'resetDefaultViews', phase: 'views', label: `reset default views for ${logical} (drop parent lookups)`, target: { entityLogical: logical, cols: defaultViewColumns(spec, e, { includeLookups: false }) } });
   }
   const selfRefRelSteps = [];
   for (const r of spec.relationships || []) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
-    const step = { kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } };
+    const step = { kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema, existing: r.existing === true } };
     // A SELF-referencing 1:N (a hierarchy — `referenced === referencing`) is deleted AFTER its table
     // rather than before. Deleting it first fails:
     //   ✗ relationship lph_org_lph_org — HTTP 400 … cannot be deleted because it is referenced by
@@ -1063,7 +1135,7 @@ function planTeardown(spec) {
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.
   for (const gc of spec.globalChoices || []) {
-    steps.push({ kind: 'globalChoice', phase: 'global-choices', label: `global choice ${gc.name}`, target: { name: gc.name } });
+    steps.push({ kind: 'globalChoice', phase: 'global-choices', label: `global choice ${gc.name}`, target: { name: gc.name, existing: gc.existing === true } });
   }
   if (spec.solution) {
     steps.push({ kind: 'solution', phase: 'solution', label: `solution ${spec.solution.uniqueName}`, target: { uniqueName: spec.solution.uniqueName } });
@@ -1156,6 +1228,19 @@ async function runTeardown(spec, opts = {}, deps = {}) {
   for (const step of plan) {
     const myN = (n += 1);
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
+    // The solution goes last, and only once every step before it succeeded. It is how a re-run tells
+    // this app's dashboards from same-named ones elsewhere (the dashboard resolver): deleted after a
+    // failed step, it left the retry nothing to prove them by, so the retry kept them — and their
+    // tiles then blocked the chart and view deletes on every later run. Deleting it removes only the
+    // container (its components stay in the org), so keeping it costs nothing a re-run cannot finish.
+    // A built-in container (Default/Active/Basic) is exempt: it proves nothing and is never deleted —
+    // its own handler skips it below.
+    if (step.kind === 'solution' && result.errors.length && !isRestrictedSolution(step.target.uniqueName)) {
+      const why = `${step.label} (kept — ${result.errors.length} earlier step(s) failed, and a re-run needs this solution to tell the app's dashboards from same-named ones; it is deleted once the rest succeeds)`;
+      result.skipped.push(why);
+      emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
+      continue;
+    }
     const handler = KIND_HANDLERS[step.kind];
     try {
       let resolved;
@@ -1174,7 +1259,9 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       const skipReason = Array.isArray(resolved) ? null : resolved.skipReason;
       if (!items.length) {
         result.skipped.push(skipReason ? `${step.label} (${skipReason})` : step.label);
-        emit({ phase: step.phase, status: 'skip', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
+        // `skip` says WHICH kind of skip this is, for the summary: nothing there to delete, or a step
+        // that found the artifact and deliberately left it (every `skipReason` is a keep-on-purpose).
+        emit({ phase: step.phase, status: 'skip', skip: skipReason ? 'kept' : 'not-found', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
       const { deletedIds, skipped } = await deleteStep(sdk, handler, items);
@@ -1211,7 +1298,8 @@ async function runTeardown(spec, opts = {}, deps = {}) {
           const rest = plan[i];
           const why = `${rest.label} (not attempted — the app was not deleted)`;
           result.skipped.push(why);
-          emit({ phase: rest.phase, status: 'skip', label: why, n: i + 1, total });
+          // Never queried, so the environment says nothing about it: counted apart from "not found".
+          emit({ phase: rest.phase, status: 'skip', skip: 'not-attempted', label: why, n: i + 1, total });
         }
         break;
       }

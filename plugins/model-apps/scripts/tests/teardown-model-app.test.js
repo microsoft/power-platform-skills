@@ -136,6 +136,39 @@ test('deleteAppCascade rejection is reported as a failed app step and dependent 
   assert.ok(cap.logs.some((l) => /teardown finished with errors/.test(l)), 'the summary stays visibly non-clean');
 });
 
+// After an app-delete abort the summary read "0 deleted, 8 not found, 1 failed" — eight steps never even
+// QUERIED, reported as a fact about the environment. Likewise a step left in place on purpose (an
+// `existing: true` table, a system table) is not "not found". Each skip is counted as what it is, and the
+// counts must agree with the per-step lines the operator just read.
+test('the teardown summary counts not-found, kept and not-attempted steps apart', async () => {
+  const tally = (logs) => {
+    const steps = logs.filter((l) => /^\s+\[\d+\/\d+\] ⊘ /.test(l));
+    return {
+      notFound: steps.filter((l) => /\(not found\)$/.test(l)).length,
+      notAttempted: steps.filter((l) => /\(not attempted — /.test(l)).length,
+      kept: steps.filter((l) => !/\(not found\)$/.test(l) && !/\(not attempted — /.test(l)).length,
+    };
+  };
+  const summaryOf = (logs) => logs.find((l) => /teardown (complete|finished with errors) — /.test(l)) || '';
+
+  const aborted = presentSdk();
+  aborted.deleteAppCascade = async () => { throw new Error('delete not confirmed'); };
+  const a = logCapture();
+  await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk: aborted, log: a.log });
+  const at = tally(a.logs);
+  assert.ok(at.notAttempted > 0 && at.notFound === 0, JSON.stringify(at));
+  assert.match(summaryOf(a.logs), new RegExp(`0 deleted, 0 not found, 1 failed, ${at.notAttempted} not attempted \\(`), summaryOf(a.logs));
+
+  const retained = JSON.parse(JSON.stringify(desk));
+  for (const e of retained.entities) e.existing = true;
+  const k = logCapture();
+  await teardownModelApp(retained, { apply: true, allowDestructive: true }, { sdk: presentSdk(), log: k.log });
+  const kt = tally(k.logs);
+  assert.ok(kt.kept >= retained.entities.length, JSON.stringify(kt));
+  assert.match(summaryOf(k.logs), new RegExp(`, ${kt.notFound} not found, 0 failed, ${kt.kept} kept \\(`), summaryOf(k.logs));
+  assert.doesNotMatch(summaryOf(k.logs), /not attempted/, 'nothing was abandoned, so the clause is omitted');
+});
+
 test('deleteAppCascade resolved success:false reports orphaned generative-page children', async () => {
   const sdk = presentSdk();
   sdk.deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
@@ -520,5 +553,28 @@ test('teardown dry-run does NOT tombstone or delete the snapshot', async () => {
     await teardownModelApp(desk, { apply: false, workspaceDir: ws }, { sdk: presentSdk() });
     const disk = snapStore.readSnapshot(ws);
     assert.ok(disk && disk.eligible === true, 'a dry-run leaves the eligible snapshot untouched');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// #587 item 2: the tombstone is the fence, so a teardown that cannot write it must not mutate. It used
+// to warn and carry on — and if the app delete then failed after lower-level artifacts were gone, the
+// old ELIGIBLE snapshot survived describing a state that no longer existed.
+test('teardown --apply refuses to delete anything when the snapshot cannot be fenced', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    // Another live, young build holds the workspace lease, so the tombstone cannot be written.
+    const held = snapStore.acquireLease(ws, { now: () => Date.now(), pid: process.pid, processAlive: () => true, staleMs: snapStore.LEASE_STALE_MS });
+    assert.ok(held.ok);
+    const sdk = presentSdk();
+    const { log, logs } = logCapture();
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk, log });
+    snapStore.releaseLease(held);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((e) => /fence|tombstone/.test(e)), JSON.stringify(r.errors));
+    assert.deepStrictEqual(sdk.calls.filter((c) => /^delete/.test(c.method)), [], 'no delete may run before the fence is in place');
+    assert.ok(logs.some((m) => /nothing was deleted/i.test(m)), logs.join('\n'));
+    const disk = snapStore.readSnapshot(ws);
+    assert.ok(disk && disk.eligible === true && !snap.isTombstoned(disk), 'the untouched snapshot still describes the untouched app');
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });

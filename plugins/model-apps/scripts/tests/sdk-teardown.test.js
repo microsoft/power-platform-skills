@@ -200,6 +200,19 @@ function mockSdk(state = {}) {
   const queryRecords = async (entitySet, opts) => {
     calls.push({ method: 'queryRecords', entitySet });
     const filter = (opts && opts.filter) || '';
+    // The app's solution, and which dashboards it holds (componenttype 60). Every dashboard the build
+    // creates is added to the app's solution, so each seeded dashboard is a member unless listed in
+    // state.foreignDashboards.
+    if (entitySet === 'solution') {
+      const m = filter.match(/uniquename eq '([^']*)'/);
+      const row = m && db.solutions[m[1]];
+      return row ? [{ solutionid: row.solutionid }] : [];
+    }
+    if (entitySet === 'solutioncomponent' && /componenttype eq 60/.test(filter)) {
+      return Object.values(db.dashboards).map((d) => d.formid)
+        .filter((id) => filter.includes(`objectid eq ${String(id).toLowerCase()}`) && !(state.foreignDashboards || []).includes(id))
+        .map((objectid) => ({ objectid }));
+    }
     if (entitySet === 'systemform') {
       const idm = filter.match(/formid eq (\S+)/);
       if (idm) {
@@ -649,7 +662,10 @@ test('runTeardown reports ok=false and records the app step when a deleteAppCasc
   assert.strictEqual(r.ok, false, 'a cascade child-cleanup failure makes the whole run not-ok');
   assert.ok(r.errors.some((e) => /app module "A"/.test(e.step || '') && /genPage gp-1: locked/.test(e.message)), 'the app step error names the orphaned genPage');
   assert.ok(events.some((e) => e.phase === 'app' && e.status === 'error'), 'the app step emits an error status');
-  assert.deepStrictEqual(solutionDeletes, ['sol-1'], 'best-effort: the solution step still ran after the app failure');
+  // Best-effort: the run carried on past the app failure to the solution step — which, after a failed
+  // step, keeps the solution so a re-run can still tell the app's dashboards apart (see below).
+  assert.ok(events.some((e) => e.phase === 'solution' && e.status === 'skip' && e.skip === 'kept'), 'the solution step was reached and deliberately kept');
+  assert.deepStrictEqual(solutionDeletes, [], 'the solution survives for the re-run');
 });
 
 // A main form the build promoted to the entity default (Gap 2) can't be deleted until a stock form
@@ -702,6 +718,183 @@ test('planTeardown adds a resetDefaultViews step only for entities that have a 1
   };
   const resets = planTeardown(spec).filter((s) => s.kind === 'resetDefaultViews').map((s) => s.target.entityLogical);
   assert.deepStrictEqual(resets, ['new_task'], 'only the child (referencing) entity needs its default views reset');
+});
+
+// The dashboard lookup is by NAME, so it can return other apps' dashboards. Deleting every match took
+// those with it. Ownership now comes from the app's solution: only the dashboards it holds are deleted,
+// and with no real solution to ask none is.
+test('teardown deletes only the dashboards the app\'s solution holds, never another app\'s namesake', async () => {
+  const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [], dashboards: [{ name: 'Operations', tiles: [] }] };
+  const run = async (ids, { inSolution, solutionExists = true, failRead = false, sln, noSolution = false } = {}) => {
+    const deleted = [];
+    const events = [];
+    const sdk = {
+      resolveArtifact: async (kind) => (kind === 'dashboard' ? ids.map((id) => ({ id, name: 'Operations' })) : []),
+      deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
+      deleteAppCascade: async () => {},
+      queryRecords: async (set, opts) => {
+        if (failRead && set === 'solutioncomponent') throw new Error('HTTP 503');
+        if (set === 'solution') return solutionExists ? [{ solutionid: 'sol-1' }] : [];
+        if (set === 'solutioncomponent') return (inSolution || []).filter((id) => opts.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        return [];
+      },
+    };
+    const which = noSolution ? { app: spec.app, entities: [], dashboards: spec.dashboards } : sln ? { ...spec, solution: { ...spec.solution, uniqueName: sln } } : spec;
+    await runTeardown(which, { apply: true }, { sdk, emit: (e) => events.push(e) });
+    const skip = events.find((e) => e.status === 'skip' && /^dashboard "Operations"/.test(e.label));
+    return { deleted, skip };
+  };
+  assert.deepStrictEqual((await run(['d-foreign', 'd-ours'], { inSolution: ['d-ours'] })).deleted, ['d-ours'], 'the namesake outside the solution survives');
+  assert.deepStrictEqual((await run(['d-1', 'd-2'], { inSolution: ['d-1', 'd-2'] })).deleted, ['d-1', 'd-2'], 'every one the solution holds is this app\'s');
+  const foreign = await run(['d-foreign'], { inSolution: [] });
+  assert.deepStrictEqual(foreign.deleted, [], 'a lone namesake the solution does not hold is not this build\'s');
+  assert.ok(foreign.skip && /none is in this app's solution 'ContosoSln'/.test(foreign.skip.label) && foreign.skip.skip === 'kept', JSON.stringify(foreign.skip));
+  const unreadable = await run(['d-ours'], { inSolution: ['d-ours'], failRead: true });
+  assert.deepStrictEqual(unreadable.deleted, [], 'an unreadable solution proves nothing, so nothing is deleted');
+  assert.match(unreadable.skip.label, /could not read solution 'ContosoSln'.*HTTP 503/);
+  // The named solution is gone (e.g. a re-run after a completed teardown): a lone namesake can only
+  // be somebody else's now, so it is kept — the name posture would have deleted it.
+  const gone = await run(['d-foreign'], { solutionExists: false });
+  assert.deepStrictEqual(gone.deleted, []);
+  assert.match(gone.skip.label, /solution 'ContosoSln' no longer exists/);
+  // No real solution to ask — the built-in container a download may leave in the spec holds every
+  // dashboard, so it proves nothing. A lone match used to be deleted here, and a re-run after this
+  // app's own was gone then deleted another app's namesake; now none is deleted, single or several.
+  const lone = await run(['d-1'], { sln: 'Default' });
+  assert.deepStrictEqual(lone.deleted, [], 'a lone match may be another app\'s namesake');
+  assert.ok(lone.skip && lone.skip.skip === 'kept' && /solution 'Default' is a built-in container that holds every dashboard/.test(lone.skip.label), JSON.stringify(lone.skip));
+  assert.deepStrictEqual((await run(['d-1', 'd-2'], { sln: 'Default' })).deleted, [], 'several cannot be told apart either');
+  const unnamed = await run(['d-1'], { noSolution: true });
+  assert.deepStrictEqual(unnamed.deleted, []);
+  assert.match(unnamed.skip.label, /this spec names no solution, so nothing proves a dashboard named 'Operations' is this app's/);
+});
+
+// The solution is what a re-run asks to tell this app's dashboards from same-named ones. Deleted after
+// a failed step, it left the retry nothing to prove them by: the retry kept them for good, and their
+// tiles then blocked the chart and view deletes on every later run. So a teardown with a failed step
+// keeps it; a clean one still deletes it.
+test('teardown keeps the solution while an earlier step failed, so a re-run can still tell which dashboards are the app\'s', async () => {
+  const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [], dashboards: [{ name: 'Operations', tiles: [] }] };
+  const run = async (failDashboard) => {
+    const calls = [];
+    const events = [];
+    const sdk = {
+      resolveArtifact: async (kind) => (kind === 'dashboard' ? [{ id: 'd-ours', name: 'Operations' }] : kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : []),
+      deleteRemoteArtifact: async (type, id) => { calls.push(`delete ${type} ${id}`); if (failDashboard) throw new Error('HTTP 429 Too Many Requests'); },
+      deleteAppCascade: async () => {},
+      deleteSolution: async (id) => { calls.push(`delete solution ${id}`); },
+      queryRecords: async (set, opts) => {
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') return opts.filter.includes('objectid eq d-ours') ? [{ objectid: 'd-ours' }] : [];
+        return [];
+      },
+    };
+    const r = await runTeardown(spec, { apply: true }, { sdk, emit: (e) => events.push(e) });
+    return { r, calls, solutionSkip: events.find((e) => e.status === 'skip' && /^solution ContosoSln/.test(e.label)) };
+  };
+  const failed = await run(true);
+  assert.strictEqual(failed.r.ok, false);
+  assert.ok(!failed.calls.includes('delete solution sol-1'), 'the solution survives a failed step');
+  assert.ok(failed.solutionSkip && failed.solutionSkip.skip === 'kept' && /kept — 1 earlier step\(s\) failed/.test(failed.solutionSkip.label), JSON.stringify(failed.solutionSkip));
+  const clean = await run(false);
+  assert.strictEqual(clean.r.ok, true, JSON.stringify(clean.r.errors));
+  assert.ok(clean.calls.includes('delete solution sol-1'), 'a clean teardown still deletes it');
+});
+
+// A built-in container is never deleted and proves nothing about ownership, so after a failed step it
+// keeps its own skip reason — "kept for the re-run" would promise evidence it cannot give.
+test('a built-in solution keeps its own skip after a failed step, never the "kept for a re-run" one', async () => {
+  const sdk = mockSdk({ webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } }, tables: ['new_customer', 'new_ticket', 'new_comment'] });
+  sdk.deleteWebResource = async () => { throw new Error('boom'); };
+  const spec = fullSpec();
+  spec.solution = { ...spec.solution, uniqueName: 'Default' };
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.skipped.includes('solution Default (restricted system solution)'), JSON.stringify(r.skipped));
+  assert.ok(!r.skipped.some((s) => /re-run needs this solution/.test(s)));
+});
+
+// The name lookup reads one page of ten; the app's own dashboard can sort beyond it (see
+// findDashboardsByName). Teardown must still find — and delete — it.
+test('teardown deletes the app\'s dashboard even when it sorts beyond the first lookup page', async () => {
+  const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [], dashboards: [{ name: 'Operations', tiles: [] }] };
+  const foreign = Array.from({ length: 10 }, (_, i) => ({ id: `d-foreign-${i}`, name: 'Operations' }));
+  const deleted = [];
+  const sdk = {
+    resolveArtifact: async (kind) => (kind === 'dashboard' ? foreign : []),
+    deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
+    deleteAppCascade: async () => {},
+    queryRecords: async (set, opts) => {
+      if (set === 'systemform') return [...foreign, { id: 'd-ours' }].map((d) => ({ formid: d.id, name: 'Operations' }));
+      if (set === 'solution') return [{ solutionid: 'sol-1' }];
+      if (set === 'solutioncomponent') return opts.filter.includes('objectid eq d-ours') ? [{ objectid: 'd-ours' }] : [];
+      return [];
+    },
+  };
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.deepStrictEqual(deleted, ['d-ours'], JSON.stringify(r.skipped));
+});
+
+// #587 item 6: `existing: true` is ONE ownership policy across tables, relationships and global
+// choices. A download flags everything it recovers that way because it cannot prove this build created
+// it — but only tables were protected, so tearing down a downloaded spec still deleted their
+// relationships (removing the lookup column, and its data, from a table teardown RETAINS) and their
+// possibly-shared global option sets.
+const ownershipSpec = (flag) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+  entities: [
+    { schemaName: 'new_project', ...(flag ? { existing: true } : {}), primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_stage', displayName: 'Stage', type: 'Choice', globalChoice: 'new_stage' }] },
+    { schemaName: 'new_task', ...(flag ? { existing: true } : {}), primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_due', displayName: 'Due', type: 'DateTime' }] },
+  ],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId' }, ...(flag ? { existing: true } : {}) },
+    { type: 'ManyToMany', entity1: 'new_project', entity2: 'new_task', ...(flag ? { existing: true } : {}) },
+  ],
+  globalChoices: [{ name: 'new_stage', options: ['Plan', 'Build'], ...(flag ? { existing: true } : {}) }],
+});
+const ownershipRun = async (flag) => {
+  const sdk = mockSdk({ tables: ['new_project', 'new_task'], relationships: ['new_project_new_task', 'new_new_project_new_task'], globalchoices: ['new_stage'] });
+  sdk.enrichDefaultViews = async (logical) => { sdk.calls.push({ method: 'enrichDefaultViews', logical }); return { updated: [] }; };
+  const events = [];
+  await runTeardown(ownershipSpec(flag), { apply: true }, { sdk, emit: (e) => events.push(e) });
+  return { sdk, events };
+};
+
+test('teardown retains relationships and global choices flagged existing, exactly like tables (#587 item 6)', async () => {
+  const { sdk, events } = await ownershipRun(true);
+  const writes = sdk.calls.filter((c) => /^(delete|enrich)/.test(c.method)).map((c) => c.method);
+  assert.deepStrictEqual(writes.filter((m) => m !== 'deleteAppCascade' && m !== 'deleteSolution'), [],
+    'nothing the download recovered may be deleted — nor may a retained table\'s default views be rewritten');
+  for (const prefix of ['relationship ', 'global choice ', 'table ']) {
+    // Events carry the skip reason inside the label: `<label> (<reason>)`.
+    const skips = events.filter((e) => e.status === 'skip' && String(e.label).startsWith(prefix));
+    assert.ok(skips.length && skips.every((e) => /existing: true/.test(e.label)), `${prefix.trim()}: ${JSON.stringify(skips)}`);
+  }
+});
+
+test('control: an author-built spec still tears down its own relationships and global choices (#587 item 6)', async () => {
+  const { sdk } = await ownershipRun(false);
+  const methods = sdk.calls.map((c) => c.method);
+  assert.strictEqual(methods.filter((m) => m === 'deleteRelationship').length, 2, 'both relationships this build created are deleted');
+  assert.ok(methods.includes('deleteGlobalOptionSet'), 'and its global choice');
+  assert.ok(methods.includes('enrichDefaultViews'), 'and the child\'s default views are still reset first');
+});
+
+// The reset exists only to undo lookups the BUILD surfaced on a table's default views, ahead of that
+// relationship's delete. So it follows the build's own enrichment decision (enrichesDefaultViews) and
+// needs a relationship that will actually be deleted — otherwise it rewrites views nobody asked it to.
+test('resetDefaultViews is planned only where the build enriched the views AND a deleted relationship puts a lookup there', () => {
+  const resetsFor = (mutate) => {
+    const s = ownershipSpec(false);
+    mutate(s);
+    return planTeardown(s).filter((st) => st.kind === 'resetDefaultViews').map((st) => st.target.entityLogical);
+  };
+  assert.deepStrictEqual(resetsFor(() => {}), ['new_task'], 'baseline: the child of a relationship this build deletes');
+  assert.deepStrictEqual(resetsFor((s) => { s.entities[1].existing = true; }), [], 'a retained table the build never enriched is left alone');
+  assert.deepStrictEqual(resetsFor((s) => { s.entities[1].existing = true; s.entities[1].enrichDefaultViews = true; }), ['new_task'],
+    'unless the author opted it into enrichment — then the build did surface the lookup');
+  assert.deepStrictEqual(resetsFor((s) => { s.entities[1].enrichDefaultViews = false; }), [], 'enrichment switched off: nothing to undo');
+  assert.deepStrictEqual(resetsFor((s) => { s.relationships[0].existing = true; }), [], 'its relationship is retained: no delete to unblock');
 });
 
 // --- dry-run ----------------------------------------------------------------------------
@@ -873,9 +1066,11 @@ test('a failed step does not strand the rest (best-effort continue)', async () =
   const r = await runTeardown(fullSpec(), { apply: true }, { sdk });
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /web resource/.test(e.step)));
-  // tables + solution after the failing step were still torn down
+  // tables after the failing step were still torn down
   assert.strictEqual(sdk.db.tables.size, 0);
-  assert.deepStrictEqual(sdk.db.solutions, {});
+  // ...but not the solution container: a re-run needs it to tell the app's dashboards from namesakes
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['ContosoSupportDesk']);
+  assert.ok(r.skipped.some((s) => /^solution ContosoSupportDesk \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(r.skipped));
 });
 
 test('forms without names are skipped (cannot be resolved)', () => {
@@ -1788,9 +1983,62 @@ test('#587 a cascade-cleanup failure still lets teardown continue — the app it
   assert.strictEqual(base.db.tables.size, 0,
     'the app is gone, so its dependents must still be torn down rather than left orphaned');
 });
-// is not a GUID skips the association query entirely — and that is deliberate: FORM_GUID_RE is an
-// injection guard on the OData filter, not an existence check. Every Dataverse `roleid` is an
-// astra HIGH — the abort added above is DOWNSTREAM of deleteStep, which treats any not-found error
+
+// The SDK's deleteAppCascade deletes remotely and THEN tidies its local workspace copy of the app, so a
+// failure in that second, local step rejects the whole call after the app is already gone. Teardown read
+// the rejection as "the app was not deleted" and abandoned every dependent step — leaving them all behind
+// while reporting the app as still there.
+test('an app delete that fails AFTER the app is gone still tears down its dependents, and says so', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      await base.deleteAppCascade(id, unique); // the remote delete really happened
+      const err = new Error("EPERM: operation not permitted, unlink 'workspace\\apps\\app-1.json'");
+      err.code = 'EPERM';
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'something did fail, and the run must say so');
+  assert.ok(r.errors.some((e) => /app "Support Desk" was deleted, but the delete call then failed: EPERM/.test(e.message)), JSON.stringify(r.errors));
+  assert.strictEqual(base.db.tables.size, 0, 'the app is gone, so its dependents are torn down');
+  assert.ok(!r.skipped.some((s) => /not attempted/.test(s)), 'nothing may be reported as abandoned for an app that was deleted');
+});
+
+// Control for the rule above: a 404 whose app is CONFIRMED gone is a clean delete, handled (and
+// verified) by deleteStep — it must not be turned into the "failed after the delete" error.
+test('a 404 from an app delete whose app is confirmed gone is still a clean delete', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      await base.deleteAppCascade(id, unique);
+      const err = new Error('appmodule not found');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(r.errors, [], 'a confirmed-absent 404 is not a failure');
+  assert.strictEqual(base.db.tables.size, 0);
+  // The resolve, plus ONE confirming read by deleteStep — the handler leaves a 404 to it rather than
+  // asking the platform the same question twice.
+  assert.strictEqual(base.calls.filter((c) => c.method === 'resolveArtifact' && c.kind === 'app').length, 2);
+});
+
+// A 404 is not proof either. The abort added above is DOWNSTREAM of deleteStep, which treats any not-found error
 // as a successful delete. But the SDK also throws 404 when an ATOMIC app+sitemap changeset is
 // ROLLED BACK by the platform — the app is still there. That was recorded as a phantom delete, the
 // abort never fired, and dependent teardown went on to strip a live app: `ok: true`, no errors.

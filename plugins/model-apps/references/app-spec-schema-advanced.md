@@ -17,6 +17,10 @@ and ~24% of it described features most apps never use.
 [ { "name": "new_priority", "displayName": "Priority", "options": ["Low","Medium","High"] } ]
 ```
 Reference from a column via `"globalChoice": "new_priority"` (built before the columns that bind it).
+- **`existing`** *(optional, download-emitted)* — `true` on a set **download** declared: an option set
+  is org-wide and may be shared with other apps, and a download cannot prove this app created it. The
+  build still creates it if missing (reuses it if present); teardown **retains** it, exactly as it
+  retains an `existing: true` table.
 
 ## webResources[] (optional — client-side logic)
 
@@ -231,6 +235,23 @@ works through.
 - A **chart** tile needs both a declared `chart` (the visualization) **and** a declared `view` (its
   data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
   defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
+- **View and chart names are unique only per table.** When the tile's view name is declared on more
+  than one table, set the tile's `entity` to say which; the chart must be declared on that **same**
+  table. Both are rejected at the spec gate otherwise — a same-named chart on another table would
+  plot a different table's data over this view.
+- **Dashboard names must be unique**, compared the way Dataverse compares them: ignoring case,
+  accents, full/half width and trailing spaces (`Overview`, `OVERVIEW `, `Café`/`Cafe`) — but not a
+  leading space, and not a vowel sign in scripts where it is a letter. A dashboard has no other
+  identity in the spec — a sitemap subarea names it and a rebuild finds it by name — so two that
+  compare equal would collapse into one. A download **withholds** such a pair and says why, rather
+  than emit a spec that cannot be rebuilt: rename one in Maker and download again. Because a name can
+  also match **another app's** dashboard, ownership comes from the app's solution, which holds every
+  dashboard the build creates (one the build cannot add to it is removed again, or named in the halt
+  when that fails too). When several in the
+  environment match, the build reuses — and verify checks, its sitemap entry included — the one the
+  solution holds, and halts if that does not single one out; a single match is used as it is. Teardown
+  deletes only the ones the solution holds, never a namesake, and none when the spec has no real
+  solution to ask (`Default`) or that solution is already gone.
 - Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.

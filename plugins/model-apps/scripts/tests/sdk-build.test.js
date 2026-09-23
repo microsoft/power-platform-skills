@@ -97,6 +97,11 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      // Which dashboards the app's solution holds (componenttype 60 = systemform) — the ownership
+      // evidence the build uses to pick among several same-named dashboards.
+      if (e === 'solutioncomponent' && /componenttype eq 60/.test(filter)) {
+        return (opts.dashboardsInSolution || []).filter((id) => filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+      }
       // The chart description reconcile (#496) reads the deployed value before deciding to write, so
       // it must only PATCH when the spec's description actually differs.
       if (e === 'savedqueryvisualization') {
@@ -182,7 +187,9 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'resolveArtifact', args: [kind, identity] });
       const out = [];
       if (kind === 'dashboard') {
-        for (const n of opts.existingDashboards || []) out.push({ id: `dashboard-existing-${n}`, name: n });
+        // An entry is a name (id derived from it) or `{ id, name }` when a test needs same-named
+        // dashboards with DIFFERENT ids.
+        for (const n of opts.existingDashboards || []) out.push(typeof n === 'string' ? { id: `dashboard-existing-${n}`, name: n } : n);
         for (const k of Object.keys(store)) if (k.startsWith('dashboard:') && store[k].name) out.push({ id: store[k].id, name: store[k].name });
         return identity && identity.name != null ? out.filter((o) => o.name === identity.name) : out;
       }
@@ -1215,6 +1222,79 @@ test('dashboards: an existing dashboard is reused (no duplicate) and reported in
   assert.ok(find(calls, 'resolveArtifact').some((c) => c.args[0] === 'dashboard' && c.args[1].name === 'Ops'), 'discovered via resolveArtifact');
 });
 
+// Names are neither unique nor compared exactly, so the lookup can return several dashboards. Reusing
+// the first one returned silently bound the app to an arbitrary one — possibly another app's. The app's
+// own is the one its solution holds; when that does not single one out the build halts, creating nothing.
+test('dashboards: several dashboards matching the name halt the build unless the solution singles one out', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const halts = [
+    ['no solution to ask', { existingDashboards: ['Ops', 'Ops'] }, /cannot say which is its own/],
+    ['none in the solution', { existingDashboards: [{ id: 'd-1', name: 'Ops' }, { id: 'd-2', name: 'Ops' }], solutionExists: true, dashboardsInSolution: [] }, /none of them is in this app's solution/],
+    ['two in the solution', { existingDashboards: [{ id: 'd-1', name: 'Ops' }, { id: 'd-2', name: 'Ops' }], solutionExists: true, dashboardsInSolution: ['d-1', 'd-2'] }, /2 of them are in this app's solution/],
+  ];
+  for (const [what, opts, why] of halts) {
+    const { sdk, calls } = mockSdk(opts);
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), (err) => /2 dashboards in this environment match the name 'Ops'/.test(err.message) && why.test(err.message) && /Rename or delete the extra ones/.test(err.message), what);
+    assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), `${what}: no dashboard is created beside them`);
+  }
+});
+
+test('dashboards: among several same-named dashboards the build reuses the one its solution holds', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  // The foreign one is returned FIRST, so the old "reuse existing[0]" would have adopted it.
+  const { sdk, calls } = mockSdk({ existingDashboards: [{ id: 'd-foreign', name: 'Ops' }, { id: 'd-ours', name: 'Ops' }], solutionExists: true, dashboardsInSolution: ['d-ours'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.strictEqual(result.created.dashboards.Ops, 'd-ours');
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'reused, not duplicated');
+});
+
+// The vendored name lookup reads one page of ten, in no defined order, so with more matches the app's
+// own dashboard can sort beyond it — and reuse, verify and teardown would all decide without it. A full
+// page is re-read in full, and membership is then asked in bounded chunks.
+test('dashboards: a full lookup page is re-read in full, so the app\'s own cannot hide beyond it', async () => {
+  const { findDashboardsByName, dashboardsInSolution } = require('../lib/sdk-build.js');
+  const foreign = Array.from({ length: 10 }, (_, i) => ({ id: `d-foreign-${i}`, name: 'Ops' }));
+  const all = [...foreign, { id: 'd-ours', name: 'Ops' }];
+  const asRows = () => all.map((d) => ({ formid: d.id, name: d.name }));
+  const reads = [];
+  const sdkWith = (page) => ({
+    resolveArtifact: async () => page,
+    queryRecords: async (set, q) => { reads.push(q); return set === 'systemform' ? asRows() : []; },
+  });
+  assert.deepStrictEqual(await findDashboardsByName(sdkWith(foreign.slice(0, 3)), 'Ops'), foreign.slice(0, 3), 'a short page is the whole set');
+  assert.strictEqual(reads.length, 0, 'and needs no second read');
+  assert.deepStrictEqual((await findDashboardsByName(sdkWith(foreign), 'Ops')).map((d) => d.id), all.map((d) => d.id), 'a full page is re-read in full');
+  assert.strictEqual(reads.length, 1);
+  assert.strictEqual(reads[0].paginate, true);
+  assert.strictEqual(reads[0].top, undefined, 'uncapped');
+  assert.strictEqual(reads[0].filter, "type eq 0 and name eq 'Ops'");
+  reads.length = 0;
+  await findDashboardsByName({ queryRecords: sdkWith([]).queryRecords }, 'Ops');
+  assert.strictEqual(reads.length, 1, 'a reader without resolveArtifact (verify\'s) always reads in full');
+
+  const ids = Array.from({ length: 30 }, (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const chunks = [];
+  const members = await dashboardsInSolution({
+    queryRecords: async (set, q) => {
+      if (set === 'solution') return [{ solutionid: 'sol-1' }];
+      chunks.push((q.filter.match(/objectid eq /g) || []).length);
+      return [ids[3], ids[27]].filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+    },
+  }, 'ContosoSln', ids);
+  assert.deepStrictEqual(chunks, [25, 5], 'membership is asked in bounded chunks');
+  assert.deepStrictEqual([...members].sort(), [ids[3], ids[27]].sort(), 'and members from every chunk are kept');
+
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk } = mockSdk({ existingDashboards: foreign, solutionExists: true, dashboardsInSolution: ['d-ours'] });
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (set, q) => (set === 'systemform' && q && q.paginate ? asRows() : query(set, q));
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.strictEqual(result.created.dashboards.Ops, 'd-ours', 'the build reuses its own from beyond the first page');
+});
+
 test('dashboards: a new dashboard is still created + pushed + added to the solution', async () => {
   const spec = makeSpec();
   spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
@@ -1223,6 +1303,59 @@ test('dashboards: a new dashboard is still created + pushed + added to the solut
   assert.ok(find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard created when absent');
   assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard pushed');
   assert.ok(result.created.dashboards.Ops, 'created id recorded');
+});
+
+// Solution membership is the only later proof that a dashboard is this app's. A push that landed but
+// whose add-to-solution then failed left the dashboard outside it for good: a rebuild reused it as a
+// lone name match without ever adding it, and teardown kept it while its tiles blocked the chart and
+// view deletes. The build now undoes the push, and says exactly what is left when it cannot. Whether
+// the halt is auto-retried follows what is left: nothing (safe — the cause's status is kept) or the
+// dashboard (never — a retry would reuse it outside the solution, whatever transient text it quotes).
+test('dashboards: a dashboard the build cannot add to its solution is removed again, never left outside it', async () => {
+  const { isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const attempt = async ({ cause, undoFails = false, rowRemains = true, rowUnreadable = false }) => {
+    const { sdk, calls } = mockSdk();
+    const add = sdk.addSolutionComponent;
+    // Forms are component type 60 too, so fail only the add for the dashboard that was just pushed.
+    sdk.addSolutionComponent = async (o) => {
+      const last = find(calls, 'pushArtifact').at(-1);
+      if (o.componentType === 60 && last && last.args[0] === 'dashboard' && last.args[1] === o.componentId) throw cause;
+      return add(o);
+    };
+    sdk.deleteRemoteArtifact = async (t, id) => { calls.push({ name: 'deleteRemoteArtifact', args: [t, id] }); if (undoFails) throw new Error('EPERM: operation not permitted, unlink'); };
+    const query = sdk.queryRecords;
+    sdk.queryRecords = async (set, q) => {
+      if (set === 'systemform' && /^formid eq /.test((q && q.filter) || '')) {
+        if (rowUnreadable) throw new Error('HTTP 500');
+        return rowRemains ? [{ formid: q.filter.slice('formid eq '.length) }] : [];
+      }
+      return query(set, q);
+    };
+    let error = null;
+    await runSdkBuild(spec, { sdk, apply: true }).catch((e) => { error = e; });
+    const pushed = find(calls, 'pushArtifact').find((c) => c.args[0] === 'dashboard');
+    return { error, pushed, undo: find(calls, 'deleteRemoteArtifact') };
+  };
+  const busy = Object.assign(new Error('HTTP 503 Service Unavailable'), { statusCode: 503 });
+  const undone = await attempt({ cause: busy });
+  assert.ok(undone.error, 'the build halts');
+  assert.match(undone.error.message, /dashboard "Ops" could not be added to solution '[^']+' \(HTTP 503 Service Unavailable\), so it was removed again — re-run to create it afresh/);
+  assert.deepStrictEqual(undone.undo.map((c) => c.args), [['dashboard', undone.pushed.args[1]]], 'the dashboard just pushed is the one removed');
+  assert.strictEqual(isTransientHalt(undone.error), true, 'nothing is left behind, so a 503 is still auto-retried');
+
+  const lock = new Error('Microsoft.Crm.ObjectModel.CustomizationLockException: try again later');
+  const stranded = await attempt({ cause: lock, undoFails: true });
+  assert.match(stranded.error.message, /dashboard "Ops" was created \([^)]+\) but could not be added to solution '[^']+' \(.*CustomizationLockException.*\), and removing it again failed \(EPERM.*\) — add it to the solution or delete it in Maker before re-running/);
+  assert.strictEqual(isTransientHalt(stranded.error), false, 'a retry would reuse the stranded dashboard outside the solution');
+  assert.strictEqual(isTransientHalt((await attempt({ cause: busy, undoFails: true, rowUnreadable: true })).error), false, 'when its absence cannot be read, it is assumed to be there');
+
+  // The row went but the local workspace copy could not be removed: nothing is left outside the
+  // solution, so it is reported (and retried) as removed.
+  const localOnly = await attempt({ cause: busy, undoFails: true, rowRemains: false });
+  assert.match(localOnly.error.message, /so it was removed again — re-run to create it afresh/);
+  assert.strictEqual(isTransientHalt(localOnly.error), true);
 });
 
 test('commands: an existing command bar is reused (no duplicate) and reported in result.created', async () => {
@@ -3470,7 +3603,7 @@ test('dashboardTileOpts id-passthrough: a tile carrying viewId/visualizationId +
 
 test('dashboardTileOpts name-based still resolves from result.created (author-declared dashboard)', () => {
   const spec = { views: [{ name: 'V', entity: 'new_ohproject' }], charts: [{ name: 'C', entity: 'new_ohproject' }] };
-  const result = { created: { views: { 'new_ohproject|V': 'view-id' }, charts: { C: 'chart-id' } } };
+  const result = { created: { views: { 'new_ohproject|V': 'view-id' }, charts: { 'new_ohproject|C': 'chart-id' } } };
   const chart = dashboardTileOpts(spec, { type: 'chart', chart: 'C', view: 'V' }, result);
   assert.strictEqual(chart.viewId, 'view-id');
   assert.strictEqual(chart.visualizationId, 'chart-id');
@@ -3486,6 +3619,32 @@ test('dashboardTileOpts keys created.views by entity|name so same-named views ac
   assert.strictEqual(listA.viewId, 'view-a', 'new_a tile binds the new_a Active view');
   const listB = dashboardTileOpts(spec, { type: 'list', view: 'Active', entity: 'new_b' }, result);
   assert.strictEqual(listB.viewId, 'view-b', 'new_b tile binds the new_b Active view');
+});
+
+// #586 item 3, found live: two charts with the same NAME on different tables and a dashboard tile on
+// one of them. Charts were keyed by name alone, so the tile took whichever chart was built last — a
+// tile whose view is one table's and whose visualization is another's. The platform accepts and
+// publishes that, and `--verify` passed it.
+test('dashboards: same-named charts on different tables do not cross-wire a tile', async () => {
+  const spec = makeSpec(); // new_ticket: view "Active Tickets", chart "By Priority"
+  spec.views.push({ entity: 'new_customer', name: 'All Customers', columns: ['new_name', 'new_tier'] });
+  // Declared LAST, so a name-only key ends on this one.
+  spec.charts.push({ entity: 'new_customer', name: 'By Priority', chartType: 'Pie', groupBy: 'new_tier', measure: 'count' });
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'By Priority', view: 'Active Tickets' }] }];
+  const { sdk, calls } = mockSdk();
+  const chartIdByEntity = {};
+  const create = sdk.createArtifact;
+  const record = (t, def, art) => { if (t === 'chart' && art) chartIdByEntity[String(def.entityLogicalName).toLowerCase()] = art.id; return art; };
+  sdk.createArtifact = (t, def) => {
+    const art = create(t, def);
+    return art && typeof art.then === 'function' ? art.then((a) => record(t, def, a)) : record(t, def, art);
+  };
+  await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(chartIdByEntity.new_ticket && chartIdByEntity.new_customer, `both charts are built: ${JSON.stringify(chartIdByEntity)}`);
+  const tile = find(calls, 'addElement').find((c) => c.args[0] === 'dashboard' && c.args[2] === '/components').args[3];
+  assert.strictEqual(tile.parameters.TargetEntityType, 'new_ticket');
+  assert.strictEqual(tile.parameters.VisualizationId, chartIdByEntity.new_ticket,
+    `the tile must show the new_ticket chart; charts built: ${JSON.stringify(chartIdByEntity)}`);
 });
 
 test('pages phase (v2, page key != name): result.created.pages is keyed by KEY so the sitemap finalize resolves', async () => {
@@ -4350,7 +4509,7 @@ test('form topology: an UNCLAIMED section that still holds a cell is never remov
     'a section still holding the primary field must survive — removing it would take the record title off the form');
 });
 
-// Astra review, HIGH: "zero cells" does not establish that THIS reconcile vacated the section. A
+// "Zero cells" does not establish that THIS reconcile vacated the section. A
 // maker-added section that was ALREADY empty — one a form script may show/hide by name — would be
 // deleted by an otherwise no-op rebuild, and the destructive preflight cannot see it because that
 // compares fields and sitemap targets, not containers.

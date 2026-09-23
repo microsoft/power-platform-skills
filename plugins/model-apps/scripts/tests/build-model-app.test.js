@@ -284,6 +284,10 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ recoverable: true }));
   assert.ok(!isTransientHalt({ message: 'validation failed', cause: { statusCode: 400 } }));
   assert.ok(!isTransientHalt(null));
+  // An error that declares itself non-transient is never retried, whatever status or text it quotes: a
+  // dashboard left outside the app's solution would be silently reused by the retry.
+  assert.ok(!isTransientHalt({ message: 'x', cause: { transient: false, statusCode: 429, message: 'CustomizationLockException … try again later' } }));
+  assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {

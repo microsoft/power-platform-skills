@@ -89,6 +89,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
+const { isRestrictedSolution } = require('./system-solutions.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -114,6 +115,59 @@ const TILE_CLASS_ID = {
 // is added to the solution under that type, not under a bespoke one.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
 const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20, workflow: 29 };
+
+// Which of `ids` (dashboard systemform ids) are components of the solution `solutionUniqueName`.
+//
+// A dashboard's only identity in an App Spec is its name, and Dataverse neither keeps names unique nor
+// compares them exactly (it ignores case, most accents and trailing spaces), so a lookup by name can
+// return other apps' dashboards too. Every dashboard the build creates is added to the app's solution
+// (the dashboards phase below) — which makes membership the evidence of ownership that the name alone
+// cannot give. Used by the build (which of several matches to reuse) and by teardown (which to delete).
+//
+// Returns a Set of bare lower-case ids, or null when there is no solution to ask: none named, a
+// built-in container (it holds every unmanaged customization, so it proves nothing), or one that no
+// longer exists. Throws when a read fails; each caller decides how to fail closed.
+async function dashboardsInSolution(sdk, solutionUniqueName, ids) {
+  if (!solutionUniqueName || isRestrictedSolution(solutionUniqueName)) return null;
+  const bare = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
+  const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${odataLit(solutionUniqueName)}'`, top: 1 });
+  const solId = sols && sols[0] && sols[0].solutionid;
+  if (!solId) return null;
+  const wanted = [...new Set((ids || []).map(bare).filter(Boolean))];
+  const members = new Set();
+  // In chunks, so the OR-list — and the URL — stays bounded however many name matches there are
+  // (findDashboardsByName reads them all). A component appears once per solution, so a chunk of 25
+  // ids answers at most 25 rows and `top: 50` never truncates.
+  for (let i = 0; i < wanted.length; i += 25) {
+    const chunk = wanted.slice(i, i + 25);
+    const rows = await sdk.queryRecords('solutioncomponent', {
+      select: ['objectid'],
+      filter: `_solutionid_value eq ${bare(solId)} and componenttype eq ${COMPONENT_TYPE.dashboard} and (${chunk.map((id) => `objectid eq ${id}`).join(' or ')})`,
+      top: 50,
+    });
+    for (const r of rows || []) {
+      const id = bare(r && r.objectid);
+      if (id) members.add(id);
+    }
+  }
+  return members;
+}
+
+// Every dashboard whose name matches `name` (Dataverse's comparison: case, most accents and trailing
+// spaces ignored), as `[{ id, name }]`. The vendored `resolveArtifact('dashboard', { name })` reads ONE
+// page — `top: 10` with no `$orderby`, so the server picks which ten — and with more matches than that
+// the app's own dashboard can sort beyond it, leaving every ownership decision (reuse, check, delete)
+// made without it. So a full page is re-read in full. A reader without resolveArtifact (verify's)
+// always reads in full. Shared by build, verify and teardown so all three see the same set.
+const DASHBOARD_LOOKUP_PAGE = 10;
+async function findDashboardsByName(sdk, name) {
+  if (typeof sdk.resolveArtifact === 'function') {
+    const page = (await sdk.resolveArtifact('dashboard', { name })) || [];
+    if (page.length < DASHBOARD_LOOKUP_PAGE) return page;
+  }
+  const rows = (await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `type eq 0 and name eq '${odataLit(name)}'`, paginate: true })) || [];
+  return rows.map((r) => ({ id: String(r.formid), name: String(r.name) }));
+}
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -144,6 +198,11 @@ const HEADER_NAV_SETTING = 'HeaderAndNavigationRefresh';
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
 // already created; the target entity is derived from the referenced view. iframe/webresource tiles
 // carry a url / web-resource name.
+//
+// Views AND charts are keyed `entity|name`, and a tile resolves both on its OWN target entity. A chart
+// keyed by name alone let two same-named charts on different tables collide, so a tile took whichever
+// was built last — one table's view with another table's chart, which the platform accepts and
+// publishes (live-measured). Validation guarantees the named chart exists on the tile's table.
 function dashboardTileOpts(spec, tile, result) {
   const viewEntity = (name) => { const v = (spec.views || []).find((x) => x.name === name); return v && v.entity.toLowerCase(); };
   const span = (o) => { if (tile.colspan) o.colspan = tile.colspan; if (tile.rowspan) o.rowspan = tile.rowspan; return o; };
@@ -152,7 +211,7 @@ function dashboardTileOpts(spec, tile, result) {
   const targetEntity = tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view);
   if (tile.type === 'chart') {
     return span({ type: 'chart', name: tile.name || tile.chart, targetEntity,
-      viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`], visualizationId: tile.visualizationId || result.created.charts[tile.chart] });
+      viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`], visualizationId: tile.visualizationId || result.created.charts[`${targetEntity}|${tile.chart}`] });
   }
   if (tile.type === 'list') {
     return span({ type: 'list', name: tile.name || tile.view, targetEntity, viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`] });
@@ -2758,7 +2817,7 @@ async function runSdkBuild(spec, opts = {}) {
         return pushed.id;
       });
     });
-    charts.forEach((c, i) => { result.created.charts[c.name] = ids[i]; });
+    charts.forEach((c, i) => { result.created.charts[`${String(c.entity).toLowerCase()}|${c.name}`] = ids[i]; });
   }
 
   // 6. Forms (independent -> parallel; sub-grids reference the child view ids built above).
@@ -3351,8 +3410,32 @@ async function runSdkBuild(spec, opts = {}) {
       // the dashboard kind (only view/chart/form/app), but the vendored bundle's resolveArtifact does (it
       // is what the teardown engine uses to find dashboards, sdk-teardown.js). Like charts, dashboard TILE
       // EDITS are not reapplied on a rebuild — recreate the dashboard to change it. Never removes tiles.
-      const existing = await provision.resolveArtifact('dashboard', { name: dash.name });
-      const existingId = existing && existing[0] && existing[0].id;
+      const existing = await findDashboardsByName(provision, dash.name);
+      let existingId = existing[0] && existing[0].id;
+      // A name lookup can return several dashboards — names are not unique, and the lookup ignores
+      // case, most accents and trailing spaces — and reusing the first one returned bound this app to
+      // an arbitrary one, possibly another app's. The app's own is the one its solution holds; when
+      // that does not single one out, halt with the names to fix rather than guess.
+      if (existing.length > 1) {
+        let ours = null;
+        let unreadable = '';
+        try {
+          const members = await dashboardsInSolution(provision, sol.uniqueName, existing.map((e) => e.id));
+          ours = members ? existing.filter((e) => members.has(String(e.id).replace(/[{}]/g, '').toLowerCase())) : null;
+        } catch (err) {
+          unreadable = ` (${(err && err.message) || err})`;
+        }
+        if (ours && ours.length === 1) {
+          existingId = ours[0].id;
+        } else {
+          const reason = ours === null
+            ? `and this app's solution cannot say which is its own${unreadable}`
+            : `and ${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution '${sol.uniqueName}'`;
+          await runner.run('dashboards', `dashboard "${dash.name}"`, async () => {
+            throw new Error(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to reuse. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
+          });
+        }
+      }
       if (existingId) {
         runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse; tile edits aren't applied on rebuild, recreate to change)`);
         result.created.dashboards[dash.name] = existingId;
@@ -3367,7 +3450,48 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tiles[ti], result), ti));
         }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`, opts.warn);
-        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+        try {
+          await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+        } catch (err) {
+          // The app's solution is the only proof, to a later rebuild or teardown, that this dashboard is
+          // the app's (names are not unique — see dashboardsInSolution). Left outside it, a rebuild would
+          // reuse it as a lone name match without ever adding it, and teardown would keep it as "not
+          // created by this build" while its tiles blocked the chart and view deletes. So undo the push
+          // — a re-run then simply creates it again — and when that fails too, say what is left behind.
+          const why = (err && err.message) || String(err);
+          let undoErr = null;
+          try {
+            await provision.deleteRemoteArtifact('dashboard', pushed.id);
+          } catch (e) {
+            undoErr = e;
+          }
+          // deleteRemoteArtifact removes the row and THEN the local workspace copy, so a failure can come
+          // from either half. Only a row that is still there is left outside the solution; when that
+          // cannot be read either, assume it is.
+          let stranded = false;
+          if (undoErr) {
+            stranded = true;
+            try {
+              const still = await provision.queryRecords('systemform', { select: ['formid'], filter: `formid eq ${String(pushed.id).replace(/[{}]/g, '')}`, top: 1 });
+              stranded = !!(still && still.length);
+            } catch { /* cannot tell — keep assuming it is still there */ }
+          }
+          if (stranded) {
+            const left = new Error(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's`);
+            // Never auto-retried (isTransientHalt, build-model-app.js): a retry would reuse it as a lone
+            // name match without adding it, whatever transient text the causes quoted above carry.
+            left.transient = false;
+            left.cause = err;
+            throw left;
+          }
+          const removed = new Error(`dashboard "${dash.name}" could not be added to solution '${sol.uniqueName}' (${why}), so it was removed again — re-run to create it afresh`);
+          // Nothing is left behind, so a retry is safe: keep the cause's HTTP status, so a 429/503 is
+          // still auto-retried as it was before the undo existed.
+          const status = err && (err.statusCode || err.status);
+          if (status) removed.statusCode = status;
+          removed.cause = err;
+          throw removed;
+        }
         result.created.dashboards[dash.name] = pushed.id;
       });
     }
@@ -4312,9 +4436,7 @@ async function runSdkBuild(spec, opts = {}) {
       // from `result.created.charts` would therefore hand publish an id it cannot resolve for an
       // existing chart with no description to reconcile, and the throw escapes publishArtifact and
       // halts the phase. `chartsToPublish` is populated at exactly the two points that put a chart in
-      // the workspace. It is also keyed by entity rather than by chart NAME, which sidesteps the
-      // `result.created.charts` name-only keying (two same-named charts on different entities
-      // collide there).
+      // the workspace, and keyed by entity because publishing is per-entity.
       for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
       await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
       if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
@@ -4414,4 +4536,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

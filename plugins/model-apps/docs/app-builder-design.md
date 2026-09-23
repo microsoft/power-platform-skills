@@ -586,13 +586,19 @@ ONLY after effective success (apply+verify).
 
 ## Eligibility state machine (durable, fail-closed)
 - **INVALIDATE (→false) before any write** of every full/unsupported/fast apply and teardown; abort if
-  the invalidation write fails.
+  the invalidation write fails. A `--changed-only` invalidate is **fenced** to the generation its
+  decision was read at: a snapshot tombstoned, rewritten or deleted since that read aborts the run
+  before it writes anything.
 - **debt** accrues on any unsupported change/removal; `eligible:true` requires empty debt; debt clears
   ONLY by proven-fresh recreation (artifact absent before build) or an exact verifier — never by a plain
   full rebuild that re-skips a stale artifact.
 - **teardown TOMBSTONE**: teardown writes `eligible:false` + `teardown-in-progress` debt BEFORE deleting
   anything, and deletes the envelope ONLY after teardown success + verified live absence; a partial/
-  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined).
+  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined). The tombstone
+  also **rotates the generation** — without that, a run that read the snapshot first still matched it
+  and re-blessed its stale view over the tombstone — and a teardown that cannot write it **deletes
+  nothing**. The CAS write takes the workspace lease itself, so a tombstone cannot land between its
+  compare and its write.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

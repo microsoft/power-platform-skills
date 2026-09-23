@@ -349,6 +349,50 @@ test('run: invalidate failure (lease held) ABORTS a fast apply without building'
   } finally { rm(dir); }
 });
 
+// #587 item 1: a teardown that tombstones the snapshot while a changed-only run is between its read and
+// its first write must fence that run. Measured before the fix: the run resumed with decision FAST,
+// invalidated the tombstoned copy, and its re-bless CAS still matched — leaving the snapshot eligible with
+// no debt, i.e. the tombstone erased. The identity lookup is the slow network step where that lands.
+for (const [path_, spec, content] of [
+  ['FAST', baseSpec, 'v2'],
+  ['FULL', () => { const s = baseSpec(); s.charts[0].kind = 'pie'; return s; }, 'v1'],
+]) {
+  test(`run: a teardown tombstone landing during identity discovery fences a ${path_} apply (#587 item 1)`, async () => {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: spec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, {
+        buildModelApp: stubBuild(record), readContent: readFor(content),
+        resolveLiveIdentity: async () => { assert.ok(store.tombstoneSnapshot(dir).ok); return LIVE; },
+      }) });
+      assert.strictEqual(r.changedOnly.decision, path_.toLowerCase(), 'precondition: the stale read still decides this path');
+      assert.strictEqual(r.ok, false, 'the run must fail closed');
+      assert.strictEqual(record.length, 0, 'nothing may be applied on a snapshot a teardown has fenced');
+      assert.match(r.errors[0], /changed since/);
+      const disk = store.readSnapshot(dir);
+      assert.ok(snap.isTombstoned(disk) && disk.eligible === false, 'the tombstone survives');
+    } finally { rm(dir); }
+  });
+
+  // The other window: the tombstone lands AFTER this run's invalidate, while its build is running. The
+  // run's re-bless must then lose its CAS rather than write its pre-teardown view over the tombstone.
+  test(`run: a teardown tombstone landing during a ${path_} build is not re-blessed away (#587 item 1)`, async () => {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const build = async () => {
+        assert.ok(store.tombstoneSnapshot(dir).ok);
+        return { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: true } };
+      };
+      const r = await flow.runChangedOnlyApply({ spec: spec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor(content) }) });
+      assert.strictEqual(r.changedOnly.decision, path_.toLowerCase());
+      const disk = store.readSnapshot(dir);
+      assert.ok(snap.isTombstoned(disk) && disk.eligible === false, `the tombstone must survive the re-bless; got ${JSON.stringify({ eligible: disk && disk.eligible, debt: disk && disk.debt })}`);
+    } finally { rm(dir); }
+  });
+}
+
 test('run: FULL fallback for an unsupported edit records the sticky debt (ineligible baseline)', async () => {
   const dir = ws();
   try {

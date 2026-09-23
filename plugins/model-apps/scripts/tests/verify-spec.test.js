@@ -1674,3 +1674,133 @@ test('verify PASSES when the field really is in the requested tab', async () => 
   });
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
 });
+
+// --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------
+// A chart tile names a table, a view and a chart. The platform accepts and publishes a tile whose
+// chart belongs to another table — and a same-named chart elsewhere made the build produce exactly
+// that, live, while verify passed. So each chart tile's chart and view must both be on its table.
+const DASH_VIEW = '{11111111-1111-1111-1111-111111111111}';
+const DASH_CHART = '{22222222-2222-2222-2222-222222222222}';
+const dashSpec = () => ({ solution: { uniqueName: 's', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+  dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] });
+const chartTile = (over) => ({ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW, VisualizationId: DASH_CHART, ...over } });
+const dashRead = ({ dashboards = [{ formid: 'dash-1' }], chartTable = 'new_ticket', viewTable = 'new_ticket', components = [chartTile()], reader = {} } = {}) => Object.assign({
+  findTable: async () => null,
+  findColumns: async () => [],
+  sitemapXml: async () => '',
+  queryRecords: async (set, q) => {
+    if (set === 'systemform') { if (dashboards instanceof Error) throw dashboards; return dashboards; }
+    if (set === 'savedqueryvisualization') {
+      if (chartTable instanceof Error) throw chartTable;
+      assert.match(q.filter, /^savedqueryvisualizationid eq 22222222-2222-2222-2222-222222222222$/, 'the braced tile GUID is queried bare and unquoted');
+      return chartTable ? [{ primaryentitytypecode: chartTable }] : [];
+    }
+    if (set === 'savedquery') return viewTable ? [{ returnedtypecode: viewTable }] : [];
+    return [];
+  },
+  dashboardComponents: async () => { if (components instanceof Error) throw components; return components; },
+}, reader);
+const dashCheck = async (opts) => (await verifySpec(dashSpec(), dashRead(opts))).checks.find((c) => c.kind === 'dashboard');
+
+test('verify PASSES a dashboard whose chart tile shows its own table\'s view and chart', async () => {
+  const chk = await dashCheck();
+  assert.strictEqual(chk.present, true, chk.detail);
+});
+
+test('verify FAILS a chart tile whose chart belongs to another table (the live cross-wiring)', async () => {
+  const chk = await dashCheck({ chartTable: 'new_customer' });
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /chart tile 'By Priority' shows new_ticket, but its chart belongs to new_customer/);
+});
+
+test('verify FAILS a chart tile whose view belongs to another table, or whose chart no longer exists', async () => {
+  assert.match((await dashCheck({ viewTable: 'new_customer' })).detail, /its view belongs to new_customer/);
+  assert.match((await dashCheck({ chartTable: null })).detail, /its chart does not exist/);
+});
+
+test('verify FAILS a missing dashboard, and an ambiguous name it cannot identify', async () => {
+  assert.strictEqual((await dashCheck({ dashboards: [] })).present, false);
+  const ambiguous = await dashCheck({ dashboards: [{ formid: 'a' }, { formid: 'b' }] });
+  assert.strictEqual(ambiguous.present, false);
+  assert.match(ambiguous.detail, /2 dashboards share this name and this app's solution cannot say which is its own/);
+});
+
+// A name can also match another app's dashboard. The build reuses the one the app's solution holds, so
+// verify checks THAT one — a namesake elsewhere must neither fail a correct app nor hide a broken one.
+test('verify checks the dashboard the app\'s solution holds when a namesake exists elsewhere', async () => {
+  const withSolution = (inSolution, onComponents) => ({
+    reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') return [{ formid: 'dash-foreign' }, { formid: 'dash-ours' }];
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        return dashRead().queryRecords(set, q);
+      },
+      dashboardComponents: async (id) => { onComponents.push(id); return [chartTile()]; },
+    },
+  });
+  const read = [];
+  const ok = await dashCheck(withSolution(['dash-ours'], read));
+  assert.strictEqual(ok.present, true, ok.detail);
+  assert.deepStrictEqual(read, ['dash-ours'], 'the tiles checked are the solution\'s dashboard, not the first match');
+  const none = await dashCheck(withSolution([], []));
+  assert.strictEqual(none.present, false);
+  assert.match(none.detail, /none of them is in this app's solution/);
+});
+
+// The sitemap subarea check resolves its dashboard the SAME way. It used to take the first name match:
+// live, another app's same-named dashboard sorted first and failed a correctly wired app's nav entry.
+test('the dashboard subarea check follows the app\'s solution too, never the first name match', async () => {
+  const OURS = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const FOREIGN = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const spec = { ...dashSpec(), appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops nav' }] }] }] } };
+  const subarea = async (inSolution, sitemapPointsAt, systemforms = [{ formid: FOREIGN }, { formid: OURS }]) => {
+    const lookups = [];
+    const read = dashRead({ reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') { lookups.push(q); if (systemforms instanceof Error) throw systemforms; return systemforms; }
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') {
+          if (inSolution instanceof Error) throw inSolution;
+          return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        }
+        return dashRead().queryRecords(set, q);
+      },
+      sitemapXml: async () => `<SiteMap><Area><SubArea Id="s" DefaultDashboard="{${sitemapPointsAt.toUpperCase()}}"/></Area></SiteMap>`,
+    } });
+    const r = await verifySpec(spec, read);
+    return { chk: r.checks.find((c) => c.kind === 'subarea'), lookups };
+  };
+  const ok = await subarea([OURS], OURS);
+  assert.strictEqual(ok.chk.present, true, `a nav entry wired to the app's own dashboard verifies; got ${ok.chk.detail}`);
+  assert.strictEqual(ok.lookups.length, 1, 'the dashboard check and the subarea check share one lookup per name');
+  assert.strictEqual(ok.lookups[0].paginate, true, 'read in full, not one page of ten the app\'s own could sort beyond');
+  assert.strictEqual((await subarea([OURS], FOREIGN)).chk.present, false, 'a nav entry wired to another app\'s namesake does not');
+  const unknown = (await subarea([], OURS)).chk;
+  assert.strictEqual(unknown.present, false);
+  assert.match(unknown.detail, /2 dashboards share this name and none of them is in this app's solution/);
+  const cannotAsk = (await subarea(new Error('HTTP 503'), OURS)).chk;
+  assert.strictEqual(cannotAsk.present, false, 'an unreadable solution proves nothing');
+  assert.match(cannotAsk.detail, /this app's solution cannot say which is its own \(HTTP 503\)/);
+  const unreadable = (await subarea([OURS], OURS, new Error('boom'))).chk;
+  assert.strictEqual(unreadable.present, false);
+  assert.match(unreadable.detail, /unverified, not proven correct/);
+});
+
+test('verify reports unreadable dashboards, tiles and tile targets as UNVERIFIED, never as correct', async () => {
+  for (const opts of [{ dashboards: new Error('boom') }, { components: new Error('boom') }, { chartTable: new Error('boom') }]) {
+    const chk = await dashCheck(opts);
+    assert.strictEqual(chk.present, false, JSON.stringify(Object.keys(opts)));
+    assert.match(chk.detail, /unverified, not proven correct/);
+  }
+});
+
+test('verify checks dashboard EXISTENCE only when the reader cannot read tiles (additive, reader-gated)', async () => {
+  const chk = await dashCheck({ reader: { dashboardComponents: undefined } });
+  assert.strictEqual(chk.present, true);
+});
+
+test('verify ignores non-chart tiles when proving a dashboard', async () => {
+  const chk = await dashCheck({ components: [{ type: 'list', name: 'L', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW } }, { type: 'iframe', name: 'I', parameters: { Url: 'https://x' } }] });
+  assert.strictEqual(chk.present, true, chk.detail);
+});

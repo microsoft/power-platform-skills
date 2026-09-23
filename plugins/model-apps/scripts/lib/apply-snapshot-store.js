@@ -108,20 +108,32 @@ function releaseLease(handle) {
   catch { /* gone/unreadable — best-effort */ }
 }
 
-// CAS write (call while holding the lease). Refuse to overwrite when the on-disk generation no longer
-// matches what the caller last read — a concurrent build won the race. expectedGeneration === null means
-// "I expected NO prior snapshot" (first write); if one appeared meanwhile, refuse. Returns { ok, reason }.
-function casWriteSnapshot(workspaceDir, envelope, expectedGeneration) {
-  const disk = readSnapshot(workspaceDir);
-  if (expectedGeneration == null) {
-    if (disk) return { ok: false, reason: 'expected no prior snapshot but one exists (concurrent create)' };
-  } else if (!disk) {
-    return { ok: false, reason: 'expected snapshot vanished (concurrent delete/teardown)' };
-  } else if (!generationMatches(disk, expectedGeneration)) {
-    return { ok: false, reason: 'generation CAS failed (concurrent snapshot write)' };
+// CAS write. Refuse to overwrite when the on-disk generation no longer matches what the caller last read —
+// a concurrent build won the race. expectedGeneration === null means "I expected NO prior snapshot" (first
+// write); if one appeared meanwhile, refuse. Returns { ok, reason }.
+//
+// Takes the workspace lease ITSELF. The compare and the write are two steps, and the lease is what
+// serializes a teardown tombstone against every other snapshot write: without it, a tombstone written
+// between this read and this write was silently overwritten by a pre-teardown view (#587 item 1). No
+// caller held the lease across this call, whatever this comment used to ask of them. A held lease means
+// another writer is mid-update, so the write is refused (fail-closed: the next run full-builds).
+function casWriteSnapshot(workspaceDir, envelope, expectedGeneration, deps = {}) {
+  const lease = acquireLease(workspaceDir, deps);
+  if (!lease.ok) return { ok: false, reason: `snapshot lease unavailable (${lease.reason})` };
+  try {
+    const disk = readSnapshot(workspaceDir);
+    if (expectedGeneration == null) {
+      if (disk) return { ok: false, reason: 'expected no prior snapshot but one exists (concurrent create)' };
+    } else if (!disk) {
+      return { ok: false, reason: 'expected snapshot vanished (concurrent delete/teardown)' };
+    } else if (!generationMatches(disk, expectedGeneration)) {
+      return { ok: false, reason: 'generation CAS failed (concurrent snapshot write)' };
+    }
+    writeSnapshotAtomic(workspaceDir, envelope);
+    return { ok: true };
+  } finally {
+    releaseLease(lease);
   }
-  writeSnapshotAtomic(workspaceDir, envelope);
-  return { ok: true };
 }
 
 // Unconditional persist under the lease (no CAS) — used to seed the very first snapshot or to write a
@@ -138,11 +150,25 @@ function persistSnapshot(workspaceDir, envelope) {
 // `generation` is the new post-invalidate token the caller must pass as the CAS `expected` on its re-bless.
 // Fail-closed callers (the fast-path apply) MUST abort if this returns { ok:false }. A missing snapshot is
 // already-safe (nothing can fast-path) ⇒ ok:true with generation:null.
-function invalidateSnapshot(workspaceDir, deps = {}) {
-  const lease = acquireLease(workspaceDir, deps);
+//
+// `options.expectedGeneration` FENCES the invalidate to the snapshot the caller's decision was based on
+// (#587 item 1). Rotating the generation only protects a reader who is later compared against it, and
+// without this the invalidate itself was never compared: a run that read an eligible snapshot, then lost
+// the race to a teardown tombstone, invalidated the TOMBSTONED copy, got a fresh generation back, and
+// re-blessed its stale view over the tombstone. With the key present the invalidate refuses unless the
+// disk still holds that very generation — so a snapshot that was tombstoned, rewritten, or deleted since
+// it was read stops the run before it mutates. Absent the key (a plain `--apply`, which decided nothing
+// from a read), behavior is unchanged. The remaining keys are the lease test seams (see acquireLease).
+function invalidateSnapshot(workspaceDir, options = {}) {
+  const lease = acquireLease(workspaceDir, options);
   if (!lease.ok) return { ok: false, reason: lease.reason };
   try {
     const disk = readSnapshot(workspaceDir);
+    const fenced = Object.prototype.hasOwnProperty.call(options, 'expectedGeneration');
+    if (fenced && !disk) return { ok: false, reason: 'the snapshot this run read has since been deleted (a concurrent teardown?) — re-run' };
+    if (fenced && (disk.generation || null) !== (options.expectedGeneration || null)) {
+      return { ok: false, reason: 'the snapshot changed since this run read it (a concurrent teardown or build) — re-run' };
+    }
     if (!disk) return { ok: true, reason: 'no snapshot to invalidate', generation: null };
     markIneligible(disk);
     const gen = newGeneration();
@@ -158,14 +184,24 @@ function invalidateSnapshot(workspaceDir, deps = {}) {
 
 // TOMBSTONE-before-delete: mark a teardown-in-progress (eligible:false + teardown debt) and persist, BEFORE
 // any live delete. A partial/crashed teardown then leaves the tombstone so a surviving artifact can never be
-// rebaselined. No snapshot ⇒ nothing to tombstone (ok). Under the lease.
+// rebaselined. Under the lease.
+//
+// It also ROTATES the generation, which is what makes it a fence rather than a label (#587 item 1): every
+// in-flight changed-only run holds the generation it read, and its invalidate and re-bless both compare
+// against it, so a tombstone that kept the old token let such a run erase it. The teardown caller refuses
+// to delete anything when this returns { ok:false } (#587 item 2).
+//
+// No snapshot ⇒ nothing to fence ⇒ ok, answered WITHOUT the lease: acquiring it creates the workspace
+// directory, and a teardown from a folder that never had one must not leave one behind.
 function tombstoneSnapshot(workspaceDir, deps = {}) {
+  if (!fs.existsSync(snapshotPath(workspaceDir))) return { ok: true, reason: 'no snapshot to tombstone' };
   const lease = acquireLease(workspaceDir, deps);
   if (!lease.ok) return { ok: false, reason: lease.reason };
   try {
     const disk = readSnapshot(workspaceDir);
     if (!disk) return { ok: true, reason: 'no snapshot to tombstone' };
     tombstone(disk);
+    bumpGeneration(disk, newGeneration());
     writeSnapshotAtomic(workspaceDir, disk);
     return { ok: true };
   } catch (e) {

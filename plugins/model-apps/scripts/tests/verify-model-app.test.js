@@ -738,3 +738,36 @@ test('appEntityComponents(): matches an objectid whose CASING differs from the r
   assert.strictEqual(r.ok, true);
   assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
 });
+// The dashboard oracle through the REAL reader seam: `dashboardComponents` is implemented here with
+// the SDK's own deserializer (fetch, then read the artifact), so a stub-only test would prove nothing
+// about the reader verify actually runs with.
+test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set === 'systemform') return [{ formid: 'dash-1' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_customer' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
+    getArtifact: async (type, id) => {
+      calls.push(['getArtifact', type, id]);
+      return { components: [{ type: 'chart', name: 'By Priority', parameters: {
+        TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] };
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk, 'a dashboard check must be produced');
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /shows new_ticket, but its chart belongs to new_customer/);
+  assert.deepStrictEqual(calls, [['fetchArtifact', 'dashboard', 'dash-1'], ['getArtifact', 'dashboard', 'dash-1']], 'the tiles come from the SDK artifact of THAT dashboard');
+});

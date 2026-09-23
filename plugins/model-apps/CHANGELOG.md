@@ -181,6 +181,43 @@ downloads that round-trip Choice columns.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
   that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
   first.
+- **Same-named charts on different tables no longer cross-wire a dashboard tile** ([#586]). A tile
+  plotted one table's chart over another table's view. Chart identity now includes its table; a tile
+  whose view name exists on several tables must say which with `entity`, and verify checks that each
+  chart tile's chart and view belong to the tile's table.
+- **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
+  ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
+  the other from the nav. A download withholds such a pair and says why.
+- **A dashboard belongs to the app through the app's solution** ([#586]). A name can also match another
+  app's dashboard, and teardown used to delete every match. It now deletes only the dashboards the app's
+  solution holds, none when the spec has no real solution to ask, and keeps the solution while any step
+  failed so a re-run can still tell. When several match, the build reuses the solution's own or halts
+  instead of reusing an arbitrary one, and verify checks that same one — including the sitemap entry
+  that opens it, which took the first match and failed a correctly wired app. A dashboard the build
+  cannot add to its solution is removed again rather than left outside it; if that fails too, the
+  build halts naming it and does not auto-retry, since a retry would reuse it outside the solution.
+- **A Choice written as a label, its translation, or its number is one sample-data key** ([#586]). The
+  loader always saw them that way; the spec gate compared them as written, so a duplicate passed it
+  and the seed then failed after tables and forms had deployed. A Choice column with no `schemaName`
+  on a table with sample data is now reported by name instead of crashing validation.
+- **A download reports only the app's own global choices as not round-tripped** ([#586]) — the ones
+  its solution owns or its columns bind — instead of every unmanaged option set in the environment.
+- **A teardown fences any `--changed-only` run already in flight** ([#587]). Its tombstone kept the
+  snapshot's generation, so a run that had read the snapshot first could re-bless it over the
+  tombstone. Teardown now also **refuses to delete anything when it cannot write that fence**,
+  instead of warning and carrying on.
+- **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
+  already kept its tables: a download flags all three `existing: true`. Deleting a relationship
+  removed its lookup column — and that column's data — from a table teardown kept.
+- **An app in several unmanaged solutions downloads the same way every time** ([#587]). The spec keeps
+  `Default` and names the candidates in `solutionCandidates` — never whichever row the server happened
+  to return first, which teardown would then delete. Its business rules and option sets are still
+  reported across all of them, and a membership that cannot be read is reported as unknown.
+- **The teardown summary no longer calls every skip "not found".** Steps kept on purpose and steps
+  never attempted after a failed app delete are counted as what they are.
+- **A failure after the app is already deleted no longer strands the rest of the teardown.** The SDK
+  tidies its local copy after the remote delete; when that step failed, teardown stopped as though
+  the app still existed. It now asks the platform, and carries on when the app is gone.
 
 ### Changed
 
@@ -207,6 +244,7 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591

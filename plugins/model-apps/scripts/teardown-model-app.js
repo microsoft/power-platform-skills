@@ -60,8 +60,9 @@ async function makeSdk(env) {
 }
 
 // Turn engine progress events into a phase-grouped, status-marked teardown log — the same shape
-// build-model-app.js uses: ▶ <phase>, then per step [n/total] with ✓ (deleted) / ⊘ (not found) /
-// ✗ (failed). A dry-run lists the same plan with a ▢ marker. `opts.counts` accumulates totals.
+// build-model-app.js uses: ▶ <phase>, then per step [n/total] with ✓ (deleted) / ⊘ (not found, kept on
+// purpose, or not attempted — the label says which) / ✗ (failed). A dry-run lists the same plan with a ▢
+// marker. `opts.counts` accumulates totals, with skips also tallied by kind for the summary.
 function cliEmit(log, opts = {}) {
   const counts = opts.counts;
   let phase = null;
@@ -69,7 +70,10 @@ function cliEmit(log, opts = {}) {
     if (e.phase !== phase) { phase = e.phase; log(`\n▶ ${phase}`); }
     if (e.status === 'start') return;
     if (!opts.apply) { log(`  [${e.n}/${e.total}] ▢ ${e.label}`); return; }
-    if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
+    if (counts) {
+      counts[e.status] = (counts[e.status] || 0) + 1;
+      if (e.status === 'skip') counts[e.skip || 'not-found'] = (counts[e.skip || 'not-found'] || 0) + 1;
+    }
     const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
     const tail = e.status === 'error' && e.detail ? ` — ${e.detail}` : '';
     log(`  [${e.n}/${e.total}] ${glyph} ${e.label}${tail}`);
@@ -98,12 +102,22 @@ async function teardownModelApp(spec, opts, deps) {
     }
   }
   // TOMBSTONE the changed-only snapshot BEFORE any delete (design core invariant): eligible:false +
-  // teardown-in-progress debt, so a partial/crashed teardown leaves the tombstone and a surviving artifact
-  // can never be rebaselined as an eligible fast-path source. Best-effort — a lease contention is logged,
-  // not fatal (once the app is deleted, the fast-path identity check also blocks any stale snapshot).
+  // teardown-in-progress debt + a rotated generation, so a partial/crashed teardown leaves the tombstone,
+  // a surviving artifact can never be rebaselined as an eligible fast-path source, and a changed-only run
+  // already in flight is fenced off (#587 item 1).
+  //
+  // The tombstone IS the fence, so failing to write it stops the teardown before it mutates (#587 item 2).
+  // It used to warn and proceed — and if the app delete then failed after lower-level artifacts were
+  // gone, the old ELIGIBLE snapshot survived describing a state that no longer existed. The usual cause
+  // is a build holding the workspace lease right now; a stale lease is reclaimed automatically, so a
+  // persistent failure means real contention or an unwritable workspace, and waiting is the fix.
   if (opts.apply && opts.workspaceDir) {
     const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
-    if (!tomb.ok) log(`⚠ could not tombstone the changed-only snapshot before teardown (${tomb.reason}) — proceeding; the app-deletion identity check still blocks a stale snapshot`);
+    if (!tomb.ok) {
+      const msg = `could not fence the changed-only snapshot before teardown (${tomb.reason}) — nothing was deleted. Let any running build of this app finish, then re-run the teardown.`;
+      log(`\n✗ ${msg}`);
+      return { ok: false, errors: [msg] };
+    }
   }
   const r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
   // After a CLEAN teardown, DELETE the snapshot envelope — the app is gone, so a fresh rebuild must start a
@@ -113,7 +127,15 @@ async function teardownModelApp(spec, opts, deps) {
     snapStore.deleteSnapshot(opts.workspaceDir);
   }
   if (opts.apply && r && !r.dryRun) {
-    log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${counts.skip} not found, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
+    // A skip is one of three different facts, and the summary used to call all of them "not found" —
+    // after an app-delete abort that read "0 deleted, 8 not found, 1 failed" for eight steps nobody
+    // queried. `kept` (left in place on purpose: existing:true, system tables, …) and `not attempted`
+    // are shown only when non-zero, so an ordinary run reads exactly as it always did.
+    const notFound = counts['not-found'] || 0;
+    const kept = counts.kept || 0;
+    const notAttempted = counts['not-attempted'] || 0;
+    const extra = `${kept ? `, ${kept} kept` : ''}${notAttempted ? `, ${notAttempted} not attempted` : ''}`;
+    log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${notFound} not found, ${counts.error} failed${extra} (${counts.ok + counts.skip + counts.error} steps)`);
   }
   return r;
 }

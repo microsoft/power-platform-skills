@@ -150,6 +150,65 @@ test('tombstoneSnapshot persists eligible:false + teardown debt (before any dele
   } finally { rm(d); }
 });
 
+// #587 item 1: a tombstone must FENCE, not merely mark. A changed-only run that read the snapshot before
+// the tombstone holds its generation; a tombstone that keeps that generation lets the run's later writes
+// still match it — and measured before this fix, the run re-blessed its stale copy over the tombstone.
+test('tombstoneSnapshot rotates the generation, so every write by a pre-tombstone reader is refused', () => {
+  const d = ws();
+  try {
+    store.writeSnapshotAtomic(d, eligible('g1'));
+    assert.ok(store.tombstoneSnapshot(d).ok);
+    const disk = store.readSnapshot(d);
+    assert.ok(disk.generation && disk.generation !== 'g1', `the tombstone must rotate the generation; got ${disk.generation}`);
+    assert.strictEqual(store.invalidateSnapshot(d, { expectedGeneration: 'g1' }).ok, false);
+    assert.strictEqual(store.casWriteSnapshot(d, eligible('g2'), 'g1').ok, false);
+    assert.ok(S.isTombstoned(store.readSnapshot(d)), 'and the tombstone is intact');
+  } finally { rm(d); }
+});
+
+test('invalidateSnapshot with an expected generation refuses a snapshot that changed or vanished since it was read', () => {
+  const d = ws();
+  try {
+    store.writeSnapshotAtomic(d, eligible('g1'));
+    const stale = store.invalidateSnapshot(d, { expectedGeneration: 'gOTHER' });
+    assert.strictEqual(stale.ok, false);
+    assert.match(stale.reason, /changed since/);
+    assert.strictEqual(store.readSnapshot(d).eligible, true, 'a refused invalidate writes nothing');
+    const good = store.invalidateSnapshot(d, { expectedGeneration: 'g1' });
+    assert.ok(good.ok && good.generation && good.generation !== 'g1', JSON.stringify(good));
+    store.deleteSnapshot(d);
+    const gone = store.invalidateSnapshot(d, { expectedGeneration: good.generation });
+    assert.strictEqual(gone.ok, false, 'a snapshot deleted since it was read is not "nothing to invalidate"');
+    assert.match(gone.reason, /deleted/);
+    assert.strictEqual(store.invalidateSnapshot(d).ok, true, 'without a fence, a missing snapshot is still already-safe');
+  } finally { rm(d); }
+});
+
+// Its read and its write are two steps, so a tombstone written between them was overwritten. The
+// lease is what serializes a tombstone against everything else, so the CAS write must take it too.
+test('casWriteSnapshot takes the lease itself, so it cannot interleave with a tombstone', () => {
+  const d = ws();
+  try {
+    store.writeSnapshotAtomic(d, eligible('g1'));
+    const held = store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: () => true, staleMs: store.LEASE_STALE_MS });
+    assert.ok(held.ok);
+    const r = store.casWriteSnapshot(d, eligible('g2'), 'g1');
+    assert.strictEqual(r.ok, false, 'a CAS write must not proceed while another writer holds the lease');
+    assert.strictEqual(store.readSnapshot(d).generation, 'g1');
+    store.releaseLease(held);
+    assert.strictEqual(store.casWriteSnapshot(d, eligible('g2'), 'g1').ok, true);
+  } finally { rm(d); }
+});
+
+test('tombstoneSnapshot with no snapshot has nothing to fence, and creates no workspace', () => {
+  const parent = ws();
+  try {
+    const d = path.join(parent, '.maker-workspace');
+    assert.ok(store.tombstoneSnapshot(d).ok);
+    assert.strictEqual(fs.existsSync(d), false, 'fencing nothing must not create the workspace directory');
+  } finally { rm(parent); }
+});
+
 test('deleteSnapshot removes the file; deleting a missing file is success', () => {
   const d = ws();
   try {

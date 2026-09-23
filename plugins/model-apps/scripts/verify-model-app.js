@@ -247,6 +247,16 @@ function readerFor(sdk, appUnique, opts) {
       const row = rows && rows[0];
       return (row && row.formxml) || null;
     },
+    // dashboardComponents(dashboardId): the deployed dashboard's tiles, parsed by the SDK's own
+    // dashboard deserializer — the path download already reads them through — so verify sees each
+    // tile's TargetEntityType / ViewId / VisualizationId exactly as a rebuild would, instead of
+    // regex-parsing FormXML a second way. Errors propagate: verify reports unreadable tiles as
+    // unverified, never as correct.
+    dashboardComponents: async (dashboardId) => {
+      await sdk.fetchArtifact('dashboard', dashboardId);
+      const art = await sdk.getArtifact('dashboard', dashboardId);
+      return (art && art.components) || [];
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },

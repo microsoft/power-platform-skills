@@ -170,7 +170,9 @@ function choiceValueMap(entity, spec) {
   }
   const map = Object.create(null);
   for (const c of entity.columns || []) {
-    if (c.type !== 'Choice' && c.type !== 'MultiChoice') continue;
+    // A column with no string schemaName cannot be keyed; validateAppSpec reports it by name
+    // ("a column is missing schemaName") — this helper must not crash that report instead.
+    if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice') || typeof c.schemaName !== 'string') continue;
     let byLabel = null;
     if (Array.isArray(c.options) && c.options.length) {
       byLabel = indexOptions(c.options);
@@ -387,7 +389,7 @@ function manyToManySchemaName(rel, publisherPrefix) {
 // booleans, ISO dates, and unknown tokens all still work).
 function resolveSampleRecords(entity, records, spec) {
   const choices = choiceValueMap(entity, spec);
-  const multi = new Set((entity.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => c.schemaName.toLowerCase()));
+  const multi = new Set((entity.columns || []).filter((c) => c && c.type === 'MultiChoice' && typeof c.schemaName === 'string').map((c) => c.schemaName.toLowerCase()));
   return (records || []).map((rec) => {
     const out = {};
     for (const [k, v] of Object.entries(rec)) {
@@ -1143,6 +1145,52 @@ const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'c
 // catch either — that is a shared limitation, deliberately not papered over on one side only.
 function sampleKeyIdentity(v) {
   return JSON.stringify([typeof v, v]);
+}
+
+// Identity of a dashboard NAME, shared by the author-time gate in `validateAppSpec` and the download's
+// withholding in `readDashboards` (download-model-app.js). The two MUST agree, or a download could
+// hand back a spec that its own gate then rejects.
+//
+// A dashboard has no identity but its name: a sitemap subarea names it, and the build reuses an
+// existing one that a server-side `name eq '…'` filter finds (resolveArtifact, sdk-build.js). That
+// comparison follows the environment's SQL collation — case-insensitive in every language, accent-
+// insensitive in most — so two names can differ on the page and still be ONE dashboard to the lookup.
+// See: https://learn.microsoft.com/en-us/power-platform/admin/language-collations
+//
+// What this folds is MEASURED, not assumed: pairs were written to a live English environment and read
+// back with `eq`. The server treated as EQUAL: case (Latin, Greek, Cyrillic); Latin, Greek and
+// Vietnamese accents, whether precomposed or decomposed; Hebrew points; the Devanagari nukta; kana
+// voicing marks; katakana vs hiragana; full- vs half-width; the ligatures and expansions ß/ss, Æ/AE,
+// Œ/OE, ﬁ/fi; the stroke letters Ø Ł Đ; final vs medial sigma; Arabic tatweel; and TRAILING spaces.
+// It kept as DIFFERENT: a LEADING space; a trailing tab or no-break space; Devanagari and Thai vowel
+// signs and Arabic harakat (letters, not accents); and Cyrillic й vs и — though ё vs е is equal, so
+// on Cyrillic only the breve counts. An earlier version stripped every combining mark and trimmed
+// both ends, which rejected distinct names such as 'कार' / 'कर' (a vowel sign is a letter).
+//
+// Where it cannot mirror the server exactly it folds MORE — accents in the accent-sensitive
+// languages, and a decomposed Hangul syllable, which the server keeps distinct from its precomposed
+// form. The costs are lopsided: a false rejection is loud and fixed by a rename, while a missed
+// collision silently drops a dashboard from the app.
+const DASHBOARD_FOLDED_MARK = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u0591-\u05bd\u05bf\u05c1\u05c2\u05c4\u05c5\u05c7\u093c\u09bc\u0a3c\u0abc\u0b3c\u0cbc\u3099\u309a\u0640]/u;
+const DASHBOARD_LETTER_FOLDS = { 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ς': 'σ' };
+function dashboardNameKey(name) {
+  // Trailing U+0020 is stripped BEFORE the compatibility decomposition: NFKD turns a no-break space
+  // into a plain one, and the server keeps a trailing no-break space significant.
+  const raw = String(name == null ? '' : name).replace(/ +$/, '');
+  let out = '';
+  let cyrillicBase = false;
+  for (const ch of raw.normalize('NFKD')) {
+    if (DASHBOARD_FOLDED_MARK.test(ch)) {
+      if (ch === '\u0306' && cyrillicBase) out += ch; // й / ў are letters of their own, not accented и / у
+      continue;
+    }
+    cyrillicBase = /\p{Script=Cyrillic}/u.test(ch);
+    out += ch;
+  }
+  return out.toLowerCase()
+    .replace(/[ßæœøłđς]/g, (c) => DASHBOARD_LETTER_FOLDS[c])
+    // Katakana → hiragana: the same kana, one code-point block apart (0x60).
+    .replace(/[\u30a1-\u30f6\u30fd\u30fe]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 }
 
 // The names the form compiler generates for an UNNAMED tab/section, shared with artifact-intent.js
@@ -2417,8 +2465,52 @@ function validateAppSpec(spec, opts = {}) {
   const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
   const viewNamesSet = new Set((spec.views || []).map((v) => v.name));
   const chartNamesSet = new Set((spec.charts || []).map((c) => c.name));
+  // Name → the tables that declare it. A tile names its view and chart, but both are unique only PER
+  // TABLE, and the build resolves them on the tile's table: when names repeat across tables, a tile
+  // that does not pin its table — or whose chart lives on a different one — deploys one table's view
+  // under another table's chart, which the platform accepts and publishes (live-measured).
+  const entitiesByName = (items) => {
+    const m = new Map();
+    for (const x of items || []) {
+      if (!x || !x.name || !x.entity) continue;
+      if (!m.has(x.name)) m.set(x.name, new Set());
+      m.get(x.name).add(String(x.entity).toLowerCase());
+    }
+    return m;
+  };
+  const viewTables = entitiesByName(spec.views);
+  const chartTables = entitiesByName(spec.charts);
+  const seenDashboardNames = new Map(); // dashboardNameKey → the first dashboard's name as written
+  // The table a name-based chart/list tile shows, or null when it cannot be determined (reported).
+  const tileTable = (d, t) => {
+    const tables = viewTables.get(t.view);
+    if (!tables) return null; // unknown view — reported by the caller
+    if (t.entity) {
+      const want = String(t.entity).toLowerCase();
+      if (!tables.has(want)) {
+        errors.push(`dashboard '${d.name}': ${t.type} tile names view '${t.view}' on ${t.entity}, but that view is declared on ${[...tables].join(', ')}`);
+        return null;
+      }
+      return want;
+    }
+    if (tables.size > 1) {
+      errors.push(`dashboard '${d.name}': ${t.type} tile's view '${t.view}' is declared on more than one table (${[...tables].join(', ')}) — set the tile's entity to say which`);
+      return null;
+    }
+    return [...tables][0];
+  };
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    // A sitemap subarea and the build both find a dashboard BY NAME, the build through a server-side
+    // filter that ignores case (and usually accents), so two names that compare equal there cannot be
+    // told apart: both subareas resolve to one dashboard and the other silently leaves the nav
+    // (#586 item 4). See dashboardNameKey for exactly what is folded.
+    const dashKey = dashboardNameKey(d.name);
+    if (seenDashboardNames.has(dashKey)) {
+      errors.push(`dashboard '${d.name}': has the same name as dashboard '${seenDashboardNames.get(dashKey)}' — Dataverse compares names ignoring case (and, in most languages, accents), and a sitemap subarea and the build find a dashboard by name, so each name must be unique`);
+    } else {
+      seenDashboardNames.set(dashKey, d.name);
+    }
     validateDescription(d.description, `dashboard '${d.name}'`, errors);
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
@@ -2440,6 +2532,13 @@ function validateAppSpec(spec, opts = {}) {
         } else {
           if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
           if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
+          else {
+            const table = tileTable(d, t);
+            const chartOn = chartTables.get(t.chart);
+            if (table && chartOn && !chartOn.has(table)) {
+              errors.push(`dashboard '${d.name}': chart tile shows ${table} (view '${t.view}'), but chart '${t.chart}' is declared on ${[...chartOn].join(', ')} — a tile's chart and view must be on the same table`);
+            }
+          }
         }
       } else if (t.type === 'list') {
         if (byId) {
@@ -2447,6 +2546,8 @@ function validateAppSpec(spec, opts = {}) {
           else badEntityRef(t.entity, `dashboard '${d.name}': list tile`);
         } else if (!t.view || !viewNamesSet.has(t.view)) {
           errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
+        } else {
+          tileTable(d, t);
         }
       } else if (t.type === 'iframe') {
         if (!t.url) errors.push(`dashboard '${d.name}': iframe tile needs a url`);
@@ -2827,7 +2928,14 @@ function validateAppSpec(spec, opts = {}) {
             for (const key of Object.keys(rec)) if (key.toLowerCase() === want) return rec[key];
             return undefined;
           };
-          const filled = (col) => v.length > 0 && v.every((r) => {
+          // The loader decides on RESOLVED values: buildSeedGroup runs resolveSampleRecords before
+          // chooseMatchOn, so a Choice label, its other-language alias and the raw option integer
+          // ('Open', 'Ouvert', 100000000) are ONE key there. Comparing the values as authored passed
+          // exactly those specs, and the seed then refused them mid-build (#586 item 2). Resolved one
+          // row at a time so a malformed row — already reported above — cannot throw out of the gate.
+          const isRow = (r) => r && typeof r === 'object' && !Array.isArray(r);
+          const resolved = v.map((r) => (isRow(r) ? resolveSampleRecords(ent, [r], spec)[0] : r));
+          const filled = (col) => resolved.length > 0 && resolved.every((r) => {
             const x = valueOf(r, col);
             return x !== undefined && x !== null && x !== '';
           });
@@ -2843,19 +2951,23 @@ function validateAppSpec(spec, opts = {}) {
             .find((c) => c && filled(c));
           const matchOnCol = altKeyCol || (!hasSafeKey && filled(ent.primaryAttribute.schemaName) ? ent.primaryAttribute.schemaName : null);
           if (matchOnCol) {
-            const seen = new Set();
-            for (const r of v) {
-              const raw = valueOf(r, matchOnCol);
+            const seen = new Map(); // resolved key → the value as the author wrote it
+            for (let i = 0; i < v.length; i++) {
+              const raw = valueOf(v[i], matchOnCol);
               // Keyed through the SHARED `sampleKeyIdentity` the loader uses, so this gate cannot
               // decide "duplicate" differently from the code that actually refuses the seed. A
               // plain `String(...)` key made `1` and `'1'` collide here while the loader treats them
               // as distinct — rejecting, at author time, a spec that builds.
-              const key = sampleKeyIdentity(raw);
+              const key = sampleKeyIdentity(valueOf(resolved[i], matchOnCol));
               if (seen.has(key)) {
-                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
+                // Two DIFFERENT spellings of one option read as a false alarm unless the message
+                // says why they are the same.
+                const prev = seen.get(key);
+                const alias = sampleKeyIdentity(prev) === sampleKeyIdentity(raw) ? '' : ` (the same option as '${String(prev)}')`;
+                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'${alias}. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
                 break;
               }
-              seen.add(key);
+              seen.set(key, raw);
             }
           }
         }
@@ -3413,6 +3525,7 @@ function migrateAppSpec(spec) {
 module.exports = {
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
+  dashboardNameKey,
   generatedTabName,
   generatedSectionName,
   formColumnsOf,

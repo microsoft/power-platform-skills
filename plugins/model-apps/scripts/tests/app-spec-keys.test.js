@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function base() {
   return {
@@ -587,6 +588,42 @@ test('sampleData: duplicate detection keys values exactly the way the loader doe
     'and so are two identical numbers');
 });
 
+// #586 item 2: the loader looks for duplicates only AFTER resolveSampleRecords has turned every Choice
+// value into its option integer, so a label, its other-language alias and the raw integer are ONE key
+// there. The gate compared the values as authored, passed the spec, and the seed then refused it —
+// after tables, forms and views were already deployed. The gate must see what the loader sees, so this
+// checks the two against each other rather than against a hand-written expectation.
+test('sampleData: duplicate detection compares Choice values as the options they resolve to', () => {
+  const withChoiceKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Choice',
+      options: [{ 1033: 'Open', 1036: 'Ouvert' }, { 1033: 'Closed', 1036: 'Fermé' }] }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return s;
+  };
+  const gateSays = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  const loaderSays = (s) => {
+    try { buildSeedGroup({ spec: s, e: s.entities[0], records: s.sampleData.contoso_order, statusReasonValues: {} }); return null; } catch (e) { return e.message; }
+  };
+  const cases = [
+    ['a label and its other-language alias', ['Open', 'Ouvert'], true],
+    ['a label and the raw option integer', ['Open', 100000000], true],
+    ['an alias and the raw option integer', ['Ouvert', 100000000], true],
+    ['two different options, in two languages', ['Open', 'Fermé'], false],
+  ];
+  for (const [what, [first, second], dup] of cases) {
+    const s = withChoiceKey([{ contoso_name: 'A', contoso_code: first }, { contoso_name: 'B', contoso_code: second }]);
+    const loader = loaderSays(s);
+    assert.strictEqual(Boolean(loader), dup, `precondition — the loader ${dup ? 'refuses' : 'accepts'} ${what}: ${loader}`);
+    assert.strictEqual(gateSays(s).length, dup ? 1 : 0, `${what}: the gate must agree with the loader; got ${JSON.stringify(gateSays(s))}`);
+  }
+  // The author wrote neither side as an integer, so the message names what they DID write.
+  const [msg] = gateSays(withChoiceKey([{ contoso_name: 'A', contoso_code: 'Open' }, { contoso_name: 'B', contoso_code: 'Ouvert' }]));
+  assert.match(msg, /'Ouvert'/);
+  assert.match(msg, /same option as 'Open'/);
+});
+
 // A generated fallback name is a REAL identity, not a placeholder: the reconcile matches a deployed
 // container by name. So an unnamed section and an explicit `name: "section_0_0"` are the same
 // container to every rebuild path, while create emits two. MEASURED before this gate: the compiled
@@ -767,8 +804,8 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
   assert.match(tooNew[0], new RegExp(`running plugin is ${String(version).replace(/\./g, '\\.')}`), 'and the version actually running');
   assert.match(tooNew[0], /upgrade the plugin/, 'and tells the author to upgrade rather than delete the line');
 
-  // Pre-release and build-metadata suffixes compare on the release CORE. Astra review caught the
-  // first attempt splitting on dots BEFORE stripping the suffix, which turned `2.8.0-beta.1` into
+  // Pre-release and build-metadata suffixes compare on the release CORE. A first attempt split on
+  // dots BEFORE stripping the suffix, which turned `2.8.0-beta.1` into
   // [2,8,0,1] — so the running release compared as OLDER than its own pre-release and refused to
   // build. A dotted suffix is the case a single-token `-beta` test cannot catch.
   for (const suffix of ['-beta', '-beta.1', '+build.1', '-rc.2']) {
@@ -802,8 +839,8 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
       `${JSON.stringify(good)} must be accepted as well-formed, got ${JSON.stringify(e)}`);
   }
 
-  // FAIL CLOSED when this plugin cannot read its own version. Astra review caught the first attempt
-  // downgrading that to a warning, which let an incompatible install reach the write path with the
+  // FAIL CLOSED when this plugin cannot read its own version. A first attempt downgraded
+  // that to a warning, which let an incompatible install reach the write path with the
   // requirement neither satisfied nor overridden. Driven by making BOTH manifest reads throw.
   const fs = require('node:fs');
   const realRead = fs.readFileSync;

@@ -449,6 +449,12 @@ async function buildModelApp(spec, opts, deps) {
 // "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
 function isTransientHalt(err) {
   if (!err) return false;
+  // An error that says it must not be retried wins over any status or text it carries. A dashboard
+  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
+  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
+  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
+  // prevent.
+  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
   const status = (err.cause && err.cause.statusCode) || err.statusCode;
   const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
   return (

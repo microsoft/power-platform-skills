@@ -226,7 +226,9 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     // apply writes anything, so a crash mid-upload can never leave a stale "eligible" snapshot and a
     // concurrent reader that captured the old generation can no longer win the re-bless CAS. A failed
     // invalidate means lease contention (another build) → ABORT rather than risk two concurrent builds.
-    const inv = store.invalidateSnapshot(ws);
+    // FENCED to the generation this decision was read at (#587 item 1): a teardown that tombstoned the
+    // snapshot while identity was being resolved must stop this run here, before it uploads anything.
+    const inv = store.invalidateSnapshot(ws, { expectedGeneration: snapshot.generation || null });
     if (!inv.ok) {
       const msg = `changed-only: could not invalidate the snapshot before the fast apply (${inv.reason}) — aborting to avoid an unsafe partial write`;
       log(`✗ ${msg}`);
@@ -254,7 +256,9 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // FULL build (baseline, ineligible-snapshot fallback, or an unsupported/unwired change).
   let expectedGen = null;
   if (snapshot) {
-    const inv = store.invalidateSnapshot(ws);
+    // Fenced exactly like the fast path: the baseline this build writes is assembled from the snapshot
+    // read above, so a tombstone that landed since must stop the build rather than be overwritten by it.
+    const inv = store.invalidateSnapshot(ws, { expectedGeneration: snapshot.generation || null });
     if (!inv.ok) {
       const msg = `changed-only: could not invalidate the snapshot before the full apply (${inv.reason}) — aborting to avoid a concurrent build`;
       log(`✗ ${msg}`);

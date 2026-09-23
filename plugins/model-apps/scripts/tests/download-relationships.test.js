@@ -41,6 +41,8 @@ test('reconstructs a 1:N between two app tables with the properly-cased lookup n
     referencing: 'new_ticket',
     // Cased as deployed — the SDK's own projection lowercases this to `new_customerid`.
     lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' },
+    // Ownership is unprovable from a download, so teardown must retain it like the tables (#587 item 6).
+    existing: true,
   }]);
 });
 
@@ -156,7 +158,7 @@ test('reconstructs N:N only when both ends are in the app, and reports the rest 
   // `manyToManySchemaName` SORTS the pair, so it would compose `new_tag_new_ticket`. Without the
   // deployed name a rebuild into this environment creates a SECOND intersect relationship instead of
   // matching the existing one.
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag', existing: true }]);
   assert.strictEqual(skipped.length, 1);
   assert.match(skipped[0].reason, /does not include both tables/i);
 });
@@ -174,7 +176,7 @@ test('an N:N is emitted once even though it appears on BOTH tables metadata (#56
   const r = rel({ SchemaName: 'new_ticket_new_tag', Entity1LogicalName: 'new_ticket', Entity2LogicalName: 'new_tag' });
   const sdk = makeSdk({ m2m: { new_ticket: [r], new_tag: [r] } });
   const { relationships } = await readRelationships(sdk, ['new_ticket', 'new_tag'], 'new');
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag', existing: true }]);
 });
 
 test('a failed relationship read is REPORTED, not silently read as "this table has none" (#567)', async () => {

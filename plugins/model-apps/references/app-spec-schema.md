@@ -505,6 +505,13 @@ rather than silently dropped:
   have (a bridge to a *standard* table like `systemuser`/`account` is kept — every org has one);
 - an **N:N whose partner table is outside the app**.
 
+Every relationship a download reconstructs carries **`"existing": true`** — the same ownership flag its
+tables carry, for the same reason: a download cannot prove this app created it. The build still creates
+a missing one; **teardown retains it**, because deleting a relationship removes its lookup column (and
+that column's data) from a table teardown also retains. An author-built relationship has no flag and is
+torn down with the app as before. If you set the flag on a relationship yourself, set it on its
+`referenced` table too: teardown cannot delete a table that a retained relationship still points at.
+
 A polymorphic lookup's **shadow attributes** (`<lookup>name`, `<lookup>yominame`) are excluded from
 `columns[]` along with it, so a rebuild does not gain invented Text columns where the lookup used to
 be. Every lookup has shadows; a polymorphic one's are physically stored rather than logical, which is
