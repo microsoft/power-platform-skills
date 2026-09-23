@@ -45,9 +45,12 @@ The plugin provides 34 skills that cover the full lifecycle of a Power Pages sit
 #### `/create-site`
 
 > "Create a Power Pages site with React for a job board"
+>
+> "Create a site from a Power Pages SPA template"
 
-Scaffolds a complete code site from a framework template, applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview in the browser throughout development.
+Starts a complete code site either from a curated SPA template or from a fresh framework scaffold. The template path previews installable templates, imports the selected unmanaged solution into your environment, applies optional seed data, activates the site, and opens the live URL. The from-scratch path applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview throughout development.
 
+- Start from a curated SPA template or scaffold from scratch
 - Choose from React, Vue, Angular, or Astro
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
@@ -466,7 +469,7 @@ The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAU
 A common end-to-end workflow looks like this:
 
 ```
-1.  /create-site            →  Scaffold + design + build pages
+1.  /create-site            →  Start from a SPA template or scaffold + design + build pages
 2.  /deploy-site            →  Upload to Power Pages environment
 3.  /activate-site          →  Provision a public URL
 4.  /setup-datamodel        →  Create Dataverse tables

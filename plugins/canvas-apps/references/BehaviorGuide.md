@@ -44,7 +44,7 @@ For every requested behavior, the plan must identify:
 
 Keep a single source of truth for each concept. Do not update one collection while a visible gallery, metric, or selector reads another.
 
-Every mutation needs an in-viewport result surface bound to the exact affected record or a snapshot captured by the handler. Show the record identity, action, and fields needed to verify the requested outcome. A list, detail screen, or metric must also read the changed source, but list position is secondary evidence: a success notification, navigation alone, or a changed row somewhere in a long list does not satisfy the contract. Do not depend on programmatically scrolling a Gallery to an arbitrary record; Canvas galleries do not provide a reliable general reveal contract.
+Every user-requested or plan-declared mutation needs an in-viewport result surface bound to the exact affected record or a snapshot captured by the handler. Internal setup and initialization mutations do not require user-facing receipts. Show the record identity, action, and fields needed to verify the requested outcome. A list, detail screen, or metric must also read the changed source, but list position is secondary evidence: a success notification, navigation alone, or a changed row somewhere in a long list does not satisfy the contract. Do not depend on programmatically scrolling a Gallery to an arbitrary record; Canvas galleries do not provide a reliable general reveal contract.
 
 ## Closed-loop state transitions
 
@@ -54,11 +54,138 @@ Every action must form one traceable loop:
 
 - Name the precondition and eligibility predicate. The control's `Visible` and `DisplayMode` formulas must permit that state.
 - Mutate the same source and field that the observer reads. A status button that patches `ReviewState` while the badge renders `Status` is broken even when both formulas compile.
-- Identify records by an immutable stable ID. Capture `ThisItem.ID` or the selected ID before mutation and look up the target from the source; do not infer identity from a display name.
+- Identify records by an immutable stable ID. Capture `ThisItem.ID` or the selected ID before mutation and look up the target from the source; do not infer identity from a display name. The `LookUp`/`Filter` that locates the target must compare the key field against the raw selected/context value with no concatenation, prefix, suffix, casing, or reshaping (`= Selected.ID & " ID"`, `"ITEM-" & Selected.ID`, `Left(...)`, `Trim(...)`) unless the documented schema stores the key that way. A reshaped key is a **phantom LookUp key**: it matches nothing, so `LookUp` returns `Blank()` and the `Patch` silently mutates no row even though the formula compiles.
+- When an action depends on a prior record selection, use one nullable selected-record ID
+  as the selection source of truth. Initialize or reset it to `Blank()`, assign it from the
+  row's selection event, and use that same ID for the selected-record display, eligibility
+  gate, mutation `LookUp`, receipt, and compound sequence evidence. This is the default
+  pattern for proving an incomplete state. A direct row action may instead use that row's
+  stable `ThisItem` identity without introducing separate selection state.
+  `Control.Selected` / `.Selected.*` on a Gallery, Dropdown, List box, or Combo box is not
+  an empty-selection contract: a control with nonempty `Items` can expose an
+  automatic/default selection before the user chooses one. Use it as incomplete-state
+  evidence only when the control's empty-selection semantics are explicitly configured and
+  evidenced.
+- Feed mutations from live input, not dead state. Any variable that is meant to carry a user-entered or user-selected value (`varAmount`, `varOldQuantity`, a staging variable) must be written from its input control at the moment of input — an `OnChange` that runs `Set(varStaging, Control.Value)`/`Set(varStaging, Control.Selected)`, or an inline `Control.Value`/`Control.Selected` read inside the handler. A staging variable initialized only in `App.OnStart` or `Screen.OnVisible` and never re-written from an input is **dead**: it stays at its seed (`0`, `Blank()`), so the mutation silently computes against the seed while still compiling and still passing sign/direction checks. Prefer reading the input directly at mutation time (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`).
+  An amount staged by `OnChange` is live, but not automatically valid: the input's
+  `Default`, `Min`, and current `Value` must still make invalid states representable, and
+  the submission gate must reject the staged/current blank or non-positive value.
 - Use the mutation result or a fresh lookup by ID for the receipt. Do not read a potentially stale gallery `ThisItem` after `Patch` and assume it contains the new value.
 - Make success contingent on the operation. Reset inputs, exit edit mode, navigate, and reveal success evidence only on the success path.
 - Bind every downstream list, filter, metric, export, and decision surface to the same updated source or refresh the external source before observing it.
 - Define a deterministic Given/When/Then scenario for the success path and each required negative or boundary path. If the generated formulas cannot satisfy that scenario by inspection, the action is incomplete.
+
+## Directional mutation contracts
+
+Opposing transitions are independent behaviors, even when one form implements both.
+Receive/Issue, Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out, and
+Enable/Disable each require separate Action Contract rows and separate concrete
+Given/When/Then scenarios.
+
+- A shared form is valid only when the operation selector and amount or value input are
+  visible, pointer-selectable, and included in the mutation formula and receipt.
+- Disable submission whenever the operation or required amount/value is hidden, clipped,
+  blank, invalid, unset, or unreachable. Never fall through to a default direction or use
+  stale operation state from an earlier interaction.
+- Make blank and non-positive amount states representable so the invalid paths can actually
+  be exercised. For `ModernNumberInput`, define compatible `Default`, `Min`, and
+  `ValidationState` formulas: do not set `Min: =1` when acceptance must enter or reset to
+  `0`. Gate on the current `Value`; both `Control.Value <= 0` and
+  `Not(Control.Value > 0)` are valid non-positive checks. Show visible validation, and use
+  `Reset(Control)` only when its `Default` restores the chosen
+  invalid state. `Default: =Blank()` and `Default: =0` are both valid when `Min` permits
+  that value and the gate rejects it.
+- Reset shared operation state to `Blank()` on entry to the action screen and/or after a
+  successful Apply. `App.OnStart` runs for the app session, not for each visit or
+  adjustment, so an OnStart-only blank assignment permits a stale direction to carry into
+  the next action. Blank-operation acceptance names the actual operation variable and its
+  reset event; an amount input's `Default: =Blank()` is not operation-state evidence. If
+  Apply clears the current operation, capture it first and bind the receipt to that
+  completed-operation state rather than to the newly blank current state.
+- A classic Dropdown with nonempty `Items` needs `AllowEmptySelection: =true` when its
+  blank default/reset is used to prove that no operation is selected. For a Combo box,
+  use `DefaultSelectedItems: =[]` and verify its empty selection; do not assign
+  `AllowEmptySelection` to it. Do not prescribe unsupported empty-selection properties for
+  a List box. Prefer an explicit operation variable whenever control semantics are absent
+  or uncertain.
+- Independent direct actions need no shared operation variable or reset: the identity of
+  each action control commits its direction. Each handler still needs its own selected-ID
+  and valid-amount gates and its own complete mutation/receipt path.
+- For arithmetic pairs, capture the old value before mutation and encode the direction
+  explicitly: increase is `newValue = oldValue + amount`; decrease is
+  `newValue = oldValue - amount`. State pairs must likewise assign explicit opposing
+  target states rather than toggle implicit state. Read both operands from live state at
+  mutation time — the old value from the canonical source and the amount from the input
+  control (`Value(txtAmount.Text)` or an `OnChange`-populated staging variable), never from a
+  staging variable left at its `App.OnStart` seed.
+- Prove each guarded direction with its own literal comparison, such as
+  `varOperation = "Receive"` and `varOperation = "Issue"`. A default or `else` arm is not
+  directional proof because an unknown or blank value can fall through to it.
+- The receipt shows the chosen operation, old value/state, amount when applicable,
+  expected new value/state, and actual persisted new value/state. The destination observer
+  must agree with that receipt.
+
+## Canonical mutation and evidence contracts
+
+Apply these contracts to every create, edit, delete, relationship change, approval, and
+state transition. The lifecycle, field-ledger, and continuation contracts below generalize
+the directional rules above to all mutations. The plan and acceptance artifact use additive
+ledgers so existing Action Contract columns remain compatible.
+
+### Mutation lifecycle evidence
+
+- Capture a **mutation receipt** from the operation result (`Patch` result,
+  `Form.LastSubmit`, connector response), a fresh canonical-source lookup by returned
+  stable ID, or a pre-delete snapshot. The receipt names the action and stable ID.
+- Name the **canonical source** that owns the post-state and the **requested destination**
+  where the user expects to use or inspect it after the mutation, such as a list, detail,
+  relationship view, review queue, or status board. The receipt, canonical observer, and
+  destination observer must all refer to the same stable ID.
+- When canonical source and destination read the same live source, state that no
+  synchronization step is needed. When they differ because the destination uses a cache,
+  projection, related collection, or external query, name the successful-path
+  refresh/requery/update that synchronizes it before evidence is shown.
+- When the requested destination can contain multiple records, name the focus mechanism
+  that selects, filters, highlights, or opens the returned stable ID. Focus supplements
+  the receipt; it does not replace it and must not match by display text or list position.
+- Keep success-only synchronization, focus, navigation, and evidence after the mutation
+  succeeds. A failed or cancelled operation must not expose a success receipt or move the
+  user to a destination that implies success.
+
+### Changed/preserved field ledger
+
+- For each mutation, maintain a field ledger that classifies relevant fields as
+  **Changed** or **Preserved**. Include every field/status written by the handler and every
+  user-visible or lifecycle-significant field that the operation must retain. For delete,
+  record existence as Changed and bind its proof to the deletion snapshot plus canonical
+  absence observer.
+- A Changed row names the input or transition expression, canonical write target, and
+  receipt proof binding. Every changed field must appear in both the Action Contract write
+  set and proof set; every write-set field must have exactly one readable proof binding.
+- A Preserved row names its canonical pre-state source and preservation mechanism: omit it
+  from a partial update, or carry forward that exact canonical value. Do not repopulate a
+  preserved field from a control default, stale selection, display text, or parallel
+  collection. Name the post-state observer that demonstrates preservation.
+- The ledger is a contract, not a second mutation schema. It expands the existing
+  write-set/proof-set parity rule without changing the meaning of either set.
+
+### Conditional stable-ID continuation
+
+- Include continuation state only when a successful create is intentionally used by a
+  later edit, delete, relationship, approval, or state-transition action. Do not add a
+  continuation contract for create-only flows or ordinary navigation.
+- Capture the created record's returned stable ID and bind the named continuation action
+  directly to that ID. The later mutation, its receipt, canonical observer, and requested
+  destination must retain the same identity; never recover it from a display name, current
+  list position, or implicit default selection.
+- Clear continuation identity and mode after the downstream action completes successfully
+  or the user cancels it. A failed downstream mutation may retain the ID for retry, but
+  must not claim completion or clear the context as if it succeeded.
+
+These contracts can be traced statically through final YAML, but static traceability does
+not prove that controls rendered, events fired, external writes succeeded, synchronization
+completed, or focus moved at runtime. Keep acceptance labeled
+`Runtime evaluation: NOT RUN` until those paths are actually executed in the running app.
 
 ## Mutation receipt contract
 
@@ -66,6 +193,10 @@ Every action must form one traceable loop:
 - In the mutation handler or form success event, capture the returned record, stable ID, or a deletion snapshot before resetting inputs or navigating. Bind the result surface to that captured state.
 - Define a **write set** for each mutation: every field and status value the handler creates or changes. Define a **proof set** in the Action Contract: the identity plus the write-set values that must be visible after success. For create and edit, the proof set must include every user-entered or user-selected field written by the handler; do not reduce it to fields already convenient to display in a list. For approve, reject, or another transition, include the identity and resulting status. For delete, include the removed identity and action from the captured snapshot.
 - Render every proof-set field as labeled, readable content bound to the captured state. A field is not proven by the input before submission, by an agent's remembered value, by hidden state, or by an unlabeled/truncated list cell.
+- Keep a directional receipt's operation, old value, amount, expected value, and actual
+  value together in one sufficiently sized visible region. Budget the container's height
+  from all five labeled rows, gaps, and padding; a visible heading above clipped receipt
+  fields is not evidence.
 - Keep the result visible until the user dismisses it or begins another mutation. A transient `Notify()` may supplement this surface but cannot replace it.
 - Also refresh or update the shared source so lists, filters, metrics, and later screens reflect the mutation. The receipt proves the immediate outcome; it does not replace source-of-truth consistency.
 - Treat write-set/proof-set parity as a generation invariant. If the handler writes a user-supplied field that the receipt does not render, the mutation is incomplete even when persistence and navigation work.
@@ -88,6 +219,20 @@ Every action must form one traceable loop:
 - On phone layouts, keep the record identity, status, and required lifecycle actions in the visible row or its immediately reachable detail. Stack the row or use a visible overflow control; never leave Edit, approve, reject, or remove in desktop columns clipped beyond the canvas width.
 - A required action below the fold needs an obvious, working scroll affordance and must not be trapped inside nested fixed-height containers.
 - Repeat the same destination set and ordering across screens so an evaluator or user does not need to rediscover navigation after each action.
+
+## Record presentation contract
+
+- For every repeated card, row, or immediately reachable detail, enumerate the fields the
+  requirements expect users to see. Render each field through a visible control bound to
+  the current record and keep that control inside the record surface.
+- The canonical identity is mandatory, but it is not sufficient when the request also
+  names people, time ranges, descriptions, statuses, or other details. A time-only card,
+  icon, tooltip, accessible label, hidden control, or clipped text does not prove those
+  fields are present.
+- A combined text control may render several fields only when its formula references every
+  required source field and the complete value fits or wraps in the normal layout.
+- After create or edit, update or refresh the source used by the record surface so the
+  required field bindings immediately show the new values without a manual refresh.
 
 ## Role-scoped record management and review
 

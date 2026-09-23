@@ -8,10 +8,17 @@ Read all `[working directory]/*.pa.yaml` files.
 
 Treat the edit as **simple** only when all are true:
 
-- At most two property mutations in total, across at most two existing controls
+- At most two property mutations in total, across at most two existing controls, and at
+  most one new leaf control
 - At most one screen changes
 - No new screen, data source, or connector
-- No structural layout change
+- No control is removed or reparented, and no container, layout mode, or existing control
+  hierarchy changes
+
+Adding one leaf control to the `Children` of an existing screen or container is not a
+structural layout change by itself. Keep that edit simple when the insertion can preserve
+the current hierarchy and layout strategy. Adding a container, moving existing controls,
+or reorganizing the hierarchy is a complex edit.
 
 Anything else is **complex**.
 
@@ -20,8 +27,10 @@ Anything else is **complex**.
 1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit
    touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
    sizing, scrolling, or color.
-2. Use `describe_control` before adding a property not already present on that control.
-3. Apply targeted edits directly to the `[working directory]` folder.
+2. Use `describe_control` before adding a property not already present on that control,
+   or before adding a control. Choose an app-wide unique control name.
+3. Apply targeted edits directly to the `[working directory]` folder. Insert a new leaf
+   control without rebuilding the surrounding hierarchy.
 4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 5. Stop after the final summary; do not invoke planner or builder agents.
 
@@ -76,6 +85,18 @@ Wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
+
+Before delegation, use the top-level skill's MCP connection for discovery introduced by
+the edit. List resources only when the edit introduces resources not already present.
+Call `describe_control` for every type receiving a property, enum, or variant not already
+carried in its target YAML, and call `describe_api` and `get_data_source_schema` only for
+APIs and data sources involved in the edit. Also call `describe_control` for every Canvas
+or Code Component used by the plan, and make those component calls last so the packet
+contains the freshest Studio snapshot. Preserve the exact results as the discovery
+packet. Do not delegate these calls: task agents do not reliably inherit the configured
+MCP connection.
+
+
 Invoke the `canvas-app-planner` agent with `Task` and:
 
 ```text
@@ -83,14 +104,21 @@ Mode: EDIT
 Working directory: `[working directory]`
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
+Plugin root: `${PLUGIN_ROOT}`
 Edit requirements: [user requirements]
 Approved plan: [full approved plan]
 Current app state: [palette, variables, layout, screens, controls]
 Synced files: [absolute working-directory paths]
+Discovery packet: [complete results gathered above]
 ```
 
 The planner writes the plan index, shared plan, and one screen brief per dispatch row. It
 does not edit any `.pa.yaml` file in EDIT mode.
+
+If it returns `Status: Discovery Packet Blocked`, gather the named missing result in this
+top-level context and re-invoke it with the completed packet. If writing is blocked, apply
+its complete inline artifact payloads verbatim as required by the skill before entering
+Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.
