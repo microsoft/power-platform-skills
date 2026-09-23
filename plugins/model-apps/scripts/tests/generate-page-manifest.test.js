@@ -536,14 +536,22 @@ test('--force keeps the replaced file\'s permission bits (POSIX)', (t) => {
 test('cleanup never deletes a temp-named file this call did not create', () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-foreign-tmp-'));
   const real = fs.writeFileSync;
+  const realOpen = fs.openSync;
   let foreign = null;
+  // Another process takes the temp name first, so the exclusive create refuses. Intercepted in
+  // either shape the exclusive create can take: an `fs.openSync(p, 'wx')` or a `wx` writeFileSync.
+  const takenFirst = (p) => {
+    real(p, 'someone else');
+    foreign = String(p);
+    const e = new Error('EEXIST: file already exists'); e.code = 'EEXIST'; return e;
+  };
   try {
+    fs.openSync = (p, flags, ...rest) => {
+      if (/\.tmp$/.test(String(p)) && flags === 'wx') throw takenFirst(p);
+      return realOpen(p, flags, ...rest);
+    };
     fs.writeFileSync = (p, data, opts) => {
-      if (/\.tmp$/.test(String(p)) && opts && opts.flag === 'wx') {
-        real(p, 'someone else'); // another process got there first...
-        foreign = String(p);
-        const e = new Error('EEXIST: file already exists'); e.code = 'EEXIST'; throw e; // ...so wx refuses
-      }
+      if (/\.tmp$/.test(String(p)) && opts && opts.flag === 'wx') throw takenFirst(p);
       return real(p, data, opts);
     };
     let threw = null;
@@ -552,6 +560,7 @@ test('cleanup never deletes a temp-named file this call did not create', () => {
     assert.ok(foreign && fs.existsSync(foreign), 'the other process\'s file must survive our cleanup');
   } finally {
     fs.writeFileSync = real;
+    fs.openSync = realOpen;
     fs.rmSync(work, { recursive: true, force: true });
   }
 });
@@ -569,6 +578,32 @@ test('a failed rename removes the temp file this call created', () => {
     assert.deepStrictEqual(fs.readdirSync(work), [], 'no temp debris may remain');
   } finally {
     fs.renameSync = real;
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// The temp file is ours from the moment the exclusive open succeeds. A write that fails AFTER the
+// open (ENOSPC, EDQUOT, EIO) leaves the file behind — fs.writeFileSync closes it but does not remove
+// it — so ownership must not wait for the write to return, or each retry strands another temp file.
+test('a write that fails after the temp file was created still removes it', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-enospc-'));
+  const real = fs.writeFileSync;
+  try {
+    // Simulates the real failure for either write shape: by fd, or by path — where Node has already
+    // created the file when the write fails.
+    const enospc = () => { const e = new Error('ENOSPC: no space left on device, write'); e.code = 'ENOSPC'; return e; };
+    fs.writeFileSync = (target, ...rest) => {
+      if (typeof target === 'number') throw enospc();
+      if (String(target).endsWith('.tmp')) { fs.closeSync(fs.openSync(target, 'wx')); throw enospc(); }
+      return real(target, ...rest);
+    };
+    let threw = null;
+    try { writeIfAllowed(path.join(work, 'package.json'), '{}', false, fs.realpathSync(work)); } catch (e) { threw = e; }
+    assert.ok(threw, 'the failed write must be reported');
+    assert.strictEqual(threw.code, 'IO_ERROR');
+    assert.deepStrictEqual(fs.readdirSync(work), [], 'no temp debris may remain');
+  } finally {
+    fs.writeFileSync = real;
     fs.rmSync(work, { recursive: true, force: true });
   }
 });

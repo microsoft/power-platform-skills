@@ -721,10 +721,13 @@ prevent — can make the rows of a section positionally meaningful in the same w
 the reserved slot. In such a section the build therefore never re-flows. Narrowing its grid is
 applied only when every row already fits the new width; otherwise the section **keeps its current
 grid** and the refusal is reported. A span change that would overflow a row there is skipped (and
-reported), rather than applied without the re-flow. A section whose row spans are all **trailing**
-— stock Main forms put `rowspan` on the last cell — re-flows normally, because nothing comes after
-the span to land in its reservation. Every refusal is also recorded in the build result
-(`skipped.layout`), and `--verify` reports the divergence for an explicit layout.
+reported), rather than applied without the re-flow. Likewise a `rowspan` is never **raised** on a
+deployed cell that other cells follow, even when its row still fits: the build keeps a field where
+the form already has it, so the field you list last is not necessarily last on the form. A section
+whose row spans are all **trailing** — stock Main forms put `rowspan` on the last cell — re-flows
+normally, because nothing comes after the span to land in its reservation. Every refusal is also
+recorded in the build result (`skipped.layout`), and `--verify` reports the divergence for an
+explicit layout.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a
@@ -773,9 +776,10 @@ Where both apply to one field the inline entry wins; a plain string entry keeps 
   after the first), and anchors may not form a **cycle**.
 - **`colspan: <n>`** widens the control to `n` of its section's columns (a whole number ≥ 1, clamped
   to the section's width) — the same key an inline entry takes. An `auto` layout generates a
-  one-column section, so there it only widens a field on a deployed form whose section is wider (a
-  stock Main form the build reconciles). **`rowspan`** above 1 is accepted **inline only**, on the last
-  field of a section: a form-level option cannot see where its field lands, so it is rejected there.
+  one-column section (two columns once it holds more than six fields), so there a wider span only
+  takes effect up to that width — or on a deployed form whose section is wider (a stock Main form
+  the build reconciles). **`rowspan`** above 1 is accepted **inline only**, on the last field of a
+  section: a form-level option cannot see where its field lands, so it is rejected there.
 
 **Only the enabled state is ever written.** The build emits `readOnly`/`hidden` when you ask for
 them and writes *nothing* when you do not, so a rebuild never clears a lock or a hide someone applied

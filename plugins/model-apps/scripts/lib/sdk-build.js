@@ -2100,6 +2100,9 @@ async function runSdkBuild(spec, opts = {}) {
     return false;
   };
   const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+  // Whether any cell — a field or an empty spacer — comes after (rowIndex, cellIndex) in reading order.
+  const cellFollows = (rows, rowIndex, cellIndex) => (rows || []).some((r, ri) => ri >= rowIndex
+    && ((r && r.cells) || []).some((_, ci) => ri > rowIndex || ci > cellIndex));
 
   // A layout change the build declined to make. Reported, AND recorded on the result: a stderr line
   // alone is invisible to a non-interactive run, and `--verify` does not check every route — an
@@ -2114,9 +2117,10 @@ async function runSdkBuild(spec, opts = {}) {
   // a span the author never declared is never written, so a maker's hand-widened cell survives.
   //
   // Clamped against the section the write actually lands in, NOT the one the compiler laid out. On
-  // an existing form they can differ: an AUTO layout compiles a synthetic ONE-column section while
-  // reconcile deliberately keeps the deployed geometry, so the compiled clamp narrowed a maker's
-  // four-column cell to 1. `rawSpan` is the authored value carried past compilation for exactly this.
+  // an existing form they can differ: an AUTO layout compiles a synthetic section of one column (two
+  // once it holds more than six fields) while reconcile deliberately keeps the deployed geometry, so
+  // the compiled clamp narrowed a maker's four-column cell. `rawSpan` is the authored value carried
+  // past compilation for exactly this.
   // Used by BOTH the existing-cell route and the add route — the add route once used the compiled
   // span alone, so a newly added field landed narrow and was only widened by a second apply.
   const spanForLiveSection = (key, wantCell, rawSpan, liveSection) => {
@@ -2148,17 +2152,30 @@ async function runSdkBuild(spec, opts = {}) {
     // A span change can require a REFLOW of its row, and a reflow by reading order cannot honour a
     // row-spanning cell's reservation. For example, on a maker form holding
     // `[A rowspan=2, B] / [spacer]`, widening `B` overflows the row, and `repackRowAt` splits it
-    // by reading order — placing `B` in the row `A` reserves. Judged on the rows AS THEY WILL BE,
-    // so a patch that INTRODUCES a rowspan is covered too.
+    // by reading order — placing `B` in the row `A` reserves. Judged on the rows AS THEY WILL BE.
     const current = await provision.getArtifact('form', formId) || {};
     const sec = sectionAt(current, location.sectionPointer) || {};
     const rows = sec.rows || [];
+    const field = (live.control && live.control.fieldName) || location.cellPointer;
+    // A rowspan RAISED on a cell that other cells follow creates a reservation they must route
+    // around: the next row's cells are displaced past the covered slot, so a full row beneath needs
+    // more columns than its grid has — even when the patched row itself still fits, which the
+    // overflow check below cannot see. The validator only allows an authored rowspan on the LAST
+    // field of the spec's list, but the reconcile keeps a staying cell where the maker put it, so the
+    // deployed order can differ. Only the rowspan is withheld; a colspan in the same patch proceeds.
+    if (patch.rowspan !== undefined && patch.rowspan > (Number(live.rowspan) || 1)
+      && cellFollows(rows, location.rowIndex, location.cellIndex)) {
+      delete patch.rowspan;
+      reportLayoutSkip(`form section at ${location.sectionPointer}: the rowspan on '${field}' was not applied — `
+        + 'other cells follow it, and a row-spanning cell displaces the cells beneath it. Make it the last '
+        + 'field of its section in the maker.');
+      if (!Object.keys(patch).length) return;
+    }
     const row = rows[location.rowIndex];
     const beforeCells = (row && row.cells) || [];
     const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
     const overflows = rowsFromCells(afterCells, sec.columns).length > 1;
     const unsafe = reflowBreaksReservation(rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r)));
-    const field = (live.control && live.control.fieldName) || location.cellPointer;
     if (overflows && unsafe) {
       if (rowWidth(afterCells) > rowWidth(beforeCells)) {
         // A WIDENING into an overflow: skipped whole, not half-applied. Applying it without the
@@ -2262,8 +2279,8 @@ async function runSdkBuild(spec, opts = {}) {
       const sectionPointer = rowsPtr.slice(0, -'/rows'.length);
       // Span the NEW cell for the section it is landing in, by the same rule as an existing one.
       // The compiled cell alone carried the compiler's clamp, which for an auto layout is a
-      // synthetic one-column section: a field added to a four-column maker form arrived narrow and
-      // was only widened — and its row reflowed — by a SECOND apply of the same spec.
+      // synthetic one- or two-column section: a field added to a four-column maker form arrived
+      // narrow and was only widened — and its row reflowed — by a SECOND apply of the same spec.
       const liveSection = sectionAt(form, sectionPointer) || {};
       const cell = { ...wantCell };
       for (const key of ['colspan', 'rowspan']) {
@@ -2376,8 +2393,8 @@ async function runSdkBuild(spec, opts = {}) {
     }
     // RAW authored spans, kept off the compiled cells because a cell is pushed verbatim to the SDK.
     // Reconcile re-clamps them against the section it actually writes into: the compiled span is
-    // clamped to the COMPILER's section, which for an auto layout is a synthetic one-column stand-in
-    // that reconcile never deploys.
+    // clamped to the COMPILER's section, which for an auto layout is a synthetic one- or two-column
+    // stand-in that reconcile never deploys.
     const rawSpans = def.__fieldSpans || {};
     for (const logical of want) {
       await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical]);

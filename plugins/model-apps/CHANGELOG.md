@@ -74,9 +74,10 @@ downloads that round-trip Choice columns.
   validated too instead of a bad value being dropped.
 - **Re-flowing a section no longer breaks a maker's row-spanning layout.** Once a field follows a
   `rowspan`, re-flowing by reading order moved it into the reserved slot. Such a section now keeps
-  its grid when the rows cannot follow a narrowing, and a span change that would overflow its row is
-  skipped. Trailing spans (the stock-form shape) re-flow normally. Every refusal is reported and
-  recorded in the build result's `skipped.layout`.
+  its grid when the rows cannot follow a narrowing, a span change that would overflow its row is
+  skipped, and a `rowspan` is never raised on a deployed cell that other cells follow. Trailing spans
+  (the stock-form shape) re-flow normally. Every refusal is reported and recorded in the build
+  result's `skipped.layout`.
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
 - **Widening a field on a deployed form re-packs its row.** The span was patched in place but the

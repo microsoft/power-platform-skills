@@ -338,8 +338,12 @@ function writeIfAllowed(filePath, content, force, approvedRoot) {
   const tmp = path.join(realDir, `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
   let createdTmp = false;
   try {
-    fs.writeFileSync(tmp, content, { flag: 'wx' });
+    // Owned from the moment the exclusive open succeeds, not when the write returns: a write that
+    // fails after the open (ENOSPC, EDQUOT, EIO) leaves the file behind, and fs.writeFileSync closes
+    // it without removing it — so waiting for the write stranded a temp file on every failed run.
+    const fd = fs.openSync(tmp, 'wx');
     createdTmp = true;
+    try { fs.writeFileSync(fd, content); } finally { fs.closeSync(fd); }
     if (st) fs.chmodSync(tmp, st.mode & 0o777);
     renameWithRetry(tmp, resolved);
   } catch (err) {
