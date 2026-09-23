@@ -4313,6 +4313,33 @@ void ValidateSelectedRecordState(
                 errors.Add(
                     $"Gallery rendering: gallery '{gallery.Name}' uses collection-count/Self.Template self-sizing for Height, which is not a deterministic render-safe viewport contract; use a bounded numeric Height with explicit positive TemplateSize, numeric TemplatePadding, Items, and row controls.");
             }
+
+            foreach (var child in nodes.Where(node =>
+                string.Equals(node.Parent, gallery.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!TryGetControlBlock(yamlLines, child.Name, out var childBlock) ||
+                    !IsOwnControlType(childBlock, "Label") ||
+                    !TryParseNumber(GetOwnPropertyFormula(child.Name, childBlock, "Y"), out _) ||
+                    !TryParseNumber(GetOwnPropertyFormula(child.Name, childBlock, "Height"), out _))
+                {
+                    continue;
+                }
+
+                var text = NormalizeWhitespace(
+                    GetOwnPropertyFormula(child.Name, childBlock, "Text") ?? "");
+                var wrap = NormalizeWhitespace(
+                    GetOwnPropertyFormula(child.Name, childBlock, "Wrap") ?? "");
+                if (text.Length > 0 &&
+                    !Regex.IsMatch(
+                        text,
+                        "^=\"(?:[^\"]|\"\")*\"$",
+                        RegexOptions.CultureInvariant) &&
+                    !string.Equals(wrap, "=false", StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add(
+                        $"Gallery text flow: dynamic label '{child.Name}' in gallery '{gallery.Name}' has fixed Y and Height but does not declare Wrap =false; wrapped runtime text can overlap later fixed-position row controls. Use Wrap =false or an auto-layout composition.");
+                }
+            }
         }
     }
 

@@ -2036,6 +2036,47 @@ test('rejects a structurally undersized action with an explicit Char(10) line br
     assert.match(stderr, /explicit multiline result with a structural minimum of 36px.*Height is 30px/);
 });
 
+test('rejects dynamic gallery text that can wrap into fixed-position row controls', () => {
+    const workspace = materialize('gallery-dynamic-text-fixed-row-overlap');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Items: =colInventory\n            - lblReceiptOperation:',
+        '                    Items: =colInventory\n' +
+        '                Children:\n' +
+        '                    - lblDynamicItemName:\n' +
+        '                        Control: Label\n' +
+        '                        Properties:\n' +
+        '                            Text: =ThisItem.ItemName\n' +
+        '                            Y: =4\n' +
+        '                            Height: =28\n' +
+        '            - lblReceiptOperation:'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected dynamic fixed-row wrapping risk to fail');
+    assert.match(
+        stderr,
+        /dynamic label 'lblDynamicItemName'.*does not declare Wrap =false/);
+});
+
+test('accepts non-wrapping dynamic gallery text in a fixed-position row', () => {
+    const workspace = materialize('gallery-dynamic-text-fixed-row-nowrap');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Items: =colInventory\n            - lblReceiptOperation:',
+        '                    Items: =colInventory\n' +
+        '                Children:\n' +
+        '                    - lblDynamicItemName:\n' +
+        '                        Control: Label\n' +
+        '                        Properties:\n' +
+        '                            Text: =ThisItem.ItemName\n' +
+        '                            Wrap: =false\n' +
+        '                            Y: =4\n' +
+        '                            Height: =28\n' +
+        '            - lblReceiptOperation:'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
 test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
     const workspace = materialize('receive-issue-pass');
     const { code, stdout, stderr } = runValidator(workspace);
