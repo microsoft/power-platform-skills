@@ -4933,6 +4933,66 @@ test('form topology: a section whose only rowspan is trailing reflows normally w
   assert.deepStrictEqual(res.skipped.layout, []);
 });
 
+// A narrowing repack can need FEWER rows than the section holds: a maker form often leaves one field
+// per row in a wide section, and packing by width puts two of them side by side. The rows that repack
+// empties must be removed — and removed from the END, because removing by index shifts every later
+// index, so a front-to-back loop would delete a row that still holds a field.
+test('form topology: a narrowing repack that needs fewer rows removes the rows it emptied', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_code', displayName: 'Code', type: 'Text' },
+    { schemaName: 'new_zeta', displayName: 'Zeta', type: 'Text' });
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', 'new_tier', 'new_code', 'new_zeta'] },
+  ] }]);
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  // Two trailing rows to remove, so the removal ORDER is observable: front-to-back would skip one.
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 4,
+        rows: [{ cells: [cell('c1', 'new_name')] }, { cells: [cell('c2', 'new_tier')] }, { cells: [cell('c3', 'new_code')] }, { cells: [cell('c4', 'new_zeta')] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const res = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const sec = (await sdk.getArtifact('form', 'form-existing')).tabs[0].columns[0].sections[0];
+  const shape = sec.rows.map((r) => r.cells.map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(shape, [['new_name', 'new_tier'], ['new_code', 'new_zeta']], `got ${JSON.stringify(shape)}`);
+  assert.deepStrictEqual(res.skipped.layout, []);
+});
+
+// The repack's own reservation check is a BACKSTOP: its caller decides before writing the width, on
+// the same rows, so today it can only fire if those rows change between that decision and the repack.
+// Simulated by adding a row-spanning cell as the width is written. The contract: the rows are left
+// exactly as they are (never re-flowed into the reservation) and the refusal is recorded.
+test('form topology: the repack refuses rows that gained a reservation after the width decision', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_code', displayName: 'Code', type: 'Text' });
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier', 'new_code'] },
+  ] }]);
+  const cell = (id, f) => ({ id, control: { fieldName: f } });
+  const deployed = { id: 'f1', tabs: [{ id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 2,
+        rows: [{ cells: [cell('c1', 'new_name'), cell('c2', 'new_tier')] }, { cells: [cell('c3', 'new_code')] }] },
+    ] }] }], bag: { a: [], c: [] } };
+  const { sdk } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const realUpdate = sdk.updateElement;
+  sdk.updateElement = async (t, id, pointer, patch) => {
+    const out = await realUpdate(t, id, pointer, patch);
+    if (t === 'form' && patch && patch.columns !== undefined && /\/sections\/\d+$/.test(String(pointer))) {
+      const section = (await sdk.getArtifact('form', id)).tabs[0].columns[0].sections[0];
+      section.rows[0].cells[0].rowspan = 2; // new_tier now FOLLOWS a row-spanning cell
+    }
+    return out;
+  };
+  const res = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: () => {} });
+  const sec = (await sdk.getArtifact('form', 'form-existing')).tabs[0].columns[0].sections[0];
+  const shape = sec.rows.map((r) => r.cells.map((c) => c.control && c.control.fieldName));
+  assert.deepStrictEqual(shape, [['new_name', 'new_tier'], ['new_code']], `the rows must not be re-flowed; got ${JSON.stringify(shape)}`);
+  assert.ok(res.skipped.layout.some((m) => /rows were left as they are rather than re-flowed/.test(m)),
+    `the refusal must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
+});
+
 // The control: without a rowspan, the same narrowing DOES reflow — so the guard is specific to the
 // vertical reservation rather than a blanket refusal.
 test('form topology: the rowspan guard does not block an ordinary narrowing', async () => {

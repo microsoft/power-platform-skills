@@ -462,6 +462,47 @@ test('a leaf probe failing with EACCES is refused as unsafe (all platforms, stub
   }
 });
 
+// The PARENT gets the same fail-closed treatment as the leaf. A directory that cannot be resolved
+// (here: it does not exist) is refused as a safety failure, never created — the caller asked to
+// write inside the working directory, and a missing parent means that is not where this would land.
+test('a parent directory that cannot be resolved is refused as unsafe, and nothing is created', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-noparent-'));
+  try {
+    const missing = path.join(work, 'not-there');
+    let threw = null;
+    try { writeIfAllowed(path.join(missing, 'package.json'), '{}', true, fs.realpathSync(work)); } catch (e) { threw = e; }
+    assert.ok(threw, 'an unresolvable parent must be refused');
+    assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
+    assert.match(threw.message, /could not be resolved/);
+    assert.strictEqual(fs.existsSync(missing), false, 'the missing directory must not be created');
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// A parent that resolves but cannot then be INSPECTED (permissions changed, or the entry vanished in
+// between) is refused too. Stubbed, because no real filesystem produces that ordering on demand.
+test('a parent directory that resolves but cannot be inspected is refused as unsafe (stubbed stat)', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-statfail-'));
+  const real = fs.statSync;
+  try {
+    const realWork = fs.realpathSync(work);
+    fs.statSync = (p, ...rest) => {
+      if (path.resolve(String(p)) === realWork) { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; }
+      return real(p, ...rest);
+    };
+    let threw = null;
+    try { writeIfAllowed(path.join(work, 'package.json'), '{}', true, realWork); } catch (e) { threw = e; }
+    assert.ok(threw, 'an uninspectable parent must be refused');
+    assert.strictEqual(threw.code, 'UNSAFE_OUTPUT');
+    assert.match(threw.message, /could not be inspected/);
+    assert.strictEqual(fs.existsSync(path.join(work, 'package.json')), false, 'nothing may be written');
+  } finally {
+    fs.statSync = real;
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
 // ATOMIC REPLACE: --force must replace the directory ENTRY, not write into the existing file. The
 // observable difference is the file identity — an in-place write keeps it, a rename changes it.
 test('--force replaces the file entry rather than writing into the existing file', () => {
