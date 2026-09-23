@@ -293,7 +293,7 @@ test('every BPF query in build, verify and teardown goes through bpfFilter', () 
 
 // --- 3. real bundle -----------------------------------------------------------------------------
 
-async function realSdk({ honourPrefer = true, readBackEtag = true } = {}) {
+async function realSdk({ honourPrefer = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-'));
   dirs.push(dir);
   const writes = [];
@@ -306,11 +306,11 @@ async function realSdk({ honourPrefer = true, readBackEtag = true } = {}) {
   //   PATCH Prefer: return=representation   -> 200, `ETag` header AND `@odata.etag`
   // An earlier version of this fake answered EVERY PATCH with an ETag. No Dataverse does that, and
   // it produced a wrong conclusion recorded downstream (that only a Draft flow could reach the
-  // create read-back). Answering by the request's own `Prefer` keeps the fixture honest about what
-  // the SDK asks for: if a later bundle stops echoing, the read-back path runs here exactly as it
-  // would against a real org, instead of being papered over by a token the server never sent.
-  // `honourPrefer: false` models an environment that ignores `Prefer`, which is the case the create
-  // read-back is kept for.
+  // create read-back the SDK then had). Answering by the request's own `Prefer` keeps the fixture
+  // honest about what the SDK asks for: a write that is not echoed gets no token here, exactly as
+  // against a real org, instead of one the server never sent papering over the gap.
+  // `honourPrefer: false` models an environment that ignores `Prefer` — which the SDK now REFUSES
+  // (`BPF_CREATE_NO_TOKEN`) rather than recovers with a by-id read-back.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api#create-with-data-returned
   const echo = (options) => honourPrefer
     && /return=representation/i.test(String(((options && options.headers) || {}).Prefer || ''));
@@ -325,8 +325,8 @@ async function realSdk({ honourPrefer = true, readBackEtag = true } = {}) {
         reads.push(String(url));
         const m = /\/workflows\(([^)]+)\)/i.exec(String(url));
         if (m) {
-          return { status: 200, headers: readBackEtag ? { etag: 'W/"1001"' } : {},
-            body: { workflowid: m[1].replace(/'/g, ''), ...(readBackEtag ? { '@odata.etag': 'W/"1001"' } : {}), statecode: 0, statuscode: 1 } };
+          return { status: 200, headers: { etag: 'W/"1001"' },
+            body: { workflowid: m[1].replace(/'/g, ''), '@odata.etag': 'W/"1001"', statecode: 0, statuscode: 1 } };
         }
         if (/\/workflows/i.test(String(url))) {
           return { status: 200, headers: {}, body: { value: [] } };
@@ -351,7 +351,10 @@ async function realSdk({ honourPrefer = true, readBackEtag = true } = {}) {
         return { status: 204, headers: {}, body: undefined };
       },
       put: async () => ({ status: 204, headers: {}, body: {} }),
-      delete: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async (url, options) => {
+        writes.push({ verb: 'DELETE', url: String(url), body: undefined, headers: (options && options.headers) || {} });
+        return { status: 204, headers: {}, body: {} };
+      },
     },
   });
   await sdk.initWorkspace();
@@ -400,41 +403,59 @@ test('REAL BUNDLE: the wire payload is a category-4 BusinessFlow definition carr
   assert.ok(xaml.includes('new_notes'), 'the second bound column reached the compiled process');
 });
 
-// --- review follow-up: the concurrency-token READ-BACK must actually be exercised ---------------
-// Every fixture above reaches a token before the read-back is needed, so a mutation making that
-// helper always throw survived the entire suite. The order inside the bundle's bpf create is
-//     token = <activation write's echo> ?? <create write's echo> ?? await <read the record back>
-// and the SDK asks EVERY one of those writes to echo (`Prefer: return=representation`), so against
-// an ordinary org the read-back is never reached at all. It is kept for an environment that ignores
-// `Prefer`, which is what `honourPrefer: false` models — and there it is reached by an Active flow
-// just as much as a Draft one, because an un-echoed activation PATCH answers 204 with no ETag too.
-// (An earlier version of this comment claimed only a Draft flow could get here. That was an
-// artefact of a fake that returned an ETag on every PATCH, not a property of Dataverse.)
-test('REAL BUNDLE: a create that yields no etag is recovered by reading the record back', async () => {
-  const { sdk, reads } = await realSdk({ honourPrefer: false });
+// --- a create whose writes are not echoed is REFUSED, never recovered by reading the record back --
+// The bundle's bpf create takes its concurrency token ONLY from the echo of a write it issued itself
+// (the POST, then the activation PATCH), and asks each of them to echo (`Prefer:
+// return=representation`), so against an ordinary org no token is ever missing. It used to fall
+// back to reading the record back by id. The SDK removed that deliberately: the id is minted by the
+// caller and known before the POST lands, so a second writer can edit the row in the gap, and the
+// read-back then hands back THEIR token paired with OUR content — the next push overwrites them.
+// These tests pin the replacement: refuse, say the flow exists, and leave it exactly as created.
+// A by-id read of this fixture always yields a token, so only the SDK declining to issue one keeps
+// these green.
+//
+// What happens next is not the SDK's advice: this plugin's next build finds the flow with its reuse
+// query (name + table) and only converges its state. The advice itself —
+// `fetchArtifact('bpf', id, { overwrite: true })` — was measured against this bundle to adopt the row
+// and turn the next push into a conditional update; the plain `fetchArtifact` it used to prescribe
+// kept the never-pushed local copy, re-issued the create, and was refused with 412.
+const byIdReads = (reads) => reads.filter((u) => /\/workflows\([^)]+\)/i.test(u));
+
+test('REAL BUNDLE: a create whose write is not echoed is refused, not recovered by a by-id read-back', async () => {
+  const { sdk, reads, writes } = await realSdk({ honourPrefer: false });
   const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
-  const pushed = await sdk.pushArtifact('bpf', art.id);
-  assert.strictEqual(pushed.saved, true,
-    'a tokenless create must be recovered by the read-back, not refused with BPF_CREATE_NO_TOKEN');
-  assert.ok(reads.some((u) => /\/workflows\([^)]+\)/i.test(u)),
-    `the record must be read back to obtain the token; reads were ${JSON.stringify(reads)}`);
+  await assert.rejects(
+    () => sdk.pushArtifact('bpf', art.id),
+    (e) => {
+      assert.strictEqual(e.code, 'BPF_CREATE_NO_TOKEN', `unexpected code ${e && e.code}: ${e && e.message}`);
+      assert.match(String(e.message), /EXISTS/, 'the message must say the flow was created, so nobody authors it twice');
+      assert.match(String(e.message), /NOT rolled back/, 'and that it was left in place');
+      return true;
+    });
+  assert.deepStrictEqual(byIdReads(reads), [], 'no by-id read-back may be issued for a token');
+  assert.ok(!writes.some((w) => w.verb === 'DELETE'), 'a flow nobody can condition a delete on must not be deleted');
 });
 
-// The correction above, pinned: an ACTIVE flow reaches the same read-back when nothing is echoed.
-test('REAL BUNDLE: an Active create reaches the read-back too when writes are not echoed', async () => {
+// An Active flow is not activated either: an activation that cannot be conditioned on our own write
+// would enable whatever the row holds by then, including another writer's edit.
+test('REAL BUNDLE: an Active create whose write is not echoed is left Draft, never activated blind', async () => {
   const { sdk, reads, writes } = await realSdk({ honourPrefer: false });
   const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Active' }));
-  const pushed = await sdk.pushArtifact('bpf', art.id);
-  assert.strictEqual(pushed.saved, true, 'the create must still be recovered');
-  assert.ok(writes.some((w) => w.verb === 'PATCH' && w.body && w.body.statecode === 1),
-    'the flow must still be activated');
-  assert.ok(reads.some((u) => /\/workflows\([^)]+\)/i.test(u)),
-    `an un-echoed activation carries no token, so the record must be read back; reads were ${JSON.stringify(reads)}`);
+  await assert.rejects(
+    () => sdk.pushArtifact('bpf', art.id),
+    (e) => {
+      assert.strictEqual(e.code, 'BPF_CREATE_NO_TOKEN', `unexpected code ${e && e.code}: ${e && e.message}`);
+      assert.match(String(e.message), /NOT activated/, 'the message must say the flow is still Draft');
+      return true;
+    });
+  assert.ok(!writes.some((w) => w.verb === 'PATCH' && w.body && w.body.statecode === 1), 'no activation may be sent');
+  assert.deepStrictEqual(byIdReads(reads), [], 'no by-id read-back may be issued for a token');
+  assert.ok(!writes.some((w) => w.verb === 'DELETE'), 'the created flow is left in place, not rolled back');
 });
 
 // Against the MEASURED contract the token arrives WITH the write, so no read-back is issued. This
 // pins the premise the fixture above is built on: if a later bundle stops asking `workflows` writes
-// to echo, this fails loudly instead of the read-back tests quietly passing for the wrong reason.
+// to echo, this fails loudly instead of the refusal tests quietly passing for the wrong reason.
 test('REAL BUNDLE: against an echoing server the create takes its token from the write itself', async () => {
   const { sdk, reads, writes } = await realSdk();
   const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Active' }));
@@ -451,25 +472,6 @@ test('REAL BUNDLE: against an echoing server the create takes its token from the
     `no by-id read-back may be needed; reads were ${JSON.stringify(reads)}`);
 });
 
-// The fail-closed counterpart: when the read-back ALSO yields nothing there is no token at all, and
-// pushing blind would silently clobber a concurrent edit. It must refuse — and say the flow exists,
-// because it does: a caller who responds by creating the flow again authors a SECOND process.
-// (The message also prescribes `fetchArtifact` as the recovery. Measured, that alone does not work:
-// no metadata was stored for the never-pushed local copy, so the next push re-issues the create and
-// is refused with 412 — `deleteArtifact` first, then fetch. This plugin never follows it: the next
-// build's reuse query adopts the flow by name and table instead.)
-test('REAL BUNDLE: a create with no token from any source is refused, not pushed blind', async () => {
-  const { sdk } = await realSdk({ honourPrefer: false, readBackEtag: false });
-  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Draft' }));
-  await assert.rejects(
-    () => sdk.pushArtifact('bpf', art.id),
-    (e) => {
-      assert.strictEqual(e.code, 'BPF_CREATE_NO_TOKEN', `unexpected code ${e && e.code}: ${e && e.message}`);
-      assert.match(String(e.message), /EXISTS/i, 'the message must say the flow was created');
-      return true;
-    });
-});
-
 test('REAL BUNDLE: an Active flow is activated in the same push (statecode 1 / statuscode 2)', async () => {
   // Activation is a SECOND, non-atomic request. It is what makes the process appear on the form, so
   // a re-vendor that stopped issuing it would deploy flows nobody can see.
@@ -479,6 +481,62 @@ test('REAL BUNDLE: an Active flow is activated in the same push (statecode 1 / s
   const patch = writes.find((w) => w.verb === 'PATCH' && /workflows\(/.test(w.url));
   assert.ok(patch, `an activation PATCH must follow the create; got ${JSON.stringify(writes.map((w) => w.verb + ' ' + w.url))}`);
   assert.deepStrictEqual(patch.body, { statecode: 1, statuscode: 2 });
+});
+
+// A live build failed this way: activating a flow on a table created seconds earlier outlasted the
+// transport's wait, the activation COMMITTED anyway, and the transport re-sent it — carrying the
+// token the first attempt had just superseded — so it was refused with a 412, and the create rolled
+// itself back on that false "concurrent edit". Driven through the plugin's REAL transport, because
+// that is where the re-send lived; every other test here injects its own client.
+test('REAL BUNDLE + REAL TRANSPORT: an activation that commits after the client stopped waiting is not re-sent', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-timeout-'));
+  dirs.push(dir);
+  const ORG = 'https://contoso.crm.dynamics.com';
+  let row = null;
+  const activations = [];
+  const conflict = { statusCode: 412, headers: {}, body: JSON.stringify({ error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } }) };
+  // The measured `workflows` contract: an echoed write carries the row version; a stale `If-Match`
+  // answers 412; the version moves on every committed write.
+  const request = async ({ url, method, headers, body }) => {
+    const u = String(url);
+    const tok = () => `W/"${row.version}"`;
+    const ifMatch = headers['If-Match'];
+    if (method === 'POST' && /\/workflows$/.test(u)) {
+      row = { id: JSON.parse(body).workflowid, version: 1, statecode: 0 };
+      return { statusCode: 201, headers: {}, body: JSON.stringify({ workflowid: row.id, '@odata.etag': tok() }) };
+    }
+    if (method === 'PATCH' && /\/workflows\(/.test(u)) {
+      const b = JSON.parse(body);
+      if (b.statecode === 1) activations.push(ifMatch);
+      if (ifMatch && ifMatch !== tok()) return conflict;
+      if (b.statecode !== undefined) row.statecode = b.statecode;
+      row.version += 1;
+      if (b.statecode === 1 && activations.length === 1) return { error: 'Request timed out' }; // committed, unanswered
+      return { statusCode: 200, headers: { etag: tok() }, body: JSON.stringify({ '@odata.etag': tok() }) };
+    }
+    if (method === 'GET' && /\/workflows\(/.test(u)) {
+      return { statusCode: 200, headers: { etag: tok() }, body: JSON.stringify({ workflowid: row.id, statecode: row.statecode, '@odata.etag': tok() }) };
+    }
+    if (method === 'DELETE' && /\/workflows\(/.test(u)) {
+      if (ifMatch && ifMatch !== tok()) return conflict;
+      row = null;
+      return { statusCode: 204, headers: {}, body: '' };
+    }
+    return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [] }) };
+  };
+  const httpClient = createAzHttpClient(ORG, { getToken: () => 'TOK', request, sleep: async () => {} });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORG, httpClient });
+  await sdk.initWorkspace();
+  const art = await sdk.createArtifact('bpf', bpfDef({ ...FLOW, status: 'Active' }));
+  await assert.rejects(() => sdk.pushArtifact('bpf', art.id), (e) => {
+    assert.doesNotMatch(String(e.message), /Original failure: Version conflict/, 'a committed activation must not be reported as somebody else\'s edit');
+    assert.match(String(e.message), /Request timed out/, 'the real cause — an unanswered write — is what must be reported');
+    return true;
+  });
+  assert.strictEqual(activations.length, 1, `the activation must be sent exactly once; got ${activations.length}`);
+  assert.ok(row && row.statecode === 1, 'the flow the platform activated is left in place for the next build to adopt');
 });
 
 test('REAL BUNDLE: a Draft flow is NOT activated', async () => {

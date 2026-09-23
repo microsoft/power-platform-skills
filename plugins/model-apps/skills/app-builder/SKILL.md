@@ -403,7 +403,8 @@ change takes effect (see *Notes & limits*).
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
-`--from <phase>` shortcut; a full rerun is the correct and safe recovery path.
+`--from <phase>` shortcut; a full rerun is the correct and safe recovery path. One exception: an
+`already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a

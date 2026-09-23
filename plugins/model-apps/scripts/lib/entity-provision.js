@@ -587,8 +587,17 @@ function requireSuccessfulPush(result, what, warn) {
     const opts = { phase: 'push', recoverable: true, cause: result.error };
     // Reporting an already-exists collision as a concurrent edit tells the operator to re-download
     // when nothing changed under them, and hides the actual cause.
+    //
+    // The remedy is NOT "re-run" and NOT a plain `fetchArtifact`. The collision means an earlier push
+    // committed but the workspace never recorded it, so it still holds a local copy marked never-
+    // pushed at that id. A plain fetch KEEPS such a copy and adopts nothing — and the build's
+    // existing-artifact path is exactly a plain fetch — so a re-run on the same workspace re-issues
+    // the create and halts here again. Measured against the vendored bundle: same workspace → the
+    // same ARTIFACT_ALREADY_EXISTS; a fresh workspace → the fetch adopts the row and the push is a
+    // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
+    // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: delete the .maker-workspace directory (or the --workspace one), then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
