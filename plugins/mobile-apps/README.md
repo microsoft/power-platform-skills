@@ -254,6 +254,37 @@ Example edit flows:
 
 ## Commands
 
+**For an app problem, try `/debug-app` before reporting an issue.** It can
+distinguish local setup/configuration problems from app-code or package defects
+and collect useful evidence without assuming a Microsoft package is broken.
+
+```text
+/debug-app startup "npm run dev fails before the QR appears"
+/debug-app "QR won't open the app"
+/debug-app "orders screen is empty"
+```
+
+If diagnostics cannot resolve the issue, use `/report-issue` with the sanitized
+findings and original reproduction steps. Do not include raw logs or credentials.
+A confirmed package defect should be reported rather than patched locally.
+This is a recommended first step, not a barrier to an explicit issue-report
+request; plugin installation/loading failures may need reporting before any
+app-level skill can run.
+
+For startup or QR-opening failures, use `/debug-app startup "<symptom>"` even
+when no native app is loaded. It inspects installation/lock consistency, relevant
+Node requirements, installed versions, and package entry points before proposing
+a repair. Restoring the same locked dependencies and restarting Metro each need
+explicit approval; upgrades remain outside this workflow. A successful install
+is not an app fix: the original startup or device symptom must be verified.
+`--no-fix` performs inspection only. Creation offers this same startup path if
+its `npm run dev` launch fails; it does not start indefinite runtime monitoring.
+
+The inspector checks static metadata, not every possible startup cause. When
+those checks do not explain the symptom, diagnosis follows the original error
+into relevant app scripts/configuration or reports the missing evidence. Clean
+metadata alone never means the app is healthy.
+
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
@@ -264,7 +295,7 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
-| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
+| `/debug-app` | ✅ v0 | Diagnoses install/startup/QR failures before an app is loaded, then monitors live sanitized `.powernative` logs for runtime or silent failures. Same-lock restoration and Metro restart require explicit approval; it does not upgrade dependencies. `startup` returns without the runtime monitor; `--no-fix` stays non-mutating. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |

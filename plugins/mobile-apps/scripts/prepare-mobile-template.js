@@ -16,6 +16,12 @@ const REQUIRED_FILES = [
 
 const HOST_TSCONFIG = '@microsoft/power-apps-native-host/config/tsconfig';
 
+const GUIDANCE_FILES = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.github/copilot-instructions.md',
+];
+
 const SHARED_FILES = [
   ['components/index.tsx', 'src/components/index.tsx'],
   ['hooks/index.ts', 'src/hooks/index.ts'],
@@ -161,6 +167,57 @@ function copySharedFiles(projectRoot, samplesRoot) {
     copied.push(destinationRelativePath);
   }
 
+  return { copied, preserved };
+}
+
+function assertPreparationPath(projectRoot, relativePath) {
+  // lstat each component: existsSync follows links and misses dangling ones.
+  // In particular, a customer-owned `.github` must never redirect guidance writes.
+  // relativePath is a repository-relative constant such as '.github/copilot-instructions.md',
+  // not a native root. path.join handles an untouched Windows root such as 'C:\\Apps\\Demo'.
+  const components = relativePath.split('/');
+  for (let index = 0; index < components.length; index += 1) {
+    const prefix = components.slice(0, index + 1).join('/');
+    const stat = fs.lstatSync(path.join(projectRoot, prefix), { throwIfNoEntry: false });
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Template preparation must not traverse a symlink: ${prefix}`);
+    }
+    const isParent = index < components.length - 1;
+    if (isParent ? !stat.isDirectory() : !stat.isFile()) {
+      throw new Error(`Template preparation target must be a ${isParent ? 'directory' : 'regular file'}: ${prefix}`);
+    }
+  }
+}
+
+function copyMissingGuidance(projectRoot, state) {
+  const copied = [];
+  const preserved = [];
+  for (const relativePath of GUIDANCE_FILES) {
+    assertPreparationPath(projectRoot, relativePath);
+    if (state.files.get(relativePath).exists) {
+      preserved.push(relativePath);
+      continue;
+    }
+    if (relativePath.startsWith('.github/')) {
+      try {
+        fs.mkdirSync(path.join(projectRoot, '.github'));
+        state.guidanceDirectoryCreated = true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        assertPreparationPath(projectRoot, relativePath);
+      }
+    }
+    // Exclusive creation preserves even a customer file appearing after preflight.
+    // Track successful copies, not planned targets, so rollback owns only our files.
+    fs.copyFileSync(
+      path.join(__dirname, '..', 'template', relativePath),
+      path.join(projectRoot, relativePath),
+      fs.constants.COPYFILE_EXCL,
+    );
+    state.createdGuidanceFiles.add(relativePath);
+    copied.push(relativePath);
+  }
   return { copied, preserved };
 }
 
@@ -484,17 +541,22 @@ function assertNoDanglingLegacyImports(projectRoot) {
 }
 
 function capturePreparationState(projectRoot) {
+  if (fs.lstatSync(projectRoot).isSymbolicLink()) {
+    throw new Error('Template preparation must not traverse a symlink: project root');
+  }
   const relativeFiles = [
     'app.config.js',
     'package.json',
     'power.config.json',
     'app/_layout.tsx',
+    ...GUIDANCE_FILES,
     ...LEGACY_EXAMPLE_FILES,
     ...SHARED_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
   ];
   const files = new Map();
 
   for (const relativePath of new Set(relativeFiles)) {
+    assertPreparationPath(projectRoot, relativePath);
     const filePath = path.join(projectRoot, relativePath);
     if (!fs.existsSync(filePath)) {
       files.set(relativePath, { exists: false });
@@ -518,11 +580,15 @@ function capturePreparationState(projectRoot) {
       existed: fs.existsSync(path.join(projectRoot, relativePath)),
     }));
 
-  return { directories, files };
+  return { directories, files, createdGuidanceFiles: new Set(), guidanceDirectoryCreated: false };
 }
 
 function restorePreparationState(projectRoot, state) {
   for (const [relativePath, snapshot] of state.files) {
+    if (GUIDANCE_FILES.includes(relativePath) && !state.createdGuidanceFiles.has(relativePath)) {
+      continue;
+    }
+    assertPreparationPath(projectRoot, relativePath);
     const filePath = path.join(projectRoot, relativePath);
     if (snapshot.exists) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -544,6 +610,10 @@ function restorePreparationState(projectRoot, state) {
       fs.rmdirSync(directoryPath);
     }
   }
+  const guidanceDirectory = path.join(projectRoot, '.github');
+  if (state.guidanceDirectoryCreated && fs.readdirSync(guidanceDirectory).length === 0) {
+    fs.rmdirSync(guidanceDirectory);
+  }
 }
 
 function prepareMobileTemplate(options) {
@@ -560,16 +630,21 @@ function prepareMobileTemplate(options) {
   let removedPowerConfig;
   let removedLegacyFiles;
   let sharedFiles;
+  let guidanceFiles;
   let writtenFiles;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
+    guidanceFiles = copyMissingGuidance(projectRoot, originalState);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
     writtenFiles = [...originalState.files]
       .filter(([relativePath, snapshot]) => {
+        if (GUIDANCE_FILES.includes(relativePath)) {
+          return originalState.createdGuidanceFiles.has(relativePath);
+        }
         const filePath = path.join(projectRoot, relativePath);
         if (!fs.existsSync(filePath)) return false;
         return !snapshot.exists || !fs.readFileSync(filePath).equals(snapshot.content);
@@ -592,6 +667,8 @@ function prepareMobileTemplate(options) {
     removedLegacyFiles,
     copiedSharedFiles: sharedFiles.copied,
     preservedSharedFiles: sharedFiles.preserved,
+    copiedGuidanceFiles: guidanceFiles.copied,
+    preservedGuidanceFiles: guidanceFiles.preserved,
   };
 }
 
