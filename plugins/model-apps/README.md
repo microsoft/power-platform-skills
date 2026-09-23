@@ -202,10 +202,10 @@ export MODEL_APPS_DISABLE_HOOKS=1
 ## Telemetry
 
 model-apps ships opt-out usage telemetry (1DS). The committed config ships
-**disabled** (`disabled: true`) — it emits nothing until go-live, even though it now
+**disabled** (`disabled: true`) — until go-live it builds, sends and mirrors nothing, even though it now
 carries the provisioned model-apps key + stream (staged, not yet enabled). `disabled:
 true` is the active guard; the placeholder-key check is only a secondary guard for
-un-provisioned copies. Once enabled it is **on by default** (you opt out).
+un-provisioned copies. Once enabled it is **on by default** (you opt out), and then:
 
 - **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
   session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when

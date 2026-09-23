@@ -334,10 +334,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a later build of an app with the same name fails with *"The name &lt;x&gt; is already in use by an
   existing site map"*, which the maker cannot act on. `deleteAppCascade` therefore resolves the sitemap
   BEFORE deleting the app, deletes both rows in **one atomic OData `$batch`**, and **fails closed** — any
-  delete it cannot prove is rejected rather than guessed. This is why
+  delete it cannot prove is rejected rather than guessed. Each row's delete is conditioned on its
+  **row** token from a by-id read, not the unpublished-aware read's content token, which runs ahead
+  of the row while a sitemap edit is unpublished (that made such an app impossible to tear down —
+  412 every time). This is why
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
-  that file for the wire contract and why a `$batch` is never retried). Pinned by
+  that file for the wire contract, why a `$batch` is never retried, and why a conditional write that
+  gets no answer is never re-sent). Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
   The empty solution container goes last — but a **built-in
@@ -893,13 +897,12 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** default-on usage telemetry. Events include Dataverse organization
-  and Entra tenant GUIDs when PAC is signed in, but Model Apps excludes the
-  signed-in user's Entra object ID. The local diagnostic mirror retains the same
-  event fields. Users opt out of transmission via
-  `/model-apps:telemetry off`; the local diagnostic mirror
-  (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
-  still written. CI/automation opt out via
+- **Privacy:** while `disabled: true` nothing is built, sent or mirrored (see Posture). Once
+  enabled, telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
+  when PAC is signed in, never the signed-in user's Entra object ID, and the local diagnostic mirror
+  (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) retains the same
+  fields — it is still written after a user opts out of transmission via
+  `/model-apps:telemetry off`. CI/automation opt out via
   `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).
 - **Fail closed:** telemetry never changes a script's exit code; emission is
   fire-and-forget via a detached dispatcher child. See `shared/telemetry/README.md`.

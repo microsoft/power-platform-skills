@@ -168,11 +168,19 @@ downloads that round-trip Choice columns.
   reapplied, and that is now said out loud.
 - **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.**
 - **The vendored SDK is refreshed** for upstream wire-correctness fixes (view joins, `addElement`
-  re-keying, dashboard parsing, duplicate sort attributes, BPF `If-Match`, a flow left disabled when
-  an edit fails) and a patched `@xmldom/xmldom` (0.8.15, parser denial-of-service fixes). A business
-  process flow now receives its concurrency token with its own create, so no follow-up read is made.
-  Measured against the previous bundle, none of it changes this plugin's output today — it removes
-  latent hazards.
+  re-keying, dashboard parsing, duplicate sort attributes, a flow left disabled when an edit fails)
+  and a patched `@xmldom/xmldom` (0.8.15, parser denial-of-service fixes). Two change what you see:
+  **an app whose sitemap has an unpublished edit can now be torn down** — the delete carried a token
+  the platform refuses while an edit is pending, so it failed with 412 every time — and **each write
+  in a business process flow's create is conditioned on the token the previous write returned**, so
+  a concurrent edit is refused rather than activated or overwritten.
+- **A slow write is waited for, not abandoned and re-sent.** Writes now get up to 5 minutes (reads
+  keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
+  still commit, and a re-send could only be refused as a false version conflict. Activating a
+  business process flow on a newly created table can take longer than the old 60 s.
+- **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
+  that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
+  first.
 
 ### Changed
 
