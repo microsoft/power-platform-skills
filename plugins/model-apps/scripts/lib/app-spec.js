@@ -1491,7 +1491,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
       for (const key of Object.keys(f.fieldOptions)) {
         const v = f.fieldOptions[key];
         if (!v || typeof v !== 'object' || Array.isArray(v)) {
-          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after? }`);
+          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after?, colspan? }`);
           continue;
         }
         seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
@@ -1500,6 +1500,25 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   }
 
   for (const { name, opt, where, inline } of seen) {
+    // A form-level span reaches the compiler exactly as an inline one does (mergeFieldOptions), so it
+    // gets the same whole-number check. Inline entries are already checked by the layout validator;
+    // before this, a `fieldOptions` `colspan: 0` or `"abc"` was dropped in silence.
+    if (!inline) {
+      for (const key of ['colspan', 'rowspan']) {
+        const n = opt[key];
+        if (n === undefined) continue;
+        if (!Number.isInteger(n) || n < 1) {
+          errors.push(`${label}: ${where} has ${key} '${n}' — it must be a whole number of ${key === 'colspan' ? 'columns' : 'rows'}, 1 or greater`);
+        } else if (key === 'rowspan' && n > 1) {
+          // A row-spanning cell is only safe as the LAST cell of its section (the trailing rule in
+          // the layout validator). A form-level option cannot see where its field lands — an auto
+          // layout picks the order, and adding a column later can make a trailing span non-trailing —
+          // so the compiler would emit a reservation directly above the next field. Measured: under
+          // an auto layout `fieldOptions: { new_a: { rowspan: 2 } }` compiled new_a[r2] above new_b.
+          errors.push(`${label}: ${where} sets rowspan ${n}, which only an explicit layout can place safely — declare it inline on the LAST field of its section, as { "name": "${name}", "rowspan": ${n} }.`);
+        }
+      }
+    }
     for (const flag of ['readOnly', 'hidden']) {
       if (opt[flag] === undefined) continue;
       if (typeof opt[flag] !== 'boolean') {
@@ -1590,6 +1609,30 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
       }
     }
   }
+}
+
+// Every sample-data row must be a real record object. The seeder spreads each row into a column map,
+// and JS spreads a non-object into something plausible rather than failing, so these reached
+// Dataverse as garbage instead of being rejected up front (MEASURED):
+//   null    → TypeError at Object.keys — a raw crash, not a diagnosable spec error
+//   'abc'   → { "0":"a", "1":"b", "2":"c" }  — index-keyed "columns"
+//   42/true → {}                             — an empty record, silently seeded
+//   ['x']   → { "0":"x" }                    — same index-keyed shape
+// An array is rejected explicitly because `typeof [] === 'object'`.
+//
+// SHARED deliberately. There are TWO public provisioning entry points — `validateAppSpec` (the
+// app-builder path) and `validateProvisionInput` (the provision-entities CLI) — and both seed through
+// the same `provisionSampleData`. Gating only one left the other crashing on `null` and coercing
+// primitives, AFTER the solution and data model had already been written. One rule, one place.
+function validateSampleDataRows(entityKey, records, errors) {
+  if (!Array.isArray(records)) return errors;
+  records.forEach((rec, i) => {
+    if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) {
+      errors.push(`sampleData['${entityKey}'][${i}] must be an object mapping column names to values, got `
+        + `${rec === null ? 'null' : Array.isArray(rec) ? 'an array' : typeof rec}`);
+    }
+  });
+  return errors;
 }
 
 function validateAppSpec(spec, opts = {}) {
@@ -2757,6 +2800,9 @@ function validateAppSpec(spec, opts = {}) {
           errors.push(`sampleData['${k}'] must be an array of records`);
           continue;
         }
+        // Every row must be a real record object — rejected here, before anything deploys. The
+        // measured failure modes and why this is shared are on validateSampleDataRows.
+        validateSampleDataRows(k, v, errors);
         // #4: catch Choice/MultiChoice sample values that are NOT a declared option label. Unknown
         // labels otherwise pass through resolveChoiceValue() unchanged and reach Dataverse as a raw
         // string, which either 400s late in the build or (for a MultiChoice) is silently wrong — a
@@ -3371,6 +3417,7 @@ module.exports = {
   generatedSectionName,
   formColumnsOf,
   validateAppSpec,
+  validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,
   validateChoiceOptionLabels,

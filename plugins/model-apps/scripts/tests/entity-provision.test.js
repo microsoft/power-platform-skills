@@ -992,15 +992,111 @@ test('a saved push whose publish failed is reported even though the push itself 
 });
 
 test('requireSuccessfulPush distinguishes an already-exists collision from a version conflict', () => {
-  // Both are by-value failures, but the remedies are opposite: re-download for a concurrent edit,
-  // adopt-the-existing-row for a replayed create. Reporting one as the other sends the operator
-  // to re-download when nothing changed under them.
+  // Both are by-value failures, but the remedies are opposite: re-download for a concurrent edit, a
+  // fresh workspace for a create that committed unrecorded. Reporting one as the other sends the
+  // operator to re-download when nothing changed under them.
   const err = new Error('a record already exists at that id');
   err.code = 'ARTIFACT_ALREADY_EXISTS';
   assert.throws(
     () => requireSuccessfulPush({ type: 'view', id: 'v9', saved: false, error: err }, 'view V9'),
-    (e) => e.name === 'BuildHalt' && e.code === 'already-exists' && /adopt it/.test(e.message) && !/re-download the app/.test(e.message)
+    (e) => {
+      assert.strictEqual(e.name, 'BuildHalt');
+      assert.strictEqual(e.code, 'already-exists');
+      assert.match(e.message, /delete the \.maker-workspace directory/, 'the halt must name the step that clears it');
+      assert.match(e.message, /halts here again/, 'and say why a plain re-run does not');
+      assert.doesNotMatch(e.message, /re-download the app/);
+      assert.doesNotMatch(e.message, /adopt it \(fetchArtifact\)/, 'a plain fetch adopts nothing here — it must not be prescribed');
+      return true;
+    }
   );
+});
+
+// The remedy above, FOLLOWED against the real bundle rather than asserted. A business process flow is
+// only the vehicle — the cheapest artifact to drive into the state with a fake server — and the state
+// is type-independent: the facade maps a create's 412 to ARTIFACT_ALREADY_EXISTS for every artifact,
+// and the workspace keeps a never-pushed local copy the same way for every artifact.
+// The fake models the measured `workflows` contract: a keyed create of an existing id → 412
+// `0x80040237`; a stale `If-Match` → 412 `0x80060882`; an echoed write carries the row version.
+test('REAL BUNDLE: the already-exists remedy works — the same workspace halts again, a fresh one adopts the row', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.join(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const rows = new Map();
+  const wire = [];
+  const srv = { honourPrefer: false };
+  const tok = (r) => `W/"${r.version}"`;
+  const echo = (o) => srv.honourPrefer && /return=representation/i.test(String(((o && o.headers) || {}).Prefer || ''));
+  const idOf = (url) => { const m = /\/workflows\(([^)]+)\)/i.exec(String(url)); return m ? m[1].replace(/'/g, '').toLowerCase() : null; };
+  const rowBody = (id, r) => ({ workflowid: id, ...r.fields, statecode: r.statecode, statuscode: r.statuscode, '@odata.etag': tok(r) });
+  const http = {
+    get: async (url) => {
+      const id = idOf(url);
+      if (!id) return { status: 200, headers: {}, body: { value: [] } };
+      const r = rows.get(id);
+      if (!r) return { status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } };
+      return { status: 200, headers: { etag: tok(r) }, body: rowBody(id, r) };
+    },
+    post: async (url, body, o) => {
+      const id = String(body.workflowid).toLowerCase();
+      wire.push(`POST ${id}`);
+      if (rows.has(id)) return { status: 412, headers: {}, body: { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } } };
+      rows.set(id, { fields: { ...body }, statecode: 0, statuscode: 1, version: 1 });
+      const r = rows.get(id);
+      return echo(o) ? { status: 201, headers: {}, body: rowBody(id, r) } : { status: 204, headers: {}, body: undefined };
+    },
+    patch: async (url, body, o) => {
+      const id = idOf(url); const r = rows.get(id);
+      const ifMatch = ((o && o.headers) || {})['If-Match'];
+      wire.push(`PATCH ${id} If-Match=${ifMatch || '-'}`);
+      if (!r) return { status: 404, headers: {}, body: {} };
+      if (ifMatch && ifMatch !== tok(r)) return { status: 412, headers: {}, body: { error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } } };
+      const { statecode, statuscode, ...rest } = body;
+      if (statecode !== undefined) r.statecode = statecode;
+      if (statuscode !== undefined) r.statuscode = statuscode;
+      Object.assign(r.fields, rest);
+      r.version += 1;
+      return echo(o) ? { status: 200, headers: { etag: tok(r) }, body: rowBody(id, r) } : { status: 204, headers: {}, body: undefined };
+    },
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const dirs = [];
+  const sdkOn = async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'already-exists-'));
+    dirs.push(dir);
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: http });
+    await sdk.initWorkspace();
+    return sdk;
+  };
+  try {
+    // 1. A create that commits while the workspace never records it. An environment that ignores
+    //    `Prefer` gets there deterministically; a lost response to a committed POST does the same.
+    const first = await sdkOn();
+    const def = { name: 'Ticket Handling', entityLogicalName: 'new_ticket', status: 'Draft',
+      stages: [{ name: 'Triage', entityLogicalName: 'new_ticket', steps: [{ name: 'Subject', fieldName: 'new_subject' }] }] };
+    const art = await first.createArtifact('bpf', def);
+    await assert.rejects(() => first.pushArtifact('bpf', art.id), (e) => e.code === 'BPF_CREATE_NO_TOKEN');
+    assert.ok(rows.has(art.id.toLowerCase()), 'precondition: the row committed');
+    srv.honourPrefer = true; // from here on, an ordinary org
+    // 2. A re-run on the SAME workspace — the build's existing-artifact path is a plain fetch.
+    await first.fetchArtifact('bpf', art.id);
+    const again = await first.pushArtifact('bpf', art.id);
+    assert.throws(() => requireSuccessfulPush(again, 'business process flow Ticket Handling'),
+      (e) => e.code === 'already-exists' && /\.maker-workspace/.test(e.message),
+      'a re-run on the same workspace must halt again, which is why the halt does not say "re-run"');
+    // 3. The remedy: a fresh workspace, then the same plain fetch.
+    wire.length = 0;
+    const fresh = await sdkOn();
+    await fresh.fetchArtifact('bpf', art.id);
+    await fresh.updateElement('bpf', art.id, '/stages/0', { name: 'Triage (renamed)' });
+    const adopted = requireSuccessfulPush(await fresh.pushArtifact('bpf', art.id), 'business process flow Ticket Handling');
+    assert.ok(adopted && adopted.saved, 'the push after a fresh fetch must commit');
+    assert.ok(!wire.some((w) => w.startsWith('POST')), `no create may be re-issued; wire was ${JSON.stringify(wire)}`);
+    assert.ok(wire.some((w) => /^PATCH .* If-Match=W\/"\d+"$/.test(w)), `the push must be a CONDITIONAL update; wire was ${JSON.stringify(wire)}`);
+    assert.match(String(rows.get(art.id.toLowerCase()).fields.xaml || ''), /Triage \(renamed\)/, 'the edit must land');
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
 });
 
 // The set of by-value push failures is OPEN and it grows: the SDK keeps moving failures from a throw

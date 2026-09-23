@@ -136,6 +136,50 @@ test('DOES retry a METADATA delete (EntityDefinitions) on a network error — as
   assert.strictEqual(calls.length, 2);
 });
 
+// A write we stop waiting for is an UNKNOWN outcome, not a failure, so writes wait far longer than
+// reads. Measured live: a business process flow activation on a fresh table ran past the old 60 s.
+test('a WRITE waits far longer than a read before giving up', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
+  await http.get('https://org/x');
+  await http.post('https://org/x', { a: 1 });
+  await http.patch('https://org/x', { a: 1 });
+  await http.put('https://org/x', { a: 1 });
+  await http.delete('https://org/x');
+  const [get, ...writes] = calls.map((c) => c.timeout);
+  assert.strictEqual(get, 60000, 'a read keeps the short timeout — it is safe to abandon and re-issue');
+  for (const t of writes) assert.ok(t >= 120000, `every write must wait well past 60 s; got ${t}`);
+});
+
+// The retry that failed a build live: the activation committed after the client gave up, and the
+// re-send — carrying the token the activation had just superseded — was refused with a 412.
+test('a CONDITIONAL write that got no answer is NOT re-sent (it may still commit)', async () => {
+  for (const header of ['If-Match', 'if-match']) {
+    const { request, calls } = fakeTransport({ error: 'Request timed out' });
+    const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await assert.rejects(
+      () => http.patch('https://org/api/data/v9.2/workflows(1)', { statecode: 1 }, { headers: { [header]: 'W/"5"' } }),
+      /Request failed: Request timed out .*not re-sent/);
+    assert.strictEqual(calls.length, 1, `exactly one conditional PATCH may be sent (header spelled ${header})`);
+  }
+});
+
+test('the no-re-send rule is scoped: an UNCONDITIONAL write that got no answer is still retried', async () => {
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.patch('https://org/api/data/v9.2/workflows(1)', { statecode: 1 });
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(calls.length, 2);
+});
+
+test('a CONDITIONAL write that got an ANSWER keeps the status retry (429 means it was never processed)', async () => {
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 429, headers: {}, body: '' } : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.patch('https://org/x', { a: 1 }, { headers: { 'If-Match': 'W/"5"' } });
+  assert.strictEqual(res.status, 204, 'a throttled conditional write is retried');
+  assert.strictEqual(calls.length, 2);
+});
+
 test('throws only when no token is available', async () => {
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
   const http = createAzHttpClient('https://org', { getToken: () => null, request });

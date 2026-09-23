@@ -1473,12 +1473,15 @@ const shapeXml = ({ cells, columns = '11' }) =>
   `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
   + `<column width="100%"><sections><section name="sec_left" columns="${columns}">`
   + `<labels><label description="L" languagecode="1033"/></labels><rows><row>`
-  + cells.map((c) => `<cell colspan="${c.span}"><control datafieldname="${c.f}" /></cell>`).join('')
+  + cells.map((c) => `<cell colspan="${c.span}"${c.rows ? ` rowspan="${c.rows}"` : ''}><control datafieldname="${c.f}" /></cell>`).join('')
   + `</row></rows></section></sections></column>`
   + `</columns></tab></tabs></form>`;
-const shapeSpec = (fields) => (spec) => {
+// `cols` defaults to 2 to match `shapeXml`'s default ratio "11". A test that deploys a different
+// grid must declare the SAME width here, or it is exercising the grid-width mismatch check rather
+// than whatever it meant to test.
+const shapeSpec = (fields, cols = 2) => (spec) => {
   spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
-    { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 2, fields }] }] }];
+    { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: cols, fields }] }] }];
 };
 
 test('verify FAILS when a deployed row carries more content than its grid', async () => {
@@ -1488,6 +1491,38 @@ test('verify FAILS when a deployed row carries more content than its grid', asyn
     shapeSpec([{ name: 'new_name', colspan: 2 }, 'new_notes']));
   assert.strictEqual(chk.present, false, 'an overflowing row must not verify');
   assert.match(chk.detail, /3 columns of content in a 2-column section/);
+});
+
+// A row-spanning cell also fills its column in the rows beneath it — FormXML rows follow HTML-table
+// semantics — so a full row sitting under a rowspan carries one column more than its own cells.
+// Counting a row's own cells alone verified that layout as PASS: live, a 2-column section holding
+// `[name rowspan=2, tier] / [code, zeta]` passed, with row 2 needing three columns.
+const rowsXml = (rows, columns = '11') =>
+  `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+  + `<column width="100%"><sections><section name="sec_left" columns="${columns}">`
+  + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+  + rows.map((cells) => `<row>${cells.map((c) => `<cell colspan="${c.span || 1}"${c.rows ? ` rowspan="${c.rows}"` : ''}>`
+    + `<control datafieldname="${c.f}" /></cell>`).join('')}</row>`).join('')
+  + `</rows></section></sections></column>`
+  + `</columns></tab></tabs></form>`;
+
+test('verify FAILS a full row sitting under a row-spanning cell — the reserved slot counts', async () => {
+  const chk = await topoCheck(
+    rowsXml([[{ f: 'new_name', rows: 2 }, { f: 'new_notes' }], [{ f: 'new_c' }, { f: 'new_d' }]]),
+    shapeSpec(['new_notes', 'new_c', 'new_d', { name: 'new_name', rowspan: 2 }]));
+  assert.strictEqual(chk.present, false, 'a row overfilled by a reservation must not verify');
+  assert.match(chk.detail, /row 2 carries 3 columns of content \(1 reserved by a row-spanning cell above\) in a 2-column section/);
+});
+
+test('verify PASSES a rowspan whose reserved slot the row beneath leaves free, and a trailing one', async () => {
+  const beside = await topoCheck(
+    rowsXml([[{ f: 'new_name', rows: 2 }, { f: 'new_notes' }], [{ f: 'new_c' }]]),
+    shapeSpec(['new_name', 'new_notes', 'new_c']));
+  assert.strictEqual(beside.present, true, `a cell beside the reservation fits; got ${beside && beside.detail}`);
+  const trailing = await topoCheck(
+    rowsXml([[{ f: 'new_name' }, { f: 'new_notes' }], [{ f: 'new_c', rows: 2 }]]),
+    shapeSpec(['new_name', 'new_notes', { name: 'new_c', rowspan: 2 }]));
+  assert.strictEqual(trailing.present, true, `a trailing rowspan reserves nothing that is used; got ${trailing && trailing.detail}`);
 });
 
 test('verify FAILS when an AUTHORED span does not match the deployed one', async () => {
@@ -1503,8 +1538,46 @@ test('verify FAILS when an AUTHORED span does not match the deployed one', async
 test('verify TOLERATES a deployed span the spec never declared', async () => {
   const chk = await topoCheck(
     shapeXml({ cells: [{ f: 'new_name', span: 2 }], columns: '1111' }),
-    shapeSpec(['new_name']));
+    shapeSpec(['new_name'], 4));
   assert.strictEqual(chk.present, true, `an undeclared span must not fail; got ${chk && chk.detail}`);
+});
+
+// --- review follow-up: a section deployed NARROWER than authored must not excuse its own span ----
+// The expected span was clamped against the DEPLOYED width, so a section that came out too narrow
+// lowered its own expectation: authored `columns: 4, colspan: 4` deployed as `columns: 1,
+// colspan: 1` verified PASS. Both faults are now reported.
+test('verify FAILS when a section is deployed narrower than authored', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1 }], columns: '1' }),
+    shapeSpec([{ name: 'new_name', colspan: 4 }], 4));
+  assert.strictEqual(chk.present, false,
+    `a section narrower than authored must not excuse its own span; got ${chk && chk.detail}`);
+  assert.match(chk.detail, /deployed 1 column\(s\) wide, the spec declares 4/,
+    `the width fault must be named; got ${chk.detail}`);
+  assert.match(chk.detail, /has colspan 1, the spec declares 4/,
+    `and the span must still be judged against the AUTHORED width; got ${chk.detail}`);
+});
+
+// --- review follow-up: `rowspan` is NOT bounded by the grid ------------------------------------
+// The clamp deliberately tests `key === 'colspan'`. Dropping that guard — clamping both spans
+// against the section width — survived the whole suite, because nothing declared a rowspan at all.
+// A 3-row-tall cell in a 2-column section is perfectly legal: rows are unbounded.
+test('verify TOLERATES a rowspan larger than the section is wide', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1, rows: 3 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 1, rowspan: 3 }]));
+  assert.strictEqual(chk.present, true,
+    `rowspan must be compared as authored, never clamped by the column count; got ${chk && chk.detail}`);
+});
+
+// And the counterpart, so "tolerates" above cannot be satisfied by ignoring rowspan entirely.
+test('verify FAILS when a declared rowspan did not deploy', async () => {
+  const chk = await topoCheck(
+    shapeXml({ cells: [{ f: 'new_name', span: 1 }] }),
+    shapeSpec([{ name: 'new_name', colspan: 1, rowspan: 3 }]));
+  assert.strictEqual(chk.present, false, 'a declared rowspan that did not deploy must fail');
+  assert.match(chk.detail, /rowspan 1, the spec declares 3/,
+    `the rowspan fault must be named exactly; got ${chk.detail}`);
 });
 
 // A section that declares no width cannot be checked for overflow — unknown is not "one column".
@@ -1516,4 +1589,88 @@ test('verify skips the occupancy check when the deployed section declares no wid
     + `</row></rows></section></sections></column></columns></tab></tabs></form>`;
   const chk = await topoCheck(xml, shapeSpec(['new_name', 'new_notes']));
   assert.strictEqual(chk.present, true, `unknown width must not invent an overflow; got ${chk && chk.detail}`);
+});
+
+// --- F1: a span the COMPILER clamps must verify against its effective value --------------------
+// The schema documents that a span wider than its section is clamped, so `colspan: 4` in a
+// one-column section deploys as 1. Comparing the RAW authored value failed a layout that had been
+// built exactly as documented. Live-reproduced:
+//   verify FAIL — field 'qa18a_name' has colspan 1, the spec declares 4
+test('verify accepts a span the compiler CLAMPED to the section width', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_left" columns="1">`
+    + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+    + `<row><cell colspan="1"><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
+      { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 1, fields: [{ name: 'new_name', colspan: 4 }] }] }] }];
+  });
+  assert.strictEqual(chk.present, true,
+    `a correctly clamped span must verify; got ${chk && chk.detail}`);
+});
+
+test('verify STILL fails a span that is wrong after clamping', async () => {
+  // Declared 4 in a 2-column section clamps to 2, but the cell deployed as 1 — a real mismatch.
+  const xml = `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_left" columns="11">`
+    + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+    + `<row><cell colspan="1"><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
+      { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: 2, fields: [{ name: 'new_name', colspan: 4 }] }] }] }];
+  });
+  assert.strictEqual(chk.present, false, `a genuine mismatch must still fail; got ${chk && chk.detail}`);
+  assert.match(chk.detail, /clamped to 2/, `the message must explain the clamp; got ${chk.detail}`);
+});
+
+// --- F4: a same-named section in ANOTHER tab must not satisfy the placement --------------------
+// The builder can produce two sections called `sec_fields` in different tabs — one holding the
+// fields, one empty in the tab that was requested. Keying placement by section NAME found the
+// empty one equal to the real one and reported PASS while the relocation had not happened.
+// Live-reproduced: verify PASS (28/28) against a form whose fields were in the wrong tab.
+test('verify FAILS when the fields sit in a same-named section under a DIFFERENT tab', async () => {
+  const xml = `<form><tabs>`
+    + `<tab name="tab_source"><labels><label description="Source" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows>`
+    + `<row><cell><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab>`
+    + `<tab name="tab_destination"><labels><label description="Destination" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows></rows></section>`
+    + `</sections></column></columns></tab>`
+    + `</tabs></form>`;
+  // The spec asks for the field in the DESTINATION tab. The deployed form has an empty section of
+  // that exact name there, and the real field still in the source tab.
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_destination', label: 'Destination', columns: [
+      { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
+  });
+  assert.strictEqual(chk.present, false,
+    'an empty same-named section must not stand in for the real one');
+  assert.match(chk.detail, /under a different tab/,
+    `the message must name the aliasing; got ${chk && chk.detail}`);
+});
+
+// The control: a correctly relocated field must still PASS, so the fix cannot be satisfied by
+// failing every same-named section.
+test('verify PASSES when the field really is in the requested tab', async () => {
+  const xml = `<form><tabs>`
+    + `<tab name="tab_source"><labels><label description="Source" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows></rows></section>`
+    + `</sections></column></columns></tab>`
+    + `<tab name="tab_destination"><labels><label description="Destination" languagecode="1033"/></labels><columns>`
+    + `<column width="100%"><sections><section name="sec_fields" columns="1">`
+    + `<labels><label description="F" languagecode="1033"/></labels><rows>`
+    + `<row><cell><control datafieldname="new_name" /></cell></row>`
+    + `</rows></section></sections></column></columns></tab>`
+    + `</tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => {
+    spec.forms[0].tabs = [{ name: 'tab_destination', label: 'Destination', columns: [
+      { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
+  });
+  assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
 });

@@ -192,9 +192,18 @@ apart deliberately.
 - Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
   in both directions, and re-added to the solution on every run so a failed component add is repaired
   rather than inherited); torn down with the app, deactivate-then-delete, before its table. Deleting
-  an activated flow cascades a **backing-table** drop and regularly runs past the client's 60s HTTP
-  timeout, so teardown polls the row rather than reporting a failure for work the server completed.
+  an activated flow cascades a **backing-table** drop that used to run past the client's 60 s HTTP
+  timeout; writes now wait up to 5 minutes, and teardown still polls the row rather than reporting a
+  failure for work the server completed if even that is exceeded.
   A new `business-process-flows` build phase sits next to `business-rules` (16 now).
+- **Each write in a flow's create is conditioned on the token the previous write returned** (vendored
+  SDK): the create echoes its token, the activation is sent only on it, and a rollback deletes only on
+  a token the create produced — so a concurrent edit is refused, never activated or deleted. This
+  exposed a transport hazard, found live: activating a flow on a table created seconds earlier ran
+  past the old 60 s wait, the activation committed anyway, and the transport's re-send was refused as
+  a version conflict, failing the build. Writes now wait up to 5 minutes and a conditional write that
+  gets no answer is never re-sent (`scripts/lib/sdk-http-client.js`); a fresh build of that app then
+  passed live.
 - **The derived unique name is a TABLE name, and it is guarded on both sides.** Dataverse stores the
   flow as `new_<name lower-cased, non-alphanumerics stripped>` — the derivation ignores the table
   *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
@@ -236,6 +245,7 @@ apart deliberately.
 ### Teardown — ✅ verified live
 - `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → business rules → business process flows → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table). A business rule / business process flow is deactivated before it is deleted, because Dataverse refuses to delete an activated process.
 - **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. A **restricted system solution** (`Active`/`Default`/`Basic`) is skipped rather than attempted (Dataverse 400s any delete of one), so a downloaded spec that defaulted its solution to `Default` tears down cleanly. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
+- **An app whose sitemap carries an unpublished edit tears down cleanly.** A sitemap has two tokens: the unpublished-aware read returns a *content* token that runs ahead of the row while an edit is pending, and Dataverse validates `If-Match` against the *row*. The vendored SDK now conditions each delete on the row token from a by-id read. Live-verified on the same pending-edit app: the previous bundle's teardown failed with 412 on the delete `$batch`; this one deleted everything, and an independent query confirmed every row gone.
 
 ### Tooling & internals — ✅ verified live
 - ASCII **form wireframe** preview (`preview-form.js`); phase-grouped build log with per-step status glyphs (`✓`/`⊘`/`✗`) + a closing summary.

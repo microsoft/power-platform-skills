@@ -71,3 +71,55 @@ test('launch handles the child error event (npx fails to spawn)', () => {
   child.emit('error', new Error('spawn npx ENOENT'));
   assert.equal(handled, 'spawn npx ENOENT');
 });
+
+// --- #588.7: a signal termination is a failure, not a clean shutdown -----------------------------
+// Node calls the exit handler with (code, signal); on a SIGNAL death `code` is null and `signal`
+// carries the name. `process.exit(code || 0)` therefore reported every crash and every kill as exit
+// 0, so an MCP host saw a server that had DIED as one that had shut down cleanly.
+test('a signal-terminated child exits non-zero and names the signal', () => {
+  const exits = [];
+  const errs = [];
+  const realExit = process.exit;
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.exit = (c) => { exits.push(c); };
+  process.stderr.write = (chunk) => { errs.push(String(chunk)); return true; };
+  try {
+    const handlers = {};
+    const child = { on: (evt, fn) => { handlers[evt] = fn; } };
+    launch({ spawnFn: () => child });
+    handlers.exit(null, 'SIGTERM');
+  } finally {
+    process.exit = realExit;
+    process.stderr.write = realWrite;
+  }
+  assert.strictEqual(exits.length, 1);
+  assert.notStrictEqual(exits[0], 0, `a signal death must not report success; got ${exits[0]}`);
+  assert.ok(exits[0] > 128, `the shell convention is 128 + signum; got ${exits[0]}`);
+  assert.ok(errs.join('').includes('SIGTERM'), `the signal must be named; got ${JSON.stringify(errs)}`);
+});
+
+test('an ordinary clean exit is still reported as success', () => {
+  const exits = [];
+  const realExit = process.exit;
+  process.exit = (c) => { exits.push(c); };
+  try {
+    const handlers = {};
+    const child = { on: (evt, fn) => { handlers[evt] = fn; } };
+    launch({ spawnFn: () => child });
+    handlers.exit(0, null);
+  } finally { process.exit = realExit; }
+  assert.deepStrictEqual(exits, [0], 'a clean shutdown must stay exit 0');
+});
+
+test('a non-zero child exit code is passed through unchanged', () => {
+  const exits = [];
+  const realExit = process.exit;
+  process.exit = (c) => { exits.push(c); };
+  try {
+    const handlers = {};
+    const child = { on: (evt, fn) => { handlers[evt] = fn; } };
+    launch({ spawnFn: () => child });
+    handlers.exit(3, null);
+  } finally { process.exit = realExit; }
+  assert.deepStrictEqual(exits, [3]);
+});

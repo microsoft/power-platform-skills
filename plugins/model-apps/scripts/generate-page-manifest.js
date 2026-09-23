@@ -35,6 +35,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const {
   RUNTIME_DEPENDENCIES,
   DEV_DEPENDENCIES,
@@ -194,14 +195,165 @@ declare global {
 `;
 }
 
-function writeIfAllowed(filePath, content, force) {
-  if (fs.existsSync(filePath) && !force) {
+// Windows can refuse a rename while another process briefly holds the destination — Defender, the
+// search indexer and OneDrive all open a just-written file — and reports it as EPERM/EACCES/EBUSY.
+// MEASURED: with `package.json` open in another program without delete-sharing, the rename failed
+// with EPERM where an in-place write would have succeeded. A SHORT bounded retry absorbs the
+// transient scanner case (graceful-fs retries renames on win32 for the same reason); a lock that
+// outlasts it is reported as what it almost certainly is, so the user knows what to do.
+const RENAME_RETRY_MS = [25, 50, 100, 200, 400];
+const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function renameWithRetry(from, to) {
+  for (let i = 0; ; i += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (process.platform !== 'win32' || !RENAME_LOCK_CODES.has(err.code) || i >= RENAME_RETRY_MS.length) throw err;
+      sleepSync(RENAME_RETRY_MS[i]);
+    }
+  }
+}
+
+function writeIfAllowed(filePath, content, force, approvedRoot) {
+  if (typeof approvedRoot !== 'string' || !approvedRoot) {
+    // Fail CLOSED, with the same code as every other refusal: without a root there is nothing to
+    // confine the write to, so it must not happen.
+    const e = new Error(`refusing to write ${filePath}: no approved root was given to confine it to`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  // Output confinement. Each part closes a hole a previous shape left open; a partial version of
+  // this check is worse than none, because it reads as a guarantee it does not give.
+  //
+  // WHAT IS GUARANTEED: the file is written at the location the working directory resolves to, and
+  // never through a link or into a file this tool does not own. `approvedRoot` is the realpath of
+  // the working directory taken at startup; `main` refuses a working directory that is ITSELF a link
+  // (a pre-planted link at the path a caller creates would redirect the whole run), while a linked
+  // ANCESTOR is followed by design — macOS temp directories live under a symlinked `/var`, and a
+  // junctioned project root is a normal setup.
+  //
+  // 1. RESOLVE WHERE THE WRITE WILL LAND. `realpath` the parent (the file itself may not exist yet)
+  //    and require it to still be the approved root: this is what catches the working directory
+  //    being swapped for a link AFTER startup. Every later operation uses this `resolved` path, never
+  //    the lexical one, so the location that was checked is the location that is written.
+  const dir = path.dirname(filePath);
+  let realDir;
+  try {
+    realDir = fs.realpathSync(dir);
+  } catch (err) {
+    const e = new Error(`refusing to write ${filePath}: its directory could not be resolved (${err.code || err.message})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  // `realpath` succeeds on a REGULAR FILE — it only resolves links, it does not assert a kind. So a
+  // parent that is a file (or a link to one) passes resolution and the escape is caught only by the
+  // write failing, which is an I/O error rather than a safety refusal. MEASURED on Windows, where
+  // `lstat` of a child under a file reports ENOENT rather than ENOTDIR, so the fail-closed probe
+  // below never sees it either. Prove the parent is a directory here instead.
+  let dirSt;
+  try {
+    dirSt = fs.statSync(realDir);
+  } catch (err) {
+    const e = new Error(`refusing to write ${filePath}: its directory could not be inspected (${err.code || err.message})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  if (!dirSt.isDirectory()) {
+    const e = new Error(`refusing to write ${filePath}: ${realDir} is not a directory`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+  const resolved = path.join(realDir, path.basename(filePath));
+  const rel = path.relative(approvedRoot, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    const e = new Error(`refusing to write ${filePath}: it resolves to ${resolved}, outside the working directory ${approvedRoot}`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  // 2. PROBE THE LINK, NOT THE TARGET, AND FAIL CLOSED. `existsSync` FOLLOWS symlinks, so a DANGLING
+  //    link — one whose target does not exist yet — reported "nothing here", skipped every check and
+  //    `writeFileSync` then CREATED the file at the outside target. MEASURED: a `package.json`
+  //    symlinked to a non-existent path outside the working directory was created there, which is
+  //    worse than the overwrite this guard was first written for.
+  //    Only ENOENT means "genuinely nothing there". Swallowing every error made EACCES/ENOTDIR — a
+  //    probe that could not determine safety — indistinguishable from a clear slot, so the write
+  //    proceeded on exactly the inputs least understood.
+  let st = null;
+  try {
+    st = fs.lstatSync(resolved);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      const e = new Error(`refusing to write ${filePath}: it could not be inspected (${err.code || err.message})`);
+      e.code = 'UNSAFE_OUTPUT';
+      throw e;
+    }
+  }
+
+  // Without --force nothing that exists is written, whatever it is — so it is simply skipped. The
+  // refusals below apply only to a write that would really happen; checking them first made a
+  // hard-linked `package.json` abort a plain run, which then never wrote `genpage.d.ts` either.
+  if (st && !force) {
     return { wrote: false, reason: 'exists (use --force to overwrite)' };
   }
+
+  if (st && !st.isFile()) {
+    // `--force` may overwrite the file this tool OWNS, never whatever that name points at. A symlink,
+    // directory or special file is not ours, whether its target exists or not.
+    const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'directory' : 'special file';
+    const e = new Error(`refusing to overwrite ${filePath}: it is not a regular file (${kind})`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  // 3. HARD LINKS. A hard link is a regular file and passes `isFile()`, but the inode is shared, so
+  //    writing through it edits the outside file just as surely as a symlink would. A file this tool
+  //    owns has exactly one name.
+  if (st && st.nlink > 1) {
+    const e = new Error(`refusing to overwrite ${filePath}: it is a hard link (${st.nlink} names share this file)`);
+    e.code = 'UNSAFE_OUTPUT';
+    throw e;
+  }
+
+  // A read-only file is a deliberate "do not modify". The in-place write this replaced refused it
+  // (EACCES); a rename would silently replace it, because replacing a directory entry needs write
+  // access to the DIRECTORY, not the file. Keep the old answer.
+  if (st && !(st.mode & 0o200)) {
+    const e = new Error(`refusing to overwrite ${filePath}: it is read-only`);
+    e.code = 'IO_ERROR';
+    throw e;
+  }
+
+  // 4. ATOMIC REPLACE. The checks above describe the past: anything that can write this directory can
+  //    swap a symlink in between `lstat` and the write, and `writeFileSync` would follow it. Writing
+  //    a fresh temp file and RENAMING over the target replaces the directory ENTRY, so a link
+  //    installed after the checks is discarded rather than followed.
+  //    The temp name is unique per call, and `wx` fails rather than reuse a name someone else
+  //    created — in which case that file is NOT ours to delete. A replaced file keeps its permission
+  //    bits (a rename would otherwise hand it the temp file's); a new one gets the process default.
+  const tmp = path.join(realDir, `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  let createdTmp = false;
   try {
-    fs.writeFileSync(filePath, content);
+    // Owned from the moment the exclusive open succeeds, not when the write returns: a write that
+    // fails after the open (ENOSPC, EDQUOT, EIO) leaves the file behind, and fs.writeFileSync closes
+    // it without removing it — so waiting for the write stranded a temp file on every failed run.
+    const fd = fs.openSync(tmp, 'wx');
+    createdTmp = true;
+    try { fs.writeFileSync(fd, content); } finally { fs.closeSync(fd); }
+    if (st) fs.chmodSync(tmp, st.mode & 0o777);
+    renameWithRetry(tmp, resolved);
   } catch (err) {
-    const e = new Error(`failed to write ${filePath}: ${err.message}`);
+    if (createdTmp) {
+      try { fs.unlinkSync(tmp); } catch { /* already renamed, or removed by someone else */ }
+    }
+    const locked = process.platform === 'win32' && RENAME_LOCK_CODES.has(err.code);
+    const e = new Error(locked
+      ? `failed to write ${filePath}: it could not be replaced (${err.code}) — another program may have it open. Close it and retry.`
+      : `failed to write ${filePath}: ${err.message}`);
     e.code = 'IO_ERROR';
     throw e;
   }
@@ -220,15 +372,28 @@ function main() {
   const workingDir = path.resolve(args.positional[0]);
   const slug = args.positional[1];
 
+  // The root every output is confined to: the working directory's realpath, taken ONCE here and
+  // re-checked at write time (see writeIfAllowed). The working directory ITSELF must not be a link.
+  // Callers create this directory (`mkdir -p <folder>`), and `mkdir -p` succeeds silently on a
+  // symlink or junction that is already there — so a link pre-planted at that path would redirect
+  // every write the run makes, with `--force` overwriting whatever it points at. A linked ANCESTOR
+  // is still followed: that is a normal setup (macOS temp dirs sit under a symlinked `/var`), not a
+  // redirect of the directory the caller named.
+  let approvedRoot;
   try {
     if (!fs.existsSync(workingDir)) {
       console.error(`error: working directory does not exist: ${workingDir}`);
+      process.exit(2);
+    }
+    if (fs.lstatSync(workingDir).isSymbolicLink()) {
+      console.error(`error: refusing to use ${workingDir} as the working directory: it is a symbolic link or junction. Pass the directory it points to if that is intended.`);
       process.exit(2);
     }
     if (!fs.statSync(workingDir).isDirectory()) {
       console.error(`error: not a directory: ${workingDir}`);
       process.exit(2);
     }
+    approvedRoot = fs.realpathSync(workingDir);
   } catch (err) {
     console.error(`error: failed to stat working directory: ${err.message}`);
     process.exit(2);
@@ -244,10 +409,10 @@ function main() {
   try {
     const pkg = buildPackageJson(slug, args.features);
     const pkgPath = path.join(workingDir, 'package.json');
-    pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force);
+    pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force, approvedRoot);
 
     const dtsPath = path.join(workingDir, 'genpage.d.ts');
-    dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force);
+    dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force, approvedRoot);
   } catch (err) {
     console.error(`error: ${err.message}`);
     process.exit(2);
@@ -271,6 +436,9 @@ module.exports = {
   parseArgs,
   buildPackageJson,
   buildAmbientDeclarations,
+  // Exported for the output-confinement tests: `--force` must overwrite the file this tool owns,
+  // never whatever a symlink at that name points at.
+  writeIfAllowed,
   RUNTIME_DEPENDENCIES,
   DEV_DEPENDENCIES,
 };

@@ -1473,7 +1473,7 @@ async function runSdkBuild(spec, opts = {}) {
     };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1967,7 +1967,33 @@ async function runSdkBuild(spec, opts = {}) {
           // `columns` is the key that matters most: it is what makes a section render as two
           // columns rather than one, and it was previously unreachable on an existing form.
           const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
+          // NARROWING the grid overflows rows that no cell changed. Three unit-width cells sit
+          // legally in a 4-column row and illegally in a 1-column one, so a width change alone can
+          // invalidate the layout — and the span-change repack never fires, because no span changed.
+          // Live-reproduced: occupancy 3 in width 1, on both applies.
+          //
+          // Only a NARROWING needs this. Widening cannot overflow a row that already fitted, and
+          // re-packing on every widen would reflow rows the author never asked to touch.
+          const narrowing = patch.columns !== undefined && Number(patch.columns) < Number(live.columns || 1);
+          let reflow = narrowing;
+          if (narrowing && reflowBreaksReservation(live.rows)) {
+            // A reflow here would move a cell into a row-spanning cell's reservation, so it cannot
+            // run — and the decision has to be made BEFORE the width is written. Writing the width
+            // and then refusing the reflow left rows overflowing the new grid for good: the next
+            // apply sees the width already applied and has nothing to do.
+            const width = Number(patch.columns);
+            reflow = false;
+            if (!(live.rows || []).every((r) => rowWidth((r && r.cells) || []) <= width)) {
+              delete patch.columns;
+              reportLayoutSkip(`form section '${live.name || pointer}' keeps its ${live.columns}-column grid: narrowing it `
+                + `to ${width} would overflow rows that cannot be re-flowed without moving a cell into a row-spanning `
+                + 'cell\'s reservation. Adjust the layout in the maker.');
+            }
+            // …otherwise every row already fits the narrower grid: the width is written and nothing
+            // is moved, because a reflow would only reshuffle cells that are already valid.
+          }
           if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
+          if (reflow) await repackSectionRows(formId, pointer, Number(patch.columns));
         }
       }
     }
@@ -1994,30 +2020,188 @@ async function runSdkBuild(spec, opts = {}) {
     return (col && (col.sections || [])[Number(t[5])]) || null;
   };
 
+  // Reflow an ENTIRE section against a new grid width, using the create path's own packer so both
+  // routes produce the same shape. Called when a section NARROWS: no cell changed, but rows that
+  // fitted the old width can overrun the new one.
+  //
+  // The cells are re-laid in their existing reading order, so the author's field order survives, and
+  // they are MOVED (written as cells arrays) rather than recreated, so ids and any maker-edited
+  // control state survive with them. Rows beyond the new count are removed from the END backwards,
+  // because removing by index shifts every later index.
+  const repackSectionRows = async (formId, sectionPointer, width) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, sectionPointer);
+    if (!section) return;
+    const liveRows = section.rows || [];
+    // A ROWSPAN makes a row's cells positionally meaningful: the cell beneath a vertically spanning
+    // one is a SPACER reserving the covered slot, and reading-order flattening moves it beside the
+    // spanning cell instead of under it. Live shape, narrowed 4 -> 2, before this guard:
+    //     [A rowspan=2] [spacer, B] [C, D]   became   [A rowspan=2, spacer] [B, C] [D]
+    // i.e. B took the reserved position. `rowsFromCells` models width only, so it cannot express
+    // that reservation — and the authored-rowspan restriction does not help, because the span
+    // belongs to the fetched MAKER form, not to the spec.
+    //
+    // REFUSE rather than guess. Leaving a maker's valid arrangement alone is the recoverable
+    // outcome; silently rearranging their form is not. The caller makes this decision BEFORE it
+    // writes the new width (so the grid and its rows never disagree); this is the backstop for any
+    // future caller that does not.
+    if (reflowBreaksReservation(liveRows)) {
+      reportLayoutSkip(`form section at ${sectionPointer}: its rows were left as they are rather than re-flowed to `
+        + `${width} column(s) — re-flowing them would move a cell into a row-spanning cell's reservation. `
+        + 'Adjust the layout in the maker if it no longer fits.');
+      return;
+    }
+    const cells = liveRows.flatMap((r) => (r && r.cells) || []);
+    if (!cells.length) return;
+    const packed = rowsFromCells(cells, width);
+    const live = liveRows;
+    // Nothing to do only when the existing rows match the packing the new width implies — INCLUDING
+    // each cell's span. Comparing field names alone discarded exactly the change this exists to make:
+    // `rowsFromCells` clamps a too-wide cell without moving it, so a section narrowed to 1 while
+    // holding a colspan-4 cell had identical row membership and was judged unchanged. The stale
+    // width then survived, and a second apply issued no corrective write either.
+    const shapeOf = (rows) => JSON.stringify((rows || []).map((r) => ((r && r.cells) || []).map((c) => [
+      c.control && c.control.fieldName,
+      Number(c.colspan) || 1,
+      Number(c.rowspan) || 1,
+    ])));
+    if (shapeOf(packed) === shapeOf(live)) return;
+    for (let i = 0; i < packed.length; i += 1) {
+      if (i < live.length) {
+        await provision.updateElement('form', formId, `${sectionPointer}/rows/${i}`, { cells: packed[i].cells });
+      } else {
+        await provision.addElement('form', formId, `${sectionPointer}/rows`, { cells: [] });
+        await provision.updateElement('form', formId, `${sectionPointer}/rows/${i}`, { cells: packed[i].cells });
+      }
+    }
+    for (let i = live.length - 1; i >= packed.length; i -= 1) {
+      await provision.removeElement('form', formId, `${sectionPointer}/rows/${i}`);
+    }
+  };
+
+  // Re-laying rows by reading order is unsafe exactly when a cell FOLLOWS a row-spanning one. That
+  // later cell — or the empty spacer holding a covered slot — has a position only relative to the
+  // span above it, and `rowsFromCells` models WIDTH only, so a reflow can move it into the reserved
+  // slot. A section whose row spans are all TRAILING reflows safely: nothing comes after the span to
+  // land in its reservation. Stock account and contact Main forms put `rowspan` on the last cell of
+  // a section, so treating every rowspan as unsafe refused exactly the commonest real shape.
+  //
+  // Shared by BOTH reflow routes (whole-section on a grid narrowing, single-row on a span change).
+  // It does not cover PLACING a new or moved field into such a section: that path predates these
+  // guards and needs spacer-aware placement (#581).
+  const reflowBreaksReservation = (rows) => {
+    let spanning = false;
+    for (const r of rows || []) {
+      for (const c of (r && r.cells) || []) {
+        if (spanning) return true;
+        if ((Number(c.rowspan) || 1) > 1) spanning = true;
+      }
+    }
+    return false;
+  };
+  const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+  // Whether any cell — a field or an empty spacer — comes after (rowIndex, cellIndex) in reading order.
+  const cellFollows = (rows, rowIndex, cellIndex) => (rows || []).some((r, ri) => ri >= rowIndex
+    && ((r && r.cells) || []).some((_, ci) => ri > rowIndex || ci > cellIndex));
+
+  // A layout change the build declined to make. Reported, AND recorded on the result: a stderr line
+  // alone is invisible to a non-interactive run, and `--verify` does not check every route — an
+  // auto layout's topology is never verified, so a skipped `fieldOptions` span would pass silently.
+  const reportLayoutSkip = (message) => {
+    result.skipped.layout.push(message);
+    if (typeof opts.warn === 'function') opts.warn(message);
+  };
+
+  // The span to WRITE for a cell landing in `liveSection`: the authored value when there is one,
+  // else the compiled one, with `colspan` clamped to the LIVE grid. `undefined` means no opinion —
+  // a span the author never declared is never written, so a maker's hand-widened cell survives.
+  //
+  // Clamped against the section the write actually lands in, NOT the one the compiler laid out. On
+  // an existing form they can differ: an AUTO layout compiles a synthetic section of one column (two
+  // once it holds more than six fields) while reconcile deliberately keeps the deployed geometry, so
+  // the compiled clamp narrowed a maker's four-column cell. `rawSpan` is the authored value carried
+  // past compilation for exactly this.
+  // Used by BOTH the existing-cell route and the add route — the add route once used the compiled
+  // span alone, so a newly added field landed narrow and was only widened by a second apply.
+  const spanForLiveSection = (key, wantCell, rawSpan, liveSection) => {
+    const raw = rawSpan && typeof rawSpan[key] === 'number' ? rawSpan[key] : undefined;
+    const compiled = wantCell && wantCell[key];
+    if (raw === undefined && compiled === undefined) return undefined;
+    const value = raw === undefined ? compiled : raw;
+    if (key !== 'colspan') return value; // only colspan is bounded by the grid
+    return Math.min(value, Math.max(1, Math.min(4, Number(liveSection && liveSection.columns) || 1)));
+  };
+
   // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
   // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
   // changes nothing issues no writes.
-  const convergeCellSpans = async (formId, form, location, wantCell) => {
+  const convergeCellSpans = async (formId, form, location, wantCell, rawSpan) => {
     if (!location || !wantCell) return;
     const live = cellAt(form, location);
     if (!live) return;
+    const liveSection = sectionAt(form, location.sectionPointer) || {};
     const patch = {};
     for (const key of ['colspan', 'rowspan']) {
-      const want = wantCell[key];
-      if (want === undefined) continue; // no opinion — never overwrite a maker's hand-set span
+      const want = spanForLiveSection(key, wantCell, rawSpan, liveSection);
+      if (want === undefined) continue; // no opinion — never overwrite a maker's span
       const current = live[key] === undefined ? 1 : live[key];
       if (current !== want) patch[key] = want;
     }
-    if (Object.keys(patch).length) {
-      await provision.updateElement('form', formId, location.cellPointer, patch);
-      // A WIDENED span can overflow the row it sits in: a 2-column section holding two colspan-1
-      // cells becomes 2+1 = 3 columns of content the moment one is widened to 2. The create path
-      // packs rows by WIDTH (`rowsFromCells`), but an in-place span change never re-ran that
-      // packing, so the row was left overflowing — a shape `rowsFromCells` would never emit, and one
-      // Dataverse renders unpredictably. Live-reproduced: widening a field left three columns of
-      // content in a two-column row across two applies.
-      await repackRowAt(formId, location);
+    if (!Object.keys(patch).length) return;
+
+    // A span change can require a REFLOW of its row, and a reflow by reading order cannot honour a
+    // row-spanning cell's reservation. For example, on a maker form holding
+    // `[A rowspan=2, B] / [spacer]`, widening `B` overflows the row, and `repackRowAt` splits it
+    // by reading order — placing `B` in the row `A` reserves. Judged on the rows AS THEY WILL BE.
+    const current = await provision.getArtifact('form', formId) || {};
+    const sec = sectionAt(current, location.sectionPointer) || {};
+    const rows = sec.rows || [];
+    const field = (live.control && live.control.fieldName) || location.cellPointer;
+    // A rowspan RAISED on a cell that other cells follow creates a reservation they must route
+    // around: the next row's cells are displaced past the covered slot, so a full row beneath needs
+    // more columns than its grid has — even when the patched row itself still fits, which the
+    // overflow check below cannot see. The validator only allows an authored rowspan on the LAST
+    // field of the spec's list, but the reconcile keeps a staying cell where the maker put it, so the
+    // deployed order can differ. Only the rowspan is withheld; a colspan in the same patch proceeds.
+    if (patch.rowspan !== undefined && patch.rowspan > (Number(live.rowspan) || 1)
+      && cellFollows(rows, location.rowIndex, location.cellIndex)) {
+      delete patch.rowspan;
+      reportLayoutSkip(`form section at ${location.sectionPointer}: the rowspan on '${field}' was not applied — `
+        + 'other cells follow it, and a row-spanning cell displaces the cells beneath it. Make it the last '
+        + 'field of its section in the maker.');
+      if (!Object.keys(patch).length) return;
     }
+    const row = rows[location.rowIndex];
+    const beforeCells = (row && row.cells) || [];
+    const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
+    const overflows = rowsFromCells(afterCells, sec.columns).length > 1;
+    const unsafe = reflowBreaksReservation(rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r)));
+    if (overflows && unsafe) {
+      if (rowWidth(afterCells) > rowWidth(beforeCells)) {
+        // A WIDENING into an overflow: skipped whole, not half-applied. Applying it without the
+        // reflow would leave an overflowing row — a shape `rowsFromCells` would never emit and
+        // Dataverse renders unpredictably — which is worse than a form that does not match the spec.
+        reportLayoutSkip(`form section at ${location.sectionPointer}: the span change on '${field}' was skipped — `
+          + 'it would overflow the row, and re-flowing that row would move a cell into a row-spanning cell\'s '
+          + 'reservation. Adjust the layout in the maker.');
+        return;
+      }
+      // A narrowing inside a row that ALREADY overflowed is strictly an improvement, so it is
+      // written — but the row is not re-flowed, for the same reason.
+      await provision.updateElement('form', formId, location.cellPointer, patch);
+      reportLayoutSkip(`form section at ${location.sectionPointer}: the span change on '${field}' was applied, `
+        + 'but its row still overflows the grid and was NOT re-flowed — that would move a cell into a '
+        + 'row-spanning cell\'s reservation. Adjust the layout in the maker.');
+      return;
+    }
+    await provision.updateElement('form', formId, location.cellPointer, patch);
+    // A WIDENED span can overflow the row it sits in: a 2-column section holding two colspan-1
+    // cells becomes 2+1 = 3 columns of content the moment one is widened to 2. The create path
+    // packs rows by WIDTH (`rowsFromCells`), but an in-place span change never re-ran that
+    // packing, so the row was left overflowing — a shape `rowsFromCells` would never emit, and one
+    // Dataverse renders unpredictably. Live-reproduced: widening a field left three columns of
+    // content in a two-column row across two applies.
+    await repackRowAt(formId, location);
   };
 
   // Re-pack the row a span change just overflowed, using the create path's own packer so both routes
@@ -2084,7 +2268,7 @@ async function runSdkBuild(spec, opts = {}) {
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
   };
 
-  const placeFieldInSection = async (formId, logical, wantCell, target, vacated) => {
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2092,7 +2276,18 @@ async function runSdkBuild(spec, opts = {}) {
     if (!existing) {
       const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
       if (!rowsPtr) return;
-      await appendCellPacked(formId, form, rowsPtr.slice(0, -'/rows'.length), wantCell);
+      const sectionPointer = rowsPtr.slice(0, -'/rows'.length);
+      // Span the NEW cell for the section it is landing in, by the same rule as an existing one.
+      // The compiled cell alone carried the compiler's clamp, which for an auto layout is a
+      // synthetic one- or two-column section: a field added to a four-column maker form arrived
+      // narrow and was only widened — and its row reflowed — by a SECOND apply of the same spec.
+      const liveSection = sectionAt(form, sectionPointer) || {};
+      const cell = { ...wantCell };
+      for (const key of ['colspan', 'rowspan']) {
+        const span = spanForLiveSection(key, wantCell, rawSpan, liveSection);
+        if (span === undefined) delete cell[key]; else cell[key] = span;
+      }
+      await appendCellPacked(formId, form, sectionPointer, cell);
       return;
     }
     // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
@@ -2109,7 +2304,7 @@ async function runSdkBuild(spec, opts = {}) {
     // cell is staying, converge here; when it is moving, converge in the DESTINATION after the move.
     const staying = !targetPointer || existing.sectionPointer === targetPointer;
     if (staying) {
-      await convergeCellSpans(formId, form, existing, wantCell);
+      await convergeCellSpans(formId, form, existing, wantCell, rawSpan);
       // Already on the form and already in the right section (or we have no opinion) — leave it be,
       // so a rebuild converges instead of reshuffling the form on every run.
       return;
@@ -2165,7 +2360,7 @@ async function runSdkBuild(spec, opts = {}) {
     // possible stranded-row removal) invalidated every pointer computed above.
     const settledForm = await provision.getArtifact('form', formId) || {};
     const settled = findFieldCellLocation(settledForm, logical);
-    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell);
+    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
   };
 
   const reconcileForm = async (formId, def) => {
@@ -2196,8 +2391,13 @@ async function runSdkBuild(spec, opts = {}) {
       declaredSection = declaredSectionByField(def.tabs);
       sectionTargets = await reconcileFormTopology(formId, def);
     }
+    // RAW authored spans, kept off the compiled cells because a cell is pushed verbatim to the SDK.
+    // Reconcile re-clamps them against the section it actually writes into: the compiled span is
+    // clamped to the COMPILER's section, which for an auto layout is a synthetic one- or two-column
+    // stand-in that reconcile never deploys.
+    const rawSpans = def.__fieldSpans || {};
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical]);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.

@@ -59,12 +59,18 @@ function rowsFromCells(cells, columns) {
     }
     // The clamp has to reach the EMITTED cell, not just the row arithmetic. Packing a `colspan: 4`
     // cell as width 2 while still serializing `colspan="4"` produces exactly the overrunning cell
-    // this clamp exists to prevent, and contradicts the documented behaviour. A span clamped back
-    // down to 1 drops the attribute entirely, matching fieldCellIntent's omit-the-default rule.
+    // this clamp exists to prevent, and contradicts the documented behaviour.
+    //
+    // The clamped value is written EVEN WHEN IT IS 1. Dropping the attribute there looked harmless
+    // ("1 is the default"), but it recreates the omission-vs-value ambiguity one layer down:
+    // reconcile reads a missing span as "no opinion" and LEAVES AN EXISTING WIDE CELL ALONE.
+    // Live-reproduced — a deployed colspan-2 cell, re-declared as `colspan: 4` in a ONE-column
+    // section, stayed at 2 across two applies instead of shrinking to the clamped 1. The author did
+    // declare a span here; 1 is its effective value, not an absence.
     let out = cell;
     if (span !== declared) {
       out = Object.assign({}, cell);
-      if (span > 1) out.colspan = span; else delete out.colspan;
+      out.colspan = span;
     }
     current.push(out);
     used += span;
@@ -216,6 +222,23 @@ function fieldOptionsMap(formSpec) {
     };
   }
   return map;
+}
+
+// Merge a form-level `fieldOptions` default with an inline field entry: the inline entry wins
+// wherever it says something. Exported so `--verify` expects the span the compiler was ASKED to
+// emit, whichever surface declared it — re-deriving the precedence there left `fieldOptions` spans
+// unverified entirely, so a span the build had to skip went unreported.
+function mergeFieldOptions(base, inline, logical) {
+  if (!base) return inline || { name: logical, readOnly: false, hidden: false, after: undefined };
+  if (!inline) return base;
+  return {
+    name: logical,
+    readOnly: inline.readOnly || base.readOnly,
+    hidden: inline.hidden || base.hidden,
+    after: inline.after !== undefined ? inline.after : base.after,
+    colspan: inline.colspan !== undefined ? inline.colspan : base.colspan,
+    rowspan: inline.rowspan !== undefined ? inline.rowspan : base.rowspan,
+  };
 }
 
 // Cell for the Notes/activity-timeline control.
@@ -419,6 +442,22 @@ function reorderCellsByAnchors(cells, positions) {
   return cells;
 }
 
+// The grid width the compiler EMITS for an authored section. This is the ONE place that rule lives:
+// the compiler lays a section out with it, and `--verify` must judge the deployed form against the
+// same value. A second derivation in the verifier drifted — it read the raw `columns`, so a section
+// that omits it (the compiler's default is 1) or one on a QuickCreate form (capped at 1) was reported
+// as wrong even though it deployed exactly as compiled.
+//
+// This is the AUTHORED effective width, not the live one: the reconcile deliberately clamps against
+// the section it is writing into (`convergeCellSpans`), which on an existing form can differ.
+//
+// Quick Create forms must use single-column sections. Dataverse rejects multi-column
+// (columns="11"/"111") quick-create sections with "Columns in a section must be set to '1'".
+function sectionGridWidth(section, formType) {
+  const maxCols = formType === 'QuickCreate' ? 1 : 4;
+  return Math.min((section && section.columns) || 1, maxCols);
+}
+
 // Compile an App Spec form entry into the SDK's canonical desired-state intent.
 //
 // NEW topology: tabs[] → columns[] → sections[] → rows[] → cells[].
@@ -445,9 +484,9 @@ function compileFormIntent(spec, formSpec, opts) {
   const entity = entityByLogical(spec, entityLogical);
   const formType = formSpec.formType || 'Main';
 
-  // Quick Create forms must use single-column sections. Dataverse rejects multi-column
-  // (columns="11"/"111") quick-create sections with "Columns in a section must be set
-  // to '1'". This cap also blocks notes — quick-create forms don't host the timeline.
+  // The QuickCreate single-column cap — the same rule `sectionGridWidth` applies to explicit
+  // sections; the auto layout below picks its own 1-or-2 within it. It also blocks notes:
+  // quick-create forms don't host the timeline.
   const maxCols = formType === 'QuickCreate' ? 1 : 4;
   const explicit = Array.isArray(formSpec.tabs) || formSpec.layout === 'explicit';
 
@@ -469,22 +508,30 @@ function compileFormIntent(spec, formSpec, opts) {
   // engine-only `__`-prefixed keys on the returned def are never sent (createFormShell hand-picks
   // the fields it passes to createArtifact), so that is where positioning intent belongs.
   const positions = {};
+  // RAW authored spans, by logical name: { <logical>: { colspan?, rowspan? } }.
+  //
+  // The cells carry the span already CLAMPED to the section the compiler laid out, which is right
+  // for the create path. It is wrong for reconcile on an existing form: an AUTO layout compiles a
+  // synthetic one-column section, but reconcile deliberately KEEPS the deployed section's geometry —
+  // so applying the synthetic clamp narrowed a maker's four-column cell to 1. The raw value has to
+  // survive compilation for the reconcile to re-clamp against the section it actually writes into.
+  //
+  // Kept off the cells, like `positions`, because a cell is pushed verbatim to the SDK and this is
+  // not part of its model.
+  const rawSpans = {};
+  const recordRawSpan = function (opt) {
+    if (!opt || !opt.name) return;
+    const out = {};
+    if (typeof opt.colspan === 'number') out.colspan = opt.colspan;
+    if (typeof opt.rowspan === 'number') out.rowspan = opt.rowspan;
+    if (Object.keys(out).length) rawSpans[opt.name] = out;
+  };
   const recordPosition = function (opt) {
     if (opt && opt.after && opt.name && opt.after !== opt.name) positions[opt.name] = opt.after;
   };
-  // Merge a form-level default with an inline override for one field.
+  // Merge a form-level default with an inline override for one field — see mergeFieldOptions.
   const optionsFor = function (logical, inline) {
-    const base = formOptions[logical];
-    if (!base) return inline || { name: logical, readOnly: false, hidden: false, after: undefined };
-    if (!inline) return base;
-    return {
-      name: logical,
-      readOnly: inline.readOnly || base.readOnly,
-      hidden: inline.hidden || base.hidden,
-      after: inline.after !== undefined ? inline.after : base.after,
-      colspan: inline.colspan !== undefined ? inline.colspan : base.colspan,
-      rowspan: inline.rowspan !== undefined ? inline.rowspan : base.rowspan,
-    };
+    return mergeFieldOptions(formOptions[logical], inline, logical);
   };
 
   let tabs;
@@ -514,9 +561,10 @@ function compileFormIntent(spec, formSpec, opts) {
                 const inline = normalizeFieldEntry(fl);
                 const opt = optionsFor(inline.name, inline);
                 recordPosition(opt);
+                recordRawSpan(opt);
                 return fieldCellIntent(inline.name, { isRequired: requiredFor(inline.name), readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan });
               });
-              const secCols = Math.min(s.columns || 1, maxCols);
+              const secCols = sectionGridWidth(s, formType);
               return {
                 // The generated fallback name is the form's identity for this section on a REBUILD
                 // (topology reconcile matches deployed sections by name). Shared with the spec gate
@@ -543,6 +591,7 @@ function compileFormIntent(spec, formSpec, opts) {
     const autoCell = function (logical, extra) {
       const opt = optionsFor(logical, null);
       recordPosition(opt);
+      recordRawSpan(opt);
       return fieldCellIntent(logical, Object.assign({ readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan }, extra || {}));
     };
     if (entity) {
@@ -606,6 +655,9 @@ function compileFormIntent(spec, formSpec, opts) {
   // precedence rule should hold in the code that implements it, not only in the gate in front of it.
   for (const key of Object.keys(formOptions)) {
     if (!Object.prototype.hasOwnProperty.call(positions, key)) recordPosition(formOptions[key]);
+    // Same catch-all for spans: a form-level `fieldOptions` entry whose field was not placed
+    // inline still carries authored intent the reconcile may need.
+    if (!Object.prototype.hasOwnProperty.call(rawSpans, key)) recordRawSpan(formOptions[key]);
   }
 
   // Notes section (opt-in: formSpec.notes or entity.hasNotes) — Main forms only.
@@ -643,6 +695,8 @@ function compileFormIntent(spec, formSpec, opts) {
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).
     __fieldPositions: positions,
+    // RAW authored spans, for reconcile to re-clamp against the section it actually writes into.
+    __fieldSpans: rawSpans,
     // Whether an EXPLICIT layout may prune deployed fields it does not list. Defaults to true (the
     // long-standing behaviour: an explicit layout is the complete desired state). `prune: false`
     // lets an author reorder or restyle a SUBSET of the fields without having to re-declare the
@@ -846,6 +900,8 @@ function findFieldCellPointer(formJson, logical) {
 
 module.exports = {
   compileFormIntent,
+  sectionGridWidth,
+  mergeFieldOptions,
   clampedCellSpan,
   cellFitsInRow,
   // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its

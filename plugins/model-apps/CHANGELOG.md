@@ -5,7 +5,7 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.8.0
+## [Unreleased] — 2.9.0
 
 A dry run that says what an apply would really do, sample data that can express a hierarchy, and
 downloads that round-trip Choice columns.
@@ -29,6 +29,35 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
+  anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
+  summary read as authoritative — and a truncated-but-authoritative listing is what drives a
+  duplicate page create. The whole line must be the summary, so a name that merely *starts* with it
+  is rejected too.
+- **A malformed page id is refused instead of stored.** The old pattern accepted 36 characters from
+  an alphabet containing `-`, so a row of dashes passed and an over-long id was silently *truncated*
+  into a plausible one. Any identifier character following the id now disqualifies it, not just a
+  hex digit. An unparsable id goes through the existing uncertain-create recovery.
+- **A sample-data row that is not an object is rejected up front.** `null` crashed, a string became
+  `{"0":"a","1":"b"}` and a number became `{}` — all after tables, forms and views had deployed.
+  Both provisioning entry points share one gate; `provision-entities` previously checked only that
+  the value was an array.
+- **A failed PAC command reports what PAC actually said.** The real error was replaced by the last
+  line of the help dump that follows it, and a deterministic failure (a bad argument, a missing file)
+  was retried three times before reporting anything — on an ordinary page update it still was, since
+  the stop condition only covered creates.
+- **A path ending in `\` no longer swallows the flags after it** on Windows, where a trailing
+  backslash escaped its own closing quote.
+- **A crashed browser-automation server reports failure**, instead of exiting 0 because the process
+  was killed by a signal rather than by its own choice.
+- **`generate-page-manifest --force` never writes outside the working directory or through a link.**
+  A `package.json` that is a symlink (even a dangling one) or a hard link is refused, and so is a
+  working directory that is itself a link or junction; a linked ancestor is still followed. A file is
+  replaced atomically and keeps its file mode, and a read-only one is refused rather than replaced.
+- **`--clear-workspace` refuses a UNC/network path**, which could otherwise block on an unreachable
+  share with no way to interrupt it. A mapped drive is unaffected.
+- **A transient discovery failure no longer certifies a `--changed-only` baseline as fresh**, which
+  could let a later page edit skip a full build it actually needed.
 - **An explicit form layout reshapes a form instead of flattening it** ([#575]). Every field was
   appended to the first section, containers were never created or resized, and declaring `tabs`
   silently switched pruning on. Containers now match by `name`, then `label`, then position, and a
@@ -36,14 +65,29 @@ downloads that round-trip Choice columns.
 - **A section emptied by a layout move is reclaimed** instead of surviving as a blank twin.
 - **A field added or moved on an existing form packs to the section's grid**, so the same spec no
   longer produces a different form depending on whether the form already existed.
-- **Cell spans converge on an existing form, and are clamped where they are written.** A declared
-  span reaches the deployed cell; an undeclared one is still never sent, so a cell widened by hand
-  survives. `rowspan` is rejected unless it is the last field in its section ([#581]).
+- **Cell spans converge on an existing form, and are clamped against the grid that is really
+  deployed.** A declared span reaches the deployed cell; an undeclared one is still never sent, so a
+  cell widened by hand survives. Clamping used the grid the spec compiled to rather than the live
+  one, so an auto layout could narrow a maker's four-column cell to one; and narrowing a section
+  left an over-wide cell behind, unchanged on the next apply too. `rowspan` is rejected unless it is
+  inline on the last field in its section ([#581]), and a form-level `fieldOptions` span is now
+  validated too instead of a bad value being dropped.
+- **Re-flowing a section no longer breaks a maker's row-spanning layout.** Once a field follows a
+  `rowspan`, re-flowing by reading order moved it into the reserved slot. Such a section now keeps
+  its grid when the rows cannot follow a narrowing, a span change that would overflow its row is
+  skipped, and a `rowspan` is never raised on a deployed cell that other cells follow. Trailing spans
+  (the stock-form shape) re-flow normally. Every refusal is reported and recorded in the build
+  result's `skipped.layout`.
 - **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
   indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
 - **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
   row was not re-packed, leaving three columns of content in a two-column section. Displaced fields
   move down rather than to the bottom of the section; a span that still fits writes nothing.
+- **`--verify` judges widths and spans by the build's own rule.** It used to derive them separately:
+  a too-narrow section could excuse its own span (`columns: 4, colspan: 4` arriving as 1 and 1
+  verified PASS), while a section that omits `columns`, a QuickCreate section, or a span set through
+  `fieldOptions` was misjudged. Verify now uses the compiler's width and field-option rules, and it
+  counts the slot a row-spanning cell reserves beneath it, so a full row under a `rowspan` fails.
 - **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
   containers and deliberately does not rename them (form scripts and business rules reference
   section names), but verify looked them up by the authored name — so a section it had just reused
@@ -124,8 +168,19 @@ downloads that round-trip Choice columns.
   reapplied, and that is now said out loud.
 - **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.**
 - **The vendored SDK is refreshed** for upstream wire-correctness fixes (view joins, `addElement`
-  re-keying, dashboard parsing, duplicate sort attributes, BPF `If-Match`). Measured against the
-  previous bundle, none of it changes this plugin's output today — it removes latent hazards.
+  re-keying, dashboard parsing, duplicate sort attributes, a flow left disabled when an edit fails)
+  and a patched `@xmldom/xmldom` (0.8.15, parser denial-of-service fixes). Two change what you see:
+  **an app whose sitemap has an unpublished edit can now be torn down** — the delete carried a token
+  the platform refuses while an edit is pending, so it failed with 412 every time — and **each write
+  in a business process flow's create is conditioned on the token the previous write returned**, so
+  a concurrent edit is refused rather than activated or overwritten.
+- **A slow write is waited for, not abandoned and re-sent.** Writes now get up to 5 minutes (reads
+  keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
+  still commit, and a re-send could only be refused as a false version conflict. Activating a
+  business process flow on a newly created table can take longer than the old 60 s.
+- **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
+  that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
+  first.
 
 ### Changed
 

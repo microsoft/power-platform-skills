@@ -86,14 +86,26 @@ async function resolveLiveIdentity({ sdk, envUrl, appUniqueName, whoAmI }) {
   } catch { return null; }
   if (!orgId) return null;
   let appId = null;
+  let appIdKnown = true;
   try {
     // App discovery by unique name (same appmodule query fetchSitemap uses). appId is a SECONDARY identity
     // signal — a fresh baseline (app not yet created) legitimately resolves null, so a miss is tolerated;
     // identityMatches only compares appId when BOTH the snapshot and live carry one.
     const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUniqueName)}'`, top: 1 });
     appId = (apps && apps[0] && apps[0].appmoduleid) || null;
-  } catch { appId = null; }
-  return { orgId, envUrl, appUniqueName, appId };
+  } catch {
+    // A FAILED READ is not a proven absence. Both used to collapse to `appId: null`, and the caller
+    // reads that as "the app did not exist when this flow started" — which is the single fact that
+    // certifies a fresh, ELIGIBLE changed-only baseline. So a transient app-query error against a
+    // PRE-EXISTING app minted an eligible baseline for an additive build that may not have converged,
+    // and a later page edit then took the fast path on the strength of it.
+    //
+    // `appIdKnown: false` keeps the tolerated-miss behaviour for identity MATCHING (an absent id is
+    // still not compared) while letting the caller refuse to certify what it could not read.
+    appId = null;
+    appIdKnown = false;
+  }
+  return { orgId, envUrl, appUniqueName, appId, appIdKnown };
 }
 
 // ---- snapshot assembly (post-apply) -------------------------------------------------------------------
@@ -187,7 +199,13 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
 
   // Whether the app already existed when the flow STARTED — the only proof a subsequent full build is a
   // fresh create (→ eligible baseline). Captured before any write (Sol #7 / Opus H2).
-  const appPreExisted = !!live.appId;
+  //
+  // An UNREADABLE app id counts as pre-existing. "We could not look" must not certify a fresh baseline:
+  // the alternative is that one transient app-query failure mints an eligible snapshot for an additive
+  // build on an app that was already there, and a later page edit rides the fast path on it. Treating
+  // it as pre-existing costs one extra full build and records `uncertified-baseline` debt, which is the
+  // recoverable direction.
+  const appPreExisted = live.appIdKnown === false ? true : !!live.appId;
 
   let decision = decideChangedOnly({ annotatedSpec, snapshot, live });
   // Sample-data guard (Sol #11): the baseline records whether --sample-data was applied. If THIS run asks

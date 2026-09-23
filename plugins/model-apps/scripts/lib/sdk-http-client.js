@@ -8,7 +8,8 @@
 // We must NOT throw on non-2xx — the SDK inspects { status, body } and raises its own typed
 // errors (ensureSuccess / VersionConflictError on 412). We throw only when we cannot obtain a token
 // (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
-// after exhausting retries. We never throw purely on a non-2xx HTTP status.
+// after exhausting retries, or at once for a write that must not be re-sent (see `call`). We never
+// throw purely on a non-2xx HTTP status.
 const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
 
 /**
@@ -44,7 +45,34 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const random = deps.random || Math.random;
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
   // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
+  //
+  // ⚠ 502/503/504 come from an INTERMEDIARY, so the write behind them may have COMMITTED — and this
+  // retry then re-sends it. For a CONDITIONAL write (every SDK form, view, chart, dashboard and app
+  // update carries `If-Match`) or a KEYED create (a client-minted id, such as a business process
+  // flow), the re-send meets the row the first attempt already created or bumped, so the outcome
+  // comes back as a definitive-looking 412 — a version conflict, or "already exists" — for a write
+  // that succeeded. That is a spurious FAILURE, never a lost write, and it halts the build with the
+  // remedy for that code (`requireSuccessfulPush`, lib/entity-provision.js). Note "already exists" is
+  // NOT cleared by simply re-running: the workspace keeps the copy it never recorded as pushed, which
+  // is why that halt names a workspace reset. Without the retry the same commit would still fail (as
+  // a bare 502), while an attempt that genuinely did not commit would no longer recover. So the
+  // policy stays.
+  // It is NOT safe for a write whose failure path must know whether the first attempt landed: the
+  // SDK's business-process-flow `update`/`delete` settle an ambiguous deactivate by re-reading the
+  // row, and this retry pre-empts that. Nothing in this plugin issues those today; exempt such
+  // writes from the retry before anything does.
   const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+  // How long to wait for an answer before giving up. A WRITE gets far longer than a read, because a
+  // write we stop waiting for is not a failed write — the server may still be executing it, so its
+  // outcome becomes UNKNOWN, and every recovery from an unknown outcome is worse than waiting. A
+  // read is safe to abandon and re-issue.
+  // MEASURED live: activating a business process flow on a table created seconds earlier ran past
+  // 60 s (the platform creates the flow's backing table inside that request). At the old 60 s limit
+  // the activation committed after the client gave up; the re-send was refused with a 412 against
+  // the version the first attempt had produced, and the flow's create rolled itself back on that
+  // false "concurrent edit" — a build that failed over a write that had succeeded.
+  const READ_TIMEOUT_MS = 60000;
+  const WRITE_TIMEOUT_MS = 300000;
   // Jittered, capped exponential backoff. Metadata customizations serialize on a per-entity
   // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,
   // a fixed schedule wakes them in lockstep so they re-collide forever. Jitter de-syncs them.
@@ -103,6 +131,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
     const noRetry = (method_ === 'DELETE' && !isMetadataDelete) || isBatch;
+    const isWrite = method_ !== 'GET';
+    // A CONDITIONAL write that got NO answer (a timeout or a dropped connection) is never re-sent.
+    // It may still commit — and if it does, the re-send carries a token the first attempt already
+    // superseded, so it can only be refused with a 412 that reads exactly like somebody else's edit.
+    // The SDK acts on that: a business process flow create rolls itself back on a version conflict
+    // in its activation step, which is how one committed-but-slow activation failed a whole build.
+    // Surfacing the unknown outcome instead lets the caller report what really happened, and the
+    // idempotent rebuild then adopts whatever did land. A conditional write that got an ANSWER
+    // (429, 5xx) keeps the status retry above; that trade-off is unchanged.
+    const conditional = isWrite && Object.keys((options && options.headers) || {}).some((h) => h.toLowerCase() === 'if-match');
 
     // Retry: refresh the token once on 401 (no backoff); back off on transient 5xx/429.
     // 6 attempts with capped jittered backoff rides out a per-entity customization lock that
@@ -121,8 +159,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
         headers['Content-Type'] = 'application/json; charset=utf-8';
       }
 
-      const res = await request({ url, method, headers, body: bodyStr, includeHeaders: true });
+      const res = await request({ url, method, headers, body: bodyStr, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS });
       if (res.error) {
+        if (conditional) {
+          throw new Error(`Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
+        }
         if (last || noRetry) throw new Error(`Request failed: ${res.error}`);
         await sleep(backoffMs(attempt));
         continue;

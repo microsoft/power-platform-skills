@@ -634,3 +634,354 @@ test('a name-less create still snapshots and reconciles an uncertain result (no 
   assert.deepStrictEqual(uploadCalls[1].slice(uploadCalls[1].indexOf('--page-id'), uploadCalls[1].indexOf('--page-id') + 2),
     ['--page-id', GP_NEW], 'the retry targets the adopted page instead of creating a duplicate');
 });
+
+// --- #588.1: a page NAME must not be able to supply the list summary ----------------------------
+// The count was matched anywhere in stdout, and pac prints names in a fixed-width table — so a page
+// called "Found 1 generated page" made a listing with NO real summary line read as AUTHORITATIVE.
+// An authoritative-looking but truncated listing is what drives a duplicate CREATE.
+test('a page NAME cannot spoof the summary and make a truncated listing authoritative', () => {
+  const spoof = [
+    'Connected as tester@contoso.com',
+    'Page ID                              Name                     Published',
+    `${GUID} Found 1 generated page   Yes`,
+  ].join('\n');
+  const k = classifyListOutput(spoof);
+  assert.strictEqual(k.kind, 'unrecognized',
+    `a name-supplied count is not a summary; got ${JSON.stringify(k)}`);
+  assert.deepStrictEqual(k.pages, [], 'an unrecognized listing yields no authoritative pages');
+});
+
+test('a REAL standalone summary line is still read (the fix must not break normal listings)', () => {
+  const k = classifyListOutput(listText([{ pageId: GUID, name: 'Overview' }]));
+  assert.strictEqual(k.kind, 'pages');
+  assert.strictEqual(k.pages.length, 1);
+  assert.strictEqual(parseListCount(LIST_EMPTY), 0, 'an explicit Found 0 is still read');
+});
+
+// --- #588.5: a page id is durable identity, so only a canonical GUID may become one --------------
+// `[0-9a-fA-F-]{36}` accepted 36 characters from an alphabet containing `-`, so a row of dashes and
+// any mis-grouped hex passed — and an OVERLONG token matched its first 36 characters, silently
+// TRUNCATING a malformed id into a plausible one.
+test('parsePageId REFUSES malformed and overlong ids instead of truncating them', () => {
+  assert.strictEqual(parsePageId('Page ID: ------------------------------------'), null,
+    'a run of dashes is 36 characters but not a GUID');
+  assert.strictEqual(parsePageId('Page ID: 111111112222333344445555555555555555'), null,
+    'ungrouped hex is not a canonical GUID');
+  assert.strictEqual(parsePageId('Page ID: 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35f'), null,
+    'an OVERLONG token must be refused, never trimmed to a valid-looking id');
+  assert.strictEqual(parsePageId('Page ID: 6e0c28a2-cdbf-41ec-9186-d10fd5de6e3'), null,
+    'a short token is refused too');
+});
+
+test('parsePageId still accepts a real id, in either case, with trailing output', () => {
+  assert.strictEqual(parsePageId('Page ID: 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35'),
+    '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35');
+  assert.strictEqual(parsePageId('Page ID: 6E0C28A2-CDBF-41EC-9186-D10FD5DE6E35\nDone.'),
+    '6E0C28A2-CDBF-41EC-9186-D10FD5DE6E35', 'pac may normalize GUID casing');
+});
+
+// A malformed id must not simply vanish: with no parsable identity the upload is UNCERTAIN, and the
+// env-wide before/after diff has to run so a landed create is adopted rather than blindly retried.
+test('a malformed Page ID drives uncertain-create reconciliation, not a blind retry', async () => {
+  const seen = [];
+  let uploads = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      seen.push(args);
+      if (args.includes('list')) {
+        return { status: 0, stdout: uploads === 0 ? LIST_EMPTY : listText([{ pageId: GUID, name: 'N' }]), stderr: '' };
+      }
+      uploads += 1;
+      // Zero exit, but the id is malformed — historically parsed and stored as identity.
+      if (uploads === 1) return { status: 0, stdout: 'Page ID: ------------------------------------', stderr: '' };
+      return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' });
+  assert.strictEqual(res.pageId, GUID,
+    'the landed create must be ADOPTED by id diff, not identified by the malformed token');
+  const uploadCalls = seen.filter((a) => a.includes('upload'));
+  assert.strictEqual(uploadCalls.length, 2, 'one create + one adopted update');
+  assert.ok(uploadCalls[1].includes('--page-id'), 'the retry targets the adopted page');
+});
+
+// --- G4: keep the diagnostic pac produced, and do not retry a deterministic failure -------------
+// CAPTURED VERBATIM from `pac model genpage download` with no --app-id. pac prints a banner, then
+// the error, then a full help dump — so the LAST non-empty line is a flag description and the real
+// cause sits in the middle. The wrapper used to report exactly that last line.
+const REAL_PAC_ARG_FAILURE = [
+  'Microsoft PowerPlatform CLI',
+  'Version: 0.1.0-dev (.NET 10.0.12)',
+  'Online documentation: https://aka.ms/PowerPlatformCLI',
+  'Feedback, Suggestions, Issues: https://github.com/microsoft/powerplatform-build-tools/discussions',
+  '',
+  'Error: A required argument --app-id is missing.',
+  '',
+  'Usage: pac model genpage download [--environment] --app-id [--page-id] [--output-directory]',
+  '',
+  '  --environment               Specifies the target Dataverse. (alias: -env)',
+  '  --app-id                    The ID of the model-driven app.',
+  '  --output-directory          Directory to save pulled pages. (alias: -o)',
+].join('\n');
+
+test('a REAL pac failure banner reports the Error line, not the last help row', async () => {
+  let thrown = null;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      return { status: 1, stdout: REAL_PAC_ARG_FAILURE, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  try { await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }); }
+  catch (e) { thrown = e; }
+  assert.ok(thrown, 'the upload must fail');
+  assert.match(thrown.message, /required argument --app-id is missing/,
+    `the real cause must survive; got ${thrown.message}`);
+  assert.ok(!/alias: -o/.test(thrown.message),
+    `a help row must not be reported as the error; got ${thrown.message}`);
+});
+
+test('a deterministic failure is reported at once, not retried until the budget is spent', async () => {
+  let uploadAttempts = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      uploadAttempts += 1;
+      return { status: 1, stdout: REAL_PAC_ARG_FAILURE, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  await assert.rejects(() => cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }));
+  assert.strictEqual(uploadAttempts, 1,
+    `an argument fault cannot succeed on a retry; attempted ${uploadAttempts} times`);
+});
+
+// The retry budget still exists for what it was built for: transient service flakes.
+test('a TRANSIENT failure is still retried and can succeed', async () => {
+  let uploadAttempts = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) {
+        return { status: 0, stdout: uploadAttempts === 0 ? LIST_EMPTY : LIST_EMPTY, stderr: '' };
+      }
+      uploadAttempts += 1;
+      if (uploadAttempts === 1) return { status: 1, stdout: '', stderr: 'The service is temporarily unavailable. Please try again.' };
+      return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' });
+  assert.strictEqual(res.pageId, GUID);
+  assert.strictEqual(uploadAttempts, 2, 'a transient failure must still be retried');
+});
+
+// --- #588.6: a path ending in a separator must not swallow the flags that follow ----------------
+// Windows command-line parsing treats `\"` as an ESCAPED QUOTE, so a directory argument ending in
+// a backslash escaped its own closing quote. Captured from a real cmd.exe parse before the fix:
+//   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
+// i.e. the path absorbed the rest of the command line and --app-id was never passed.
+test('a trailing backslash is doubled so it cannot escape the closing quote', () => {
+  // `String.raw` cannot be used here: a template literal may not END with a backslash, because it
+  // escapes the closing backtick. Ordinary escapes it is.
+  const dir = 'C:\\Users\\Power User\\download\\';
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], 'win32');
+  // The run before the closing quote is doubled; the following flag stays a separate argument.
+  assert.match(inv.command, /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after$/,
+    `the trailing separator must be escaped; got ${inv.command}`);
+});
+
+test('interior backslashes are left alone (every Windows path has them)', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], 'win32');
+  assert.match(inv.command, /"C:\\Users\\Power User\\download"/,
+    `an ordinary path must round-trip unchanged; got ${inv.command}`);
+});
+
+test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
+  const dir = '/home/user/download\\';
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], 'linux');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
+    'the POSIX path spawns pac directly, so nothing may be rewritten');
+});
+
+// --- review follow-up: a TRANSIENT message must NOT be mistaken for a deterministic one --------
+// The first version matched the bare phrases "does not exist" and "could not be found", so a
+// service message like "The resource does not exist yet; please retry." aborted the retry loop —
+// losing a retry that would have SUCCEEDED. A lost retry fails a build; a needless retry costs
+// about a second, and that asymmetry is what decides the trade.
+const runRetryCase = async (stderr) => {
+  let attempts = 0;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      attempts += 1;
+      return { status: 1, stdout: '', stderr };
+    },
+    sleep: async () => {},
+  });
+  try { await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }); } catch { /* expected */ }
+  return attempts;
+};
+
+test('a transient message containing "does not exist" is still RETRIED', async () => {
+  for (const msg of [
+    'The resource does not exist yet; please retry.',
+    'Error: The specified environment does not exist.',
+    'Error: The app module could not be found.',
+    'The service is temporarily unavailable. Please try again.',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const attempts = await runRetryCase(msg);
+    assert.strictEqual(attempts, 3, `"${msg}" must be retried; attempted ${attempts} time(s)`);
+  }
+});
+
+// The real pac wording for a missing file, MEASURED, carries argument AND file context — which is
+// what makes it unambiguously deterministic where a bare phrase is not.
+test('a REAL pac argument/file fault is still short-circuited', async () => {
+  for (const msg of [
+    'Error: A required argument --app-id is missing.',
+    "Error: The value passed to '--code-file' is invalid. The file 'D:\\nope\\absent.tsx' could not be found.",
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const attempts = await runRetryCase(msg);
+    assert.strictEqual(attempts, 1, `"${msg}" cannot succeed on a retry; attempted ${attempts} time(s)`);
+  }
+});
+
+// --- review follow-up: the diagnostic fallback must not report only the banner -----------------
+// `FLAG_HELP_RE` drops the help dump, but pac can print the ONLY diagnostic in that same indented
+// shape. With no `Error:` line, the filtered set was empty and the fallback took the FIRST four
+// lines — the banner — discarding the one line that said anything.
+test('a flag-SHAPED sole diagnostic survives instead of being replaced by the banner', async () => {
+  const out = [
+    'Microsoft PowerPlatform CLI',
+    'Version: 0.1.0-dev (.NET 10.0.12)',
+    'Online documentation: https://aka.ms/PowerPlatformCLI',
+    'Feedback, Suggestions, Issues: https://github.com/microsoft/powerplatform-build-tools/discussions',
+    '  --output-directory does not exist: C:\\missing',
+  ].join('\n');
+  let thrown = null;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com/', {
+    run: async (args) => {
+      if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+      return { status: 1, stdout: out, stderr: '' };
+    },
+    sleep: async () => {},
+  });
+  try { await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }); }
+  catch (e) { thrown = e; }
+  assert.ok(thrown);
+  assert.match(thrown.message, /output-directory does not exist/,
+    `the only real line must survive; got ${thrown.message}`);
+  assert.ok(!/Microsoft PowerPlatform CLI/.test(thrown.message),
+    `the banner must not be reported as the diagnostic; got ${thrown.message}`);
+});
+
+// --- review follow-up: both boundaries were the wrong SHAPE, not just missing ------------------
+
+// The trailing boundary only rejected the GUID alphabet, so a suffix starting with any other
+// character passed the lookahead and the id was accepted with the rest silently dropped. This
+// value becomes DURABLE page identity, so a truncated id is a wrong-page write later.
+test('parsePageId refuses a GUID followed by any identifier character, not just hex', () => {
+  const G = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+  assert.strictEqual(parsePageId(`Page ID: ${G}`), G, 'the control: a clean id still parses');
+  for (const suffix of ['oops', 'f', '-', '_x', '0', 'Z']) {
+    assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), null,
+      `a token continuing with ${JSON.stringify(suffix)} must be refused, not trimmed to the GUID`);
+  }
+  // ...but punctuation genuinely ENDS the token — pac prints the id inside prose.
+  for (const suffix of ['.', ',', ')', ' ', '\n']) {
+    assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), G,
+      `${JSON.stringify(suffix)} terminates the id and must still parse`);
+  }
+});
+
+// Anchoring the START defeated the table-row spoof, but with the line END unconstrained a name
+// that merely BEGAN with the summary text was accepted just the same — and a listing that looks
+// authoritative but is truncated is exactly what drives a duplicate CREATE.
+test('parseListCount requires the WHOLE line to be the summary, not just its start', () => {
+  assert.strictEqual(parseListCount('Found 3 generated page(s):'), 3, 'the live-captured form still parses');
+  assert.strictEqual(parseListCount('Found 0 generated page(s):'), 0);
+  for (const bad of [
+    'Found 1 generated pagex',
+    'Found 1 generated page(s) extra',
+    'Found 1 generated page(s): and then some',
+  ]) {
+    assert.strictEqual(parseListCount(bad), null,
+      `${JSON.stringify(bad)} is not the summary grammar and must not supply a count`);
+  }
+});
+
+// And the whole point: an unparsable summary must make the listing UNRECOGNIZED, never "empty" —
+// "empty" is what authorises a create.
+test('a malformed summary line makes the listing unrecognized, not empty', () => {
+  const out = 'Connected as tester@contoso.com\nRetrieving generated pages...\nFound 0 generated pagex\n';
+  assert.strictEqual(classifyListOutput(out).kind, 'unrecognized',
+    'a summary that does not parse must fail closed');
+});
+
+// --- review follow-up: the retry guard was keyed on the wrong condition ------------------------
+// "Stop retrying a deterministic failure" was gated on `!pid`, i.e. only on a CREATE. An ordinary
+// update — where the caller supplies `pageId`, so `pid` is truthy from the first attempt — sat
+// through every attempt on a fault that can never resolve itself, burying the real message under
+// "after 3 attempt(s)". The correct test is whether the NEXT attempt runs the SAME command.
+test('a deterministic failure on an ORDINARY update stops after one attempt', async () => {
+  let attempts = 0;
+  const run = async () => {
+    attempts += 1;
+    // Real pac wording for an argument fault — retrying cannot change the outcome.
+    return { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} })
+      .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed/i);
+  assert.strictEqual(attempts, 1,
+    `a deterministic UPDATE fault must not be retried; ran ${attempts} attempt(s)`);
+});
+
+// The control: a TRANSIENT failure on the same ordinary update is still retried, so the guard did
+// not simply disable retries for updates.
+test('a transient failure on an ordinary update is still retried', async () => {
+  let attempts = 0;
+  const run = async () => {
+    attempts += 1;
+    return { status: 1, stdout: '', stderr: 'Error: The service is temporarily unavailable. Please try again.' };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} })
+      .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed/i);
+  assert.ok(attempts > 1,
+    `a transient fault must still be retried; ran ${attempts} attempt(s)`);
+});
+
+// The ONE case the deterministic-failure stop must not break: an uncertain CREATE that actually
+// landed. Once the env diff adopts the new page, the next attempt is an UPDATE by id — a different
+// command — so the create's argument fault says nothing about it. Every other adoption test used a
+// transient error, so a guard that ignored the adoption transition survived the whole suite; and
+// that mutant is a duplicate-create hazard, because the call throws without returning the id the
+// create already minted.
+test('a deterministic-looking error on a CREATE that landed is still adopted and returned', async () => {
+  const uploads = [];
+  let listN = 0;
+  const run = async (args) => {
+    if (args[2] === 'list') {
+      listN += 1;
+      // before the create: empty; after it: the page exists — the create DID land.
+      return { status: 0, stdout: listN === 1 ? LIST_EMPTY : listText([{ pageId: GUID, name: 'Overview' }]), stderr: '' };
+    }
+    uploads.push(args);
+    return uploads.length === 1
+      ? { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." }
+      : { status: 0, stdout: `Successfully pushed page. Page ID: ${GUID}`, stderr: '' };
+  };
+  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} })
+    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
+  assert.strictEqual(r.pageId, GUID, 'the adopted page must be returned, not lost to a thrown error');
+  assert.strictEqual(uploads.length, 2, 'exactly one follow-up attempt — the UPDATE of the adopted page');
+  assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
+  assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
+});
