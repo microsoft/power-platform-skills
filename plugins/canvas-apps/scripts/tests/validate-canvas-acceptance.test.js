@@ -1,0 +1,4235 @@
+// Integration tests for scripts/validate-canvas-acceptance.cs.
+//
+// The validator is a pure static analyzer: given a canvas-app workspace (App.pa.yaml,
+// plan, acceptance evidence) and the plugin root, it either exits 0 (PASS) or non-zero
+// with one ERROR line per failed contract. It needs NO live coauthoring session, so it
+// runs unchanged in CI. These tests drive it against a committed Receive/Issue fixture
+// to lock in the directional-mutation contract (the P0 "reversed sign" regression).
+//
+// Two machine-specific values cannot be committed literally — the absolute workspace
+// path (used by the plan's Dispatch target) and the absolute plugin root (used by the
+// acceptance `Plugin root:` metadata). The fixture stores them as `{{WORKSPACE}}` and
+// `{{PLUGIN_ROOT}}` placeholders in `*.template.md`; each test materializes a run under
+// `.work/` (git-ignored), substitutes the real paths, and invokes the validator there.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const testsDir = __dirname;
+const pluginRoot = path.resolve(testsDir, '..', '..');
+const validator = path.join(pluginRoot, 'scripts', 'validate-canvas-acceptance.cs');
+const currentSkillVersion = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'canvas-app', 'SKILL.md'),
+    'utf8').match(/^version:\s*(\S+)/m)[1];
+const fixtureDir = path.join(testsDir, 'fixtures', 'receive-issue');
+const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compound');
+// Negative-space fixture embedding two runtime-fatal defects the "directionally correct"
+// evidence otherwise satisfies: a phantom LookUp key (`... .Selected.ID & " ID"`) and dead
+// staging variables (`varReceipt*` seeded to 0 and never written from an input). The validator
+// must report both defects. Individual tests repair the key or add live OnChange assignments
+// to prove each rule independently instead of allowing one failure to mask the other.
+const staleStagingFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-stale-staging');
+const lifecycleFieldsFixtureDir = path.join(testsDir, 'fixtures', 'mutation-lifecycle-fields');
+const continuationFixtureDir = path.join(testsDir, 'fixtures', 'continuation-stable-id');
+const stateDrivenSurfaceFixtureDir = path.join(testsDir, 'fixtures', 'state-driven-surface');
+const workRoot = path.join(testsDir, '.work');
+fs.rmSync(workRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+fs.mkdirSync(workRoot, { recursive: true });
+
+// The valid issue mutation subtracts the amount from the old value (`old - amount`).
+// Swapping the operands to `amount - old` keeps a '-' in the formula — which the old
+// "operator appears anywhere" check accepted — while reversing the real direction, so it
+// is the precise negative case the hardened binding must reject.
+const CORRECT_ISSUE_ARITHMETIC = 'varOldQuantity - varAmount';
+const REVERSED_ISSUE_ARITHMETIC = 'varAmount - varOldQuantity';
+
+// The reviewer's repro: keep the *expected-value* preview correct
+// (`Set(varExpectedQuantity, varOldQuantity - varAmount)`) but reverse only the actual Patch
+// write's persisted value (`{Quantity: varOldQuantity - varAmount}` -> `+`). A whole-formula
+// scan still finds a correct `old - amount` (in the preview) and wrongly PASSES; the hardened
+// check isolates the Patch write and must FAIL this, because the persisted direction is wrong.
+const CORRECT_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity - varAmount}';
+const REVERSED_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity + varAmount}';
+const PHANTOM_RECORD_ID = 'drpMngAdjustItem.Selected.ID & " ID"';
+const LIVE_RECORD_ID = 'drpMngAdjustItem.Selected.ID';
+const RECEIVE_STALE_WRITE = '{Quantity: varReceiptOldQuantity + varReceiptAmount}))';
+const ISSUE_STALE_WRITE = '{Quantity: varReceiptOldQuantity - varReceiptAmount}))';
+const LATE_STAGING_ASSIGNMENTS =
+    '; Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)' +
+    '; Set(varReceiptAmount, Value(numMngAdjustAmount.Text))';
+const RECEIVE_ACTION_BINDING =
+    '`btnReceive.OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))`';
+const ISSUE_ACTION_BINDING =
+    '`btnIssue.OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))`';
+const RECEIVE_ACTION_FORMULA = RECEIVE_ACTION_BINDING.slice('`btnReceive.OnSelect: '.length, -1);
+const ISSUE_ACTION_FORMULA = ISSUE_ACTION_BINDING.slice('`btnIssue.OnSelect: '.length, -1);
+const SHARED_SWITCH =
+    'Switch(varOperation, "Receive", varOldQuantity + varAmount, "Issue", varOldQuantity - varAmount)';
+const REVERSED_SHARED_SWITCH =
+    'Switch(varOperation, "Receive", varOldQuantity - varAmount, "Issue", varOldQuantity + varAmount)';
+const SHARED_APPLY_FORMULA =
+    `=Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, ${SHARED_SWITCH}); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: ${SHARED_SWITCH}}))`;
+const SHARED_APPLY_BINDING = `\`btnApply.OnSelect: ${SHARED_APPLY_FORMULA}\``;
+
+function replaceAllRequired(value, expected, replacement, label) {
+    assert.ok(value.includes(expected), `fixture transformation could not find ${label}: ${expected}`);
+    return value.split(expected).join(replacement);
+}
+
+function replaceOnceRequired(value, expected, replacement, label) {
+    const first = value.indexOf(expected);
+    assert.notStrictEqual(first, -1, `fixture transformation could not find ${label}: ${expected}`);
+    assert.strictEqual(
+        value.indexOf(expected, first + expected.length),
+        -1,
+        `fixture transformation expected exactly one ${label}`);
+    return value.replace(expected, replacement);
+}
+
+function replaceFirstRequired(value, expected, replacement, label) {
+    assert.ok(value.includes(expected), `fixture transformation could not find ${label}: ${expected}`);
+    return value.replace(expected, replacement);
+}
+
+function readFixture(file) {
+    const raw = fs.readFileSync(file, 'utf8');
+    return {
+        eol: raw.includes('\r\n') ? '\r\n' : '\n',
+        text: raw.replace(/\r\n/g, '\n'),
+    };
+}
+
+function writeFixture(file, fixture) {
+    const output = fixture.eol === '\n'
+        ? fixture.text
+        : fixture.text.replace(/\n/g, fixture.eol);
+    fs.writeFileSync(file, output);
+}
+
+function readTableKeys(text, heading) {
+    const lines = text.split(/\r?\n/);
+    const headingIndex = lines.findIndex((line) => line.trim() === heading);
+    if (headingIndex < 0) return [];
+    const tableStart = lines.findIndex(
+        (line, index) => index > headingIndex && line.trimStart().startsWith('|'));
+    if (tableStart < 0) return [];
+    const keys = [];
+    for (let index = tableStart + 2; index < lines.length; index++) {
+        if (!lines[index].trimStart().startsWith('|')) break;
+        const key = lines[index].trim().slice(1, -1).split('|')[0].trim();
+        if (key && !key.startsWith('[')) keys.push(key);
+    }
+    return keys;
+}
+
+function installCurrentRequirementsContract(workspace, { targetDevice = 'Fixed desktop' } = {}) {
+    const planPath = path.join(workspace, 'canvas-app-plan.md');
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const actions = readTableKeys(plan, '## Action Contracts');
+    const scenarios = readTableKeys(plan, '## Functional Test Matrix');
+    assert.ok(actions.length > 0, 'current contract requires action rows');
+    assert.ok(scenarios.length > 0, 'current contract requires scenario rows');
+
+    const rows = actions.map((action, index) => {
+        const key = `req-${index + 1}`;
+        const scenario = scenarios[Math.min(index, scenarios.length - 1)];
+        return {
+            key,
+            clause: `Exercise ${action}`,
+            outcome: `${action} completes with visible evidence`,
+            action,
+            scenario,
+        };
+    });
+    plan = `${plan.trimEnd()}\n\n## Requirement Coverage\n\n` +
+        '| Requirement | Planned affordance | Fidelity |\n' +
+        '| --- | --- | --- |\n' +
+        rows.map((row) => `| ${row.key} | ${row.outcome} | Exact |`).join('\n') +
+        '\n\n## Original Request Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row.key} | ${row.clause} | Data lifecycle | ${row.outcome} | ${row.action} | Screen1.OnVisible | ${row.scenario} |`
+        ).join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+
+    let acceptance = fs.readFileSync(acceptancePath, 'utf8');
+    acceptance = acceptance.replace(
+        /^Skill contract version:\s*\S+/m,
+        `Skill contract version: ${currentSkillVersion}`);
+    fs.writeFileSync(acceptancePath, acceptance);
+
+    fs.writeFileSync(
+        path.join(workspace, 'canvas-app-requirements.md'),
+        '# Canvas App Original Request Contract\n\n' +
+        `Contract version: 1\nTarget device: ${targetDevice}\n\n` +
+        '## Original Request\n\n' +
+        rows.map((row) => row.clause).join('. ') + '.\n\n' +
+        '## Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Scenario(s) | Specialized contract mappings |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row.key} | ${row.clause} | Data lifecycle | ${row.outcome} | ${row.action} | ${row.scenario} | N/A |`
+        ).join('\n') + '\n');
+}
+
+function materialize(
+    caseName,
+    {
+        reverseIssue = false,
+        reverseIssuePatchOnly = false,
+        repairPhantomKey = false,
+        wireStagingOnChange = false,
+        wireStagingAfterPatch = false,
+        contradictReceiveActionBinding = false,
+        sharedApplyFlow = false,
+        sharedSelectorMutates = false,
+        omitSharedMutationBinding = false,
+        reverseSharedBranches = false,
+        mismatchedSharedVariables = false,
+        mismatchedSharedOwner = false,
+        mutationDoesNotConsumeOperation = false,
+        mismatchedSharedGate = false,
+        operationLiteralSuffix = false,
+        unrelatedOperationLiteral = false,
+        dropdownSelector = false,
+        quoteYamlFormulas = false,
+        blockYamlFormula = false,
+        blockYamlKeepTrailingNewline = false,
+        actionBindingLineBreak = false,
+        misleadingApplyDirect = false,
+        orphanApplyGate = false,
+        labeledReceiptValues = false,
+        ambiguousReceiptValue = false,
+        selectorReceiptAssignment = false,
+        sharedActionHandlerOnly = false,
+        dropdownDirectShared = false,
+        updateContextSelectors = false,
+        sharedIfBranches = false,
+        ambiguousSharedDispatch = false,
+        mutatingSelectorFunction = null,
+        selectGateRouting = false,
+        unrelatedGateMutation = false,
+        requiredRecordScalar = null,
+        mixedTopology = false,
+        multiFieldPatch = false,
+        ambiguousMultiFieldPatch = false,
+        contextStagingOnChange = false,
+        contextStagingAfterPatch = false,
+        q8RuntimeGaps = false,
+        selectedEvidenceMismatch = false,
+        explicitSelectedId = false,
+        modernAmount = false,
+        modernAmountDefaultZero = false,
+        stagedAmountMinOne = false,
+        operationPostSuccessReset = false,
+        compoundSelectionMismatch = false,
+        omitOperationAllowEmpty = false,
+        omitSelectionDefault = false,
+        listBoxSelection = false,
+        directWithoutOperationState = false,
+        customRecordKey = false,
+        transformedCustomRecordKey = false,
+        wrappedGalleryItems = false,
+        twoSpaceScreenIndent = false,
+        amountInvalidPolarity = false,
+        sourceDir = fixtureDir,
+    } = {}) {
+    const workspace = path.join(workRoot, caseName);
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.mkdirSync(workspace, { recursive: true });
+
+    // App.pa.yaml and Screen1.pa.yaml are copied verbatim (they contain no placeholders);
+    // the two Markdown artifacts are templated with the run-specific absolute paths.
+    const appFixture = readFixture(path.join(sourceDir, 'App.pa.yaml'));
+    const screenFixture = readFixture(path.join(sourceDir, 'Screen1.pa.yaml'));
+    const planFixture = readFixture(path.join(sourceDir, 'canvas-app-plan.template.md'));
+    const acceptanceFixture = readFixture(path.join(sourceDir, 'canvas-app-acceptance.template.md'));
+    let appYaml = appFixture.text;
+    let screenYaml = screenFixture.text;
+    let plan = planFixture.text;
+    let acceptance = acceptanceFixture.text;
+
+    plan = plan.split('{{WORKSPACE}}').join(workspace);
+    acceptance = acceptance.split('{{PLUGIN_ROOT}}').join(pluginRoot);
+    screenYaml = replaceFirstRequired(
+        screenYaml,
+        '                    AllowEmptySelection: =true\n' +
+        '                    DefaultSelectedItems: =[]',
+        '                    DefaultSelectedItems: =[]',
+        'docs-compliant ComboBox empty-selection properties');
+
+    if (reverseIssue) {
+        // Reverse the sign in BOTH the YAML (so the binding still matches the app exactly
+        // and only the directional check fires) and the acceptance issue-mutation cell.
+        screenYaml = replaceAllRequired(
+            screenYaml, CORRECT_ISSUE_ARITHMETIC, REVERSED_ISSUE_ARITHMETIC, 'Issue arithmetic in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, CORRECT_ISSUE_ARITHMETIC, REVERSED_ISSUE_ARITHMETIC, 'Issue arithmetic evidence');
+    }
+
+    if (reverseIssuePatchOnly) {
+        // Reverse ONLY the Patch write (persisted value), leaving the expected-value preview
+        // `Set(varExpectedQuantity, varOldQuantity - varAmount)` intact. Apply to both the YAML
+        // and the acceptance cell so the binding still matches the app and only the directional
+        // Patch-write check fires.
+        screenYaml = replaceAllRequired(
+            screenYaml, CORRECT_ISSUE_PATCH_WRITE, REVERSED_ISSUE_PATCH_WRITE, 'Issue Patch write in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, CORRECT_ISSUE_PATCH_WRITE, REVERSED_ISSUE_PATCH_WRITE, 'Issue Patch write evidence');
+    }
+
+    if (repairPhantomKey) {
+        screenYaml = replaceAllRequired(
+            screenYaml, PHANTOM_RECORD_ID, LIVE_RECORD_ID, 'phantom record ID in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, PHANTOM_RECORD_ID, LIVE_RECORD_ID, 'phantom record ID evidence');
+    }
+
+    if (contextStagingOnChange || contextStagingAfterPatch) {
+        for (const [stale, context] of [
+            ['varReceiptOldQuantity', 'locOldQuantity'],
+            ['varReceiptAmount', 'locAmount'],
+        ]) {
+            appYaml = replaceAllRequired(appYaml, stale, context, `${stale} App context name`);
+            screenYaml = replaceAllRequired(screenYaml, stale, context, `${stale} YAML context name`);
+            acceptance = replaceAllRequired(
+                acceptance, stale, context, `${stale} evidence context name`);
+        }
+
+        if (contextStagingOnChange) {
+            screenYaml = replaceFirstRequired(
+                screenYaml,
+                '                    Items: =colInventory',
+                '                    Items: =colInventory\n' +
+                '                    OnChange: =UpdateContext({locOldQuantity: drpMngAdjustItem.Selected.Quantity})',
+                'context selected-record assignment');
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    Format: =TextFormat.Number',
+                '                    Format: =TextFormat.Number\n' +
+                '                    OnChange: =UpdateContext({locAmount: Value(numMngAdjustAmount.Text)})',
+                'context amount assignment');
+        }
+
+        if (contextStagingAfterPatch) {
+            const assignments =
+                '; UpdateContext({locOldQuantity: drpMngAdjustItem.Selected.Quantity, ' +
+                'locAmount: Value(numMngAdjustAmount.Text)})';
+            for (const tail of [
+                '{Quantity: locOldQuantity + locAmount}))',
+                '{Quantity: locOldQuantity - locAmount}))',
+            ]) {
+                screenYaml = replaceAllRequired(
+                    screenYaml, tail, tail + assignments, 'late context assignment YAML');
+                acceptance = replaceAllRequired(
+                    acceptance, tail, tail + assignments, 'late context assignment evidence');
+            }
+        }
+    }
+
+    if (wireStagingOnChange) {
+        // The selected-record combo box is the first of two controls bound to colInventory.
+        screenYaml = replaceFirstRequired(
+            screenYaml,
+            '                    Items: =colInventory',
+            '                    Items: =colInventory\n' +
+            '                    OnChange: =Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)',
+            'selected-record Items binding');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Format: =TextFormat.Number',
+            '                    Format: =TextFormat.Number\n' +
+            '                    OnChange: =Set(varReceiptAmount, Value(numMngAdjustAmount.Text))',
+            'amount Format binding');
+    }
+
+    if (wireStagingAfterPatch) {
+        for (const mutationTail of [RECEIVE_STALE_WRITE, ISSUE_STALE_WRITE]) {
+            screenYaml = replaceAllRequired(
+                screenYaml, mutationTail, mutationTail + LATE_STAGING_ASSIGNMENTS, 'stale Patch write in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, mutationTail, mutationTail + LATE_STAGING_ASSIGNMENTS, 'stale Patch write evidence');
+        }
+    }
+
+    if (contradictReceiveActionBinding) {
+        const claimedBinding = '`btnReceive.OnSelect: =Set(varOperation, "Receive")`';
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive | ${claimedBinding} |`,
+            'Receive Action Contract row');
+    }
+
+    if (sharedApplyFlow) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnApply:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
+            '            - btnReceive:',
+            'shared Apply control');
+
+        const mutatingReceiveSelectorBinding = RECEIVE_ACTION_BINDING.replace(
+            '=Set(varLastOperation, "Receive")',
+            '=Set(varOperation, "Receive"); Set(varLastOperation, "Receive")');
+        const receiveSelectorBinding = sharedSelectorMutates
+            ? mutatingReceiveSelectorBinding
+            : '`btnReceive.OnSelect: =Set(varOperation, "Receive")`';
+        const issueSelectorBinding = '`btnIssue.OnSelect: =Set(varOperation, "Issue")`';
+        if (!sharedSelectorMutates) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+                '                    OnSelect: =Set(varOperation, "Receive")',
+                'Receive selector YAML');
+        } else {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+                `                    OnSelect: ${mutatingReceiveSelectorBinding.slice(
+                    '`btnReceive.OnSelect: '.length, -1)}`,
+                'mutating Receive selector YAML');
+        }
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            '                    OnSelect: =Set(varOperation, "Issue")',
+            'Issue selector YAML');
+
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive + btnApply | ${receiveSelectorBinding}<br>${SHARED_APPLY_BINDING} |`,
+            'Receive shared Action Contract row');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Issue   | btnIssue   | ${ISSUE_ACTION_BINDING} |`,
+            `| Issue   | btnIssue + btnApply | ${issueSelectorBinding}<br>${SHARED_APPLY_BINDING} |`,
+            'Issue shared Action Contract row');
+        assert.ok(
+            acceptance.includes('Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)'),
+            'shared fixture must retain exact blank operation evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'shared operation reset YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'shared operation reset evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnApply.DisplayMode: =If(IsBlank(varOperation) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'shared Apply gate evidence');
+        if (!sharedSelectorMutates) {
+            acceptance = replaceOnceRequired(
+                acceptance,
+                RECEIVE_ACTION_BINDING.slice(1, -1),
+                SHARED_APPLY_BINDING.slice(1, -1),
+                'Receive directional mutation evidence');
+        }
+        acceptance = replaceOnceRequired(
+            acceptance,
+            ISSUE_ACTION_BINDING.slice(1, -1),
+            SHARED_APPLY_BINDING.slice(1, -1),
+            'Issue directional mutation evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'operation=lblReceiptOperation.Text: =varLastOperation',
+            'operation=lblReceiptOperation.Text: =varOperation',
+            'shared operation receipt evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varLastOperation',
+            '                    Text: =varOperation',
+            'shared operation receipt YAML');
+
+        if (reverseSharedBranches) {
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, REVERSED_SHARED_SWITCH, 'shared Switch branches in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, REVERSED_SHARED_SWITCH, 'shared Switch branch evidence');
+        }
+
+        if (omitSharedMutationBinding) {
+            acceptance = replaceAllRequired(
+                acceptance,
+                `<br>${SHARED_APPLY_BINDING}`,
+                '',
+                'shared mutation binding in Action Contract');
+        }
+
+        if (mismatchedSharedVariables) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Issue")',
+                '                    OnSelect: =Set(varIssueOperation, "Issue")',
+                'Issue selector variable in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`',
+                '`btnIssue.OnSelect: =Set(varIssueOperation, "Issue")`',
+                'Issue selector variable evidence');
+        }
+
+        if (mismatchedSharedOwner) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '            - btnReceive:',
+                '            - btnCommitAdjustment:\n' +
+                '                Control: Classic/Button\n' +
+                '                Properties:\n' +
+                '                    DisplayMode: =If(IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
+                '            - btnReceive:',
+                'second shared mutation owner YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`<br>' +
+                SHARED_APPLY_BINDING,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`<br>' +
+                SHARED_APPLY_BINDING.replace('btnApply', 'btnCommitAdjustment'),
+                'Issue mutation owner evidence');
+        }
+
+        if (mutationDoesNotConsumeOperation) {
+            const disconnectedFormula = SHARED_APPLY_FORMULA.replaceAll(
+                'varOperation',
+                'varMutationMode');
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_APPLY_FORMULA, disconnectedFormula, 'disconnected mutation YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_APPLY_FORMULA, disconnectedFormula, 'disconnected mutation evidence');
+        }
+
+        if (mismatchedSharedGate) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                'DisplayMode: =If(IsBlank(varOperation)',
+                'DisplayMode: =If(IsBlank(varGateOperation)',
+                'shared gate variable in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'btnApply.DisplayMode: =If(IsBlank(varOperation)',
+                'btnApply.DisplayMode: =If(IsBlank(varGateOperation)',
+                'shared gate variable evidence');
+        }
+
+        if (operationLiteralSuffix) {
+            for (const [literal, replacement] of [
+                ['"Receive"', '"Receive inventory"'],
+                ['"Issue"', '"Issue inventory"'],
+            ]) {
+                screenYaml = replaceAllRequired(
+                    screenYaml, literal, replacement, `${literal} operation literal in YAML`);
+                acceptance = replaceAllRequired(
+                    acceptance, literal, replacement, `${literal} operation literal evidence`);
+            }
+        }
+
+        if (unrelatedOperationLiteral) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Receive")',
+                '                    OnSelect: =Set(varOperation, "Inbound")',
+                'unrelated Receive selector literal in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnReceive.OnSelect: =Set(varOperation, "Receive")`',
+                '`btnReceive.OnSelect: =Set(varOperation, "Inbound")`',
+                'unrelated Receive selector literal evidence');
+        }
+
+        if (dropdownSelector) {
+            const dropdownEvent = '`drpOperation.OnChange: =Set(varOperation, Self.Selected.Value)`';
+            const dropdownItems = '`drpOperation.Items: =["Receive", "Issue"]`';
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    Items: =["Receive", "Issue"]',
+                '                    Items: =["Receive", "Issue"]\n' +
+                '                    OnChange: =Set(varOperation, Self.Selected.Value)',
+                'dropdown selector YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnReceive.OnSelect: =Set(varOperation, "Receive")`',
+                `${dropdownEvent}<br>${dropdownItems}`,
+                'Receive dropdown selector evidence');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`',
+                `${dropdownEvent}<br>${dropdownItems}`,
+                'Issue dropdown selector evidence');
+        }
+
+        if (selectorReceiptAssignment) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `OnSelect: =Set(varOperation, "${direction}")`,
+                    `OnSelect: =Set(varOperation, "${direction}"); Set(varReceiptAction, "${direction}")`,
+                    `${direction} selector receipt assignment in YAML`);
+                acceptance = replaceOnceRequired(
+                    acceptance,
+                    `OnSelect: =Set(varOperation, "${direction}")\``,
+                    `OnSelect: =Set(varOperation, "${direction}"); Set(varReceiptAction, "${direction}")\``,
+                    `${direction} selector receipt assignment evidence`);
+            }
+        }
+
+        if (sharedActionHandlerOnly || dropdownDirectShared || updateContextSelectors || mixedTopology) {
+            for (const direction of ['Receive', 'Issue']) {
+                acceptance = replaceOnceRequired(
+                    acceptance,
+                    `\`btn${direction}.OnSelect: =Set(varOperation, "${direction}")\`<br>`,
+                    '',
+                    `${direction} selector omission from Action Contract`);
+            }
+        }
+
+        if (updateContextSelectors) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `OnSelect: =Set(varOperation, "${direction}")`,
+                    `OnSelect: =UpdateContext({varOperation: "${direction}"})`,
+                    `${direction} UpdateContext selector YAML`);
+            }
+        }
+
+        if (dropdownDirectShared) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `                    OnSelect: =Set(varOperation, "${direction}")`,
+                    '',
+                    `${direction} Set selector removal`);
+            }
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+                '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+                'dropdown operation reset YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+                'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+                'dropdown operation reset evidence');
+            screenYaml = replaceAllRequired(
+                screenYaml,
+                'varOperation',
+                'drpOperation.Selected.Value',
+                'dropdown-direct operation source in YAML');
+            acceptance = replaceAllRequired(
+                acceptance,
+                'varOperation',
+                'drpOperation.Selected.Value',
+                'dropdown-direct operation source evidence');
+        }
+
+        if (sharedIfBranches) {
+            const sharedIf =
+                'If(varOperation = "Receive", varOldQuantity + varAmount, ' +
+                'varOperation = "Issue", varOldQuantity - varAmount)';
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, sharedIf, 'guarded If branches in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, sharedIf, 'guarded If branch evidence');
+        }
+
+        if (ambiguousSharedDispatch) {
+            const ambiguous =
+                `(${SHARED_SWITCH}) + 0 * (${SHARED_SWITCH})`;
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, ambiguous, 'ambiguous shared dispatch in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, ambiguous, 'ambiguous shared dispatch evidence');
+        }
+
+        if (mixedTopology) {
+            const mixedSharedBinding = reverseSharedBranches
+                ? SHARED_APPLY_BINDING.replaceAll(SHARED_SWITCH, REVERSED_SHARED_SWITCH)
+                : SHARED_APPLY_BINDING;
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Issue")',
+                `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+                'mixed direct Issue YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                `| Issue   | btnIssue + btnApply | ${mixedSharedBinding} |`,
+                `| Issue   | btnIssue | ${ISSUE_ACTION_BINDING} |`,
+                'mixed direct Issue Action Contract');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                ` | ${mixedSharedBinding.slice(1, -1)} | galInventory.Items: =colInventory |`,
+                ` | ${ISSUE_ACTION_BINDING.slice(1, -1)} | galInventory.Items: =colInventory |`,
+                'mixed direct Issue mutation evidence');
+        }
+
+        if (mutatingSelectorFunction) {
+            const mutations = {
+                ClearCollect: 'ClearCollect(colScratch, {Value: 1})',
+                Clear: 'Clear(colScratch)',
+                Update: 'Update(colScratch, First(colScratch), {Value: 2})',
+                Relate: 'Relate(ThisItem.Children, First(colScratch))',
+                Unrelate: 'Unrelate(ThisItem.Children, First(colScratch))',
+            };
+            const mutation = mutations[mutatingSelectorFunction];
+            assert.ok(mutation, `missing selector mutation fixture for ${mutatingSelectorFunction}`);
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                'OnSelect: =Set(varOperation, "Receive")',
+                `OnSelect: =Set(varOperation, "Receive"); ${mutation}`,
+                `${mutatingSelectorFunction} selector YAML`);
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'OnSelect: =Set(varOperation, "Receive")`',
+                `OnSelect: =Set(varOperation, "Receive"); ${mutation}\``,
+                `${mutatingSelectorFunction} selector evidence`);
+        }
+    }
+
+    if (quoteYamlFormulas) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+            `                    OnSelect: '${RECEIVE_ACTION_FORMULA}'`,
+            'single-quoted Receive YAML formula');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            `                    OnSelect: ${JSON.stringify(ISSUE_ACTION_FORMULA)}`,
+            'double-quoted Issue YAML formula');
+    }
+
+    if (blockYamlFormula) {
+        const literalMarker = blockYamlKeepTrailingNewline ? '|' : '|-';
+        const foldedMarker = blockYamlKeepTrailingNewline ? '>' : '>-';
+        const receiveBlockFormula = blockYamlKeepTrailingNewline
+            ? RECEIVE_ACTION_FORMULA.replace(
+                '; Set(varOldQuantity',
+                ';\n\n                        Set(varOldQuantity')
+            : RECEIVE_ACTION_FORMULA;
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+            `                    OnSelect: ${literalMarker}\n` +
+            `                        ${receiveBlockFormula}`,
+            'literal block Receive YAML formula');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            `                    OnSelect: ${foldedMarker}\n` +
+            `                        ${ISSUE_ACTION_FORMULA}`,
+            'folded block Issue YAML formula');
+    }
+
+    if (actionBindingLineBreak) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING.replace(
+                '; Set(varOldQuantity',
+                ';<br>Set(varOldQuantity')} |`,
+            'Action Contract formula line break');
+    }
+
+    if (misleadingApplyDirect) {
+        screenYaml = replaceAllRequired(
+            screenYaml, 'btnReceive', 'btnReceiveApply', 'Apply-named direct control in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'btnReceive', 'btnReceiveApply', 'Apply-named direct control evidence');
+    }
+
+    if (orphanApplyGate) {
+        const orphanGate =
+            '=If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnApply:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            `                    DisplayMode: ${orphanGate}\n` +
+            '            - btnReceive:',
+            'orphan Apply gate YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            `btnApply.DisplayMode: ${orphanGate.replace('||', '\\|\\|')}`,
+            'orphan Apply gate evidence');
+    }
+
+    if (labeledReceiptValues || ambiguousReceiptValue) {
+        const oldFormula = ambiguousReceiptValue
+            ? '=varOldQuantity & varAmount'
+            : '="Old quantity: " & varOldQuantity';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varOldQuantity',
+            `                    Text: ${oldFormula}`,
+            'old receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'old=lblReceiptOld.Text: =varOldQuantity',
+            `old=lblReceiptOld.Text: ${oldFormula}`,
+            'old receipt label evidence');
+    }
+
+    if (labeledReceiptValues) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varAmount',
+            '                    Text: ="Amount: " & Text(varAmount, "0")',
+            'amount receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'amount=lblReceiptAmount.Text: =varAmount',
+            'amount=lblReceiptAmount.Text: ="Amount: " & Text(varAmount, "0")',
+            'amount receipt label evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varLastMutation.Quantity',
+            '                    Text: ="Actual: " & Text(varLastMutation.Quantity)',
+            'actual receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'actual=lblReceiptActual.Text: =varLastMutation.Quantity',
+            'actual=lblReceiptActual.Text: ="Actual: " & Text(varLastMutation.Quantity)',
+            'actual receipt label evidence');
+    }
+
+    if (selectGateRouting) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnRouteMutation:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    OnSelect: =Select(btnReceive)\n' +
+            '            - btnReceive:',
+            'Select gate route YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnRouteMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'Select gate route evidence');
+    }
+
+    if (unrelatedGateMutation) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnUnrelatedMutation:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    OnSelect: =Clear(colScratch)\n' +
+            '            - btnReceive:',
+            'unrelated gated mutation YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnUnrelatedMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'unrelated gated mutation evidence');
+    }
+
+    if (requiredRecordScalar) {
+        const scalar = requiredRecordScalar === 'quoted'
+            ? '"=ThisItem.Quantity"'
+            : '|-\n                        =ThisItem.Quantity';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - galInventory:',
+            '            - lblRequiredQuantity:\n' +
+            '                Control: Classic/Label\n' +
+            '                Properties:\n' +
+            `                    Text: ${scalar}\n` +
+            '            - galInventory:',
+            'required record field YAML');
+        plan +=
+            '\n## Required Record Fields\n\n' +
+            '| Field | Screen | Control | Formula | Source Field | Notes |\n' +
+            '| ----- | ------ | ------- | ------- | ------------ | ----- |\n' +
+            '| Quantity | Screen1 | lblRequiredQuantity | Text | Quantity | visible |\n';
+        acceptance +=
+            '\n## Required Record Field Evidence\n\n' +
+            '| Field | Control | Formula | Record hierarchy | Visibility/layout | Result |\n' +
+            '| ----- | ------- | ------- | ---------------- | ----------------- | ------ |\n' +
+            '| Quantity | lblRequiredQuantity | Text: =ThisItem.Quantity | gallery row | visible | PASS |\n';
+    }
+
+    if (multiFieldPatch || ambiguousMultiFieldPatch) {
+        for (const expression of [
+            'varOldQuantity + varAmount',
+            'varOldQuantity - varAmount',
+        ]) {
+            const extra = ambiguousMultiFieldPatch
+                ? `, Delta: ${expression}`
+                : ', Notes: "adjusted"';
+            screenYaml = replaceAllRequired(
+                screenYaml,
+                `{Quantity: ${expression}}`,
+                `{Quantity: ${expression}${extra}}`,
+                `${expression} multi-field Patch YAML`);
+            acceptance = replaceAllRequired(
+                acceptance,
+                `{Quantity: ${expression}}`,
+                `{Quantity: ${expression}${extra}}`,
+                `${expression} multi-field Patch evidence`);
+        }
+    }
+
+    if (explicitSelectedId) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'cmbAdjustItem.Selected.Quantity',
+            'LookUp(colInventory, ID = varSelectedInventoryId).Quantity',
+            'selected quantity lookup');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'cmbAdjustItem.Selected.Quantity',
+            'LookUp(colInventory, ID = varSelectedInventoryId).Quantity',
+            'selected quantity lookup evidence');
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'cmbAdjustItem.Selected.ID',
+            'varSelectedInventoryId',
+            'selected ID YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'cmbAdjustItem.Selected.ID',
+            'varSelectedInventoryId',
+            'selected ID evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Set(varSelectedInventoryId, Blank())',
+            'selected ID entry reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Set(varSelectedInventoryId, Blank())',
+            'selected ID reset evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - drpOperation:',
+            '            - btnSelectInventory:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    OnSelect: =Set(varSelectedInventoryId, cmbAdjustItem.Selected.ID)\n' +
+            '            - drpOperation:',
+            'reachable selected ID event');
+    }
+
+    if (modernAmount || modernAmountDefaultZero || stagedAmountMinOne || q8RuntimeGaps) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - txtAmount:\n' +
+            '                Control: Classic/TextInput\n' +
+            '                Properties:\n' +
+            '                    Format: =TextFormat.Number',
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =Blank()\n' +
+            `                    Min: =${q8RuntimeGaps || stagedAmountMinOne ? '1' : '0'}`,
+            'modern amount control');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| txtAmount | lblAmount.Text | Screen1 |',
+            '| numAdjustAmount | lblAmount.Text | Screen1 |',
+            'modern amount label evidence');
+    }
+
+    if (modernAmount || modernAmountDefaultZero || stagedAmountMinOne) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem); Reset(numAdjustAmount)',
+            'modern amount entry reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem); Reset(numAdjustAmount)',
+            'modern amount reset evidence');
+    }
+
+    if (modernAmountDefaultZero) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =Blank()',
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =0',
+            'zero amount default');
+    }
+
+    if (stagedAmountMinOne) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Min: =1',
+            '                    Min: =1\n' +
+            '                    OnChange: =Set(varAmount, Self.Value)',
+            'staged amount event');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'Set(varAmount, numAdjustAmount.Value); ', '', 'inline amount staging YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'Set(varAmount, numAdjustAmount.Value); ', '', 'inline amount staging evidence');
+    }
+
+    if (operationPostSuccessReset) {
+        const resetFormula = SHARED_APPLY_FORMULA + '; Set(varOperation, Blank())';
+        screenYaml = replaceAllRequired(
+            screenYaml, SHARED_APPLY_FORMULA, resetFormula, 'post-success operation reset YAML');
+        acceptance = replaceAllRequired(
+            acceptance, SHARED_APPLY_FORMULA, resetFormula, 'post-success operation reset evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)\n',
+            '            OnVisible: =Reset(cmbAdjustItem)\n',
+            'screen operation reset removal');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            `btnApply.OnSelect: ${resetFormula}`,
+            'post-success blank-operation binding');
+    }
+
+    if (q8RuntimeGaps) {
+        appYaml = replaceOnceRequired(
+            appYaml,
+            '        StartScreen: =Screen1',
+            '        StartScreen: =Screen1\n' +
+            '        OnStart: =ClearCollect(colInventory, {ID: "INV-001", Quantity: 10}); ' +
+            'Set(varOperation, Blank()); Set(varSelectedInventoryId, "INV-001")',
+            'Q8 App.OnStart state');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'cmbAdjustItem', 'galAdjustItems', 'Q8 gallery selection YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'cmbAdjustItem', 'galAdjustItems', 'Q8 gallery selection evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            'Control: Classic/ComboBox',
+            'Control: Gallery',
+            'Q8 gallery control');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(galAdjustItems)\n',
+            '',
+            'Q8 missing screen reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(galAdjustItems)',
+            'numAdjustAmount.Default: =Blank()',
+            'Q8 unrelated blank-operation evidence');
+    }
+
+    if (selectedEvidenceMismatch) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| Receive/Issue | galAdjustItems.Selected.ID |',
+            '| Receive/Issue | varSelectedInventoryId |',
+            'mismatched selected-record declaration');
+    }
+
+    if (compoundSelectionMismatch) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| Receive/Issue | cmbAdjustItem.Selected.ID | Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11 |',
+            '| Receive/Issue | varOtherSelectedId | Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11 |',
+            'mismatched compound selected-record source');
+    }
+
+    if (omitOperationAllowEmpty) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - drpOperation:\n' +
+            '                Control: Classic/DropDown\n' +
+            '                Properties:\n' +
+            '                    AllowEmptySelection: =true\n',
+            '            - drpOperation:\n' +
+            '                Control: Classic/DropDown\n' +
+            '                Properties:\n',
+            'operation AllowEmptySelection');
+    }
+
+    if (omitSelectionDefault) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    DefaultSelectedItems: =[]\n',
+            '',
+            'selection DefaultSelectedItems');
+    }
+
+    if (listBoxSelection) {
+        screenYaml = replaceOnceRequired(
+            screenYaml, 'Control: Classic/ComboBox', 'Control: Classic/ListBox',
+            'ListBox selected-record control');
+    }
+
+    if (directWithoutOperationState) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'IsBlank(drpOperation.Selected.Value) || ',
+            '',
+            'direct operation gate YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'IsBlank(drpOperation.Selected.Value) \\|\\| ',
+            '',
+            'direct operation gate evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            '            OnVisible: =Reset(cmbAdjustItem)',
+            'direct selection-only reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            'drpOperation.Default: =Blank()',
+            'direct unused operation evidence');
+    }
+
+    if (customRecordKey || transformedCustomRecordKey) {
+        const selected = transformedCustomRecordKey
+            ? 'cmbAdjustItem.Selected.ID & "-copy"'
+            : 'cmbAdjustItem.Selected.ID && Active = true';
+        const replacement = `LookUp(colInventory, ItemID = ${selected}, ThisRecord)`;
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'LookUp(colInventory, ID = cmbAdjustItem.Selected.ID)',
+            replacement,
+            'custom-key target YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'LookUp(colInventory, ID = cmbAdjustItem.Selected.ID)',
+            replacement,
+            'custom-key target evidence');
+    }
+
+    if (wrappedGalleryItems) {
+        screenYaml = replaceFirstRequired(
+            screenYaml,
+            '                    Items: =colInventory',
+            '                    Items: =SortByColumns(Filter(colInventory, Quantity >= 0), "ID")',
+            'wrapped gallery Items');
+    }
+
+    if (amountInvalidPolarity) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'Not(Value(txtAmount.Text) > 0)',
+            'Value(txtAmount.Text) <= 0',
+            'invalid amount polarity YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'Not(Value(txtAmount.Text) > 0)',
+            'Value(txtAmount.Text) <= 0',
+            'invalid amount polarity evidence');
+    }
+
+    if (twoSpaceScreenIndent) {
+        screenYaml = screenYaml
+            .split('\n')
+            .map((line) => {
+                const indentation = line.match(/^ */)[0].length;
+                return ' '.repeat(Math.floor(indentation / 2)) + line.slice(indentation);
+            })
+            .join('\n');
+    }
+
+    writeFixture(path.join(workspace, 'App.pa.yaml'), { ...appFixture, text: appYaml });
+    writeFixture(path.join(workspace, 'Screen1.pa.yaml'), { ...screenFixture, text: screenYaml });
+    writeFixture(path.join(workspace, 'canvas-app-plan.md'), { ...planFixture, text: plan });
+    writeFixture(
+        path.join(workspace, 'canvas-app-acceptance.md'),
+        { ...acceptanceFixture, text: acceptance });
+    installCurrentRequirementsContract(workspace);
+    return workspace;
+}
+
+function materializeLayout(caseName, { responsive = false } = {}) {
+    const workspace = materialize(caseName);
+    const widthSource = responsive ? 'App.Width' : 'Parent.Width';
+    const adjustEscape = responsive ? '\n                            LayoutWrap: =true' : '';
+    const yaml = `Screens:
+    Screen1:
+        Properties:
+            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)
+        Children:
+            - conAdjustPanel:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =${responsive ? 400 : 'If(Parent.Width<640,318,126)'}
+                    LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)
+                    LayoutGap: =12
+                    PaddingTop: =16
+                    PaddingBottom: =16
+                    PaddingLeft: =16
+                    PaddingRight: =16${adjustEscape}
+                Children:
+                    - fldAdjustItem:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =48
+                            Width: =180
+                            LayoutMinWidth: =180
+                        Children:
+                            - lblAdjustItem:
+                                Control: Text
+                                Properties:
+                                    Text: ="Inventory item"
+                            - cmbAdjustItem:
+                                Control: Classic/ComboBox
+                                Properties:
+                                    DefaultSelectedItems: =[]
+                                    Items: =colInventory
+                                    Height: =48
+                                    Width: =180
+                                    LayoutMinWidth: =180
+                    - fldOperation:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+                        Children:
+                            - lblOperation:
+                                Control: Text
+                                Properties:
+                                    Text: ="Operation"
+                            - drpOperation:
+                                Control: Classic/DropDown
+                                Properties:
+                                    AllowEmptySelection: =true
+                                    Default: =Blank()
+                                    Items: =["Receive", "Issue"]
+                                    Height: =48
+                                    Width: =140
+                                    LayoutMinWidth: =140
+                    - fldAmount:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =86
+                            Width: =180
+                            LayoutMinWidth: =180
+                        Children:
+                            - lblAmount:
+                                Control: Text
+                                Properties:
+                                    Text: ="Amount"
+                            - txtAmount:
+                                Control: Classic/TextInput
+                                Properties:
+                                    Format: =TextFormat.Number
+                                    Height: =86
+                                    Width: =180
+                                    LayoutMinWidth: =180
+                    - btnReceive:
+                        Control: Classic/Button
+                        Properties:
+                            DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                            OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+                    - btnIssue:
+                        Control: Classic/Button
+                        Properties:
+                            DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                            OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+            - conManageFormPanel:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =If(${widthSource}<768,620,250)
+                    LayoutDirection: =LayoutDirection.Vertical
+                    PaddingTop: =16
+                    PaddingBottom: =16
+                Children:
+                    - conManageFields:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =If(${widthSource}<768,430,110)
+                        Children:
+                            - galInventory:
+                                Control: Gallery
+                                Properties:
+                                    Items: =colInventory
+                                    Height: =100
+                    - conManageActions:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =96
+            - conAdjustHeading:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =${responsive ? 180 : 76}
+                    LayoutDirection: =LayoutDirection.Vertical
+                    LayoutGap: =2
+                Children:
+                    - lblReceiptOperation:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varLastOperation
+                            Height: =40
+                    - lblReceiptOld:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varOldQuantity
+                            Height: =26
+                    - lblReceiptAmount:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varAmount
+                            Height: =26
+                    - lblReceiptExpected:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varExpectedQuantity
+                            Height: =26
+                    - lblReceiptActual:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varLastMutation.Quantity
+                            Height: =28
+`;
+    fs.writeFileSync(path.join(workspace, 'Screen1.pa.yaml'), yaml);
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    const acceptance = fs.readFileSync(acceptancePath, 'utf8')
+        .replace('| cmbAdjustItem | lblAdjustItem.Text | Screen1 |',
+            '| cmbAdjustItem | lblAdjustItem.Text | fldAdjustItem |')
+        .replace('| drpOperation | lblOperation.Text | Screen1 |',
+            '| drpOperation | lblOperation.Text | fldOperation |')
+        .replace('| txtAmount | lblAmount.Text | Screen1 |',
+            '| txtAmount | lblAmount.Text | fldAmount |');
+    fs.writeFileSync(acceptancePath, acceptance);
+    fs.appendFileSync(
+        acceptancePath,
+        '\n## Layout Budget Evidence\n\n' +
+        '| Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        `| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root contract | ${responsive ? 900 : 640}px | explicit child widths + gap + padding | adjustment controls | PASS |\n`);
+    return workspace;
+}
+
+function runValidator(workspace, root = pluginRoot) {
+    const result = spawnSync(
+        'dotnet',
+        ['run', '--file', validator, '--', workspace, root],
+        { encoding: 'utf8' });
+    if (result.error) {
+        throw result.error;
+    }
+
+    return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
+}
+
+function rewriteScreen(workspace, transform) {
+    const screenPath = path.join(workspace, 'Screen1.pa.yaml');
+    fs.writeFileSync(screenPath, transform(fs.readFileSync(screenPath, 'utf8')));
+}
+
+function rewriteArtifact(workspace, file, transform) {
+    const artifactPath = path.join(workspace, file);
+    fs.writeFileSync(artifactPath, transform(fs.readFileSync(artifactPath, 'utf8')));
+}
+
+function materializeLifecycle(caseName) {
+    return materialize(caseName, { sourceDir: lifecycleFieldsFixtureDir });
+}
+
+function materializeContinuation(caseName) {
+    return materializeFocusedFixture(caseName, continuationFixtureDir);
+}
+
+function materializeStateDrivenSurface(caseName) {
+    return materializeFocusedFixture(caseName, stateDrivenSurfaceFixtureDir);
+}
+
+function materializeFocusedFixture(caseName, sourceDir) {
+    const workspace = path.join(workRoot, caseName);
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.mkdirSync(workspace, { recursive: true });
+    for (const file of ['App.pa.yaml', 'Screen1.pa.yaml']) {
+        fs.copyFileSync(
+            path.join(sourceDir, file),
+            path.join(workspace, file));
+    }
+    for (const [template, output] of [
+        ['canvas-app-plan.template.md', 'canvas-app-plan.md'],
+        ['canvas-app-acceptance.template.md', 'canvas-app-acceptance.md'],
+    ]) {
+        const content = fs.readFileSync(path.join(sourceDir, template), 'utf8')
+            .replaceAll('{{WORKSPACE}}', workspace)
+            .replaceAll('{{PLUGIN_ROOT}}', pluginRoot);
+        fs.writeFileSync(path.join(workspace, output), content);
+    }
+    installCurrentRequirementsContract(workspace);
+    return workspace;
+}
+
+function rewriteTableRow(workspace, file, heading, key, transform) {
+    rewriteArtifact(workspace, file, (text) => {
+        const lines = text.split('\n');
+        const headingIndex = lines.findIndex((line) => line.trim() === heading);
+        assert.notStrictEqual(headingIndex, -1, `missing ${heading}`);
+        const rowIndex = lines.findIndex(
+            (line, index) => index > headingIndex && line.startsWith(`| ${key} |`));
+        assert.notStrictEqual(rowIndex, -1, `missing ${key} row under ${heading}`);
+        const row = lines[rowIndex].trim();
+        const cells = row.slice(1, -1).split('|').map((cell) => cell.trim());
+        lines[rowIndex] = `| ${transform(cells).join(' | ')} |`;
+        return lines.join('\n');
+    });
+}
+
+function nestExplicitSelectorInGallery(workspace, { safe = true } = {}) {
+    rewriteScreen(workspace, (yaml) => {
+        const selector = /            - btnSelectInventory:\r?\n                Control: Classic\/Button\r?\n                Properties:\r?\n                    OnSelect: =Set\(varSelectedInventoryId, cmbAdjustItem\.Selected\.ID\)\r?\n/;
+        assert.match(yaml, selector, 'expected explicit selector for gallery nesting');
+        return yaml.replace(
+        selector,
+        '            - galAdjustInventory:\n' +
+        '                Control: Gallery@2.15.0\n' +
+        '                Properties:\n' +
+        '                    Items: =colInventory\n' +
+        `                    Height: =${safe ? '320' : 'CountRows(colInventory) * Self.TemplateHeight + ((CountRows(colInventory) + 1) * Self.TemplatePadding)'}\n` +
+        '                    TemplateSize: =64\n' +
+        '                    TemplatePadding: =8\n' +
+        '                Children:\n' +
+        '                    - btnSelectInventory:\n' +
+        '                        Control: Classic/Button\n' +
+        '                        Properties:\n' +
+        '                            OnSelect: =Set(varSelectedInventoryId, ThisItem.ID)\n');
+    });
+}
+
+function nestSharedApplyInVisibleContainer(workspace, formula) {
+    rewriteScreen(workspace, (yaml) => {
+        const start = yaml.indexOf('            - btnApply:');
+        const end = yaml.indexOf('            - galInventory:', start);
+        assert.ok(start >= 0 && end > start, 'expected shared Apply block');
+        const apply = yaml.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, start) +
+            '            - conAdjustAction:\n' +
+            '                Control: GroupContainer\n' +
+            '                Properties:\n' +
+            `                    Visible: ${formula}\n` +
+            '                Children:\n' +
+            apply +
+            yaml.slice(end);
+    });
+}
+
+function removeDataEntryLabelEvidence(acceptance, control) {
+    return acceptance.replace(
+        new RegExp(`^\\| ${control} \\|[^\\r\\n]*\\r?\\n`, 'm'),
+        '');
+}
+
+function appendArtifactSection(workspace, file, section) {
+    rewriteArtifact(workspace, file, (text) => `${text.trimEnd()}\n\n${section.trim()}\n`);
+}
+
+function stripMarkdownSection(workspace, file, title) {
+    rewriteArtifact(workspace, file, (text) => text.replace(
+        new RegExp(`^## ${title}\\r?\\n[\\s\\S]*?(?=^## |$(?![\\s\\S]))`, 'm'),
+        ''));
+}
+
+function setRequirementsContract(
+    workspace,
+    {
+        targetDevice = 'Fixed desktop',
+        request,
+        rows,
+    }) {
+    fs.writeFileSync(
+        path.join(workspace, 'canvas-app-requirements.md'),
+        '# Canvas App Original Request Contract\n\n' +
+        `Contract version: 1\nTarget device: ${targetDevice}\n\n` +
+        `## Original Request\n\n${request}\n\n` +
+        '## Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Scenario(s) | Specialized contract mappings |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) => `| ${row.join(' | ')} |`).join('\n') + '\n');
+}
+
+function replacePlanRequirementContracts(workspace, rows) {
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Requirement Coverage');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        '## Requirement Coverage\n\n' +
+        '| Requirement | Planned affordance | Fidelity |\n' +
+        '| --- | --- | --- |\n' +
+        rows.map((row) => `| ${row[0]} | ${row[3]} | Exact |`).join('\n') +
+        '\n\n## Original Request Capability Inventory\n\n' +
+        '| Requirement key | Original request clause | Capability family | Required outcome / scope | Required action(s) | Observer(s) | Scenario(s) |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        rows.map((row) =>
+            `| ${row[0]} | ${row[1]} | ${row[2]} | ${row[3]} | ${row[4]} | ${row[7]} | ${row[5]} |`
+        ).join('\n'));
+}
+
+function configureTemporalContract(
+    workspace,
+    {
+        seed,
+        input,
+        sort,
+        semantics,
+        field = 'StartTime',
+        includeContract = true,
+    }) {
+    rewriteArtifact(workspace, 'App.pa.yaml', (yaml) => yaml.replace(
+        'App:\n',
+        'App:\n    Properties:\n' +
+        `        OnStart: =ClearCollect(colMeetings, ${seed})\n`));
+    rewriteScreen(workspace, (yaml) => `${yaml.trimEnd()}\n` +
+        '            - txtStart:\n' +
+        '                Control: Classic/TextInput\n' +
+        '                Properties:\n' +
+        `                    OnChange: ${input}\n` +
+        '            - galMeetings:\n' +
+        '                Control: Gallery\n' +
+        '                Properties:\n' +
+        `                    Items: ${sort}\n` +
+        '            - lblFirstMeeting:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        `                    Text: =First(${sort.slice(1)}).${field}\n`);
+    const rows = [[
+        'meeting-order',
+        'Order meetings by start time',
+        'Time and scheduling',
+        'Meetings appear in chronological start-time order',
+        'Receive',
+        'ReceiveAdds',
+        'Temporal ordering=meeting-start',
+        'lblFirstMeeting.Text',
+    ]];
+    setRequirementsContract(workspace, {
+        targetDevice: 'Fixed desktop',
+        request: 'Order meetings by start time.',
+        rows: rows.map((row) => row.slice(0, 7)),
+    });
+    replacePlanRequirementContracts(workspace, rows);
+    if (includeContract) {
+        appendArtifactSection(
+            workspace,
+            'canvas-app-plan.md',
+            `## Temporal Ordering Contracts
+
+| Ordering key | Source | Sort field | Storage semantics | Input validation / normalization | Canonical sort binding | Accepted formats | Invalid / blank behavior |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| meeting-start | colMeetings | ${field} | ${semantics} | txtStart.OnChange validates input | galMeetings.Items sorts ${field} | en-US 12-hour and 24-hour | reject invalid; blank remains blank |`);
+        appendArtifactSection(
+            workspace,
+            'canvas-app-acceptance.md',
+            `## Temporal Ordering Evidence
+
+| Ordering key | Input validation / normalization binding | Sort binding | Observer binding | Result |
+| --- | --- | --- | --- | --- |
+| meeting-start | txtStart.OnChange: ${input} | galMeetings.Items: ${sort} | lblFirstMeeting.Text: =First(${sort.slice(1)}).${field} | PASS |`);
+    }
+}
+
+function wrapScreenInViewportRoot(workspace, { sibling = false } = {}) {
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '        Children:\n';
+        const start = yaml.indexOf(marker);
+        assert.notStrictEqual(start, -1, 'expected Screen1 Children');
+        const prefix = yaml.slice(0, start + marker.length);
+        const children = yaml.slice(start + marker.length)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        const overlay = sibling
+            ? '            - conOverlay:\n' +
+              '                Control: GroupContainer\n' +
+              '                Variant: ManualLayout\n' +
+              '                Properties:\n' +
+              '                    Visible: =true\n'
+            : '';
+        return prefix +
+            '            - conRoot:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Width: =Parent.Width\n' +
+            '                    Height: =Parent.Height\n' +
+            '                    LayoutMinWidth: =0\n' +
+            '                    LayoutMinHeight: =0\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+            '                Children:\n' +
+            children +
+            overlay;
+    });
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (acceptance) => acceptance
+        .replace('| cmbAdjustItem | lblAdjustItem.Text | Screen1 |',
+            '| cmbAdjustItem | lblAdjustItem.Text | conRoot |')
+        .replace('| drpOperation | lblOperation.Text | Screen1 |',
+            '| drpOperation | lblOperation.Text | conRoot |')
+        .replace('| txtAmount | lblAmount.Text | Screen1 |',
+            '| txtAmount | lblAmount.Text | conRoot |'));
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        `## Viewport Containment Contracts
+
+| Screen | Root control | Layout variant | Width binding | Height binding | Overflow policy |
+| --- | --- | --- | --- | --- | --- |
+| Screen1 | conRoot | AutoLayout | conRoot.Width: =Parent.Width | conRoot.Height: =Parent.Height | vertical scroll |`);
+    appendArtifactSection(
+        workspace,
+        'canvas-app-acceptance.md',
+        `## Viewport Containment Evidence
+
+| Screen | Root control | Top-level containment | Conditional surfaces | Result |
+| --- | --- | --- | --- | --- |
+| Screen1 | conRoot | sole top-level root | state-driven visibility checked separately | PASS |`);
+}
+
+// Keep cleanup out of the node:test hook lifecycle. The full file drives many synchronous
+// `dotnet run --file` validators; on newer Node test runners, a top-level `test.after`
+// cleanup can remove `.work` while late tests are still starting, causing misleading
+// "Missing App.pa.yaml" validator failures instead of exercising the intended rule.
+process.on('exit', () => fs.rmSync(workRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+
+test('rejects upstream-required temporal ordering when the plan omits its contract', () => {
+    const workspace = materialize('time-contract-omitted');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "9:00 AM"}, {StartTime: "2:00 PM"}',
+        input: '=Set(varStart, txtStart.Text)',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+        includeContract: false,
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted required temporal contract to fail');
+    assert.match(stderr, /Missing upstream temporal ordering evidence for 'meeting-start'/);
+});
+
+test('accepts validated canonical 24-hour normalization and sorting', () => {
+    const workspace = materialize('time-canonical-sort');
+    configureTemporalContract(workspace, {
+        seed: '{StartSortKey: "09:00"}, {StartSortKey: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartSortKey: Text(TimeValue(txtStart.Text, "en-US"), "[$-en-US]HH:mm")}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartSortKey")',
+        semantics: 'Canonical 24-hour text',
+        field: 'StartSortKey',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected canonical time ordering to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a typed-time contract when the actual source field is seeded with text', () => {
+    const workspace = materialize('time-false-typed');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "9:00 AM"}, {StartTime: "2:00 PM"}',
+        input: '=IfError(Set(varStart, TimeValue(txtStart.Text, "en-US")), Set(varStart, Blank()))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected string-backed typed-time claim to fail');
+    assert.match(stderr, /declares typed time.*field 'StartTime' is not established from typed time values/);
+});
+
+test('accepts typed time sorted with SortByColumns', () => {
+    const workspace = materialize('time-typed-sortbycolumns');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0)}, {StartTime: Time(14, 0, 0)}',
+        input: '=IfError(Set(varStart, TimeValue(txtStart.Text, "en-US")), Set(varStart, Blank()))',
+        sort: '=SortByColumns(colMeetings, "StartTime", SortOrder.Ascending)',
+        semantics: 'Typed time',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected typed SortByColumns to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts typed time sorted with Sort', () => {
+    const workspace = materialize('time-typed-sort');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0)}, {StartTime: Time(14, 0, 0)}',
+        input: '=Set(varStart, TimeValue(txtStart.Text, "en-US"))',
+        sort: '=Sort(colMeetings, StartTime, SortOrder.Ascending)',
+        semantics: 'Typed time',
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected typed Sort to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a temporal contract that sorts a different field', () => {
+    const workspace = materialize('time-wrong-sort-field');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Time(9, 0, 0), Title: "Zulu"}, {StartTime: Time(14, 0, 0), Title: "Alpha"}',
+        input: '=Set(varStart, TimeValue(txtStart.Text, "en-US"))',
+        sort: '=SortByColumns(Filter(colMeetings, !IsBlank(StartTime)), "Title")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong time sort field to fail');
+    assert.match(stderr, /must sort declared source 'colMeetings' by exact field 'StartTime'/);
+});
+
+test('rejects canonical normalization that parses unrelated data then persists raw input', () => {
+    const workspace = materialize('time-unrelated-normalization');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Set(varPreview, Text(TimeValue("00:00"), "HH:mm")); Patch(colMeetings, First(colMeetings), {StartTime: txtStart.Text}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated parse plus raw persisted input to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects canonical time writes without invalid and blank guards', () => {
+    const workspace = materialize('time-missing-invalid-blank-guards');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unguarded canonical input to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects a non-zero-padded canonical time key', () => {
+    const workspace = materialize('time-not-zero-padded');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text, "en-US"), "H:mm")}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-padded canonical key to fail');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('rejects a typed-time claim whose field expression returns formatted text', () => {
+    const workspace = materialize('time-typed-claim-formatted-text');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: Text(Time(9, 0, 0), "h:mm AM/PM")}, {StartTime: Text(Time(14, 0, 0), "h:mm AM/PM")}',
+        input: '=Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "h:mm AM/PM")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Typed time',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected outer Text return semantics not to count as typed time');
+    assert.match(stderr, /field 'StartTime' is not established from typed time values/);
+    assert.match(stderr, /typed-time input binding is unverified/);
+});
+
+test('rejects a canonical field expression that keeps only the minute suffix', () => {
+    const workspace = materialize('time-canonical-minute-only');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Right(Text(TimeValue(txtStart.Text, "en-US"), "[$-en-US]HH:mm"), 2)}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a minute-only wrapper not to count as a canonical time value');
+    assert.match(stderr, /canonical text input is unverified/);
+    assert.match(stderr, /contains or is seeded with noncanonical time text/);
+});
+
+test('rejects a canonical field expression with a suffix after normalization', () => {
+    const workspace = materialize('time-canonical-suffixed-value');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(Trim(txtStart.Text)), Notify("Time required"), IfError(Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm") & " AM"}), Notify("Invalid time")))',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected trailing operators to invalidate the canonical value claim');
+    assert.match(stderr, /canonical text input is unverified/);
+    assert.match(stderr, /contains or is seeded with noncanonical time text/);
+});
+
+test('rejects canonical guards that validate an unrelated input outside the write', () => {
+    const workspace = materialize('time-canonical-unrelated-guards');
+    configureTemporalContract(workspace, {
+        seed: '{StartTime: "09:00"}, {StartTime: "14:00"}',
+        input: '=If(IsBlank(txtAmount.Text), Notify("Amount required")); IfError(Set(varAmount, Value(txtAmount.Text)), Notify("Invalid amount")); Patch(colMeetings, First(colMeetings), {StartTime: Text(TimeValue(txtStart.Text), "HH:mm")})',
+        sort: '=SortByColumns(colMeetings, "StartTime")',
+        semantics: 'Canonical 24-hour text',
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated guards not to validate the time write');
+    assert.match(stderr, /canonical text input is unverified/);
+});
+
+test('does not associate an unrelated hours label with VendorID sorting', () => {
+    const workspace = materialize('vendor-id-unrelated-time-label');
+    rewriteArtifact(workspace, 'App.pa.yaml', (yaml) => yaml.replace(
+        'App:\n',
+        'App:\n    Properties:\n' +
+        '        OnStart: =ClearCollect(colVendors, {VendorID: "V002"}, {VendorID: "V001"})\n'));
+    rewriteScreen(workspace, (yaml) => `${yaml.trimEnd()}\n` +
+        '            - galVendors:\n' +
+        '                Control: Gallery\n' +
+        '                Properties:\n' +
+        '                    Items: =SortByColumns(colVendors, "VendorID")\n' +
+        '            - lblOpeningHours:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="9:00 AM"\n');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected unrelated VendorID sort to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a plan that reduces original requirements without a capability inventory', () => {
+    const workspace = materialize('requirements-without-inventory');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing original capability inventory to fail');
+    assert.match(stderr, /Original Request Capability Inventory/);
+});
+
+test('requires the orchestrator-authored requirements artifact regardless of plan heading names', () => {
+    const workspace = materialize('requirements-upstream-artifact-missing');
+    fs.rmSync(path.join(workspace, 'canvas-app-requirements.md'));
+    appendArtifactSection(
+        workspace,
+        'canvas-app-plan.md',
+        '## Original user request\n\nReceive and issue inventory.');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing upstream requirements artifact to fail');
+    assert.match(stderr, /Missing orchestrator-authored original requirements contract/);
+});
+
+test('keeps pre-3.1 acceptance artifacts compatible when validated against a legacy skill root', () => {
+    const workspace = materialize('requirements-legacy-compatible');
+    fs.rmSync(path.join(workspace, 'canvas-app-requirements.md'));
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Requirement Coverage');
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Original Request Capability Inventory');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) =>
+        text.replace(
+            `Skill contract version: ${currentSkillVersion}`,
+            'Skill contract version: 3.0.9'));
+    const legacyRoot = path.join(workRoot, 'legacy-plugin-root');
+    fs.mkdirSync(path.join(legacyRoot, 'skills', 'canvas-app'), { recursive: true });
+    fs.writeFileSync(
+        path.join(legacyRoot, 'skills', 'canvas-app', 'SKILL.md'),
+        '---\nname: canvas-app\nversion: 3.0.9\n---\n');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) =>
+        text.replace(`Plugin root: ${pluginRoot}`, `Plugin root: ${legacyRoot}`));
+    const { code, stdout, stderr } = runValidator(workspace, legacyRoot);
+    assert.strictEqual(
+        code,
+        0,
+        `expected legacy contract compatibility.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a planner inventory that omits an upstream dependency and alert requirement', () => {
+    const workspace = materialize('requirements-dependency-omitted');
+    setRequirementsContract(workspace, {
+        request: 'Receive inventory, create product dependencies, and show blocked-product alerts.',
+        rows: [
+            ['receive-stock', 'Receive inventory', 'Data lifecycle', 'quantity increases', 'Receive', 'ReceiveAdds', 'N/A'],
+            ['product-dependency', 'Create product dependencies', 'Relationships and hierarchy', 'selected products are linked by stable IDs', 'Issue', 'IssueSubtracts', 'N/A'],
+            ['blocked-alert', 'Show blocked-product alerts', 'Workflow and review', 'blocked products expose a visible alert', 'Issue', 'IssueSubtracts', 'N/A'],
+        ],
+    });
+    replacePlanRequirementContracts(workspace, [
+        ['receive-stock', 'Receive inventory', 'Data lifecycle', 'quantity increases', 'Receive', 'ReceiveAdds', 'N/A', 'galInventory.Items'],
+    ]);
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted upstream capabilities to fail');
+    assert.match(stderr, /Missing upstream requirement capability evidence for 'product-dependency'/);
+    assert.match(stderr, /Missing upstream requirement capability evidence for 'blocked-alert'/);
+});
+
+test('rejects a requirement observer that does not resolve to final YAML', () => {
+    const workspace = materialize('requirements-missing-observer');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (plan) =>
+        plan.replace('Screen1.OnVisible | ReceiveAdds', 'lblDoesNotExist.Text | ReceiveAdds'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected nonexistent observer binding to fail');
+    assert.match(stderr, /observer 'lblDoesNotExist.Text' does not resolve/);
+});
+
+test('accepts stable original-request mappings to known actions, observers, and scenarios', () => {
+    const workspace = materialize('requirements-mapped-inventory');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected mapped requirement inventory to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects responsive viewport containment with a screen-level sibling outside the root', () => {
+    const workspace = materialize('viewport-root-sibling');
+    wrapScreenInViewportRoot(workspace, { sibling: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected root sibling to fail containment');
+    assert.match(stderr, /must have exactly one top-level root.*conRoot, conOverlay/);
+});
+
+test('accepts one explicit AutoLayout viewport root containing all screen content', () => {
+    const workspace = materialize('viewport-root-contained');
+    wrapScreenInViewportRoot(workspace);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected contained viewport root to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('requires viewport containment for an upstream responsive target even when plan tables are omitted', () => {
+    const workspace = materialize('viewport-responsive-contract-omitted');
+    wrapScreenInViewportRoot(workspace, { sibling: true });
+    stripMarkdownSection(workspace, 'canvas-app-plan.md', 'Viewport Containment Contracts');
+    stripMarkdownSection(workspace, 'canvas-app-acceptance.md', 'Viewport Containment Evidence');
+    rewriteArtifact(workspace, 'canvas-app-requirements.md', (text) =>
+        text.replace('Target device: Fixed desktop', 'Target device: Phone and tablet'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing responsive viewport contract to fail');
+    assert.match(stderr, /responsive or unknown target requires a contract for screen 'Screen1'/);
+});
+
+test('keeps explicitly fixed desktop multi-root layouts exempt from viewport contracts', () => {
+    const workspace = materialize('viewport-fixed-desktop-exempt');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected explicit fixed desktop target to remain compatible.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not reject uncertain proportional-font width from character-count estimation', () => {
+    const workspace = materialize('required-action-text-estimate');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Manage Inventory"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected uncertain font-width estimate not to hard fail.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not treat a predicate-only string literal as rendered button text', () => {
+    const workspace = materialize('text-nonrendered-predicate-literal');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: =If(IsBlank(LookUp(colInventory, Description = "Long internal lookup description that is never rendered in this button")), "Receive", "Receive")\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected predicate-only literal not to affect text fit.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not reject narrow glyphs with explicit zero padding from a font-width guess', () => {
+    const workspace = materialize('text-narrow-glyphs');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="iiiiiiiiiiiiiiiiiiii"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    Size: =14\n' +
+        '                    Wrap: =false\n' +
+        '                    PaddingLeft: =0\n' +
+        '                    PaddingRight: =0\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected explicit zero-padding narrow glyphs to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not decode a literal backslash-n sequence as a rendered line break', () => {
+    const workspace = materialize('text-literal-backslash-n');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Line\\nOne"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =44\n' +
+        '                    Size: =14\n' +
+        '                    PaddingTop: =4\n' +
+        '                    PaddingBottom: =4\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected a literal backslash-n to remain one rendered line.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a structurally undersized action with an explicit Char(10) line break', () => {
+    const workspace = materialize('text-explicit-char-linebreak-clips');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)',
+        '                    Text: ="Manage" & Char(10) & "Inventory"\n' +
+        '                    Width: =112\n' +
+        '                    Height: =30\n' +
+        '                    Size: =14\n' +
+        '                    PaddingTop: =4\n' +
+        '                    PaddingBottom: =4\n' +
+        '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected explicit multiline height deficit to fail');
+    assert.match(stderr, /explicit multiline result with a structural minimum of 36px.*Height is 30px/);
+});
+
+test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
+    const workspace = materialize('receive-issue-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('rejects three mutation inputs that expose only AccessibleLabel or HintText', () => {
+    const workspace = materialize('receive-unlabeled-input-strip');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(/            - lblAdjustItem:[\s\S]*?                    Text: ="Inventory item"\r?\n/, '')
+        .replace(/            - lblOperation:[\s\S]*?                    Text: ="Operation"\r?\n/, '')
+        .replace(/            - lblAmount:[\s\S]*?                    Text: ="Amount"\r?\n/, '')
+        .replace(
+            '                    Items: =colInventory',
+            '                    AccessibleLabel: ="Inventory item"\n                    Items: =colInventory')
+        .replace(
+            '                    Items: =["Receive", "Issue"]',
+            '                    AccessibleLabel: ="Operation"\n                    Items: =["Receive", "Issue"]')
+        .replace(
+            '                    Format: =TextFormat.Number',
+            '                    AccessibleLabel: ="Amount"\n                    HintText: ="Quantity"\n                    Format: =TextFormat.Number'));
+    rewriteScreen(workspace, (yaml) => {
+        const start = yaml.indexOf('            - cmbAdjustItem:');
+        const end = yaml.indexOf('            - btnReceive:', start);
+        assert.ok(start >= 0 && end > start, 'expected three-input strip');
+        const inputs = yaml.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, start) +
+            '            - conAddFields:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Height: =48\n' +
+            '                    Width: =513\n' +
+            '                    LayoutDirection: =LayoutDirection.Horizontal\n' +
+            '                Children:\n' +
+            inputs +
+            yaml.slice(end);
+    });
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    let acceptance = fs.readFileSync(acceptancePath, 'utf8');
+    for (const control of ['cmbAdjustItem', 'drpOperation', 'txtAmount']) {
+        acceptance = removeDataEntryLabelEvidence(acceptance, control);
+    }
+    fs.writeFileSync(acceptancePath, acceptance);
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unlabeled input strip to fail');
+    for (const control of ['cmbAdjustItem', 'drpOperation', 'txtAmount']) {
+        assert.match(stderr, new RegExp(`required control '${control}'.*persistent visible human-readable label`));
+    }
+});
+
+test('accepts separate visible label and input evidence in one field region', () => {
+    const workspace = materialize('receive-visible-field-labels');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected visible field labels to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects label evidence whose visible field name is hidden', () => {
+    const workspace = materialize('receive-hidden-field-label');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Text: ="Amount"',
+        '                    Text: ="Amount"\n                    Visible: =false'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected hidden field label to fail');
+    assert.match(stderr, /evidence for required control 'txtAmount'.*persistent visible label binding/);
+});
+
+test('accepts a compact field group with a visible sibling label', () => {
+    const workspace = materialize('receive-compact-field-group');
+    rewriteScreen(workspace, (yaml) => {
+        const labelStart = yaml.indexOf('            - lblAmount:');
+        const inputEnd = yaml.indexOf('            - btnReceive:', labelStart);
+        assert.ok(labelStart >= 0 && inputEnd > labelStart, 'expected amount label/input block');
+        const fieldChildren = yaml.slice(labelStart, inputEnd)
+            .replace('                    Text: ="Amount"', '                    Text: ="Amount"\n                    Height: =24')
+            .replace('                    Format: =TextFormat.Number', '                    Format: =TextFormat.Number\n                    Height: =48')
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, labelStart) +
+            '            - conAmountField:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Height: =80\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                Children:\n' +
+            fieldChildren +
+            yaml.slice(inputEnd);
+    });
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        '| txtAmount | lblAmount.Text | Screen1 |',
+        '| txtAmount | lblAmount.Text | conAmountField |'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected compact labeled field group to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a supported native visible Label property without duplicate label evidence', () => {
+    const workspace = materialize(
+        'receive-native-number-label',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Default: =0',
+        '                    Label: ="Amount"\n                    Default: =0'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'numAdjustAmount'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected native visible label to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+for (const modernType of [
+    'ModernTextInput@1.0.0',
+    'ModernDropdown@1.0.0',
+    'ModernCombobox@1.0.0',
+    'ModernRadio@1.0.0',
+]) {
+    test(`rejects an unlabeled required ${modernType}`, () => {
+        const workspace = materialize(`receive-unlabeled-${modernType.split('@')[0].toLowerCase()}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'Control: Classic/TextInput',
+            `Control: ${modernType}`));
+        const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+        fs.writeFileSync(
+            acceptancePath,
+            removeDataEntryLabelEvidence(
+                fs.readFileSync(acceptancePath, 'utf8'),
+                'txtAmount'));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected unlabeled ${modernType} to fail`);
+        assert.match(stderr, /required control 'txtAmount'.*persistent visible human-readable label/);
+    });
+
+    test(`accepts a visible sibling label for required ${modernType}`, () => {
+        const workspace = materialize(`receive-labeled-${modernType.split('@')[0].toLowerCase()}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'Control: Classic/TextInput',
+            `Control: ${modernType}`));
+        const { code, stdout, stderr } = runValidator(workspace);
+        assert.strictEqual(
+            code,
+            0,
+            `expected labeled ${modernType} to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    });
+}
+
+test('rejects an unlabeled required ModernNumberInput', () => {
+    const workspace = materialize(
+        'receive-unlabeled-modern-number',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'numAdjustAmount'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unlabeled ModernNumberInput to fail');
+    assert.match(stderr, /required control 'numAdjustAmount'.*persistent visible human-readable label/);
+});
+
+test('accepts a visible sibling label for required versioned ModernNumberInput', () => {
+    const workspace = materialize(
+        'receive-labeled-modern-number',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Control: ModernNumberInput',
+        'Control: ModernNumberInput@1.0.0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected labeled versioned ModernNumberInput to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not accept a fabricated native Label property on Classic/TextInput', () => {
+    const workspace = materialize('receive-fabricated-classic-label');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Format: =TextFormat.Number',
+        '                    Label: ="Amount"\n                    Format: =TextFormat.Number'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'txtAmount'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected fabricated classic Label to fail');
+    assert.match(stderr, /required control 'txtAmount'.*persistent visible human-readable label/);
+});
+
+test('rejects exported-shape horizontal, nested-breakpoint, and receipt layout clipping', () => {
+    const workspace = materializeLayout('receive-layout-clipped');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected required controls in clipped containers to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+    assert.match(stderr, /vertical container 'conAdjustHeading' requires 154px.*Height branch is 76px/);
+});
+
+test('does not classify a screen as its first versioned Gallery child', () => {
+    const workspace = materializeLayout('receive-layout-screen-gallery-first');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '        Children:\n',
+        '        Children:\n' +
+        '            - galUnrelated:\n' +
+        '                Control: Gallery@2.15.0\n' +
+        '                Properties:\n' +
+        '                    Items: =[]\n'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected clipped containers to remain in scope');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+    assert.match(stderr, /vertical container 'conAdjustHeading' requires 154px.*Height branch is 76px/);
+});
+
+test('retains explicit non-fill sizes when LayoutMinWidth and LayoutMinHeight are zero', () => {
+    const workspace = materializeLayout('receive-layout-zero-minimums');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(
+            /^(\s*)LayoutMinWidth: =(\d+)$/gm,
+            '$1LayoutMinWidth: =0')
+        .replace(
+            /^(\s*)Height: =(.+)$/gm,
+            '$1Height: =$2\n$1LayoutMinHeight: =0'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected explicit non-fill sizes to retain their budget');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('accepts wrapped horizontal content and App.Width-correlated sufficient vertical budgets', () => {
+    const workspace = materializeLayout('receive-layout-responsive', { responsive: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected responsive layout to pass but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts bounded non-fill sizes with zero layout minimums', () => {
+    const workspace = materializeLayout('receive-layout-bounded-non-fill', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900')
+        .replace(
+            'LayoutDirection: =If(App.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal')
+        .replace(
+            /^(\s*)LayoutMinWidth: =(\d+)$/gm,
+            '$1LayoutMinWidth: =0')
+        .replace(
+            /^(\s*)Height: =(.+)$/gm,
+            '$1Height: =$2\n$1LayoutMinHeight: =0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded non-fill layout to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a numeric horizontal budget without LayoutWrap', () => {
+    const workspace = materializeLayout('receive-layout-arithmetic', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900')
+        .replace(
+            'LayoutDirection: =If(App.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded horizontal arithmetic to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects an App.Width horizontal branch that exceeds its local rendered-width contract', () => {
+    const workspace = materializeLayout('receive-layout-app-width-letterbox', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace('If(App.Width<640', 'If(App.Width<1000'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        fs.readFileSync(acceptancePath, 'utf8').replace(
+            '| local/root contract | 900px |',
+            '| App.Width branch; local/root runtime contract | 500px |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected letterboxed App.Width composition to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 500px/);
+});
+
+test('rejects a logical root.Width branch that can stay wide in a 513px host viewport', () => {
+    const workspace = materializeLayout('receive-layout-root-width-scale-fit', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(Screen1.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        fs.readFileSync(acceptancePath, 'utf8').replace(
+            '| local/root contract | 900px |',
+            '| logical root branch; local/root host contract | 513px |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected logical root width in a narrow host to fail closed');
+    assert.match(stderr, /relies on logical width source 'Screen1.Width'/);
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 513px/);
+});
+
+test('rejects the canonical conAdjustNav 680px wide branch against a 500px local viewport', () => {
+    const workspace = materialize('receive-layout-adjust-nav-letterbox');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - cmbAdjustItem:',
+        '            - conAdjustNav:\n' +
+        '                Control: GroupContainer\n' +
+        '                Variant: AutoLayout\n' +
+        '                Properties:\n' +
+        '                    Height: =If(App.Width < 640, 196, 52)\n' +
+        '                    LayoutDirection: =If(App.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)\n' +
+        '                    LayoutGap: =8\n' +
+        '                    PaddingLeft: =8\n' +
+        '                    PaddingRight: =8\n' +
+        '                    Width: =Parent.Width\n' +
+        '                Children:\n' +
+        '                    - txtAdjustBrand:\n' +
+        '                        Control: Text\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 220)\n' +
+        '                    - btnAdjustDashboard:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            OnSelect: =Navigate(Screen1)\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '                    - btnAdjustManageItems:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            OnSelect: =Navigate(Screen1)\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '                    - btnAdjustStock:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '            - cmbAdjustItem:'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '\n## Layout Budget Evidence\n\n' +
+        '| Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        '| Stock Adjustment / conAdjustNav | QACHK-HORIZONTAL-BUDGET | App.Width branch; local/root runtime contract | 500px | 16 padding + 640 children + 24 gaps = 680px | navigation | PASS |\n');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected exported navigation budget to fail');
+    assert.match(stderr, /horizontal container 'conAdjustNav' requires 680px.*at most 500px/);
+});
+
+test('allows duplicate per-axis evidence rows without reading height as width', () => {
+    const workspace = materializeLayout('receive-layout-duplicate-evidence', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '| Stock Adjustment / conAdjustPanel | QACHK-NO-HEIGHT-TRAP | local/root vertical | 100px height | 5px incidental note | controls | PASS |\n' +
+        '| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root desktop branch | 1000px | 860px required; 12px gap | controls | PASS |\n');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'logical-width responsive composition must still fail closed');
+    assert.match(stderr, /relies on logical width source 'App.Width'/);
+    assert.doesNotMatch(stderr, /requires 860px.*at most 100px/);
+    assert.doesNotMatch(stderr, /Duplicate row 'Stock Adjustment \/ conAdjustPanel'/);
+});
+
+test('uses the narrowest matching horizontal layout evidence row', () => {
+    const workspace = materializeLayout('receive-layout-multiple-horizontal-evidence', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root narrow branch | 700px | 860px required | controls | PASS |\n');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected narrowest horizontal evidence to govern');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 700px/);
+});
+
+test('accepts an always-stacked local composition', () => {
+    const workspace = materializeLayout('receive-layout-local-width', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =LayoutDirection.Vertical')
+        .replace('\n                            LayoutWrap: =true', ''));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected local-width responsive composition to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+for (const [slug, operator, trueDirection, falseDirection] of [
+    ['lt', '<', 'Vertical', 'Horizontal'],
+    ['lte', '<=', 'Vertical', 'Horizontal'],
+    ['gt', '>', 'Horizontal', 'Vertical'],
+    ['gte', '>=', 'Horizontal', 'Vertical'],
+]) {
+    test(`parses responsive LayoutDirection with ${operator}`, () => {
+        const workspace = materializeLayout(`receive-layout-operator-${slug}`, { responsive: true });
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            `LayoutDirection: =If(App.Width ${operator} 640, LayoutDirection.${trueDirection}, LayoutDirection.${falseDirection})`));
+        const { code, stdout, stderr } = runValidator(workspace);
+        assert.strictEqual(
+            code,
+            0,
+            `expected ${operator} conditional to parse.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    });
+}
+
+test('rejects an unresolved state-based horizontal-capable LayoutDirection', () => {
+    const workspace = materializeLayout('receive-layout-unparsed-state-direction', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(varIsMobile,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved conditional direction to fail closed');
+    assert.match(
+        stderr,
+        /horizontal-capable container 'conAdjustPanel' has an unresolved conditional LayoutDirection/);
+});
+
+test('allows an unresolved horizontal-capable direction when wrapping guarantees escape', () => {
+    const workspace = materializeLayout('receive-layout-unparsed-wrapped', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+        'LayoutDirection: =If(varIsMobile,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected wrapped conditional direction to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not describe nested local Parent.Width as host-insensitive logical width', () => {
+    const workspace = materializeLayout('receive-layout-nested-parent-width', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        let nested = yaml
+            .replace('\n                            LayoutWrap: =true', '')
+            .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(Parent.Width<1000,LayoutDirection.Vertical,LayoutDirection.Horizontal)');
+        const start = nested.indexOf('            - conAdjustPanel:');
+        const end = nested.indexOf('            - conManageFormPanel:', start);
+        assert.ok(start >= 0 && end > start, 'expected adjustment panel block');
+        const panel = nested.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        nested = nested.slice(0, start) +
+            '            - conOuter:\n' +
+            '                Control: GroupContainer\n' +
+            '                Properties:\n' +
+            '                    Width: =1000\n' +
+            '                Children:\n' +
+            panel +
+            nested.slice(end);
+        return nested;
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected nested local Parent.Width budget to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.doesNotMatch(stderr, /relies on logical width source 'Parent.Width'/);
+});
+
+test('accepts FillPortions children without Width or LayoutMinWidth', () => {
+    const workspace = materializeLayout('receive-layout-fill-portions', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(/^(\s*)Width: =\d+\n/gm, '')
+        .replaceAll(/LayoutMinWidth: =\d+/g, 'FillPortions: =1')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected FillPortions layout to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects each unresolved horizontal child with an actionable diagnostic', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-width');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Width: =180', 'Width: =Parent.Width / 2')
+        .replace('LayoutMinWidth: =180', 'LayoutMinWidth: =0')
+        .replace('Width: =140', 'Width: =Parent.Width / 3'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved child width to fail');
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel' child 'fldAdjustItem'.*numeric Width.*numeric LayoutMinWidth/);
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel' child 'fldOperation'.*numeric Width.*numeric LayoutMinWidth/);
+});
+
+test('gives implemented remedies for a non-App.Width unresolved horizontal container', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-horizontal-container', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =LayoutDirection.Horizontal'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved horizontal container width to fail');
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel'.*set numeric Width, enable LayoutWrap, or use exact Scroll\/LayoutOverflow\.Scroll/);
+    assert.doesNotMatch(stderr, /record its narrowest local\/root width in Layout Budget Evidence/);
+});
+
+test('rejects an unresolved vertical container Height with numeric guidance', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-container', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =If(App.Width<768,620,250)',
+        'Height: =Parent.Height'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved vertical container Height to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' has an unresolved Height.*numeric Height/);
+});
+
+test('rejects each unresolved vertical child height with numeric guidance', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-child', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =If(App.Width<768,430,110)',
+        'AutoHeight: =true\n' +
+        '                            Height: =Parent.Height'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved vertical child height to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' child 'conManageFields'.*numeric Height.*numeric LayoutMinHeight/);
+    assert.match(stderr, /AutoHeight text inside a fixed-height panel/);
+});
+
+test('does not correlate Parent.Width conditions across nested layout scopes', () => {
+    const workspace = materializeLayout('receive-layout-parent-width-scopes', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('If(App.Width<768,620,250)', 'If(Parent.Width<768,620,250)')
+        .replace('If(App.Width<768,430,110)', 'If(Parent.Width<768,430,110)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected independently scoped Parent.Width branches to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('exempts a canonical scrolling screen root but still rejects its nested fixed panel', () => {
+    const workspace = materializeLayout('receive-layout-screen-root', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '        Children:\n';
+        const markerIndex = yaml.indexOf(marker);
+        assert.notStrictEqual(markerIndex, -1, 'missing screen Children marker');
+        const prefix = yaml.slice(0, markerIndex + marker.length);
+        const children = yaml.slice(markerIndex + marker.length)
+            .split('\n')
+            .map((line) => line.length > 0 ? `        ${line}` : line)
+            .join('\n')
+            .replace(
+                'Height: =If(App.Width<768,620,250)',
+                'Height: =250')
+            .replace(
+                'Height: =If(App.Width<768,430,110)',
+                'Height: =430');
+        return prefix +
+            '            - conRoot:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Width: =Parent.Width\n' +
+            '                    Height: =Parent.Height\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+            '                Children:\n' +
+            children;
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected nested fixed panel clipping to fail');
+    assert.doesNotMatch(stderr, /vertical container 'conRoot'/);
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('accepts a fixed-height vertical container with deliberate scrolling overflow', () => {
+    const workspace = materializeLayout('receive-layout-scroll-overflow', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =180\n                    LayoutDirection: =LayoutDirection.Vertical',
+        'Height: =76\n' +
+        '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+        '                    LayoutOverflowY: =LayoutOverflow.Scroll'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected scrolling fixed-height container to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a vertical scroll container with a direct FillPortions child', () => {
+    const workspace = materializeLayout('receive-layout-scroll-fill-trap', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =varLastOperation\n                            Height: =40',
+        'Text: =varLastOperation\n' +
+        '                            Height: =40\n' +
+        '                            FillPortions: =1').replace(
+        'LayoutDirection: =LayoutDirection.Vertical\n                    LayoutGap: =2',
+        'LayoutDirection: =LayoutDirection.Vertical\n' +
+        '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+        '                    LayoutGap: =2'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a direct fill child to defeat scroll escape');
+    assert.match(
+        stderr,
+        /vertical scroll container 'conAdjustHeading'.*'lblReceiptOperation'.*FillPortions > 0/);
+});
+
+test('does not treat conditional horizontal Scroll as an all-branch escape', () => {
+    const workspace = materializeLayout('receive-layout-conditional-horizontal-scroll');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'PaddingRight: =16',
+        'PaddingRight: =16\n' +
+        '                    LayoutOverflowX: =If(App.Width<640,LayoutOverflow.Scroll,LayoutOverflow.Hide)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected overflowing non-scroll branch to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+});
+
+test('accepts exact horizontal Scroll as an overflow escape', () => {
+    const workspace = materializeLayout('receive-layout-horizontal-scroll', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'PaddingRight: =16',
+            'PaddingRight: =16\n' +
+            '                    LayoutOverflowX: =LayoutOverflow.Scroll'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected exact horizontal scroll escape to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('ignores AutoLayout template budgets beneath a versioned Gallery', () => {
+    const workspace = materializeLayout('receive-layout-versioned-gallery', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '            - conAdjustHeading:';
+        const markerIndex = yaml.indexOf(marker);
+        assert.notStrictEqual(markerIndex, -1, 'missing receipt container');
+        const prefix = yaml.slice(0, markerIndex);
+        const receipt = yaml.slice(markerIndex)
+            .split('\n')
+            .map((line) => line.length > 0 ? `        ${line}` : line)
+            .join('\n')
+            .replace('Height: =180', 'Height: =76');
+        return prefix +
+            '            - galReceipt:\n' +
+            '                Control: Gallery@2.15.0\n' +
+            '                Properties:\n' +
+            '                    Items: =[1]\n' +
+            '                Children:\n' +
+            receipt;
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected versioned Gallery template to be scoped out.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts an equivalent amount <= 0 invalid-submit gate', () => {
+    const workspace = materialize(
+        'receive-invalid-amount-polarity',
+        { amountInvalidPolarity: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected equivalent invalid-polarity gate to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('indexes a two-space exported screen key for exact OnVisible reset evidence', () => {
+    const workspace = materialize(
+        'receive-two-space-screen',
+        { twoSpaceScreenIndent: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects operation-control reset without AllowEmptySelection true', () => {
+    const workspace = materialize(
+        'receive-operation-not-empty',
+        {
+            sharedApplyFlow: true,
+            dropdownDirectShared: true,
+            omitOperationAllowEmpty: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable operation control to fail');
+    assert.match(
+        stderr,
+        /blank-operation binding must reset actual operation source 'drpOperation\.Selected\.Value'/);
+});
+
+test('accepts docs-compliant ComboBox DefaultSelectedItems reset without AllowEmptySelection', () => {
+    const workspace = materialize('receive-selection-empty-combobox');
+    const screen = fs.readFileSync(path.join(workspace, 'Screen1.pa.yaml'), 'utf8');
+    assert.doesNotMatch(
+        screen,
+        /Control: Classic\/ComboBox\n\s+Properties:\n\s+AllowEmptySelection/);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected docs-compliant ComboBox to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a versioned ComboBox with docs-compliant nullable reset configuration', () => {
+    const workspace = materialize('receive-selection-versioned-combobox');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Control: Classic/ComboBox',
+        'Control: Classic/ComboBox@2.4.0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected versioned ComboBox to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts docs-compliant DropDown blank default and AllowEmptySelection', () => {
+    const workspace = materialize(
+        'receive-operation-empty-dropdown',
+        { sharedApplyFlow: true, dropdownDirectShared: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected docs-compliant DropDown to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects selected ComboBox proof without DefaultSelectedItems empty', () => {
+    const workspace = materialize(
+        'receive-selection-not-empty',
+        { omitSelectionDefault: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable selected control to fail');
+    assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
+});
+
+test('rejects selected ListBox proof without nullable reset configuration', () => {
+    const workspace = materialize(
+        'receive-listbox-not-empty',
+        { listBoxSelection: true, omitSelectionDefault: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable ListBox selection to fail');
+    assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
+});
+
+test('rejects an orphan operation variable on a non-mutating Apply gate', () => {
+    const workspace = materialize('receive-orphan-apply-gate', { orphanApplyGate: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected orphan Apply gate to fail validation');
+    assert.match(
+        stderr,
+        /blank-checks operation variable 'varOperation', but no reachable control event assigns it/);
+    assert.match(
+        stderr,
+        /gated control 'btnApply' must own or route to a declared mutation handler/);
+});
+
+test('accepts independent direct actions without a dead shared submit control', () => {
+    const workspace = materialize('receive-independent-direct-pass');
+    const screen = fs.readFileSync(path.join(workspace, 'Screen1.pa.yaml'), 'utf8');
+    assert.doesNotMatch(screen, /btnApply/);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects the ADO-export contradiction between a claimed selector and direct-mutation YAML', () => {
+    const workspace = materialize(
+        'receive-action-binding-contradiction',
+        { contradictReceiveActionBinding: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected contradictory Action Contract evidence to fail validation');
+    assert.match(
+        stderr,
+        /Action Contract for 'Receive' binding 'btnReceive\.OnSelect' does not match final app YAML/);
+    assert.match(stderr, /Action Contract omits the distinct mutation-handler binding/);
+});
+
+test('rejects an accurately recorded selector that mutates in a shared Apply flow', () => {
+    const workspace = materialize(
+        'receive-shared-selector-mutates',
+        { sharedApplyFlow: true, sharedSelectorMutates: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(
+        stderr,
+        /Directional action 'Receive' selector 'btnReceive' must select the operation without mutating data/);
+});
+
+test('accepts selectors that set a shared operation consumed by the mutating Apply control', () => {
+    const workspace = materialize('receive-shared-apply-pass', { sharedApplyFlow: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('preserves separate direct actions with selection and amount blank gates', () => {
+    const workspace = materialize(
+        'receive-direct-without-operation-state',
+        { directWithoutOperationState: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects the exported Q8 incomplete-state gaps without disputing directional arithmetic', () => {
+    const workspace = materialize(
+        'receive-q8-runtime-gaps',
+        { sharedApplyFlow: true, q8RuntimeGaps: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected runtime-derived Q8 gaps to fail static acceptance');
+    assert.match(
+        stderr,
+        /blank-operation binding must reset actual operation source 'varOperation'/);
+    assert.match(
+        stderr,
+        /cannot use 'galAdjustItems\.Selected\.ID' as no-selection proof/);
+    assert.match(
+        stderr,
+        /amount control 'numAdjustAmount' has Min=1/);
+    assert.doesNotMatch(stderr, /mutation must apply '[+-]'/);
+});
+
+test('rejects selected-ID evidence when the mutation still uses Gallery.Selected.ID', () => {
+    const workspace = materialize(
+        'receive-q8-selection-mismatch',
+        {
+            sharedApplyFlow: true,
+            q8RuntimeGaps: true,
+            selectedEvidenceMismatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected contradictory selected-record evidence to fail');
+    assert.match(
+        stderr,
+        /receive mutation must target selected-record source 'varSelectedInventoryId'/);
+    assert.match(
+        stderr,
+        /explicit selected ID 'varSelectedInventoryId' must reset to Blank on screen entry/);
+});
+
+test('accepts one explicit selected ID reset and assigned by a reachable row event', () => {
+    const workspace = materialize(
+        'receive-explicit-selected-id',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts an explicit selected ID assigned by a non-gallery OnChange path', () => {
+    const workspace = materialize(
+        'receive-non-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    rewriteScreen(workspace, (yaml) => {
+        const selector = /            - btnSelectInventory:\r?\n                Control: Classic\/Button\r?\n                Properties:\r?\n                    OnSelect: =Set\(varSelectedInventoryId, cmbAdjustItem\.Selected\.ID\)\r?\n/;
+        assert.match(yaml, selector, 'expected explicit non-gallery selector');
+        return yaml.replace(
+        selector,
+        '            - cmbSelectInventory:\r\n' +
+        '                Control: Classic/ComboBox\r\n' +
+        '                Properties:\r\n' +
+        '                    Items: =colInventory\r\n' +
+        '                    OnChange: =Set(varSelectedInventoryId, Self.Selected.ID)\r\n');
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected non-gallery OnChange selection to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts an explicit selected ID event in a bounded versioned Gallery', () => {
+    const workspace = materialize(
+        'receive-bounded-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestExplicitSelectorInGallery(workspace);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded gallery selection to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a gallery-only selected ID path with exported self-sizing Height', () => {
+    const workspace = materialize(
+        'receive-self-sized-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestExplicitSelectorInGallery(workspace, { safe: false });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected self-sized gallery selection to fail');
+    assert.match(stderr, /explicit selected ID.*render-safe gallery/);
+    assert.match(stderr, /gallery 'galAdjustInventory'.*collection-count\/Self\.Template self-sizing/);
+});
+
+test('rejects all three exported collection-count gallery Height patterns', () => {
+    const workspace = materialize('receive-three-self-sized-galleries');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        ['galDashInventory', 'galManageInventory', 'galAdjustInventory']
+            .map((name) =>
+                `            - ${name}:\n` +
+                '                Control: Gallery\n' +
+                '                Properties:\n' +
+                '                    Items: =colInventory\n' +
+                '                    Height: =CountRows(colInventory) * Self.TemplateHeight + ((CountRows(colInventory) + 1) * Self.TemplatePadding)\n' +
+                '                    TemplateSize: =64\n' +
+                '                    TemplatePadding: =8\n' +
+                '                Children:\n' +
+                `                    - lbl${name}Row:\n` +
+                '                        Control: Classic/Label\n' +
+                '                        Properties:\n' +
+                '                            Text: =ThisItem.Name\n')
+            .join('') +
+        '            - galInventory:'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected each exported self-sizing gallery to fail');
+    for (const gallery of ['galDashInventory', 'galManageInventory', 'galAdjustInventory']) {
+        assert.match(stderr, new RegExp(`gallery '${gallery}'.*collection-count/Self[.]Template`));
+    }
+});
+
+test('rejects a required action surface hidden by selected valid-state visibility', () => {
+    const workspace = materialize(
+        'receive-hidden-negative-state-surface',
+        {
+            sharedApplyFlow: true,
+            explicitSelectedId: true,
+        });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '=Not(IsBlank(varSelectedInventoryId))');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected hidden negative-state action surface to fail');
+    assert.match(
+        stderr,
+        /required negative-state control 'btnApply'.*visibility on 'conAdjustAction'/);
+});
+
+test('rejects spaced nonblank visibility gates', () => {
+    const workspace = materialize(
+        'receive-spaced-hidden-negative-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '= Not ( IsBlank ( varSelectedInventoryId ) )');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected spaced nonblank visibility gate to fail');
+    assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+});
+
+test('rejects If-form nonblank visibility gates with correct polarity', () => {
+    const workspace = materialize(
+        'receive-if-hidden-negative-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '=If(IsBlank(varSelectedInventoryId), false, true)');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected If-form valid-state visibility gate to fail');
+    assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+});
+
+test('rejects bang-IsBlank and Blank inequality visibility equivalents', () => {
+    for (const [name, formula] of [
+        ['bang', '= ! IsBlank ( varSelectedInventoryId )'],
+        ['inequality', '= varSelectedInventoryId <> Blank ( )'],
+    ]) {
+        const workspace = materialize(
+            `receive-${name}-hidden-negative-state`,
+            { sharedApplyFlow: true, explicitSelectedId: true });
+        nestSharedApplyInVisibleContainer(workspace, formula);
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected ${name} valid-state visibility gate to fail`);
+        assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+    }
+});
+
+test('does not invert an If-form blank-state validation visibility predicate', () => {
+    const workspace = materialize(
+        'receive-if-visible-invalid-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        '            - lblSelectValidation:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Select an inventory row."\n' +
+        '                    Visible: = If ( IsBlank ( varSelectedInventoryId ) , true , false )\n' +
+        '            - galInventory:'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected blank-state validation visibility to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects If-form positive amount visibility but accepts its invalid-state inverse', () => {
+    const hiddenWorkspace = materialize(
+        'receive-if-positive-amount-hidden',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    nestSharedApplyInVisibleContainer(
+        hiddenWorkspace,
+        '=If(numAdjustAmount.Value <= 0, false, true)');
+    const hidden = runValidator(hiddenWorkspace);
+    assert.notStrictEqual(hidden.code, 0, 'expected positive amount visibility gate to fail');
+    assert.match(hidden.stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+
+    const visibleWorkspace = materialize(
+        'receive-if-invalid-amount-visible',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(visibleWorkspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        '            - lblAmountValidation:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Enter a positive amount."\n' +
+        '                    Visible: = If ( numAdjustAmount.Value > 0, false, true )\n' +
+        '            - galInventory:'));
+    const visible = runValidator(visibleWorkspace);
+    assert.strictEqual(
+        visible.code,
+        0,
+        `expected invalid amount visibility to preserve polarity.\nstdout:\n${visible.stdout}\nstderr:\n${visible.stderr}`);
+});
+
+test('accepts an always-visible action surface whose Apply button is disabled', () => {
+    const workspace = materialize(
+        'receive-visible-disabled-action-surface',
+        {
+            sharedApplyFlow: true,
+            explicitSelectedId: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected visible disabled action surface to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a blank Min=0 modern amount with gate and screen-entry reset', () => {
+    const workspace = materialize(
+        'receive-modern-amount',
+        { sharedApplyFlow: true, modernAmount: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('validates exported versioned NumberInput Value state', () => {
+    const workspace = materialize(
+        'receive-exported-number-input',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Control: ModernNumberInput', 'Control: NumberInput@2.1.0')
+        .replace('Default: =0', 'Value: =0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected exported NumberInput state to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects exported NumberInput with a positive initial Value', () => {
+    const workspace = materialize(
+        'receive-exported-number-input-positive',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Control: ModernNumberInput', 'Control: NumberInput')
+        .replace('Default: =0', 'Value: =1'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected positive NumberInput initial value to fail');
+    assert.match(stderr, /amount control 'numAdjustAmount' must default to Blank or zero/);
+});
+
+test('accepts a zero-default Min=0 modern amount when the gate requires greater than zero', () => {
+    const workspace = materialize(
+        'receive-modern-amount-zero-default',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('resolves a staged amount from reachable OnChange and rejects its Min=1', () => {
+    const workspace = materialize(
+        'receive-staged-modern-amount-min-one',
+        { sharedApplyFlow: true, stagedAmountMinOne: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected staged Min=1 amount source to fail');
+    assert.match(stderr, /amount control 'numAdjustAmount' has Min=1/);
+});
+
+test('accepts resetting the actual operation state after a successful mutation', () => {
+    const workspace = materialize(
+        'receive-operation-post-success-reset',
+        { sharedApplyFlow: true, operationPostSuccessReset: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a custom record key, additional predicate, and three-argument LookUp', () => {
+    const workspace = materialize(
+        'receive-custom-record-key',
+        { customRecordKey: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a transformed custom record key', () => {
+    const workspace = materialize(
+        'receive-transformed-custom-record-key',
+        { transformedCustomRecordKey: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected transformed custom key to fail');
+    assert.match(stderr, /transformed record-identity key/);
+});
+
+test('rejects wrapped Gallery Items as nullable selected-record proof', () => {
+    const workspace = materialize(
+        'receive-wrapped-gallery-selection',
+        {
+            sharedApplyFlow: true,
+            q8RuntimeGaps: true,
+            wrappedGalleryItems: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrapped nonempty Gallery.Selected proof to fail');
+    assert.match(stderr, /cannot use 'galAdjustItems\.Selected\.ID' as no-selection proof/);
+});
+
+test('accepts correct shared branches when Action Contract contains only the handler', () => {
+    const workspace = materialize(
+        'receive-shared-handler-only-pass',
+        { sharedApplyFlow: true, sharedActionHandlerOnly: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared branches when Action Contract omits selectors', () => {
+    const workspace = materialize(
+        'receive-shared-handler-only-reversed',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected evidence-shaped shared branch bypass to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts shared handler branching directly on dropdown state', () => {
+    const workspace = materialize(
+        'receive-dropdown-direct-pass',
+        { sharedApplyFlow: true, dropdownDirectShared: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared branches that consume dropdown state directly', () => {
+    const workspace = materialize(
+        'receive-dropdown-direct-reversed',
+        {
+            sharedApplyFlow: true,
+            dropdownDirectShared: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed dropdown-direct branches to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts correct shared Receive with direct Issue mixed topology', () => {
+    const workspace = materialize(
+        'receive-mixed-topology-pass',
+        { sharedApplyFlow: true, mixedTopology: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared Receive in mixed topology', () => {
+    const workspace = materialize(
+        'receive-mixed-topology-reversed',
+        {
+            sharedApplyFlow: true,
+            mixedTopology: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mixed-topology reversed Receive to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+});
+
+test('accepts operation selectors assigned through UpdateContext for gate liveness', () => {
+    const workspace = materialize(
+        'receive-update-context-selector',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            updateContextSelectors: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('resolves operation source from receipt when a gate has multiple IsBlank operands', () => {
+    const workspace = materialize(
+        'receive-multi-blank-gate-pass',
+        { sharedApplyFlow: true, sharedActionHandlerOnly: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed branches with a multi-IsBlank gate', () => {
+    const workspace = materialize(
+        'receive-multi-blank-gate-reversed',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed multi-IsBlank flow to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts shared arithmetic guarded by explicit If conditions', () => {
+    const workspace = materialize(
+        'receive-shared-if-pass',
+        { sharedApplyFlow: true, sharedIfBranches: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects ambiguous multiple matching operation dispatches', () => {
+    const workspace = materialize(
+        'receive-shared-ambiguous-dispatch',
+        { sharedApplyFlow: true, ambiguousSharedDispatch: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous shared dispatch to fail closed');
+    assert.match(stderr, /must guard exactly one write branch/);
+});
+
+test('resolves shared operation state when selectors also assign receipt labels', () => {
+    const workspace = materialize(
+        'receive-shared-selector-receipt',
+        { sharedApplyFlow: true, selectorReceiptAssignment: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a shared selector whose Action Contract omits the mutation owner', () => {
+    const workspace = materialize(
+        'receive-shared-owner-omitted',
+        { sharedApplyFlow: true, omitSharedMutationBinding: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted shared mutation evidence to fail validation');
+    assert.match(stderr, /Action Contract omits the distinct mutation-handler binding/);
+});
+
+test('rejects shared mutation branches whose Receive and Issue arithmetic is swapped', () => {
+    const workspace = materialize(
+        'receive-shared-reversed-branches',
+        { sharedApplyFlow: true, reverseSharedBranches: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed shared branches to fail validation');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('rejects different operation variables across shared directional rows', () => {
+    const workspace = materialize(
+        'receive-shared-variable-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedVariables: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared variables to fail validation');
+    assert.match(stderr, /shared rows must use the same operation state variable/);
+});
+
+test('rejects different mutation owners across shared directional rows', () => {
+    const workspace = materialize(
+        'receive-shared-owner-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedOwner: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared mutation owners to fail validation');
+    assert.match(stderr, /shared rows must resolve to the same mutation control and event/);
+});
+
+test('rejects a shared mutation handler that does not consume selector operation state', () => {
+    const workspace = materialize(
+        'receive-shared-disconnected-mutation',
+        { sharedApplyFlow: true, mutationDoesNotConsumeOperation: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected disconnected shared mutation to fail validation');
+    assert.match(stderr, /mutation handler 'btnApply' must consume operation variable 'varOperation'/);
+});
+
+test('rejects a shared gate that blank-checks different operation state', () => {
+    const workspace = materialize(
+        'receive-shared-gate-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedGate: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared gate state to fail validation');
+    assert.match(stderr, /shared mutation gate must blank-check operation variable 'varOperation'/);
+});
+
+test('accepts explicit operation literals that contain each direction word', () => {
+    const workspace = materialize(
+        'receive-shared-operation-labels',
+        { sharedApplyFlow: true, operationLiteralSuffix: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a selector operation literal unrelated to its direction', () => {
+    const workspace = materialize(
+        'receive-shared-unrelated-operation',
+        { sharedApplyFlow: true, unrelatedOperationLiteral: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated selector operation to fail validation');
+    assert.match(stderr, /must assign operation state to a declared value containing direction 'receive'/);
+});
+
+test('accepts a declared dropdown selection binding for shared operation state', () => {
+    const workspace = materialize(
+        'receive-shared-dropdown',
+        { sharedApplyFlow: true, dropdownSelector: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts valid single- and double-quoted YAML formulas', () => {
+    const workspace = materialize('receive-quoted-yaml', { quoteYamlFormulas: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts valid literal and folded YAML block-scalar formulas', () => {
+    const workspace = materialize('receive-block-yaml', { blockYamlFormula: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts block scalars that retain their trailing newline', () => {
+    const workspace = materialize(
+        'receive-block-yaml-keep',
+        { blockYamlFormula: true, blockYamlKeepTrailingNewline: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('normalizes documented br separators inside exact Action Contract bindings', () => {
+    const workspace = materialize(
+        'receive-action-binding-br',
+        { actionBindingLineBreak: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a direct mutation control whose name contains Apply', () => {
+    const workspace = materialize('receive-misleading-apply-name', { misleadingApplyDirect: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects common Power Fx mutation functions in a shared operation selector', () => {
+    for (const mutation of ['ClearCollect', 'Clear', 'Update', 'Relate', 'Unrelate']) {
+        const workspace = materialize(
+            `receive-selector-${mutation.toLowerCase()}`,
+            { sharedApplyFlow: true, mutatingSelectorFunction: mutation });
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected ${mutation} selector mutation to fail`);
+        assert.match(stderr, /selector 'btnReceive' must select the operation without mutating data/);
+    }
+});
+
+test('accepts a gated control that routes to a declared mutation with Select', () => {
+    const workspace = materialize(
+        'receive-select-gate-route',
+        { selectGateRouting: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a gated control whose unrelated mutation does not route to the declared handler', () => {
+    const workspace = materialize(
+        'receive-unrelated-gate-mutation',
+        { unrelatedGateMutation: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated gated mutation to fail routing validation');
+    assert.match(
+        stderr,
+        /gated control 'btnUnrelatedMutation' must own or route to a declared mutation handler/);
+});
+
+test('matches required record fields against quoted YAML formulas', () => {
+    const workspace = materialize(
+        'receive-required-record-quoted',
+        { requiredRecordScalar: 'quoted' });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('matches required record fields against block-scalar YAML formulas', () => {
+    const workspace = materialize(
+        'receive-required-record-block',
+        { requiredRecordScalar: 'block' });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts mutation lifecycle evidence and multi-field changed/preserved parity', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-field-parity-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected mutation lifecycle and field-parity fixture to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('derives field-ledger entries from a balanced UpdateIf change record', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-update-if');
+    const patch = /Set\(varLastMutation, Patch\(colInventory, LookUp\(colInventory, ID = cmbAdjustItem\.Selected\.ID\), (\{[^}]+\})\)\)/g;
+    const updateIf = (_, record) =>
+        `UpdateIf(colInventory, ID = cmbAdjustItem.Selected.ID, ${record}); ` +
+        'Set(varLastMutation, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID))';
+    rewriteScreen(workspace, (yaml) => yaml.replace(patch, updateIf));
+    for (const file of ['canvas-app-plan.md', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text
+            .replace(patch, updateIf)
+            .replace(/^\| Receive\s*\|/gm, '| Save up |')
+            .replace(/^\| Issue\s*\|/gm, '| Save down |')
+            .replaceAll('| Receive |', '| Save up |')
+            .replaceAll('| Issue |', '| Save down |'));
+    }
+    rewriteArtifact(workspace, 'canvas-app-requirements.md', (text) => text
+        .replaceAll('| Receive |', '| Save up |')
+        .replaceAll('| Issue |', '| Save down |'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected balanced UpdateIf field derivation to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('derives every field from a balanced Collect record', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-collect-field');
+    const patch = /Set\(varLastMutation, Patch\(colInventory, LookUp\(colInventory, ID = cmbAdjustItem\.Selected\.ID\), \{([^}]+)\}\)\)/g;
+    const collect = (_, fields) =>
+        `Collect(colInventory, {ID: cmbAdjustItem.Selected.ID, ${fields}}); ` +
+        'Set(varLastMutation, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID)); ' +
+        `If(false, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {${fields}}))`;
+    rewriteScreen(workspace, (yaml) => yaml.replace(patch, collect));
+    for (const file of ['canvas-app-plan.md', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text
+            .replace(patch, collect)
+            .replace(/^\| Receive\s*\|/gm, '| Save add up |')
+            .replace(/^\| Issue\s*\|/gm, '| Save add down |'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected Collect ID omitted from the ledger to fail');
+    assert.match(stderr, /derived static write has unmatched field 'ID'/);
+});
+
+test('rejects receipt-only lifecycle evidence without canonical and destination observers', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-receipt-only');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = 'N/A';
+            cells[3] = 'N/A';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected receipt-only lifecycle evidence to fail');
+    assert.match(stderr, /requires exact canonical observer evidence/);
+    assert.match(stderr, /requires exact requested destination observer evidence/);
+});
+
+test('rejects a lifecycle canonical observer bound to the wrong source', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-wrong-source');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =LookUp(colInventory, ID = varLastMutation.ID).Quantity',
+        'Text: =LookUp(colInventoryArchive, ID = varLastMutation.ID).Quantity'));
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = cells[2].replace('colInventory', 'colInventoryArchive');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong canonical source to fail');
+    assert.match(stderr, /canonical observer must read mutation source 'colInventory'/);
+});
+
+test('rejects lifecycle evidence whose canonical observer uses another stable ID', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-wrong-id');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =LookUp(colInventory, ID = varLastMutation.ID).Quantity',
+        'Text: =LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity'));
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = cells[2].replace('varLastMutation.ID', 'cmbAdjustItem.Selected.ID');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched lifecycle ID to fail');
+    assert.match(stderr, /canonical observer must reference stable ID 'varLastMutation.ID'/);
+});
+
+test('requires synchronization when the requested destination reads another source', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-missing-sync');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Items: =Filter(colInventory, ID = varLastMutation.ID)',
+        'Items: =Filter(colInventoryView, ID = varLastMutation.ID)'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replaceAll(
+        'galInventory.Items: =Filter(colInventory, ID = varLastMutation.ID)',
+        'galInventory.Items: =Filter(colInventoryView, ID = varLastMutation.ID)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unsynchronized destination source to fail');
+    assert.match(stderr, /requires exact synchronization evidence/);
+});
+
+test('rejects a statically written field missing from the mutation field ledger', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-missing-field');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected an unledgered static write field to fail');
+    assert.match(stderr, /derived static write has unmatched field 'Notes'/);
+});
+
+test('rejects a declared write set that mismatches the field-ledger changed fields', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-mismatched-write-set');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-plan.md',
+        '## Action Contracts',
+        'Receive',
+        (cells) => {
+            cells[7] = 'Quantity, Status';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched declared write set to fail');
+    assert.match(stderr, /declared write set is missing field 'Notes'/);
+    assert.match(stderr, /declared write set has unmatched field 'Status'/);
+});
+
+test('rejects partial proof coverage for a multi-field mutation', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-partial-proof');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected partial multi-field proof to fail');
+    assert.match(stderr, /Missing mutation field evidence for 'Receive \/ Notes'/);
+});
+
+test('bounds unsupported SubmitForm and connector mutations without claiming static success', () => {
+    for (const [name, formula] of [
+        ['submit-form', 'SubmitForm(frmInventory)'],
+        ['connector', 'InventoryConnector.UpdateRecord(cmbAdjustItem.Selected.ID)'],
+    ]) {
+        const workspace = materializeLifecycle(`mutation-field-ledger-${name}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            /OnSelect: =Set\(varLastOperation, "Receive"\);[^\r\n]+/,
+            `OnSelect: =${formula}`));
+        rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replaceAll(
+            /btnReceive\.OnSelect: =Set\(varLastOperation, "Receive"\);[^|<\r\n]+/g,
+            `btnReceive.OnSelect: =${formula}`));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected unsupported ${name} mutation to be bounded`);
+        assert.match(
+            stderr,
+            /Static mutation field-parity validation cannot prove runtime success.*Runtime evaluation: NOT RUN/);
+    }
+});
+
+test('keeps standalone creates valid when no continuation contract is declared', () => {
+    const workspace = materializeLifecycle('continuation-not-applicable');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected continuation N/A to preserve the existing fixture.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('accepts returned-ID delete continuation with clearing and absence proof', () => {
+    const workspace = materializeContinuation('continuation-delete-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected returned-ID delete continuation to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('accepts a plan-declared state-driven surface with an equivalent visibility predicate', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected state-driven surface fixture to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a persistent sibling label inside the same declared state-driven surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-label-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected same-surface sibling label to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a fabricated shared region for a same-surface sibling label', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-wrong-region');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        '| inpEditorValue | lblEditorValue.Text | conItemEditor |',
+        '| inpEditorValue | lblEditorValue.Text | Screen1 |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected fabricated field-region evidence to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('rejects labels with their own false or transient visibility predicate', () => {
+    for (const [name, predicate] of [
+        ['false', '=false'],
+        ['transient', '=varTransientLabelState'],
+    ]) {
+        const workspace = materializeStateDrivenSurface(`state-driven-label-${name}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            '                            Text: ="Item name"',
+            '                            Text: ="Item name"\n' +
+            `                            Visible: ${predicate}`));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected independently ${name} label to fail`);
+        assert.match(
+            stderr,
+            /must name a persistent visible label binding/);
+    }
+});
+
+test('rejects a human-readable label outside the input surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-unrelated');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - btnCreate:',
+        '            - lblOutside:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Item name"\n' +
+        '            - btnCreate:'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'lblEditorValue.Text',
+        'lblOutside.Text'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated label to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('rejects a label nested under the input instead of a sibling label', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-input-child');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                            HintText: ="Enter a value"',
+        '                            HintText: ="Enter a value"\n' +
+        '                        Children:\n' +
+        '                            - lblNestedValue:\n' +
+        '                                Control: Classic/Label\n' +
+        '                                Properties:\n' +
+        '                                    Text: ="Item name"'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'lblEditorValue.Text',
+        'lblNestedValue.Text'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected input-child label to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('does not accept placeholder metadata without sibling label evidence', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-placeholder-only');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| inpEditorValue \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected placeholder-only input metadata to fail');
+    assert.match(stderr, /AccessibleLabel and HintText do not count/);
+});
+
+test('does not exempt labels under an undeclared conditional surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-undeclared-surface');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (text) => text.replace(
+        '`conItemEditor.Visible=varEditorMode = "Edit"` and title reflects edit state',
+        'title reflects edit state'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## State-Driven Surface Visibility Evidence');
+        const end = text.indexOf('## Data Entry Label Evidence');
+        assert.ok(start >= 0 && end > start, 'expected visibility evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected undeclared conditional surface label to fail');
+    assert.match(stderr, /must name a persistent visible label binding/);
+});
+
+test('rejects missing acceptance evidence for a plan-declared state-driven surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-missing-evidence');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## State-Driven Surface Visibility Evidence');
+        const end = text.indexOf('## Continuation Evidence');
+        assert.ok(start >= 0 && end > start, 'expected surface visibility evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing surface visibility evidence to fail');
+    assert.match(
+        stderr,
+        /Missing acceptance section '## State-Driven Surface Visibility Evidence'/);
+});
+
+test('rejects a retained-shape surface declaration when final YAML omits Visible', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-missing-yaml');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        /^ {20}Visible: =\(varEditorMode = "Edit"\) = true\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing surface Visible property to fail');
+    assert.match(
+        stderr,
+        /Plan-declared state-driven surface 'conItemEditor' has no Visible property in final app YAML/);
+});
+
+test('rejects YAML and evidence using a different state-driven surface predicate than the plan', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-wrong-predicate');
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text.replaceAll(
+            '=(varEditorMode = "Edit") = true',
+            '=varEditorMode = "Create"'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong surface visibility predicate to fail');
+    assert.match(
+        stderr,
+        /YAML visibility predicate is not the same as or provably equivalent to the plan predicate/);
+});
+
+test('rejects child-only visibility as evidence for a plan-declared surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-child-only');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('                    Visible: =(varEditorMode = "Edit") = true\n', '')
+        .replace(
+            '                            Text: ="Editor"',
+            '                            Text: ="Editor"\n' +
+            '                            Visible: =varEditorMode = "Edit"'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'conItemEditor.Visible: =(varEditorMode = "Edit") = true',
+        'lblEditorTitle.Visible: =varEditorMode = "Edit"'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected child-only visibility evidence to fail');
+    assert.match(
+        stderr,
+        /must bind the declared surface itself as 'conItemEditor.Visible'/);
+});
+
+test('does not require visibility evidence for an always-visible surface absent from the plan', () => {
+    const workspace = materializeContinuation('always-visible-surface-not-declared');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '        Children:',
+        '        Children:\n' +
+        '            - conAlwaysVisible:\n' +
+        '                Control: GroupContainer\n' +
+        '                Properties:\n' +
+        '                    Visible: =true'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected undeclared always-visible surface to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not infer a visibility contract from navigation-based disclosure', () => {
+    const workspace = materializeContinuation('navigation-disclosure-not-visibility');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Text: ="Create"',
+        '                    Text: ="Create"\n' +
+        '                    OnChange: =Navigate(Screen2)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected navigation disclosure without a visibility plan row to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('requires continuation evidence only when the plan declares a successor', () => {
+    const workspace = materializeContinuation('continuation-missing-evidence');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## Continuation Evidence');
+        const end = text.indexOf('## Functional Test Matrix Results');
+        assert.ok(start >= 0 && end > start, 'expected continuation evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected declared continuation without evidence to fail');
+    assert.match(stderr, /Missing acceptance section '## Continuation Evidence'/);
+});
+
+test('rejects a returned continuation ID recovered by display name', () => {
+    const workspace = materializeContinuation('continuation-create-rediscovery');
+    const returnedCreate = 'Patch(colItems, Defaults(colItems), {Name: "Created"})';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(returnedCreate, 'LookUp(colItems, Name = "Created")'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected create rediscovery to fail');
+    assert.match(
+        stderr,
+        /returned stable ID must be assigned directly from the record returned by its create Patch\/Collect/);
+});
+
+test('rejects downstream continuation rediscovery by display name', () => {
+    const workspace = materializeContinuation('continuation-target-rediscovery');
+    const exactTarget =
+        'LookUp(colItems, ID = varContinuationId)); Remove(colItems, varDeleteSnapshot)';
+    const rediscoveredTarget =
+        'LookUp(colItems, Name = "Created")); Remove(colItems, varDeleteSnapshot)';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(exactTarget, rediscoveredTarget));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected manual downstream rediscovery to fail');
+    assert.match(stderr, /manually rediscovers the created record/);
+});
+
+test('rejects downstream continuation rediscovery by list position', () => {
+    const workspace = materializeContinuation('continuation-target-list-position');
+    const exactTarget =
+        'LookUp(colItems, ID = varContinuationId)); Remove(colItems, varDeleteSnapshot)';
+    const positionalTarget =
+        'First(colItems)); Remove(colItems, varDeleteSnapshot)';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(exactTarget, positionalTarget));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected positional downstream rediscovery to fail');
+    assert.match(stderr, /manually rediscovers the created record/);
+});
+
+test('rejects continuation evidence bound to a different event than the plan', () => {
+    const workspace = materializeContinuation('continuation-plan-event-mismatch');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-plan.md',
+        '## Continuation Contracts',
+        'Create item',
+        (cells) => {
+            cells[2] = 'Delete item / btnOther.OnSelect';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched declared continuation event to fail');
+    assert.match(stderr, /downstream evidence must use declared event 'btnOther.OnSelect'/);
+});
+
+test('rejects continuation completion that leaves the returned ID set', () => {
+    const workspace = materializeContinuation('continuation-missing-success-id-clear');
+    const clearId = ' Set(varContinuationId, Blank());';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text.replaceAll(
+            `Remove(colItems, varDeleteSnapshot);${clearId}`,
+            'Remove(colItems, varDeleteSnapshot);'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected uncleared successful continuation ID to fail');
+    assert.match(stderr, /successful completion must clear continuation ID 'varContinuationId'/);
+});
+
+test('rejects cancellation that does not clear continuation mode', () => {
+    const workspace = materializeContinuation('continuation-missing-cancel-mode-clear');
+    const cancel =
+        'Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(cancel, 'Set(varContinuationId, Blank())'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected uncleared cancellation mode to fail');
+    assert.match(stderr, /must set a continuation mode during create and clear it on both/);
+});
+
+test('rejects mutating continuation cancellation', () => {
+    const workspace = materializeContinuation('continuation-mutating-cancel');
+    const cancel = 'Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())';
+    const mutatingCancel =
+        'RemoveIf(colItems, ID = varContinuationId); ' + cancel;
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(`OnSelect: =${cancel}`, `OnSelect: =${mutatingCancel}`));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mutating cancellation to fail');
+    assert.match(stderr, /cancellation clear must not mutate data/);
+});
+
+test('rejects delete continuation without a same-ID snapshot receipt', () => {
+    const workspace = materializeContinuation('continuation-delete-missing-receipt');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Continuation Evidence',
+        'Create item',
+        (cells) => {
+            cells[3] = cells[3]
+                .split('<br>')
+                .filter((binding) => !binding.includes('lblDeleteReceipt'))
+                .join('<br>');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected delete without snapshot receipt to fail');
+    assert.match(stderr, /delete needs a receipt bound to the same-ID deletion snapshot/);
+});
+
+test('rejects delete continuation missing destination absence proof', () => {
+    const workspace = materializeContinuation('continuation-delete-missing-absence');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Continuation Evidence',
+        'Create item',
+        (cells) => {
+            cells[3] = cells[3]
+                .split('<br>')
+                .filter((binding) => !binding.includes('lblDestinationAbsent'))
+                .join('<br>');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected incomplete delete absence proof to fail');
+    assert.match(stderr, /requires exact same-ID canonical and destination absence proof bindings/);
+});
+
+test('accepts one directional arithmetic field in a multi-field Patch record', () => {
+    const workspace = materialize(
+        'receive-multi-field-patch',
+        { multiFieldPatch: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects multiple directional arithmetic fields in one Patch record', () => {
+    const workspace = materialize(
+        'receive-ambiguous-multi-field-patch',
+        { ambiguousMultiFieldPatch: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous Patch fields to fail');
+    assert.match(stderr, /Patch record must contain exactly one field using both receipt arithmetic operands; found 2/);
+});
+
+test('extracts old and amount values from labeled receipt expressions', () => {
+    const workspace = materialize(
+        'receive-labeled-receipts',
+        { labeledReceiptValues: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects ambiguous multi-value receipt labels with a dedicated error', () => {
+    const workspace = materialize(
+        'receive-ambiguous-receipt',
+        { ambiguousReceiptValue: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous receipt evidence to fail validation');
+    assert.match(stderr, /receipt binding 'old' has ambiguous label expression/);
+    assert.doesNotMatch(stderr, /old operand .*dead staging|must apply .*receipt old-value operand/);
+});
+
+test('rejects a reversed-sign Issue mutation (directional contract)', () => {
+    const workspace = materialize('receive-issue-reversed', { reverseIssue: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a reversed-sign issue mutation to fail validation');
+    // The failure must be the directional binding specifically — not an unrelated error —
+    // to prove the hardened check is what caught the reversed arithmetic.
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('rejects a reversed-sign Issue Patch write even when the expected-value preview is correct', () => {
+    // Reviewer's repro: expected-value preview stays `varOldQuantity - varAmount` (correct),
+    // only the actual Patch write flips to `+`. A whole-formula scan would still find a correct
+    // `old - amount` in the preview and wrongly PASS; the hardened check must isolate the Patch
+    // write and FAIL. This is the "correct-looking receipt math, wrong persisted value" pattern.
+    const workspace = materialize('receive-issue-reversed-patch', { reverseIssuePatchOnly: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a reversed-sign Patch write to fail validation');
+    // The failure must name the Patch write specifically, proving the check binds the operator to
+    // the persisted value and not to the still-correct expected-value preview.
+    assert.match(stderr, /issue mutation must apply '-'[^\n]*in its Patch write/);
+});
+
+test('accepts a same-record compound-sequence Receive/Issue workspace', () => {
+    // Static scope only: this asserts the compound fixture's final YAML and evidence artifacts
+    // pass the same file-based validator (correct +/- arithmetic, blank-operation gate, stable
+    // selected-record ID, canonical observer, five receipt bindings). The compound fixture reads
+    // each operation's old value from the canonical source
+    // (`LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity`) and documents the
+    // `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11` sequence in a `## Compound Sequence Evidence`
+    // table. The validator does NOT execute the app, so it cannot prove that at runtime the
+    // second operation truly reads the mutated 13 (not a stale 10) or that the submit button
+    // becomes clickable — that stays the live browser evaluation's job. This test only locks in
+    // that the compound fixture and its extra evidence table remain validator-clean.
+    const workspace = materialize('receive-issue-compound-pass', { sourceDir: compoundFixtureDir });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('rejects compound evidence that names a different selected-record source', () => {
+    const workspace = materialize(
+        'receive-issue-compound-selection-mismatch',
+        {
+            sourceDir: compoundFixtureDir,
+            compoundSelectionMismatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected compound selected-record mismatch to fail');
+    assert.match(
+        stderr,
+        /compound evidence must use selected-record source 'cmbAdjustItem\.Selected\.ID' consistently/);
+});
+
+test('rejects both a phantom LookUp key and dead staging variables', () => {
+    // This fixture is directionally correct (Patch writes `old + amount` / `old - amount`,
+    // expected-value preview agrees, selected-record expression carries a stable ID, observer
+    // reads the canonical source), so it satisfies every prior contract. It embeds two
+    // runtime-fatal defects:
+    //   1. Phantom LookUp key — the Patch target is
+    //      `LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID")`; the literal
+    //      ` & " ID"` suffix guarantees LookUp returns Blank() so no record is ever patched.
+    //   2. Dead/stale staging variables — `varReceiptOldQuantity`/`varReceiptAmount` are seeded
+    //      to 0 in App.OnStart and NEVER written from `numMngAdjustAmount`/`drpMngAdjustItem`
+    //      (no OnChange, no inline `.Value`/`.Selected` read at mutation time), so every
+    //      adjustment computes against 0 instead of the typed amount.
+    // Both defects are independently machine-enforced, once per direction and operand.
+    const workspace = materialize('receive-issue-stale-staging-fail', { sourceDir: staleStagingFixtureDir });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stderr, /receive mutation uses a transformed record-identity key/);
+    assert.match(stderr, /issue mutation uses a transformed record-identity key/);
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
+    const errorLines = stderr.split('\n').filter((line) => line.startsWith('ERROR:'));
+    assert.strictEqual(errorLines.length, 6, `expected two key and four liveness errors, got:\n${stderr}`);
+});
+
+test('rejects dead staging variables when the selected-record key is valid', () => {
+    const workspace = materialize(
+        'receive-issue-dead-staging-only',
+        { sourceDir: staleStagingFixtureDir, repairPhantomKey: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.doesNotMatch(stderr, /transformed record-identity key/);
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
+    const errorLines = stderr.split('\n').filter((line) => line.startsWith('ERROR:'));
+    assert.strictEqual(errorLines.length, 4, `expected exactly four liveness errors, got:\n${stderr}`);
+});
+
+test('accepts staging variables written from live control OnChange formulas', () => {
+    const workspace = materialize(
+        'receive-issue-live-onchange',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            wireStagingOnChange: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('accepts context staging values written by live UpdateContext OnChange formulas', () => {
+    const workspace = materialize(
+        'receive-live-context-onchange',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            contextStagingOnChange: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects context staging assignments that occur only after Patch', () => {
+    const workspace = materialize(
+        'receive-late-context-staging',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            contextStagingAfterPatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected late UpdateContext staging to fail');
+    assert.match(stderr, /receive old operand 'locOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'locAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'locOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'locAmount' is a dead staging variable/);
+});
+
+test('rejects staging assignments that occur only after Patch', () => {
+    const workspace = materialize(
+        'receive-issue-late-staging',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            wireStagingAfterPatch: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
+});
