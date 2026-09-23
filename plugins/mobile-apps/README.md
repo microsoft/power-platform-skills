@@ -203,7 +203,18 @@ For other capabilities (only those actually shipped by the template):
 > /add-native sharing           # expo-sharing wrapper
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present and not runtime-banned, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
+Native modules are allowlist-bound by the current template `package.json`, with on-demand Microsoft controls defined in [OOB controls](skills/add-native/references/oob-controls.md):
+
+| Request | App dependency added when missing |
+|---|---|
+| `/add-native pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` |
+| `/add-native pen-input` | `@microsoft/power-apps-native-pen-input` |
+| `/add-native native-barcode-scanner` (explicit Microsoft request) | `@microsoft/power-apps-native-barcode-scanner` |
+| `/add-native geolocation` | `@microsoft/power-apps-native-bglocation` |
+
+The planner and skills always consult that reference for the use case, package, and dependency spec. Only controls requested by the user or selected in an approved plan may change the app's runtime dependencies and lockfile. The base template stays unchanged; existing compatible dependencies are reused without upgrades. Generic barcode/QR scanning keeps the existing Expo camera flow unless the Microsoft control is explicitly requested. Installing a package does not add native code to the running player/rewrap binary; native runtime support must be verified separately.
+
+All other missing native packages remain blocked. For example, push notifications require `expo-notifications`; if the template does not ship it, `/add-native` stops instead of installing it or faking support. Runtime bans and the no-native-configuration-edit rule are unchanged.
 
 ### 4. Add a connector
 
@@ -261,7 +272,7 @@ Example edit flows:
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
-| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-native` | ✅ v0 | Add a supported native capability/control and typed wrappers under `src/native/`. Requested Microsoft OOB controls follow the canonical control reference for app dependency additions; other native modules must already ship in the template. Never edits `app.config.js`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |

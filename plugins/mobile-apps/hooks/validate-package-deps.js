@@ -7,8 +7,9 @@
  * resulting deps include known-bad packages, private vendor packages are
  * referenced via the npm registry instead of `file:` paths to vendor *.tgz,
  * OR native/runtime packages are added outside the current package baseline's
- * native/runtime allowlist. A reviewed exact-version exception may admit an
- * otherwise ambiguous `react-native-*` package that planning verified is JS-only.
+ * native/runtime allowlist or the canonical Microsoft controls reference.
+ * A reviewed exact-version exception may admit an otherwise ambiguous
+ * `react-native-*` package that planning verified is JS-only.
  *
  * Allowed icon library: `@expo/vector-icons` only.
  *
@@ -47,6 +48,7 @@ const VENDOR_ONLY = [/^expo-msal-intune$/, /^@microsoft\/pa-/];
 const NATIVE_PACKAGE_PATTERNS = [
   /^expo($|-)/,
   /^@expo\//,
+  /^@microsoft\/power-apps-native-/,
   /^react-native$/,
   /^@react-native\//,
   /^@react-native-community\//,
@@ -75,6 +77,54 @@ const NATIVE_PACKAGE_PATTERNS = [
 const AMBIGUOUS_REACT_NATIVE_PACKAGE_PATTERN = /^react-native-/;
 
 const BUNDLED_TEMPLATE_PACKAGE_PATH = path.resolve(__dirname, '..', 'template', 'package.json');
+const MICROSOFT_CONTROL_POLICY_PATH = path.resolve(
+  __dirname, '..', 'skills', 'add-native', 'references', 'oob-controls.md',
+);
+
+function readMicrosoftControlDeps() {
+  const content = fs.readFileSync(MICROSOFT_CONTROL_POLICY_PATH, 'utf8');
+  const startMarker = '<!-- microsoft-native-controls:start -->';
+  const endMarker = '<!-- microsoft-native-controls:end -->';
+  const start = content.indexOf(startMarker);
+  const end = content.indexOf(endMarker);
+  const invalidPolicy = () => new Error('oob-controls.md has a missing, malformed, or duplicate allowed-controls table');
+  if (
+    start < 0 || end <= start ||
+    content.indexOf(startMarker, start + startMarker.length) !== -1 ||
+    content.indexOf(endMarker, end + endMarker.length) !== -1
+  ) {
+    throw invalidPolicy();
+  }
+  const [header, separator, ...rows] = content.slice(start + startMarker.length, end)
+    .trim().split(/\r?\n/).map((line) => line.trim());
+  if (
+    header !== '| Use case | Capability | Package | Dependency spec | Helper |' ||
+    !/^\|(?:\s*-+\s*\|){5}$/.test(separator || '') ||
+    rows.length === 0
+  ) {
+    throw invalidPolicy();
+  }
+
+  // Parse only the marked table, never package mentions elsewhere in the prose:
+  // | Preview PDF | `pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `^0.2.9` | `add-pdf-viewer` |
+  // Reject malformed rows rather than silently dropping restrictions. This is a
+  // package-name permission check, not version matching, consent, or native support.
+  const deps = {};
+  const capabilities = new Set();
+  const helpers = new Set();
+  for (const row of rows) {
+    const match = /^\| ([^|]+) \| `([a-z][a-z0-9-]*)` \| `(@microsoft\/power-apps-native-[a-z0-9-]+)` \| `(\*|\^?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))` \| `(add-[a-z0-9-]+)` \|$/.exec(row);
+    if (!match) throw invalidPolicy();
+    const [, useCase, capability, name, version, helper] = match;
+    if (!useCase.trim() || Object.hasOwn(deps, name) || capabilities.has(capability) || helpers.has(helper)) {
+      throw invalidPolicy();
+    }
+    deps[name] = version;
+    capabilities.add(capability);
+    helpers.add(helper);
+  }
+  return deps;
+}
 
 function packageDeps(pkg) {
   return {
@@ -264,9 +314,13 @@ process.stdin.on('end', () => {
   let nativeAllowlistDeps;
   try {
     nativeAllowlistDeps = getNativeAllowlistDeps(toolName, toolInput, content, fp);
+    const controlDeps = readMicrosoftControlDeps();
+    if (nativeAllowlistDeps) {
+      nativeAllowlistDeps = { ...nativeAllowlistDeps, ...controlDeps };
+    }
   } catch (error) {
     process.stderr.write(
-      `BLOCKED: unable to load native dependency allowlist from ${BUNDLED_TEMPLATE_PACKAGE_PATH}: ${error.message}\n`,
+      `BLOCKED: unable to load native dependency allowlist: ${error.message}\n`,
     );
     process.exit(2);
   }

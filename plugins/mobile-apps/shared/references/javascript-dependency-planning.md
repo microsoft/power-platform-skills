@@ -15,7 +15,7 @@ A package is native-bound when it or a runtime dependency ships any of these:
 - `app.plugin.js`, `app.plugin.ts`, or equivalent Expo config plugin
 - `react-native.config.js`
 
-Those packages must already be supported by the template/runtime. A package name is not evidence: a `react-native-*` package may still be pure JavaScript.
+Those packages must already be supported by the template/runtime. The allowlisted Microsoft OOB controls use [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md), not this JS-only workflow; their native runtime availability is checked separately. A package name is not evidence: a `react-native-*` package may still be pure JavaScript.
 
 ## When To Select A Library
 
