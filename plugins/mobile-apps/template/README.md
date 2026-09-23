@@ -26,6 +26,11 @@ connector wiring.
 	npm install
 	```
 
+	Before running Power Apps commands, ensure the project has
+	`node_modules/.bin/pa` or `node_modules/.bin/pa.cmd`. If missing, stop and
+	restore the declared dependencies or migrate an older template. Keep
+	`--no-install` on every invocation; do not install the unrelated `pa` package.
+
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
 	For GitHub Copilot in VS Code:
@@ -164,12 +169,17 @@ instead of modifying the old app in place. Commit or back up the old app first.
 	cp -R ../old-app/src/. src/
 	```
 
-3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
-	`power.config.json`, and `offline-profile.json` as needed. Review each file
-	before replacing the version supplied by the new template.
+3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`, and
+	`offline-profile.json` as needed. Review each file before replacing the
+	version supplied by the new template.
 4. Keep the new template's `package.json`, lock file, root configuration files,
-	`android/`, and `ios/`. Reapply old customizations selectively rather than
-	copying these files wholesale.
+	`android/`, and `ios/`. In particular, do not copy the old
+	`power.config.json`; keep the file generated for the new app and selected
+	environment. If the old file contains intentional app settings such as
+	`appType` or `distPath`, review the new schema and reapply only those values;
+	do not copy environment IDs, data-source references, or the whole file.
+	Reapply other old customizations selectively rather than copying root files
+	wholesale.
 5. Run `npm install`, `npm run type-check`, and the bundle command for each
 	target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
 6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
@@ -193,8 +203,9 @@ Web builds are supported in Code Apps. They are also supported in Power Pages
 when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
-and `buildPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+and `distPath` to `dist-web` in `power.config.json`, then run
+`npx --no-install pa app push --non-interactive`. Ensure the Code App and Mobile App have
+different app IDs by removing the `appId` field before pushing the app.
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

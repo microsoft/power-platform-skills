@@ -124,6 +124,8 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(debugSkill, /baseline read gets `ENOENT`/);
   assert.match(debugSkill, /watcher = fs\.watch/);
   assert.match(debugSkill, /observation: interval/);
+  assert.match(debugSkill, /npx --no-install pa auth status --json --non-interactive/);
+  assert.doesNotMatch(debugSkill, /npx power-apps\b/);
   assert.match(debugSkill, /a frame under `node_modules\/@microsoft\/power-apps-native-\*` is evidence, not proof/i);
   assert.match(debugSkill, /confirmed package-owned defect routes to `\/report-issue`/i);
   assert.match(debugSkill, /do not edit `node_modules\/`, generate `patch-package` artifacts or postinstall rewrites/i);

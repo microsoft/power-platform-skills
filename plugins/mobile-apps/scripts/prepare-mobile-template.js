@@ -574,7 +574,7 @@ function prepareMobileTemplate(options) {
         if (!fs.existsSync(filePath)) return false;
         return !snapshot.exists || !fs.readFileSync(filePath).equals(snapshot.content);
       })
-      .map(([relativePath]) => relativePath)
+      .map(([relativePath]) => relativePath.split(path.sep).join('/'))
       .sort();
   } catch (error) {
     try {
