@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  DEFAULT_TTL_MS,
   invalidateInventoryCache,
   main: cacheMain,
   readInventoryCache,
@@ -17,6 +18,7 @@ const {
   cacheablePlanningInventory,
   createSnapshot,
   expandSnapshot,
+  main: snapshotMain,
 } = require('../create-dataverse-snapshot');
 
 const context = {
@@ -177,6 +179,102 @@ test('expired, mismatched, and corrupt caches fail open to a live planning read'
   assert.equal(readInventoryCache(file, context).reason, 'identity-mismatch');
   fs.writeFileSync(file, '{invalid');
   assert.equal(readInventoryCache(file, context).reason, 'invalid-json');
+});
+
+test('slow snapshot details cannot restart the inventory cache TTL', async (testContext) => {
+  const file = tempFile(testContext);
+  const output = path.join(path.dirname(file), 'snapshot.json');
+  const fixture = planningFixture();
+  const calls = [];
+  const request = fixtureRequest(fixture, calls);
+  const retrievedAtMs = Date.parse('2026-09-23T00:00:00.000Z');
+  let currentTimeMs = retrievedAtMs;
+  let delayed = false;
+  testContext.mock.method(Date, 'now', () => currentTimeMs);
+  testContext.mock.method(console, 'log', () => {});
+  testContext.mock.method(process.stderr, 'write', () => true);
+  const args = [
+    'node', 'create-dataverse-snapshot.js',
+    '--env-url', context.environmentUrl,
+    '--tenant-id', context.tenantId,
+    '--output', output,
+    '--tables', 'new_item',
+    '--combined-base-read',
+    '--inventory-cache', file,
+  ];
+  const createExecutor = () => async (method, apiPath) => {
+    if (apiPath.includes('$expand=Attributes(') && !delayed) {
+      currentTimeMs += DEFAULT_TTL_MS + 1;
+      delayed = true;
+    }
+    return request(method, apiPath);
+  };
+
+  await snapshotMain(args, { createExecutor });
+  assert.equal(delayed, true);
+  const cache = readInventoryCache(file, context);
+  assert.equal(cache.hit, false);
+  assert.equal(cache.reason, 'expired');
+  assert.equal(cache.ageMs, DEFAULT_TTL_MS + 1);
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(stored.cachedAtMs, retrievedAtMs);
+  assert.equal(stored.cachedAt, new Date(retrievedAtMs).toISOString());
+
+  fixture.entities.push({
+    ...fixture.entities[0],
+    LogicalName: 'new_recent',
+    SchemaName: 'new_Recent',
+    EntitySetName: 'new_recents',
+    PrimaryIdAttribute: 'new_recentid',
+  });
+  await snapshotMain(args, { createExecutor });
+  assert.equal(calls.filter((apiPath) => apiPath.includes('IsCustomizable/Value eq true')).length, 2);
+  const snapshot = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.ok(snapshot.inventory.some((table) => table.logicalName === 'new_recent'));
+});
+
+test('snapshot cache hits preserve discovery age until the configured TTL expires', async (testContext) => {
+  const file = tempFile(testContext);
+  const output = path.join(path.dirname(file), 'snapshot.json');
+  const calls = [];
+  const request = fixtureRequest(planningFixture(), calls);
+  const retrievedAtMs = Date.parse('2026-09-23T00:00:00.000Z');
+  let currentTimeMs = retrievedAtMs;
+  testContext.mock.method(Date, 'now', () => currentTimeMs);
+  testContext.mock.method(console, 'log', () => {});
+  testContext.mock.method(process.stderr, 'write', () => true);
+  const ttlMs = 5000;
+  const args = [
+    'node', 'create-dataverse-snapshot.js',
+    '--env-url', context.environmentUrl,
+    '--tenant-id', context.tenantId,
+    '--output', output,
+    '--tables', 'new_item',
+    '--combined-base-read',
+    '--inventory-cache', file,
+    '--inventory-cache-ttl-ms', String(ttlMs),
+  ];
+  const createExecutor = () => async (method, apiPath) => {
+    if (apiPath.includes('$expand=Attributes(')) currentTimeMs += 1000;
+    return request(method, apiPath);
+  };
+
+  await snapshotMain(args, { createExecutor });
+  const cache = readInventoryCache(file, context, { ttlMs });
+  assert.equal(cache.hit, true);
+  assert.equal(cache.ageMs, 1000);
+  const beforeHit = fs.readFileSync(file, 'utf8');
+
+  await snapshotMain(args, { createExecutor });
+  assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).inventorySource, 'cache');
+  assert.equal(fs.readFileSync(file, 'utf8'), beforeHit);
+  assert.equal(readInventoryCache(file, context, { ttlMs }).ageMs, 2000);
+  assert.equal(calls.filter((apiPath) => apiPath.includes('IsCustomizable/Value eq true')).length, 1);
+
+  currentTimeMs = retrievedAtMs + ttlMs + 1;
+  await snapshotMain(args, { createExecutor });
+  assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).inventorySource, 'live');
+  assert.equal(calls.filter((apiPath) => apiPath.includes('IsCustomizable/Value eq true')).length, 2);
 });
 
 test('cache invalidation is idempotent', (testContext) => {

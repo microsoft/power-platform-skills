@@ -2766,8 +2766,8 @@ function createCliRequest(
   });
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
+async function main(argv = process.argv, { createExecutor = createDataverseRequestExecutor } = {}) {
+  const args = parseArgs(argv);
   if (!args['env-url'] || !args['tenant-id'] || !args.output) {
     process.stderr.write(
       'Usage: node create-dataverse-snapshot.js --env-url <url> --tenant-id <id> --output <json> '
@@ -2783,7 +2783,7 @@ async function main() {
   const progress = (event) => {
     process.stderr.write(`DATAVERSE_SNAPSHOT_PROGRESS ${JSON.stringify(event)}\n`);
   };
-  const request = createCliRequest(args);
+  const request = createCliRequest(args, createExecutor);
   const baseSnapshot = args['base-snapshot']
     ? JSON.parse(fs.readFileSync(path.resolve(args['base-snapshot']), 'utf8'))
     : null;
@@ -2819,6 +2819,9 @@ async function main() {
       throw new Error(`Base snapshot mismatch: ${validation.errors.join('; ')}`);
     }
   }
+  // Start cache age before discovery so pagination and slow detail loads cannot
+  // give the oldest inventory observations a new TTL when the snapshot is written.
+  const inventoryReadStartedAtMs = Date.now();
   const snapshot = args['reconcile-exact']
     ? await createReconciliationSnapshot({
       environmentUrl: args['env-url'],
@@ -2862,6 +2865,10 @@ async function main() {
       inventoryCachePath,
       cacheContext,
       cacheablePlanningInventory(snapshot),
+      {
+        nowMs: () => inventoryReadStartedAtMs,
+        nowIso: () => new Date(inventoryReadStartedAtMs).toISOString(),
+      },
     );
   }
   console.log(JSON.stringify({
@@ -2929,6 +2936,7 @@ module.exports = {
   isVersionedName,
   labelText,
   loadDetailedEntity,
+  main,
   requestBaseMetadata,
   requestCombinedBaseMetadata,
   normalizeNextLink,
