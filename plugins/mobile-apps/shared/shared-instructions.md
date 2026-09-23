@@ -249,9 +249,12 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 
 ### `npm install` / `npx expo install` failures
 
+Project dependency installs are owned by [`scripts/install-dependencies.js`](../scripts/install-dependencies.js) (`start` / `status` / `wait`). It keeps its log and exit code under `<app>/.powernative/dependency-install/`, so a skill can start an install, do other work, and collect the real result later. Do not run a second `npm install` next to a tracked one: two npm processes writing the same `node_modules` leave it in a state neither of them can report on. Adding a single approved package (`npm install --save-exact <pkg>@<version>`) is a different operation and is unaffected.
+
 | Condition | Action |
 | --- | --- |
 | `404` for `@microsoft/power-apps-native-host` or `@microsoft/power-apps` | Likely an internal-feed-only package. Check npm registry/auth configuration for the correct Azure Artifacts feed. STOP. |
+| `401` / `403` on any `@microsoft/*` package | Expired or missing registry credentials. The user renews them outside the skill; never read, print, or write npm credentials. Re-run the install after they confirm. STOP until then. |
 | Peer-dep mismatch from Expo SDK | Run `npx expo install --fix` once. If still failing, surface the message and STOP. |
 | Reanimated install but build fails immediately after | `react-native-reanimated/plugin` is missing or wrongly ordered in `babel.config.js`. Add it as the **last** plugin entry. |
 

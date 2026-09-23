@@ -422,6 +422,7 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
       'validate_fresh_template',
       'validate_development_toolchain',
       'gather_app_requirements',
+      'bootstrap_app_project',
       'plan_app_architecture',
       'select_app_environment',
       'prepare_template_files',

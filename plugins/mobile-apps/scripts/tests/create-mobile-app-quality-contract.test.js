@@ -65,3 +65,67 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(shared, /not modified afterward by the skill or its subagents/);
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
+
+function section(start, end) {
+  const startIndex = skill.indexOf(start);
+  assert.notEqual(startIndex, -1, `missing section: ${start}`);
+  const endIndex = skill.indexOf(end, startIndex + start.length);
+  assert.notEqual(endIndex, -1, `missing section boundary: ${end}`);
+  return skill.slice(startIndex, endIndex);
+}
+
+test('creating an app has no user prerequisites', () => {
+  assert.match(skill, /\*\*This skill has no setup steps\.\*\*/);
+  // The prerequisite this replaced: the user had to materialize a template and
+  // install its dependencies before the skill would run at all.
+  assert.doesNotMatch(skill, /rerun `\/create-mobile-app --working-dir <fresh-template-dir>`/);
+  assert.doesNotMatch(skill, /must run `npm install` in the fresh template folder/);
+  assert.doesNotMatch(skill, /ask the user to run `npm install`/i);
+});
+
+test('the app folder is created from the bundled snapshot, never fetched', () => {
+  const bootstrap = section(
+    '### Step 2a — Create the app folder, start dependency install',
+    '### Step 2b — Requirements discovery',
+  );
+
+  assert.match(bootstrap, /scripts\/bootstrap-mobile-project\.js/);
+  assert.match(bootstrap, /--parent-dir "\$PWD" --slug "<slug>"/);
+  assert.match(bootstrap, /Exit 2 is an actionable refusal/);
+  assert.match(bootstrap, /Set `<working_dir>` to `result\.targetDir`/);
+  // Network template fetches would let main drift ahead of prepare-mobile-template.js.
+  assert.doesNotMatch(bootstrap, /npx degit|git clone|curl |wget /);
+
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../bootstrap-mobile-project.js'),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /\bhttps?:\/\/(?!\/)[^\s)]*\/(?:archive|tarball)/);
+  assert.doesNotMatch(source, /child_process|fetch\(/);
+});
+
+test('dependency install starts in Step 2a and is collected in Step 5', () => {
+  const bootstrap = section(
+    '### Step 2a — Create the app folder, start dependency install',
+    '### Step 2b — Requirements discovery',
+  );
+  assert.match(bootstrap, /scripts\/install-dependencies\.js" --working-dir "<working_dir>" start/);
+  assert.match(bootstrap, /\*\*Do not poll, tail, or block on the install here\.\*\*/);
+
+  const preparation = section(
+    '### Step 5 — Prepare existing template',
+    '### Step 6 — Initialize',
+  );
+  assert.match(preparation, /install-dependencies\.js" --working-dir "<working_dir>" wait --timeout-ms 900000/);
+  for (const state of ['succeeded', 'failed', 'stalled', 'timeout', 'not-started']) {
+    assert.ok(preparation.includes(`\`${state}\``), `Step 5 must handle ${state}`);
+  }
+  assert.match(preparation, /never substitute your own `npm install` for this gate/);
+
+  // Step 5 runs after planning, so its gate is the only blocking wait in the flow.
+  const betweenBootstrapAndPreparation = skill.slice(
+    skill.indexOf('### Step 2b — Requirements discovery'),
+    skill.indexOf('### Step 5 — Prepare existing template'),
+  );
+  assert.doesNotMatch(betweenBootstrapAndPreparation, /install-dependencies\.js/);
+});

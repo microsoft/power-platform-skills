@@ -87,7 +87,7 @@ test -f memory-bank.md && echo "OK: memory bank found" || echo "WARN: no memory 
 git status --short
 ```
 
-If `native-app-plan.md` is missing → STOP. Tell the user this skill edits an existing generated app; they should re-run `/create-mobile-app` on a fresh template or manually recreate the plan before using this editor.
+If `native-app-plan.md` is missing → STOP. Tell the user this skill edits an existing generated app, and that `/create-mobile-app` builds a new one from scratch in a new folder. Do not try to reconstruct the plan from the source tree.
 
 Read if present:
 
@@ -105,7 +105,7 @@ Run these existing-app health checks before any mutation:
 | `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, `src/tokens/index.ts` exist | Restore missing shared scaffold from `shared/samples/src/` before screen-builder work; do not overwrite existing files |
 | `app/_layout.tsx` still wraps providers and SafeAreaProvider correctly | Patch conservatively before screen work; route/safe-area validators depend on this |
 | `src/generated/` compiles when the edit depends on generated services | Regenerate schemas/services first, or block before screen work |
-| `node_modules` and package scripts needed for verification exist | If missing, ask user to run install; do not pretend verification passed |
+| `node_modules` and package scripts needed for verification exist | If `node_modules/expo` is missing, install them rather than asking the user to: `node "${PLUGIN_ROOT}/scripts/install-dependencies.js" --working-dir <working_dir> start`, continue with the non-verifying parts of Step 0-1, then block on `… wait --timeout-ms 900000` before the first gate that runs `tsc` or a validator. On `failed`, show its `logTail` and STOP; never report a gate as passed when it could not run |
 
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 

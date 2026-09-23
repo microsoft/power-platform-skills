@@ -14,33 +14,34 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-Resume/template checks → prerequisites → requirements (iOS + Android fixed) →
-rough plan preview → Gate 1 architecture (native capabilities, connectors,
-then data platform) → Gate 2 Dataverse model when selected → Gates 3 and 4
-screen graph/specifications → environment and template preparation → app
-initialization → design system → conditional Dataverse materialization and
-sample data → Mobile Offline Profile offer for Dataverse apps → native
-capabilities and connectors → navigation and screens → validation, preview,
-and summary.
+Resume check → prerequisites → requirements (iOS + Android fixed) → project
+bootstrap (create the app folder from the bundled template, start dependency
+install in the background) → rough plan preview → Gate 1 architecture (native
+capabilities, connectors, then data platform) → Gate 2 Dataverse model when
+selected → Gates 3 and 4 screen graph/specifications → environment selection →
+dependency-install wait and template preparation → app initialization → design
+system → conditional Dataverse materialization and sample data → Mobile Offline
+Profile offer for Dataverse apps → native capabilities and connectors →
+navigation and screens → validation, preview, and summary.
 
 ---
 
-## Fresh-template working-directory mode
+## Zero-prerequisite mode
 
-This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+**This skill has no setup steps.** The user installs the plugin and runs `/create-mobile-app` from anywhere: an empty folder, their projects folder, or a template folder they materialized themselves. Step 2a creates the app folder and starts `npm install`; the user never has to run `degit` or `npm install` first.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+The template is the snapshot **bundled inside this plugin** at `${PLUGIN_ROOT}/template`. Do not `degit`, clone, or fetch a template over the network. The bundled copy is the only shape `scripts/prepare-mobile-template.js` is tested against, so it cannot drift ahead of the preparation logic in Step 5, and it works offline and behind a proxy. A user who wants a newer template updates the plugin (`/check-updates` Step 1 checks for that).
 
-Use these markers:
+`scripts/bootstrap-mobile-project.js` classifies the target folder. It never overwrites an existing file, so every refusal below is a safety property, not a preference:
 
 | State | Detection | Action |
 |---|---|---|
-| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
-| Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
+| New or empty folder | Does not exist, or contains nothing but `.git` / OS cruft | Copy the bundled template into it, then install dependencies. |
+| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts`, `app/_layout.tsx`, `tsconfig.json` exist; no created-app markers | Reuse the folder as-is. Install dependencies if `node_modules/expo` is absent. |
+| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: not a create target. Point the user at `/edit-app`, or ask for a different app name. |
+| Occupied by something else | Non-empty, and required template files are missing | STOP: ask for an empty or new folder. Never copy over unrelated content. |
 
-This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
+`/create-mobile-app` creates a new app. It does not adopt, repair, or overwrite an already-created app; that is `/edit-app`'s job.
 
 ---
 
@@ -73,9 +74,13 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ---
 
-### Step 0 — Resume check + fresh-template gate
+### Step 0 — Resume check
 
 **Telemetry checkpoint: `validate_fresh_template`**
+
+The checkpoint name is kept from when this step also gated the template, so the existing funnel stays comparable. What it now covers is the resume check.
+
+Step 0 only decides whether this is a resume. The create target is classified in Step 2a, once the app name exists. Requiring the user to have prepared a folder beforehand is exactly the prerequisite this skill no longer has.
 
 If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
 
@@ -87,14 +92,9 @@ If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing direct
 
 The bank is the only resume mechanism. Do not infer resume state from `package.json` or `node_modules/` — those can lie.
 
-After the resume check, run the **fresh-template gate** from the section above. This is a create-only command:
+**Resume path:** when the user confirms a resume, `<working_dir>` is that folder and Step 2a reuses it without copying anything. Otherwise continue to Step 1; Step 2a picks and classifies the create target.
 
-- If `memory-bank.md` exists and the user confirms resume, resume as documented above.
-- If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
-- If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
-
-**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Never copy the bundled template over existing content.** `bootstrap-mobile-project.js` copies with `COPYFILE_EXCL` and refuses an occupied folder, so this holds even if a folder changes between classification and copy. A template snapshot may carry a placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
 ### Step 1 — Prerequisites
 
@@ -102,14 +102,14 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
-**Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by `npx power-apps`:
+**Important: npm auth and Power Platform app auth are separate.** Step 2a runs `npm install` with whatever registry and credentials the machine is already configured with; that account can be different from the one `npx power-apps` uses:
 
 | What | Uses | Typical account |
 |---|---|---|
-| `npm install` private feed access | npm/Azure Artifacts auth configured outside this skill | Account with feed Reader access |
+| `npm install` registry access | npm/Azure Artifacts auth configured outside this skill | Account with feed Reader access |
 | `npx power-apps init`, Dataverse, deploy | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
 
-Renewing npm feed auth does not sign the user into `npx power-apps`. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm/ADO feed token.
+Renewing npm feed auth does not sign the user into `npx power-apps`. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm feed token.
 
 Then run the checks:
 
@@ -127,7 +127,7 @@ git --version                                       # optional
 | Node < 22 | STOP — instruct `nvm install 22 && nvm use 22` |
 | `az` | STOP — instruct `az login` |
 
-Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. The user must run `npm install` in the fresh template folder before invoking `/create-mobile-app`.
+Registry rule: Step 2a runs `npm install` for the user, but this skill still does not provision npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. It uses the machine's existing npm configuration and never reads or prints its credentials. A `401`/`403`/`404` on `@microsoft/power-apps-*` is an npm auth problem the user resolves outside this skill; see [`shared-instructions.md`](${PLUGIN_ROOT}/shared/shared-instructions.md) → `npm install` failures.
 
 Capture target Power Platform environment for the remaining flow.
 
@@ -219,7 +219,7 @@ Then collect with `AskUserQuestion` (batch where possible):
 |---|---|
 | App display name | derived from description |
 | Aesthetic | minimal / playful / professional / matches existing brand |
-| Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
+| Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1, or choose "use a different environment" and provide another environment ID |
 
 Set `<target_platforms> = "ios, android"` for every new app. Do not ask the
 user to choose between iOS and Android; the mobile template targets both and
@@ -249,6 +249,62 @@ If `npx power-apps list-codeapps` is unavailable in the installed CLI version, s
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 
 **Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, note it for a post-creation `/setup-app-insights` run (Application Insights is no longer configured during creation) and explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific custom events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomEventsLogger()`; do not convert them into connectors or data-model artifacts.
+
+### Step 2a — Create the app folder, start dependency install
+
+**Telemetry checkpoint: `bootstrap_app_project`**
+
+**Print before starting:**
+> "→ [Step 2a/13] Creating `<slug>/` from the bundled template and installing its dependencies in the background. Planning continues while it downloads."
+
+This is the step that makes the skill zero-prerequisite. Do not ask the user to run `degit` or `npm install`, here or anywhere else in this skill.
+
+**Resume runs skip this step.** Step 0 already confirmed the folder; emit only the `skipped` checkpoint and go to Step 2b.
+
+**1. Materialize the app folder**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/bootstrap-mobile-project.js" --parent-dir "$PWD" --slug "<slug>"
+```
+
+Pass `--working-dir "<path>"` instead whenever `$ARGUMENTS` carried one or the user named a folder. With `--parent-dir`, the script reuses the current folder when it is already a template and otherwise creates `<cwd>/<slug>`, so the user gets a sensibly named project folder without being asked where to put it.
+
+Output is one line of JSON:
+
+```json
+{"targetDir":"/Users/dev/apps/field-inspections","state":"created","templateSource":"bundled","copiedFiles":["app.config.js","app.json"],"dependenciesInstalled":false}
+```
+
+| `state` | Meaning | Action |
+|---|---|---|
+| `created` | New folder copied from `${PLUGIN_ROOT}/template` | Continue. Tell the user where the app was created. |
+| `existing-template` | The user had already materialized a template there | Continue. Nothing was copied. |
+
+**Exit 2 is an actionable refusal, not a crash.** The message names the folder and the reason. Do not retry it, do not silently fall back to another folder, and do not delete anything to make room:
+
+- **Already a created app** → tell the user that folder holds an existing app and offer `/edit-app`. If they want a new app, ask for a different name with `AskUserQuestion`, re-derive the slug, and re-run this step.
+- **Occupied by unrelated content** → ask for an empty or new folder with `AskUserQuestion` and re-run this step with `--working-dir`.
+
+Any other non-zero exit is a broken plugin install (most often an incomplete bundled `template/`). Report the message and STOP; reinstalling or updating the plugin is the fix, and no folder was touched.
+
+Set `<working_dir>` to `result.targetDir`. Every later step runs there.
+
+**2. Start dependencies installing in the background**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/install-dependencies.js" --working-dir "<working_dir>" start
+```
+
+The script spawns a detached `npm install --no-audit --no-fund` and returns immediately, so the several minutes of downloading overlap Steps 2b–4 instead of being charged to the user. A cold npm cache on this template takes roughly 5-6 minutes, which is why Step 5's gate allows 15. It writes its log and state under `<working_dir>/.powernative/dependency-install/`, which the template already git-ignores. Step 5 owns the wait.
+
+| `state` | Meaning |
+|---|---|
+| `running` | Install started (or one was already in flight and was adopted). Continue immediately. |
+| `already-installed` | `node_modules/expo` was present. Continue. |
+
+**Do not poll, tail, or block on the install here.** That would give back the time this step exists to save. Do not run `npm install` yourself, and do not start a second install; re-running `start` adopts the job in flight rather than launching a rival npm against the same `node_modules`.
+
+If the command exits non-zero, report its message and STOP: an install that cannot even start (no `package.json`, unwritable folder) will not fix itself during planning.
 
 ### Step 2b — Requirements discovery
 
@@ -363,7 +419,9 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before anything expensive or irreversible happens. Step 2a has already created `<working_dir>` and started downloading dependencies into it, so an abort here leaves a plain unused template folder the user can delete: no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+
+**If the user aborts here,** name the folder that was created so they can remove it, and do not delete it yourself.
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -375,7 +433,7 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 | Connectors | Connector keywords in the confirmed brief | `len(candidates)` | low — Gate 1 confirms the actual list |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
-| Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
+| Scaffold min | Fixed | `1-2` (template preparation only; the Step 2a install runs during planning) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
 
@@ -438,9 +496,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 > percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
 > applicable milestone before interrupting."
 
-### Step 2d — Template-only mode
+### Step 2d — Scaffold state
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
+The template is already in `<working_dir>`: Step 2a either copied it there or confirmed it was there. Dependencies are installing in the background; nothing between here and Step 5 may wait on them, and nothing between here and Step 5 may write to `node_modules/`. Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + up to 4 applicable approval gates)
 
@@ -1022,27 +1080,39 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 
 **Telemetry checkpoint: `prepare_template_files`**
 
-This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
+This step prepares the folder Step 2a produced. Do not clone, degit, or copy a template here; that already happened.
 
 **Print before starting:**
-> "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
+> "→ [Step 5/13] Waiting for dependencies, then preparing the Expo standalone template in <working_dir> …"
+
+**Dependency-install gate.** This is where the background install from Step 2a is collected. Block on it before touching a single file:
+
+```bash
+cd <working_dir>
+node "${PLUGIN_ROOT}/scripts/install-dependencies.js" --working-dir "<working_dir>" wait --timeout-ms 900000
+```
+
+| `state` | Action |
+|---|---|
+| `succeeded` / `already-installed` | Continue to the required checks. |
+| `failed` | STOP. Show `logTail` and the full log at `.powernative/dependency-install/install.log`. Classify with [`shared-instructions.md`](${PLUGIN_ROOT}/shared/shared-instructions.md) → `npm install` failures; a `401`/`403`/`404` on `@microsoft/power-apps-*` is npm auth the user fixes outside this skill. After they fix it, rerun this gate; the script restarts a failed install. |
+| `stalled` | The worker died without finishing (host restart, force-quit). Rerun `install-dependencies.js … start`, then this gate. |
+| `timeout` | Still running after 15 minutes. Report progress from `logTail`, ask whether to keep waiting, and rerun the gate with a longer `--timeout-ms`. Do not proceed. |
+| `not-started` | Step 2a was skipped or its folder differs. Run `install-dependencies.js … start` for `<working_dir>`, then this gate. |
+
+Never proceed on a non-success state, and never substitute your own `npm install` for this gate: the script owns install state, and a second npm against the same `node_modules` corrupts it. The approved plan from Step 3 is already on disk, so nothing is lost by stopping here and resuming after the user fixes their registry access.
 
 Required checks:
 
 ```bash
-cd <working_dir>
 test -f package.json && test -f app.config.js && test -f auth.config.json && test -f tamagui.config.ts
 test -d node_modules/expo
 ```
 
-If any required template file is missing, STOP:
-> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
-
-If `node_modules/expo` is missing, STOP:
-> "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+If any required template file is missing, STOP. This means the folder changed under the skill after Step 2a classified it; report which files are missing rather than re-copying over whatever is there now.
 
 If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
-> "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
+> "This folder already looks like a created app. Use `/edit-app` to change it, or rerun `/create-mobile-app` with a different app name for a new app."
 
 Run the deterministic preparation script once:
 
@@ -1195,11 +1265,11 @@ owns the runtime package paths and the six shared-code aliases:
 create a second template-local alias map. Expo Metro consumes the resulting
 effective TypeScript paths, so no Babel alias plug-in is required.
 
-`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
+`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If the Step 5 dependency-install gate reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
 
-Do not run `npm install` inside Step 5 — in template-only mode dependencies must already be installed before the skill starts.
+Do not run `npm install` yourself anywhere in Step 5; the dependency-install gate at the top of this step already collected the background install started in Step 2a.
 
-> **Install note (current template):** The template does not read `power.config.json` during `npm install`. The Step 6 → Step 6.5 ordering is kept for predictable checkpoints, but do not run `npm run generate-schemas` during initial scaffold.
+> **Install note (current template):** The template does not read `power.config.json` during `npm install`, which is why Step 2a can install dependencies before the environment is chosen. The Step 6 → Step 6.5 ordering is kept for predictable checkpoints, but do not run `npm run generate-schemas` during initial scaffold.
 
 ### Step 6 — Initialize
 
@@ -1226,13 +1296,13 @@ do not add this CLI-generated file to Step 5's manual validation targets or hand
 
 ### Step 6.5 — Verify dependencies
 
-This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
+This step verifies dependencies only; Step 5's gate is what installs them.
 
 ```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
+[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing"
 ```
 
-If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
+If `node_modules/expo` is missing here, something removed it after Step 5's gate passed. STOP and report that, rather than reinstalling blindly on top of whatever state the folder is in. Do not provision ADO tokens from this skill.
 
 ### Step 6.5b — Root runtime contract verification
 
@@ -1273,6 +1343,9 @@ Before leaving this step, run the shared changed-file gate on Step 5's `writtenF
 and any other pending skill/subagent-authored files or scaffold repairs, using an exact `--file`
 argument for each. Exclude files verified as CLI-generated and not manually modified afterward;
 `power.config.json` is covered by the read-only identity checks in Step 6, not this write gate.
+Step 2a's copied template files are likewise out of scope: they are byte-for-byte copies of the
+bundled snapshot, and Step 5's `writtenFiles` already names every one of them the preparation
+script went on to change.
 The successful TypeScript check does not replace either validation.
 
 Immediately after creating `memory-bank.md`, flush any queued planner concerns from `DEFERRED_CONCERNS[]` into `## Concerns` (append-only). This flush is unconditional: if the queue is non-empty, write it now before continuing to Step 6.75.

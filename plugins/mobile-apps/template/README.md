@@ -14,19 +14,12 @@ iOS, Android, or hosted web app that connects to Power Platform data through
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
 
-Start from the Power Platform mobile app template, then use the mobile-app
-skill to generate the app plan, data model, screens, native capabilities, and
-connector wiring.
+Install the mobile-app plugin and run its `/create-mobile-app` skill. The skill
+ships this template, so it creates the app folder and installs the dependencies
+for you, then generates the app plan, data model, screens, native capabilities,
+and connector wiring.
 
-1. Create a new app from the template and install dependencies:
-
-	```sh
-	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
-	cd my-mobile-app
-	npm install
-	```
-
-2. Install the mobile-app plugin from the Power Platform Skills marketplace.
+1. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
 	For GitHub Copilot in VS Code:
 
@@ -49,20 +42,29 @@ connector wiring.
 	claude plugin install mobile-app@power-platform-skills --scope user
 	```
 
-3. Open the template folder in VS Code and run the skill from Copilot Chat:
+2. Open the folder you keep projects in, and run the skill from Copilot Chat:
 
 	```text
 	/create-mobile-app
 	```
 
-	The template includes this host package and the required Expo / React Native
-	runtime dependencies. The skill updates the app in place as it designs and
-	generates the mobile experience.
+	The skill creates a folder named after your app, copies this template into it,
+	and installs the host package and the required Expo / React Native runtime
+	dependencies in the background while you answer the planning questions.
+
+	To build in a folder you prepared yourself, create it first and pass it to the
+	skill as `/create-mobile-app --working-dir ./my-mobile-app`:
+
+	```sh
+	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
+	cd my-mobile-app
+	npm install
+	```
 
 	When prompted to sign in, use credentials for the tenant where the Dataverse
 	environment belongs.
 
-4. Create the Microsoft Entra app registration from Power Apps Wrap.
+3. Create the Microsoft Entra app registration from Power Apps Wrap.
 
 	Open the app-registration page for the Power Platform environment selected
 	during `/create-mobile-app`:
@@ -95,7 +97,7 @@ connector wiring.
 	- `Connectivity.Connections.UserConsent`
 
 
-5. Start mobile app:
+4. Start mobile app:
 
 	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
 	runs schema generation and type-checking before Expo starts.
@@ -111,7 +113,7 @@ connector wiring.
 	```
 
 
-6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
+5. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	- Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
