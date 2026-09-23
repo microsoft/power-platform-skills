@@ -357,11 +357,27 @@ async function verifySpec(spec, read, opts = {}) {
             // This is the shape defect the reconcile fixes (a field packed into a full row, or a
             // widened span overflowing one), and a field-to-section check alone cannot see it.
             // Skipped when the deployed section declares no width — unknown is not "one".
+            //
+            // A row-spanning cell also fills its column(s) in the rows beneath it (FormXML rows follow
+            // HTML-table semantics), so a row's occupancy is its own cells PLUS the slots still reserved
+            // by spans from the rows above. Counting a row's own cells alone verified a full row
+            // sitting under a rowspan — live, `[name rowspan=2, tier] / [code, zeta]` in a 2-column
+            // section passed, with row 2 needing three columns.
             if (Number.isFinite(secCols) && secCols >= 1) {
+              let carried = []; // one entry per reserving cell: its width and the rows it still covers
               for (const [ri, drow] of (secHit.item.rows || []).entries()) {
-                const used = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                const own = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                const reserved = carried.reduce((n, r) => n + r.width, 0);
+                const used = own + reserved;
                 if (used > secCols) {
-                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content in a ${secCols}-column section`);
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content`
+                    + (reserved ? ` (${reserved} reserved by a row-spanning cell above)` : '')
+                    + ` in a ${secCols}-column section`);
+                }
+                carried = carried.map((r) => ({ width: r.width, left: r.left - 1 })).filter((r) => r.left > 0);
+                for (const c of drow.cells || []) {
+                  const rs = Number(c.rowspan) || 1;
+                  if (rs > 1) carried.push({ width: Number(c.colspan) || 1, left: rs - 1 });
                 }
               }
             }

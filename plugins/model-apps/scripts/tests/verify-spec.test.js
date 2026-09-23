@@ -1493,6 +1493,38 @@ test('verify FAILS when a deployed row carries more content than its grid', asyn
   assert.match(chk.detail, /3 columns of content in a 2-column section/);
 });
 
+// A row-spanning cell also fills its column in the rows beneath it — FormXML rows follow HTML-table
+// semantics — so a full row sitting under a rowspan carries one column more than its own cells.
+// Counting a row's own cells alone verified that layout as PASS: live, a 2-column section holding
+// `[name rowspan=2, tier] / [code, zeta]` passed, with row 2 needing three columns.
+const rowsXml = (rows, columns = '11') =>
+  `<form><tabs><tab name="tab_overview"><labels><label description="Overview" languagecode="1033"/></labels><columns>`
+  + `<column width="100%"><sections><section name="sec_left" columns="${columns}">`
+  + `<labels><label description="L" languagecode="1033"/></labels><rows>`
+  + rows.map((cells) => `<row>${cells.map((c) => `<cell colspan="${c.span || 1}"${c.rows ? ` rowspan="${c.rows}"` : ''}>`
+    + `<control datafieldname="${c.f}" /></cell>`).join('')}</row>`).join('')
+  + `</rows></section></sections></column>`
+  + `</columns></tab></tabs></form>`;
+
+test('verify FAILS a full row sitting under a row-spanning cell — the reserved slot counts', async () => {
+  const chk = await topoCheck(
+    rowsXml([[{ f: 'new_name', rows: 2 }, { f: 'new_notes' }], [{ f: 'new_c' }, { f: 'new_d' }]]),
+    shapeSpec(['new_notes', 'new_c', 'new_d', { name: 'new_name', rowspan: 2 }]));
+  assert.strictEqual(chk.present, false, 'a row overfilled by a reservation must not verify');
+  assert.match(chk.detail, /row 2 carries 3 columns of content \(1 reserved by a row-spanning cell above\) in a 2-column section/);
+});
+
+test('verify PASSES a rowspan whose reserved slot the row beneath leaves free, and a trailing one', async () => {
+  const beside = await topoCheck(
+    rowsXml([[{ f: 'new_name', rows: 2 }, { f: 'new_notes' }], [{ f: 'new_c' }]]),
+    shapeSpec(['new_name', 'new_notes', 'new_c']));
+  assert.strictEqual(beside.present, true, `a cell beside the reservation fits; got ${beside && beside.detail}`);
+  const trailing = await topoCheck(
+    rowsXml([[{ f: 'new_name' }, { f: 'new_notes' }], [{ f: 'new_c', rows: 2 }]]),
+    shapeSpec(['new_name', 'new_notes', { name: 'new_c', rowspan: 2 }]));
+  assert.strictEqual(trailing.present, true, `a trailing rowspan reserves nothing that is used; got ${trailing && trailing.detail}`);
+});
+
 test('verify FAILS when an AUTHORED span does not match the deployed one', async () => {
   const chk = await topoCheck(
     shapeXml({ cells: [{ f: 'new_name', span: 1 }] }),

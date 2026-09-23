@@ -86,7 +86,8 @@ downloads that round-trip Choice columns.
 - **`--verify` judges widths and spans by the build's own rule.** It used to derive them separately:
   a too-narrow section could excuse its own span (`columns: 4, colspan: 4` arriving as 1 and 1
   verified PASS), while a section that omits `columns`, a QuickCreate section, or a span set through
-  `fieldOptions` was misjudged. Verify now uses the compiler's width and field-option rules.
+  `fieldOptions` was misjudged. Verify now uses the compiler's width and field-option rules, and it
+  counts the slot a row-spanning cell reserves beneath it, so a full row under a `rowspan` fails.
 - **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
   containers and deliberately does not rename them (form scripts and business rules reference
   section names), but verify looked them up by the authored name — so a section it had just reused
