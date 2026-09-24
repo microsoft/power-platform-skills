@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { validatePageOutput } = require('../genpage-worker-output.js');
+const { validatePageOutput, stampPageTarget } = require('../genpage-worker-output.js');
 
 function write(code) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-worker-output-'));
@@ -115,6 +115,88 @@ test('a folder, a link or an unreadable file at the page path is a failed valida
   assert.deepEqual(validatePageOutput({ filePath: real }).problems, ['file could not be read (EACCES)']);
   t.mock.method(fs, 'lstatSync', () => { const e = new Error('operation not permitted'); e.code = 'EPERM'; throw e; });
   assert.deepEqual(validatePageOutput({ filePath: real }).problems, ['file could not be inspected (EPERM)']);
+});
+
+// A worker that returns without writing leaves an earlier attempt's page in place, and that page passes
+// every content check. Each target is stamped right before it is dispatched, and a page exactly as it was
+// stamped is refused, so the inline fallback runs instead of the stale page being deployed.
+const COMPLETE = 'export default function GeneratedComponent() {\n  return <div>ok</div>;\n}\n';
+test('a page unchanged since its dispatch stamp is refused, and any write is accepted', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-worker-output-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const page = path.join(dir, 'overview.tsx');
+  const sidecar = path.join(dir, '.overview.tsx.dispatch-stamp.json');
+  fs.writeFileSync(page, COMPLETE);
+  assert.deepEqual(stampPageTarget({ filePath: page }), { ok: true, action: 'stamp', filePath: page, existed: true });
+  assert.ok(fs.existsSync(sidecar));
+  assert.deepEqual(validatePageOutput({ filePath: page }).problems, ['file is unchanged since the page was dispatched — the worker did not write it']);
+  // The stamp is KEPT while the page is unchanged: the retry the skill prescribes, or the same check run
+  // again, is refused the same way. Consuming it on the failure let the next check pass the stale page.
+  assert.ok(fs.existsSync(sidecar), 'an unchanged page keeps its stamp');
+  assert.deepEqual(validatePageOutput({ filePath: page }).problems, ['file is unchanged since the page was dispatched — the worker did not write it']);
+  // The same bytes written again still count: a write moves the modification time. And a page found
+  // changed consumes its stamp.
+  stampPageTarget({ filePath: page });
+  const later = new Date(fs.statSync(page).mtimeMs + 5000);
+  fs.writeFileSync(page, COMPLETE);
+  fs.utimesSync(page, later, later);
+  assert.equal(validatePageOutput({ filePath: page }).ok, true);
+  assert.ok(!fs.existsSync(sidecar), 'a page found changed consumes its stamp');
+  // …and so does new content with the old modification time.
+  stampPageTarget({ filePath: page });
+  const same = fs.statSync(page);
+  fs.writeFileSync(page, COMPLETE.replace('ok', 'OK'));
+  fs.utimesSync(page, same.atime, same.mtime);
+  assert.equal(validatePageOutput({ filePath: page }).ok, true);
+  // A target that did not exist at dispatch: never written stays "never written" (its stamp kept), and
+  // written is accepted.
+  const fresh = path.join(dir, 'details.tsx');
+  const freshStamp = path.join(dir, '.details.tsx.dispatch-stamp.json');
+  assert.equal(stampPageTarget({ filePath: fresh }).existed, false);
+  assert.deepEqual(validatePageOutput({ filePath: fresh }).problems, ['file was never written']);
+  assert.ok(fs.existsSync(freshStamp));
+  fs.writeFileSync(fresh, COMPLETE);
+  assert.equal(validatePageOutput({ filePath: fresh }).ok, true);
+  assert.ok(!fs.existsSync(freshStamp));
+  // Without a stamp, only the content is judged.
+  assert.equal(validatePageOutput({ filePath: page }).ok, true);
+  // A page whose folder does not exist yet cannot be stale: nothing to stamp, and no folder is created.
+  const nested = path.join(dir, 'pages', 'new.tsx');
+  assert.deepEqual(stampPageTarget({ filePath: nested }), { ok: true, action: 'stamp', filePath: nested, existed: false });
+  assert.equal(fs.existsSync(path.join(dir, 'pages')), false);
+  assert.deepEqual(validatePageOutput({ filePath: nested }).problems, ['file was never written']);
+});
+
+// A stamp that cannot be trusted fails closed: the check can no longer tell this run's write from what was
+// there. The sidecar is written in place, so a link or a hard link at its path is refused, not written through.
+test('a dispatch stamp that cannot be trusted fails closed, and a linked stamp path is refused', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-worker-output-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const page = path.join(dir, 'overview.tsx');
+  const sidecar = path.join(dir, '.overview.tsx.dispatch-stamp.json');
+  fs.writeFileSync(page, COMPLETE);
+  for (const [what, content] of [['unparseable', '{ not json'], ['not a stamp', '{"filePath":"x"}']]) {
+    fs.writeFileSync(sidecar, content);
+    const r = validatePageOutput({ filePath: page });
+    assert.equal(r.ok, false, what);
+    assert.match(r.problems[0], /^the dispatch stamp (could not be read|is not a dispatch stamp)/, what);
+    assert.ok(fs.existsSync(sidecar), `${what}: kept, so the check keeps failing until the page is stamped again`);
+  }
+  fs.rmSync(sidecar);
+  const elsewhere = path.join(dir, 'elsewhere.json');
+  fs.writeFileSync(elsewhere, '{}');
+  fs.linkSync(elsewhere, sidecar);
+  const refused = stampPageTarget({ filePath: page });
+  assert.equal(refused.ok, false);
+  assert.match(refused.problems[0], /is not a plain file/);
+  assert.equal(fs.readFileSync(elsewhere, 'utf8'), '{}', 'nothing is written through the hard link');
+  assert.match(validatePageOutput({ filePath: page }).problems[0], /^the dispatch stamp is not a plain file; remove it and re-run$/);
+  assert.equal(fs.readFileSync(elsewhere, 'utf8'), '{}', 'and the check leaves the other name alone');
+  fs.rmSync(sidecar);
+  const { spawnSync } = require('node:child_process');
+  const cli = spawnSync(process.execPath, [path.join(__dirname, '..', 'genpage-worker-output.js'), '--stamp', '--file', page], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stdout);
+  assert.deepEqual(JSON.parse(cli.stdout), { ok: true, action: 'stamp', filePath: page, existed: true });
 });
 
 // Elision is judged where it can mean elision — a comment, or a bare line standing in for code. The

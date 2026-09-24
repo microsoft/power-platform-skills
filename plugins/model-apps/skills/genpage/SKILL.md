@@ -722,7 +722,14 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    contains no telemetry calls — do not read it.
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+7. Stamp the target, so the gate below can tell the page you write from one an earlier attempt left
+   there:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"
+   ```
+
+   Then write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
 8. After writing, Grep every named import from `@fluentui/react-icons` against
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
@@ -748,7 +755,15 @@ duplicated in a subagent context.
 
 #### 5c. Multi-page: invoke page-builders in parallel
 
-**If the plan's Pages table contains 2+ rows**, invoke a `genpage-page-builder`
+**If the plan's Pages table contains 2+ rows**, first stamp every target, so the gate after the
+workers can tell a page a worker wrote from one an earlier attempt left there (continue only on
+`"ok":true`):
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"
+```
+
+Then invoke a `genpage-page-builder`
 agent via the `Task` tool per page. **Fire all invocations in a single message**
 for parallel execution.
 
@@ -809,7 +824,8 @@ stops mid-statement (inside JSX, a string or a comment, or after an operator), a
 elided code — a `FIXME` comment, a `TODO` that opens a comment or takes a colon,
 a comment opening with `...`, "omitted for brevity", or a bare `...` line. The
 same words in strings or JSX text ("Loading…"), or as prose in a comment ("the
-todo list"), are UI copy and pass. If a worker reported missing declared file/process tools, produced no file,
+todo list"), are UI copy and pass. It also refuses a page that is exactly as its dispatch stamp
+recorded it: the worker wrote nothing, and what is there is an earlier attempt's. If a worker reported missing declared file/process tools, produced no file,
 or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
 Run the Phase 5b page-builder workflow inline for only the failed page, preserving
 the same plan and dispatch inputs. This is the same inline fallback path for missing

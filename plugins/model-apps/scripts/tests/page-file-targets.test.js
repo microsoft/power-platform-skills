@@ -256,3 +256,23 @@ test('check-page-files.js gates dispatch: exit 0 when safe, 3 with the problems 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The working directory ITSELF must not be a link, the rule generate-page-manifest.js applies to the same
+// directory: each target resolved inside the link's realpath and passed, and every page a worker wrote went
+// wherever it points. A linked ANCESTOR is still followed — a normal setup.
+test('a working directory that is itself a link or junction refuses every page written into it', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-rootlink-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const real = path.join(parent, 'real');
+  fs.mkdirSync(real);
+  const linked = path.join(parent, 'linked');
+  fs.symlinkSync(real, linked, 'junction');
+  assert.deepEqual(codes(['overview.tsx', 'pages/details.tsx'], { workingDir: linked }), ['link:overview.tsx', 'link:pages/details.tsx']);
+  assert.match(pageFileProblems(['overview.tsx'], { workingDir: linked })[0].message, /working directory, which is itself a symbolic link or junction; pass the directory it points to$/);
+  // Built pages are not written, so they are not refused for it; the real directory, and one BELOW a
+  // linked ancestor, are fine.
+  assert.deepEqual(codes([], { workingDir: linked, built: ['home.tsx'] }), []);
+  assert.deepEqual(codes(['overview.tsx'], { workingDir: real }), []);
+  fs.mkdirSync(path.join(real, 'app'));
+  assert.deepEqual(codes(['overview.tsx'], { workingDir: path.join(linked, 'app') }), []);
+});

@@ -363,3 +363,31 @@ test('the CLI prepares and verifies by exit code: 0 on success, 3 on a failed ga
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The working directory itself must not be a link — the rule the page-file gate and the manifest generator
+// apply. With no plan there yet, prepare returned ok at once, and the planner then wrote the plan (and the
+// orchestrator its approval sidecar) wherever a link planted at the working directory points.
+test('prepare refuses a working directory that is itself a link or junction, even with no plan yet', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-rootlink-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const real = path.join(parent, 'real');
+  fs.mkdirSync(real);
+  const linked = path.join(parent, 'linked');
+  fs.symlinkSync(real, linked, 'junction');
+  const refused = preparePlanProvenance({ planPath: path.join(linked, 'genpage-plan.md') });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /is a symbolic link or junction — pass the directory it points to as the working directory$/);
+  assert.equal(preparePlanProvenance({ planPath: path.join(real, 'genpage-plan.md') }).ok, true, 'the real directory is fine');
+  fs.mkdirSync(path.join(real, 'app'));
+  assert.equal(preparePlanProvenance({ planPath: path.join(linked, 'app', 'genpage-plan.md') }).ok, true, 'so is one below a linked ancestor');
+});
+
+// The page-file rule allows a harmless `.` segment and normalizes it for identity, so provenance compares
+// the same spelling: an approved `./overview.tsx` and a written `overview.tsx` are one page.
+test('create targets are compared with . segments dropped', () => {
+  const dotted = PREVIEW.replace('| overview.tsx |', '| ./overview.tsx |');
+  assert.notEqual(dotted, PREVIEW, 'precondition: the preview names ./overview.tsx');
+  assert.deepEqual(planTargets(dotted), { kind: 'create', targets: ['details.tsx', 'overview.tsx'] });
+  const verified = verifyPlanProvenance({ planPath: tmpPlan(WRITTEN), approvedPlan: dotted });
+  assert.equal(verified.ok, true, verified.error);
+});

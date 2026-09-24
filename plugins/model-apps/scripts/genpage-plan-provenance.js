@@ -66,9 +66,11 @@ const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(${
 function planTargets(text) {
   const src = String(text || '');
   // A Pages table decides "create" first: edit plans never have one, while a create plan's per-page
-  // `- **File:**` lines could hold a `<guid>/page.tsx` path and be misread as an edit target.
+  // `- **File:**` lines could hold a `<guid>/page.tsx` path and be misread as an edit target. Each file
+  // is compared in the page-file rule's own spelling, `.` segments dropped: `./overview.tsx` in the
+  // preview and `overview.tsx` in the written plan name the same page.
   const files = pageFilesFromPlan(src, { heading: /^#{2,3}\s+Pages\b/ });
-  if (files && files.length) return { kind: 'create', targets: files.map((f) => f.trim()).sort() };
+  if (files && files.length) return { kind: 'create', targets: files.map((f) => path.posix.normalize(f.trim())).sort() };
   // The edit target is the page's GUID: the written plan's `- **Page ID:** <guid>`, or else the GUID
   // folder directly before `page.tsx`, which both the preview's `- **File:** <guid>/page.tsx` and the
   // written plan's `- **Absolute path:** <working-dir>/<guid>/page.tsx` carry.
@@ -116,6 +118,15 @@ function preparePlanProvenance({ planPath }) {
   const absPlanPath = path.resolve(planPath);
   const refuse = (error) => ({ ok: false, action: 'prepare', planPath: absPlanPath, error });
   try {
+    // The working directory ITSELF must not be a link — the rule the page-file gate and the manifest
+    // generator apply to the same directory. With the plan absent this returned ok at once, and the planner
+    // then wrote the plan, and the orchestrator its approval sidecar, wherever a link planted there points.
+    // A linked ANCESTOR is still followed, a normal setup (macOS temp dirs sit under a symlinked /var).
+    const workingDir = path.dirname(absPlanPath);
+    const dir = entryAt(workingDir);
+    if (dir && dir.isSymbolicLink()) {
+      return refuse(`${workingDir} is a symbolic link or junction — pass the directory it points to as the working directory`);
+    }
     // The approval sidecar the skill has the orchestrator write next to the plan
     // (`.approved-genpage-plan.md`, `.approved-genpage-edit-plan.md`) is written IN PLACE after this
     // runs, so a link there — or a hard link, whose other name the write would rewrite — puts the approved

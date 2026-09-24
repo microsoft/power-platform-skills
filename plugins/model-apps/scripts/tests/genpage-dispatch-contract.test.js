@@ -393,3 +393,17 @@ test('Telemetry uses enabled|disabled and is never conflated with the Connectors
     assert.doesNotMatch(tel, /binding\(s\)|\bnone\b/, `${t.file}: Telemetry must not use the Connectors vocabulary: ${tel}`);
   }
 });
+
+// A worker that writes nothing leaves an earlier attempt's page in place, and it passes every content check.
+// Each target is stamped before it is written, in both paths, so the gate can refuse a page left as it was.
+test('genpage stamps every page target before it is written, in both paths', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  const multi = skill.split(/#### 5c\. Multi-page/)[1];
+  const stamp = /genpage-worker-output\.js" --stamp --file/;
+  assert.match(fastPath, stamp, 'the single-page path stamps its target');
+  assert.ok(fastPath.search(stamp) < fastPath.search(/write the `\.tsx` file/i), 'before it writes it');
+  assert.match(multi, stamp, 'the multi-page path stamps every target');
+  assert.ok(multi.search(stamp) < multi.search(/Fire all invocations in a single message/), 'before it dispatches the workers');
+  assert.match(multi, /exactly as its dispatch stamp\s+recorded it/, 'and the gate names what an unchanged page means');
+});
