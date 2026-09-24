@@ -276,3 +276,18 @@ test('a working directory that is itself a link or junction refuses every page w
   fs.mkdirSync(path.join(real, 'app'));
   assert.deepEqual(codes(['overview.tsx'], { workingDir: path.join(linked, 'app') }), []);
 });
+
+// A built page is not refused for its disk state, but a new page must not reach it through a link: with
+// `alias -> sub`, `alias/a.tsx` IS `sub/a.tsx`, and a worker writing the latter overwrote the built page.
+test('a new page that is a built page reached through a junction collides with it', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-builtalias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.writeFileSync(path.join(root, 'sub', 'a.tsx'), 'export default function A() { return null; }\n');
+  fs.symlinkSync(path.join(root, 'sub'), path.join(root, 'alias'), 'junction');
+  const problems = pageFileProblems(['sub/a.tsx'], { workingDir: root, built: ['alias/a.tsx'] });
+  assert.deepEqual(problems.map((p) => `${p.code}:${p.file}`), ['collision:sub/a.tsx']);
+  assert.match(problems[0].message, /"alias\/a\.tsx" and "sub\/a\.tsx" are the same file, reached through a link or junction/);
+  // CONTROL: a different built page is no collision.
+  assert.deepEqual(codes(['sub/b.tsx'], { workingDir: root, built: ['alias/a.tsx'] }), []);
+});

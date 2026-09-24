@@ -340,6 +340,47 @@ test('CLI refuses a page a worker could not write safely in the working director
   }
 });
 
+// A built page is written by no worker, but a new page must not reach it through a link or junction: with
+// `loop` pointing back at the working directory, the built `loop/overview.tsx` IS the new `overview.tsx`.
+// Only the CLI knows the working directory, so it hands the built pages to the disk check as well.
+test('CLI refuses a new page that is a built page reached through a junction', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-builtalias-'));
+  try {
+    fs.symlinkSync(dir, path.join(dir, 'loop'), 'junction');
+    fs.writeFileSync(path.join(dir, 'overview.tsx'), 'export default function Overview() { return null; }\n');
+    const s = spec();
+    s.pages[2].source = { kind: 'tsx', codeFile: 'loop/overview.tsx' };
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(s), 'utf8');
+    const cli = path.join(__dirname, '..', 'write-page-plan.js');
+    const res = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });
+    assert.notEqual(res.status, 0, res.stdout);
+    assert.match(res.stdout + res.stderr, /"loop\/overview\.tsx" and "overview\.tsx" are the same file, reached through a link or junction/);
+    assert.equal(fs.existsSync(path.join(dir, 'app-builder-page-plan.md')), false, 'no plan is written');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// CONTROL for the test above: the built pages go to the disk check only to be matched against, in the plan's
+// own spelling — never held to the rules for a file about to be written. A Windows `pages\home.jsx`, which
+// the spec gate accepts, does not stop the CLI.
+test('CLI does not refuse a built page in a spelling the spec gate accepts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-builtok-'));
+  try {
+    const s = spec();
+    s.pages[2].source = { kind: 'tsx', codeFile: 'pages\\home.jsx' };
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(s), 'utf8');
+    const cli = path.join(__dirname, '..', 'write-page-plan.js');
+    const res = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(JSON.parse(res.stdout).ok, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI refuses to write a plan when a referenced sample is absent', (t) => {
   const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

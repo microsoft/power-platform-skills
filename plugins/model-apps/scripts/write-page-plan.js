@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
-const { buildPagePlan, pageKey, pageFile, pageDataMode, mdText } = require('./lib/page-plan.js');
+const { buildPagePlan, pageKey, pageFile, planFile, pageDataMode, mdText } = require('./lib/page-plan.js');
 const { pageFileProblems } = require('./lib/page-file-targets.js');
 
 function main() {
@@ -84,10 +84,13 @@ function main() {
   // directory, a page already there under another spelling — run HERE, where the working directory is
   // known: buildPagePlan is pure, so it applies only the lexical rules and collisions. /genpage runs the
   // same checks through check-page-files.js before its workers; this is /app-builder's, before Phase 1.5
-  // dispatches any. Only the pages a worker will write are checked — a built page is written by nobody,
-  // and buildPagePlan has already held it to collisions.
+  // dispatches any. Only the pages a worker will write are held to the whole rule — a built page is
+  // written by nobody — but the built pages go along as `built`, in the plan's own spelling: a new page
+  // must not reach one through a link or junction (`loop/home.tsx`, with `loop` pointing back here, IS
+  // `home.tsx`), and only here is the working directory known to resolve that.
   const intentFiles = (spec.pages || []).filter((p) => p && (!p.source || p.source.kind === 'intent')).map(pageFile);
-  const problems = pageFileProblems(intentFiles, { workingDir: absWorkingDir });
+  const builtFiles = (spec.pages || []).filter((p) => p && p.source && p.source.kind === 'tsx' && p.source.codeFile).map(planFile);
+  const problems = pageFileProblems(intentFiles, { workingDir: absWorkingDir, built: builtFiles });
   if (problems.length) {
     emitResult(false, new Error(`page file(s) are not safe to write in ${absWorkingDir}: ${problems.map((p) => p.message).join('; ')}`));
     return;

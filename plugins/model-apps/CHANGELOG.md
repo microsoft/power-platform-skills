@@ -181,9 +181,11 @@ downloads that round-trip Choice columns.
 - **`/genpage` runs only the plan you approved** ([#585]). A plan left over from an earlier run is
   quarantined before the planner writes, and the new file must build exactly the pages the approved
   plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
-  A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included) is
-  refused rather than written through, and an overlong or conflicting page id is refused, not
-  truncated to a valid-looking one.
+  A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included), or a
+  hard link at either file, is refused rather than written through, and an overlong or conflicting page
+  id is refused, not truncated to a valid-looking one. An edit's target is the page the preview's own
+  File line names, so neither a path quoted from the page's prompt nor another file in its folder
+  (`page.tsx.bak`) can stand in for it.
 - **A truncated page is caught before deploy** ([#585]). Every page — each parallel worker's, and one
   written inline — is checked for a complete default export, balanced brackets and elided code
   (`// TODO`, `// ...`, "omitted for brevity"). A write cut off where every bracket still balances
@@ -226,7 +228,8 @@ downloads that round-trip Choice columns.
   a trailing dot), a name that is not a `.tsx` page (`package.json`), a page path that is itself a link
   or not a regular file, a folder that links outside the working directory or cannot be read, and
   names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
-  already there) halt the build. The same rule covers the pages `/app-builder` generates — which now
+  already there) halt the build, as does a new page that is an already-built one reached through a link
+  or junction. The same rule covers the pages `/app-builder` generates — which now
   runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
   cannot be read fails its check instead of crashing it.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy

@@ -308,10 +308,10 @@ test('verify refuses a written plan that is a link or a folder', (t) => {
   if (!linkOrSkip(t, path.join(dir, 'elsewhere.md'), planPath, 'file')) return;
   const linked = verifyPlanProvenance({ planPath, approvedPlan: PREVIEW });
   assert.equal(linked.ok, false, 'a link to a matching plan is still not the plan');
-  assert.match(linked.error, /not a regular file/);
+  assert.match(linked.error, /not a plain file \(a link, junction, hard link or folder\)/);
   fs.unlinkSync(planPath);
   fs.mkdirSync(planPath);
-  assert.match(verifyPlanProvenance({ planPath, approvedPlan: PREVIEW }).error, /not a regular file/);
+  assert.match(verifyPlanProvenance({ planPath, approvedPlan: PREVIEW }).error, /not a plain file \(a link, junction, hard link or folder\)/);
 });
 
 // The skill acts on the CLI's exit code and JSON line, so that contract is pinned end to end.
@@ -390,4 +390,69 @@ test('create targets are compared with . segments dropped', () => {
   assert.deepEqual(planTargets(dotted), { kind: 'create', targets: ['details.tsx', 'overview.tsx'] });
   const verified = verifyPlanProvenance({ planPath: tmpPlan(WRITTEN), approvedPlan: dotted });
   assert.equal(verified.ok, true, verified.error);
+});
+
+// The page must END the preview's File line: `page\.tsx\b` also took `<guid>/page.tsx.bak`, a different file,
+// and since an edit's provenance compares only the GUID, that approval certified a plan for the real page.
+test('a File line or path naming something other than page.tsx itself names nothing', () => {
+  for (const tail of ['page.tsx.bak', 'page.tsxx', 'page.tsx-old', 'page.tsx~', 'page.tsx+old', 'page.tsx#1', 'page.tsx/old.tsx', 'page.tsx(1)', 'page.tsx:alt', 'page.tsx\u00e9']) {
+    assert.equal(planTargets(EDIT_PREVIEW.replace(`${PAGE_ID}/page.tsx`, `${PAGE_ID}/${tail}`)), null, tail);
+  }
+  // CONTROLS: a backticked value, trailing blanks, and Windows line endings still end cleanly.
+  for (const shape of [`\`${PAGE_ID}/page.tsx\``, `${PAGE_ID}/page.tsx   `]) {
+    assert.deepEqual(planTargets(EDIT_PREVIEW.replace(`${PAGE_ID}/page.tsx`, shape)), { kind: 'edit', targets: [PAGE_ID] }, shape);
+  }
+  assert.deepEqual(planTargets(EDIT_PREVIEW.replace(/\n/g, '\r\n')), { kind: 'edit', targets: [PAGE_ID] });
+  // …and so does sentence punctuation, a closing mark or a note after the path, on the File line and in the
+  // folder path. Another page's path sits AHEAD of the File line, so only the File line itself can answer.
+  const other = '11111111-2222-3333-4444-555555555555';
+  const ahead = `## Genpage Edit Plan\n\nLike ${other}/page.tsx\n\n${EDIT_PREVIEW.replace('## Genpage Edit Plan\n\n', '')}`;
+  for (const shape of [`${PAGE_ID}/page.tsx.`, `${PAGE_ID}/page.tsx,`, `${PAGE_ID}/page.tsx;`, `\`${PAGE_ID}/page.tsx\`.`, `${PAGE_ID}/page.tsx)`, `${PAGE_ID}/page.tsx (edit)`]) {
+    assert.deepEqual(planTargets(ahead.replace(`${PAGE_ID}/page.tsx`, shape)), { kind: 'edit', targets: [PAGE_ID] }, shape);
+  }
+  for (const tail of ['.', ':', ')', '"', '**', '|', '<br>', '}', '\u201d', '\u00bb', '\u2014the page']) {
+    assert.deepEqual(planTargets(`Edit ${PAGE_ID}/page.tsx${tail}\n`), { kind: 'edit', targets: [PAGE_ID] }, tail);
+  }
+  assert.deepEqual(planTargets(`Edit ${PAGE_ID}/page.tsx`), { kind: 'edit', targets: [PAGE_ID] }, 'at the very end of the text');
+  assert.equal(planTargets(`Edit ${PAGE_ID}/page.tsx.bak\n`), null, 'but an extension after it is another file');
+});
+
+// The rule says what CONTINUES a file name, not what ends one: a path the folder fallback cannot end is
+// skipped, and the next one wins. Listing closers instead skipped a written plan's real path when HTML or a
+// curly quote followed it, and the page quoted in its original prompt became the target.
+test('the folder fallback is not diverted to a later path by a mark it does not list', () => {
+  const other = '11111111-2222-3333-4444-555555555555';
+  const written = (line) => `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute path:** ${line}\n- **App ID:** 1\n\n## Original Page Context\nsee ${other}/page.tsx\n`;
+  for (const line of [`D:/work/edit/${PAGE_ID}/page.tsx<br>`, `\u201cD:\\work\\edit\\${PAGE_ID}\\page.tsx\u201d`, `D:\\work\\edit\\${PAGE_ID}\\page.tsx}`]) {
+    assert.deepEqual(planTargets(written(line)), { kind: 'edit', targets: [PAGE_ID] }, line);
+  }
+  // CONTROL: a path that does name another file is still skipped for the next one.
+  assert.deepEqual(planTargets(written(`D:/work/edit/${PAGE_ID}/page.tsx.bak`)), { kind: 'edit', targets: [other] });
+});
+
+// The preview's File line is read from its own `### Current State` block: a `- **File:**` bullet quoted from the
+// page's prompt ahead of that block decided the target.
+test('the preview is read by the File line in its own Current State block', () => {
+  const other = '11111111-2222-3333-4444-555555555555';
+  const quotedFirst = `## Genpage Edit Plan\n\n> The maker asked:\n- **File:** ${other}/page.tsx\n\n${EDIT_PREVIEW.replace('## Genpage Edit Plan\n\n', '')}`;
+  assert.deepEqual(planTargets(quotedFirst), { kind: 'edit', targets: [PAGE_ID] });
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN), approvedPlan: quotedFirst }).ok, true);
+});
+
+// A hard link at the plan path is a plain file to lstat, yet quarantining it renamed only this name — the
+// plan stayed reachable through the other — and the planner's write in place rewrites every name.
+test('prepare and verify refuse a hard-linked plan', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-hardlink-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const planPath = path.join(dir, 'genpage-edit-plan.md');
+  const outside = path.join(dir, 'elsewhere.md');
+  fs.writeFileSync(outside, EDIT_WRITTEN);
+  fs.linkSync(outside, planPath);
+  const prepared = preparePlanProvenance({ planPath });
+  assert.equal(prepared.ok, false);
+  assert.match(prepared.error, /is a hard link \(2 names for one file\) — remove it and re-run$/);
+  assert.ok(fs.existsSync(planPath), 'nothing is quarantined');
+  const verified = verifyPlanProvenance({ planPath, approvedPlan: EDIT_PREVIEW });
+  assert.equal(verified.ok, false);
+  assert.match(verified.error, /is not a plain file \(a link, junction, hard link or folder\)/);
 });

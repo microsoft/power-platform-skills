@@ -245,6 +245,18 @@ function pageFileProblems(files, opts = {}) {
       return;
     }
     seen.set(identity, file);
+    // A built page is not refused for its disk state — no worker writes it — but it is still a file a new
+    // page must not reach through a link or junction: `alias/a.tsx`, with `alias -> sub`, IS `sub/a.tsx`,
+    // and without its real path on record a worker writing `sub/a.tsx` overwrote the built page.
+    if (!written && rootReal && !rootError) {
+      try {
+        const target = path.resolve(root, file);
+        let probe = target;
+        while (!entryAt(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+        const resolved = identityOf(path.join(fs.realpathSync.native(probe), path.relative(probe, target)));
+        if (!seenReal.has(resolved)) seenReal.set(resolved, file);
+      } catch { /* unresolvable: it simply cannot be matched through a link */ }
+    }
   };
   for (const raw of opts.built || []) check(raw, false);
   for (const raw of files || []) check(raw, true);

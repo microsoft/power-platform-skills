@@ -327,6 +327,7 @@ module.exports = {
   mdText,
   pageKey,
   pageFile,
+  planFile,
   pageEntities,
   pageDataMode,
   needsCaching,

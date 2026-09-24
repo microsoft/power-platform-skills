@@ -62,7 +62,28 @@ function labelledPageIds(text, { lineStart = false } = {}) {
     return id ? id[1].toLowerCase() : null;
   });
 }
-const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(${GUID})[\\\\/]page\\.tsx\\b`, 'im');
+// A path names `page.tsx` only when the name ENDS there: `page\.tsx\b` also took `<guid>/page.tsx.bak`, a
+// different file, and since an edit's provenance compares only the GUID, an approval naming it certified a
+// written plan for the real page. What goes on naming a file is a letter or digit in any script, one of
+// `_ - ~ + # $ @ % & =`, an opening bracket, or a path separator (`page.tsx/old.tsx` is a file in a FOLDER
+// of that name) — or a `.` or `:` before one of those (`page.tsx.bak`, the NTFS stream `page.tsx:alt`).
+// Anything else ends it: a blank, the end, sentence punctuation, a quote, a dash or a closing mark in any
+// script (`”`, `»`, `<br>`). The rule says what CONTINUES a name, not what ends one, because a path the
+// fallback cannot end is skipped and the next one in the document wins — which may be a path quoted in the
+// page's own prompt.
+const NAME_GOES_ON = String.raw`[\p{L}\p{N}_\-~+#$@%&=(\[{/\\]`;
+const PAGE_END = `(?!${NAME_GOES_ON}|[.:]+${NAME_GOES_ON})`;
+// The File line reads the same way; a note after the path (` (edit)`) is not part of it.
+const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'imu');
+// The preview's own block. Its File line is read there only: the preview also quotes the page's prompt,
+// and a `- **File:** <other>/page.tsx` bullet in that quote, placed ahead of the block, decided the target.
+function currentStateBlock(src) {
+  const state = /^###[ \t]+Current State[ \t]*$/im.exec(src);
+  if (!state) return src;
+  const rest = src.slice(state.index + state[0].length);
+  const next = /^#{1,3}[ \t]+\S/m.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+}
 function planTargets(text) {
   const src = String(text || '');
   // A Pages table decides "create" first: edit plans never have one, while a create plan's per-page
@@ -81,12 +102,12 @@ function planTargets(text) {
     const labels = labelledPageIds(next ? rest.slice(0, next.index) : rest);
     if (labels.length) return labels.every((id) => id && id === labels[0]) ? { kind: 'edit', targets: [labels[0]] } : null;
   } else {
-    const file = FILE_LINE.exec(src);
+    const file = FILE_LINE.exec(currentStateBlock(src));
     if (file) return { kind: 'edit', targets: [file[1].toLowerCase()] };
     const [first] = labelledPageIds(src, { lineStart: true });
     if (first !== undefined) return first ? { kind: 'edit', targets: [first] } : null;
   }
-  const folder = src.match(new RegExp(`(?<![\\w-])(${GUID})[\\\\/]page\\.tsx`));
+  const folder = src.match(new RegExp(`(?<![\\w-])(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'u'));
   if (folder) return { kind: 'edit', targets: [folder[1].toLowerCase()] };
   return null;
 }
@@ -140,6 +161,9 @@ function preparePlanProvenance({ planPath }) {
     if (!plan) return { ok: true, action: 'prepare', planPath: absPlanPath, quarantinedPath: null };
     if (plan.isSymbolicLink()) return refuse(`${absPlanPath} is a symbolic link or junction — remove it and re-run; the planner would write the plan through it`);
     if (!plan.isFile()) return refuse(`${absPlanPath} is not a regular file — remove it and re-run`);
+    // A HARD link is a plain file to lstat, yet quarantining it only renames this name: the plan stays
+    // reachable through its other names, outside the working directory included — the sidecar rule, here.
+    if (plan.nlink > 1) return refuse(`${absPlanPath} is a hard link (${plan.nlink} names for one file) — remove it and re-run`);
     const quarantineDir = path.join(path.dirname(absPlanPath), '.genpage-provenance');
     const quarantine = entryAt(quarantineDir);
     // lstat never reports a link as a directory, so this refuses a link, a junction and a file alike.
@@ -180,9 +204,10 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
   if (!entry) {
     return { ok: false, action: 'verify', planPath: absPlanPath, approvedTargets: approved.targets, error: `planner did not write ${absPlanPath}` };
   }
-  // lstat reports a link as a link, never as a file, so this refuses links and folders alike.
-  if (!entry.isFile()) {
-    return { ok: false, action: 'verify', planPath: absPlanPath, approvedTargets: approved.targets, error: `${absPlanPath} is not a regular file (a link, junction or folder) — the plan must be written in place` };
+  // lstat reports a link as a link, never as a file, so this refuses links and folders alike — and a hard
+  // link, whose other names the planner's write would have rewritten too.
+  if (!entry.isFile() || entry.nlink > 1) {
+    return { ok: false, action: 'verify', planPath: absPlanPath, approvedTargets: approved.targets, error: `${absPlanPath} is not a plain file (a link, junction, hard link or folder) — the plan must be written in place` };
   }
   let written;
   try { written = fs.readFileSync(absPlanPath, 'utf8'); } catch (e) {
