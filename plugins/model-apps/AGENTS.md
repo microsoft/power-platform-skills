@@ -217,7 +217,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   other failed push that carried the change resets the copy too — except a concurrent edit
   (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
-  nothing behind.
+  nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
+  run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,

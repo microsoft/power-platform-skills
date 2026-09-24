@@ -3577,12 +3577,22 @@ async function runSdkBuild(spec, opts = {}) {
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
           requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
-        } else if (!has('pages') && await applyAppAiDescription(provision, spec, existingId)) {
+        } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
-          // needs its own push. That push re-sends the live sitemap, which the SDK validates.
-          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          // needs its own push. That push re-sends the workspace copy's sitemap, which the SDK validates —
+          // and which is the live one only while the copy is CLEAN: a plain fetch returns a copy holding
+          // edits an earlier run could not push (a failed sitemap rewrite) unchanged, as long as the server
+          // has not moved past it. Pushing that replayed the stale rewrite, detaching live pages with no
+          // gate and no --allow-destructive. So a dirty copy is refused here, before anything is applied.
+          const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === existingId);
+          if (listed && listed.isDirty) {
+            throw new BuildHalt(`app ${def.name}: the workspace copy holds edits an earlier run did not push, and pushing the routing description would send them too. Run the build with the pages phase, or delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+          }
+          if (await applyAppAiDescription(provision, spec, existingId)) {
+            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
+            reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;

@@ -221,6 +221,27 @@ test('REAL BUNDLE: a sitemap 412 after the header committed is a concurrent edit
   await assert.rejects(sdk.fetchArtifact('app', APP_ID), (e) => e && e.code === 'LOCAL_EDITS_WOULD_BE_LOST');
 });
 
+// The deferred routing-description push refuses a DIRTY copy (sdk-build.js): a plain fetch returns a copy
+// holding an earlier run's unpushed sitemap rewrite unchanged, and pushing the routing description would
+// replay it. That leans on the SDK's own dirty flag, pinned here: an app edit a failed push left behind is
+// reported dirty, and a fresh fetch clears it.
+test('REAL BUNDLE: an app edit a failed push left behind is reported dirty, and a fresh fetch clears it', async () => {
+  const { sdk } = await freshSdk({ sitemapStatus: 500 });
+  const listed = async () => (await sdk.listArtifacts('app')).find((a) => a.id === APP_ID);
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual((await listed()).isDirty, false, 'a fresh copy is clean');
+  const edited = spec(undefined);
+  edited.appShell.areas[0].groups[0].subAreas[0].label = 'Tickets';
+  await sdk.updateElement('app', APP_ID, '/siteMap', appDef(edited, { forms: {}, views: {}, charts: {} }).siteMap);
+  // sdk-async-ok: the push is expected to fail, and only the copy it leaves behind matters here.
+  await sdk.pushArtifact('app', APP_ID).catch(() => {});
+  assert.strictEqual((await listed()).isDirty, true, 'the unpushed rewrite is still in the copy');
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual((await listed()).isDirty, true, 'and a plain fetch keeps it while the server has not moved');
+  await sdk.fetchArtifact('app', APP_ID, { overwrite: true });
+  assert.strictEqual((await listed()).isDirty, false, 'a fresh fetch clears it');
+});
+
 test('REAL BUNDLE: after the pending-draft halt, "publish, then re-run" really converges', async () => {
   // Run 1 is refused; the operator publishes, which settles the draft and MOVES the server's etag; run 2
   // does exactly what the build does — a plain fetch, then the helper, then a push.

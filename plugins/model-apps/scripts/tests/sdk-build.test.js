@@ -164,6 +164,12 @@ function mockSdk(opts = {}) {
       return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
     },
     // Artifact idempotency: reuse existing view/chart/form/app when opts.artifactsExist is set.
+    // listArtifacts mirrors the real SDK's dirty flag (a local copy holding unpushed edits); a test marks
+    // the existing app's copy dirty with `dirtyApp`.
+    listArtifacts: async (kind) => {
+      calls.push({ name: 'listArtifacts', args: [kind] });
+      return kind === 'app' && opts.artifactsExist ? [{ type: 'app', id: 'app-existing', isDirty: !!opts.dirtyApp }] : [];
+    },
     findArtifact: async (kind, identity) => {
       calls.push({ name: 'findArtifact', args: [kind, identity] });
       if (!opts.artifactsExist) return null;
@@ -674,6 +680,28 @@ test('#583 when the sitemap write is deferred, the routing description is pushed
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 1);
   assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push carries the routing description');
   assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1);
+});
+
+// That push re-sends the workspace copy's sitemap, which is the live one only while the copy is clean: a
+// plain fetch returns a copy holding an earlier run's unpushed sitemap rewrite unchanged, and pushing it
+// replayed the rewrite — detaching live pages with no gate. A dirty copy is refused before anything is
+// applied; a spec with no routing description never looks.
+test('#583 the deferred routing-description push refuses a copy holding an earlier run\u2019s unpushed edits', async () => {
+  const spec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
+    assert.match(e.message, /holds edits an earlier run did not push/);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing pushed');
+  const noRouting = makeSpec();
+  noRouting.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const quiet = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await runSdkBuild(noRouting, { sdk: quiet.sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(find(quiet.calls, 'listArtifacts').length, 0, 'without a routing description there is nothing to push');
 });
 
 // #583: the SDK refuses a header write with a 412 while an earlier header change is unpublished, and the
