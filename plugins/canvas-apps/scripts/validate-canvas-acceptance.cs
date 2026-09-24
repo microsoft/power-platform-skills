@@ -2895,6 +2895,58 @@ bool IsPersistentlyVisible(
 void ValidateLayoutReachability(HashSet<string> requiredControls)
 {
     var nodes = BuildYamlNodes(yamlLines);
+    foreach (var label in nodes)
+    {
+        if (!TryGetControlBlock(yamlLines, label.Name, out var labelBlock) ||
+            !IsOwnControlType(labelBlock, "Label") ||
+            !string.Equals(
+                NormalizeWhitespace(GetOwnPropertyFormula(label.Name, labelBlock, "AutoHeight") ?? ""),
+                "=true", StringComparison.OrdinalIgnoreCase) ||
+            !Regex.IsMatch(
+                GetOwnPropertyFormula(label.Name, labelBlock, "Text") ?? "",
+                @"^=\s*Concat\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            !TryParseNumber(GetOwnPropertyFormula(label.Name, labelBlock, "X"), out var labelX) ||
+            !TryParseNumber(GetOwnPropertyFormula(label.Name, labelBlock, "Y"), out var labelY))
+        {
+            continue;
+        }
+
+        if (label.Parent is not null &&
+            TryGetControlBlock(yamlLines, label.Parent, out var parentBlock) &&
+            parentBlock.Split('\n')
+                .TakeWhile(line => !line.TrimStart().StartsWith("Children:", StringComparison.Ordinal))
+                .Any(line => string.Equals(line.Trim(), "Variant: AutoLayout", StringComparison.OrdinalIgnoreCase)))
+        {
+            continue;
+        }
+
+        foreach (var sibling in nodes.Where(node =>
+            node.Name != label.Name &&
+            string.Equals(node.Parent, label.Parent, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!TryGetControlBlock(yamlLines, sibling.Name, out var siblingBlock) ||
+                !TryParseNumber(GetOwnPropertyFormula(sibling.Name, siblingBlock, "X"), out var siblingX) ||
+                !TryParseNumber(GetOwnPropertyFormula(sibling.Name, siblingBlock, "Y"), out var siblingY) ||
+                siblingY <= labelY)
+            {
+                continue;
+            }
+
+            var horizontalOverlap = labelX == siblingX;
+            if (TryParseNumber(GetOwnPropertyFormula(label.Name, labelBlock, "Width"), out var labelWidth) &&
+                TryParseNumber(GetOwnPropertyFormula(sibling.Name, siblingBlock, "Width"), out var siblingWidth))
+            {
+                horizontalOverlap = labelWidth > 0 && siblingWidth > 0 &&
+                    labelX < siblingX + siblingWidth && siblingX < labelX + labelWidth;
+            }
+            if (horizontalOverlap)
+            {
+                errors.Add(
+                    $"Collection text flow: auto-height collection label '{label.Name}' can grow into fixed-position sibling '{sibling.Name}'. Use a bounded scrollable gallery for repeated records, an auto-layout composition, or position following controls from the label's Y + Height; verify the populated layout, not only the initial records.");
+            }
+        }
+    }
     var byName = nodes
         .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);

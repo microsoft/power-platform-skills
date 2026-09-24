@@ -7,6 +7,7 @@ and are reported by no compile diagnostic.
 ## Contents
 
 - Manual layout
+- Layout under record growth
 - Auto layout
 - Keep responsive layout out of state
 - Keep persistent visible labels with inputs
@@ -52,6 +53,26 @@ X: =(Parent.Width - Self.Width) / 2    # Center horizontally
 Width: =Parent.Width                    # Full width
 Height: =Parent.Height - Self.Y         # Fill remaining height
 ```
+
+## Layout under record growth
+
+Repeated records need a bounded, scrollable gallery with real row controls and stable
+record selection. Do not render a growing collection as `Concat(...)` text in an
+`AutoHeight` label above fixed-position details, warnings, or buttons: adding records
+increases the label height without moving those siblings, so the list covers the UI.
+Compilation and a screenshot of the initial seed rows do not detect this defect.
+
+For genuinely variable-length text rather than interactive records, let an AutoLayout
+parent arrange the siblings or position the next control from the label's `Y + Height`
+with spacing. Keep the containing region scrollable when its content exceeds the
+viewport. Turning off `AutoHeight` or truncating records is not a substitute for making
+all required content reachable.
+
+Before declaring layout acceptance, check empty, populated, and overflow states with
+long item names and visible warnings or success messages. Verify that adding records
+does not cover actions and that the last record and its actions remain reachable.
+Record static checks as static evidence; do not claim runtime verification without
+actually inspecting those states.
 
 ## Auto layout
 

@@ -2036,6 +2036,70 @@ test('rejects a structurally undersized action with an explicit Char(10) line br
     assert.match(stderr, /explicit multiline result with a structural minimum of 36px.*Height is 30px/);
 });
 
+for (const layout of [
+    { name: 'fixed sibling', autoHeight: 'true', width: '400', siblingX: '20', siblingY: '250', rejected: true },
+    { name: 'responsive width', autoHeight: 'true', width: 'Parent.Width - 40', siblingX: '20', siblingY: '250', rejected: true },
+    { name: 'partially overlapping column', autoHeight: 'true', width: '400', siblingX: '350', siblingY: '250', rejected: true },
+    { name: 'separate column', autoHeight: 'true', width: '400', siblingX: '420', siblingY: '250', rejected: false },
+    { name: 'flow-positioned sibling', autoHeight: 'true', width: '400', siblingX: '20', siblingY: 'lblGrowingInventory.Y + lblGrowingInventory.Height + 16', rejected: false },
+    { name: 'bounded label', autoHeight: 'false', width: '400', siblingX: '20', siblingY: '250', rejected: false },
+    { name: 'auto-layout parent', autoHeight: 'true', width: '400', siblingX: '20', siblingY: '250', parentLayout: 'AutoLayout', rejected: false },
+    { name: 'manual-layout parent', autoHeight: 'true', width: '400', siblingX: '20', siblingY: '250', parentLayout: 'ManualLayout', rejected: true },
+    { name: 'unrelated auto-layout sibling', autoHeight: 'true', width: '400', siblingX: '20', siblingY: '250', nestedLayout: true, rejected: true },
+]) {
+test(`auto-height collection label: ${layout.name}`, () => {
+    const workspace = materialize(`collection-label-${layout.name.replaceAll(' ', '-')}`);
+    rewriteScreen(workspace, (yaml) => {
+        let source = yaml.replace(
+        '        Children:\n',
+        '        Children:\n' +
+        '            - lblGrowingInventory:\n' +
+        '                Control: Label\n' +
+        '                Properties:\n' +
+        `                    AutoHeight: =${layout.autoHeight}\n` +
+        '                    Height: =100\n' +
+        '                    Text: =Concat(colInventory, ItemName & Char(10))\n' +
+        '                    X: =20\n' +
+        '                    Y: =76\n' +
+        `                    Width: =${layout.width}\n` +
+        '            - btnBelowInventory:\n' +
+        '                Control: Button\n' +
+        '                Properties:\n' +
+        `                    X: =${layout.siblingX}\n` +
+        `                    Y: =${layout.siblingY}\n` +
+        '                    Width: =140\n');
+        if (layout.nestedLayout) {
+            source += '\n            - conUnrelated:\n' +
+                '                Control: GroupContainer\n' +
+                '                Variant: AutoLayout\n' +
+                '                Properties:\n' +
+                '                    LayoutDirection: =LayoutDirection.Vertical\n';
+        }
+        if (layout.parentLayout) {
+            const marker = '        Children:\n';
+            const index = source.indexOf(marker) + marker.length;
+            const end = source.indexOf('            - lblAdjustItem:', index);
+            assert.ok(end > index, 'expected original fixture controls after growth controls');
+            source = source.slice(0, index) +
+                '            - conCollectionRegion:\n' +
+                '                Control: GroupContainer\n' +
+                `                Variant: ${layout.parentLayout}\n` +
+                '                Children:\n' +
+                source.slice(index, end).trimEnd().split('\n').map(line => `        ${line}`).join('\n') +
+                '\n' + source.slice(end);
+        }
+        return source;
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    if (layout.rejected) {
+        assert.notStrictEqual(code, 0, 'expected collection growth overlap to fail');
+        assert.match(stderr, /Collection text flow:.*lblGrowingInventory.*btnBelowInventory/);
+    } else {
+        assert.strictEqual(code, 0, `expected safe layout to pass.\n${stdout}\n${stderr}`);
+    }
+});
+}
+
 test('rejects dynamic gallery text that can wrap into fixed-position row controls', () => {
     const workspace = materialize('gallery-dynamic-text-fixed-row-overlap');
     rewriteScreen(workspace, (yaml) => yaml.replace(
