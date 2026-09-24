@@ -91,6 +91,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     [`shared/references/app-edit-routing.md`](shared/references/app-edit-routing.md)
     for the implementation-only escape hatch, conditional Dataverse modeling,
     operational exceptions, and no-recursion return contract.
+    Native entry/helpers also bind every shell call and file tool to the resolved
+    absolute app root before project/package gates; a parent's `cd` does not
+    persist between calls. Follow Step 0 of
+    [`native-artifact-compatibility.md`](shared/references/native-artifact-compatibility.md).
 17. **Data-source retirement is app-local and CLI-owned** — After approved
     consumer edits, use the supported removal command to update registrations,
     schemas, and generated models/services, then regenerate the runtime schema

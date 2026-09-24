@@ -9,6 +9,11 @@ model: sonnet
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 # Add Pen Input
 
 **Internal helper.** Users should invoke `/add-native pen-input`, `/add-native signature`, or `/add-native @microsoft/power-apps-native-pen-input`; `/add-native` routes here after resolving the capability.
@@ -20,7 +25,8 @@ Generate or verify the native pen input wrapper and show how to call its **nativ
 ### 1. Verify app
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
@@ -28,6 +34,7 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
 ```
 
@@ -179,6 +186,7 @@ File column pattern: save or update the parent row first, then upload the PNG by
 ### 6. Type-check
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 

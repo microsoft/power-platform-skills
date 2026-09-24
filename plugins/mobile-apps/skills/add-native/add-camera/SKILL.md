@@ -9,6 +9,11 @@ model: sonnet
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 **References:**
 
 - [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) — File/image column upload patterns (Step 7–8)
@@ -53,7 +58,8 @@ capture/scanner package.
 ### Step 1 — Verify project
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 If any file is missing, report and STOP — this skill requires an initialized Power Apps mobile app.
@@ -79,6 +85,7 @@ capture or scanning. The checker accepts artifact-key JSON, not raw `$ARGUMENTS`
 or a public capability string. Missing/ambiguous intent still returns to the owner.
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node - '<approved-artifact-keys-json>' <<'NODE'
 const p = require('./package.json');
 const modules = {
@@ -552,6 +559,7 @@ async function readUriAsBase64(uri: string): Promise<string | null> {
 > "→ Running tsc to verify the requested native artifacts compile (~10–20 seconds)."
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 

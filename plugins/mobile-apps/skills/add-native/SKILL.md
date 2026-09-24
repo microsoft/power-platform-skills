@@ -8,6 +8,11 @@ model: sonnet
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Resolve `--working-dir` / owner context there; use the resolved absolute root for
+every shell call and file tool, not a previous shell's cwd.
+
 # Add Native Capability
 
 **Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
@@ -186,7 +191,8 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 ### Step 1 — Verify project
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 ### Step 2 — Resolve capability
@@ -208,6 +214,7 @@ If the user names something not in the supported table, apply the Native capabil
 For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 case "<capability>" in
   camera|image-picker|barcode-scanner|qr-scanner) test -f "${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
   pdf-report) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
@@ -220,7 +227,8 @@ esac
 
 - **INTERNAL_HELPER:** read the printed helper file and execute its workflow with
   the same absolute `working_dir`, arguments, supplied answers, mode flags, and
-  current owner/phase/`approved_scope`. Each helper must execute
+  current owner/phase/`approved_scope`. The helper must bind every operation to
+  that root using Step 0, even if launched from another directory. Each helper must execute
   [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
   before its writes/reuse and before its success summary; outer Step 5 is not
   reached on this branch. Propagate `NEEDS_CONTEXT`/`BLOCKED` and the artifact
@@ -234,6 +242,7 @@ esac
 Confirm the underlying native-capability package is actually present in the project's `package.json` (catches the case where the user hand-removed it or the template version is older than expected):
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template should ship it. Re-scaffold via /create-mobile-app, restore it from upstream, or wait for the template release that adds it — this skill will not install it.'); process.exit(1); }"
 ```
 
@@ -313,6 +322,7 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 

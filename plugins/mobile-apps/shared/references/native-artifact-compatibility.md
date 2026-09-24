@@ -4,6 +4,35 @@ Apply this contract inside `/add-native` and every nested native helper before
 writing or reusing output. Dedicated helpers return before the outer Step 5;
 checking only that step leaves their actual artifacts unchecked.
 
+## 0. Bind every operation to the app root
+
+Before any project read, package gate, or command, resolve one absolute
+`working_dir` for this invocation:
+
+- **Child invocation:** require the owner's absolute `working_dir`, including
+  `--working-dir` when supplied. Never fall back to the process cwd. Missing or
+  relative owner context returns `NEEDS_CONTEXT` before project access.
+- **Direct invocation:** use `--working-dir` when supplied; otherwise capture the
+  initial cwd once. Resolve a direct relative argument against that initial cwd.
+- Canonicalize the existing directory. If the argument and owner context identify
+  different roots, return `NEEDS_CONTEXT`; do not choose one silently. A missing
+  or inaccessible directory is `BLOCKED`, not permission to scaffold or use cwd.
+
+Pass this resolved root unchanged to each nested helper. A prior `cd` or exported
+variable does not persist across tool calls: **every shell call** must set its cwd
+explicitly to this root, or begin with the fail-closed `cd` shown in the workflows.
+Replace the entire quoted `"<working_dir>"` placeholder with the resolved path
+as one shell-quoted literal argument; escape any shell metacharacters. Never run
+an unresolved placeholder. Apply this to package/installed-version checks,
+discovery, type-checking, validation, telemetry, and any ad hoc shell commands,
+not just the first project gate.
+
+File tools do not inherit shell cwd. Give Read/Edit/Write/Grep/Glob absolute
+project paths rooted at `working_dir`, including `package.json`, `node_modules`,
+`native-app-plan.md`, `memory-bank.md`, `src/native/`, and `src/generated/`.
+Keep plugin reference/script paths rooted at the absolute `PLUGIN_ROOT`.
+Root binding grants no additional approval and does not relax plan-only mode.
+
 ## 1. Resolve the current request
 
 Inherit the absolute `working_dir`, original arguments, supplied answers,

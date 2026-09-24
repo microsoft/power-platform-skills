@@ -9,6 +9,11 @@ model: sonnet
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 # Add PDF Report
 
 **Internal helper.** Users should invoke `/add-native pdf-report`, `/add-native generate-pdf`, or `/add-native pdf-export`; `/add-native` routes here after resolving the capability.
@@ -32,7 +37,8 @@ Local generated PDFs are usually `file://` URIs and can be passed to `openHttpsP
 ### 1. Verify app
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
@@ -42,6 +48,7 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 `expo-print` is required. `expo-sharing` is optional unless the plan specifically needs sharing behavior.
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/viewed/uploaded, but sharing helpers must not be generated.');"
 ```
 
@@ -260,6 +267,7 @@ if (!upload.success) {
 ### 6. Type-check
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
