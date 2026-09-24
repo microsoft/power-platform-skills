@@ -3584,7 +3584,10 @@ async function runSdkBuild(spec, opts = {}) {
           // and which is the live one only while the copy is CLEAN: a plain fetch returns a copy holding
           // edits an earlier run could not push (a failed sitemap rewrite) unchanged, as long as the server
           // has not moved past it. Pushing that replayed the stale rewrite, detaching live pages with no
-          // gate and no --allow-destructive. So a dirty copy is refused here, before anything is applied.
+          // gate and no --allow-destructive. So a dirty copy is refused here, before anything is applied —
+          // and before the routing description is compared, not only when it needs a push: the copy's value
+          // may be this very edit, left unpushed by the earlier run, and "unchanged" against the copy would
+          // then skip the push the server still needs while the build reported success.
           const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === existingId);
           if (listed && listed.isDirty) {
             throw new BuildHalt(`app ${def.name}: the workspace copy holds edits an earlier run did not push, and pushing the routing description would send them too. Run the build with the pages phase, or delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });

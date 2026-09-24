@@ -697,6 +697,11 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
   assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing pushed');
+  // …even when the copy already carries the wanted routing description: that may be the very edit the
+  // earlier run failed to push, so "unchanged" against the copy is no proof the server has it.
+  const same = mockSdk({ artifactsExist: true, dirtyApp: true, existingAppAiDescription: ROUTING });
+  await assert.rejects(runSdkBuild(spec, { sdk: same.sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-copy-unpushed-edits');
+  assert.strictEqual(appCalls(same.calls, 'pushArtifact').length, 0, 'nothing pushed');
   const noRouting = makeSpec();
   noRouting.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
   const quiet = mockSdk({ artifactsExist: true, dirtyApp: true });
