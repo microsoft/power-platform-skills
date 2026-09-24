@@ -135,7 +135,9 @@ when none is stated, use the uniquely established current/default language.
 
 If initial or modified body content is requested, resolve the locale, target
 copy file, sections, elements, and dependencies needed by
-`author-webpage-content`. Do not invent additional sections, business copy,
+`author-webpage-content`. Carry the inspected Bootstrap major and any approved `designContext`
+into that handoff, especially for a new or blank page; the content owner must not infer the
+framework from missing markup. Do not invent additional sections, business copy,
 images, links, scripts, or navigation.
 
 ### Navigation
@@ -160,7 +162,7 @@ Create every required directory, metadata record, and companion file, including
 empty localized copy files for new records. When body content is part of the
 request, invoke `author-webpage-content` once per resolved locale only after
 supplying the exact existing target file, locale, operation, final rendered
-values, and preservation requirements.
+values, version evidence for new sections, and preservation requirements.
 
 For an existing page request limited to localized body HTML, route directly to
 `author-webpage-content` after resolving the target root/localized identity. Do

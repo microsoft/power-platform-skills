@@ -1,7 +1,39 @@
 # Declarative Visual Asset Planning
 
 Use this reference when a declarative-site customization may benefit from photography, logos,
-favicons, icons, illustrations, patterns, fonts, or other visual Web Files.
+favicons, icons, illustrations, patterns, fonts, or other visual assets.
+
+## Resolve delivery first
+
+During site creation, use **direct HTTPS URLs for added images**, recorded as
+`newSiteDesign.imageDelivery: "external-url"`. Do not download/stage images, create image Web Files
+or attachment metadata, or invoke `author-web-file` for these additions. Reuse suitable existing
+template images without reimporting them. Existing-site customization and explicit file imports
+retain the Web File path below; this policy does not remove Web Files for CSS, fonts or documents.
+
+Power Pages supports native [external image URLs](https://learn.microsoft.com/power-pages/getting-started/add-image).
+For each external image:
+
+- Resolve an actual direct image resource, not a gallery/HTML page or guessed photo ID. Require
+  an absolute HTTPS URL without embedded credentials, raw whitespace or backslashes. Use a stable
+  user-approved CDN/host URL or a curated Unsplash direct URL; never use auth/SAS secrets or
+  expiring private links.
+- Record `delivery: "external-url"`, `externalUrl`, source/license basis and
+  `preparation: { "status": "remote" }`. Do not claim a file hash, cache path or imported metadata.
+- Put that exact URL in the consumer's static `inputs` (including nested image `source` values).
+  No import operation or `publicUrl` output binding is needed. For CSS backgrounds, also declare
+  the URL in the styling owner's `externalResources`.
+- Review hotlink permission, privacy and remote availability, plus known site CSP `img-src`
+  restrictions. Power Pages permissions do not protect external URLs. Never relax CSP
+  automatically; choose a permitted source or obtain separate approval for policy changes.
+- Keep localized alt text, aspect ratio, reserved layout space, crop/focal point, and appropriately
+  sized CDN variants. Verify the image resource using source evidence or an authorized check;
+  syntactic URL validation is not proof of MIME type, availability, or runtime rendering.
+
+The plan renderer shows the URL and hosting caveats without automatically fetching external-mode
+image previews. The site loads the image from its host at runtime. A local-only or newly authored
+image needs an approved hosted URL before it can use this route; do not upload it or invent a URL
+as a workaround.
 
 ## Design role before source
 
@@ -19,16 +51,29 @@ classify each proposed visual by the job it performs:
 
 FAQ, pricing, policy, and operational pages often benefit more from typography, spacing, and
 simple original SVG details than unrelated stock photography. Record `assets: []` when no visual
-asset improves the requested outcome.
+asset improves an existing-site or narrow-edit outcome.
+
+For an explicit new-site design handoff, plan meaningful content imagery as part of the initial
+composition: a relevant hero image or original illustration and supporting images where they
+explain the content. Reuse suitable template images rather than replacing them gratuitously.
+Record at least one non-decorative content photograph/illustration in the asset manifest with
+its real placement; a logo, favicon, icon, or decorative pattern alone is insufficient. An explicit
+user request to omit images is recorded as `newSiteDesign.imagery: "user-declined"` with
+`imageryReason`. Missing source material is a dependency to resolve, not an implicit opt-out.
+Use the shared `${PLUGIN_ROOT}/references/site-design-quality.md` for visual composition; this
+reference owns the delivery-specific URL, staging/import, binding, and verification rules.
 
 ## Source priority
 
 Resolve sources in this order:
 
-1. existing site Web Files and template images;
-2. user-provided approved brand assets and photography;
-3. original agent-authored SVG icons, patterns, dividers, and simple illustrations;
-4. curated Unsplash photography.
+1. existing approved site/template images or hosted image URLs;
+2. user-provided approved hosted brand assets and photography;
+3. curated Unsplash photography for URL-based additions.
+
+Outside URL-based creation, user-provided local files and original safe SVG illustrations may
+also use the explicitly selected Web File delivery path. Do not silently switch a new-site image
+to file delivery because a hosted source is missing.
 
 Do not generate raster images. Do not use another stock provider. Do not use placeholder-image
 services or leave unresolved image slots.
@@ -41,7 +86,8 @@ role, and licensing/ownership are appropriate for the new placement.
 
 ### User-provided assets
 
-Treat every supplied file as untrusted. Stage it with:
+This is the Web File delivery path only, not the new-site URL image path. Treat every supplied
+file as untrusted. Stage it with:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/prepare-declarative-asset.js" \
@@ -55,6 +101,9 @@ and returns the project-relative path and SHA-256. The cache is outside the decl
 and must never be passed to `pac pages upload`.
 
 ### Original SVG assets
+
+Use local SVG authoring/staging only on the explicit Web File path. URL-based creation needs an
+already hosted approved illustration; do not stage or upload an illustration as a hidden fallback.
 
 Original SVG is suitable for simple geometry, icons, patterns, and non-photographic illustration.
 Author it in the fresh external review directory, then stage it through the same helper before the
@@ -74,7 +123,9 @@ temperature, orientation, and available text space fit the page. Record both:
 - the direct `https://images.unsplash.com/...` image URL with explicit sizing/crop parameters and
   a supported format such as `fm=jpg`.
 
-Stage the selected image:
+For URL-based creation, use the sized/cropped direct image URL as `externalUrl`; retain the
+photo page, photographer and license in `source`. Do not download it. For an explicitly selected
+Web File delivery outside that creation path, stage the selected image:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/prepare-declarative-asset.js" \
@@ -90,8 +141,8 @@ recognizable people, trademarks, artwork, or protected property visible in a pho
 those subjects when the planned use could imply endorsement or require additional rights; retain
 a plan warning when the context needs human legal/brand review.
 
-Import the staged file as a local Power Pages Web File by default. Do not hotlink the Unsplash URL
-in the finished declarative page.
+Import staged files as local Power Pages Web Files only on that file-delivery path. URL-based
+creation uses the approved Unsplash direct URL in the finished image component instead.
 
 ## Composition decisions
 
@@ -104,7 +155,7 @@ For each approved asset, resolve:
 - informative versus decorative behavior;
 - localized alternative text for every affected locale;
 - optional safe link destination;
-- existing, staged, or global-caller dependencies;
+- existing, remote, staged, or global-caller dependencies;
 - whether `style-site` is required for presentation after placement.
 
 Use the image component's responsive defaults unless the inspected site establishes a stronger
@@ -128,10 +179,14 @@ branches.
 
 ## Execution and verification
 
-Create/import operations belong to `author-web-file`. Their consumers depend on the import and
-bind the verified `publicUrl`; never put a guessed future URL in page content.
+External images require no import: consumers use their approved static HTTPS URL directly.
+Verify that actual image references, after HTML attribute decoding, match that URL and that no
+download/cache/Web File was created. Do not treat a remote asset as a byte-hashed local artifact.
 
-After execution verify:
+For Web File delivery, create/import operations belong to `author-web-file`. Their consumers
+depend on the import and bind the verified `publicUrl`; never guess a future Web File URL.
+
+For Web File assets, after execution verify:
 
 - staged SHA-256 matches the imported bytes;
 - binary and adjacent `.webfile.yml` both exist;

@@ -264,6 +264,9 @@ Create the visitor-facing body file only at each localized
 - Leave it empty when no initial content was requested.
 - When initial content was requested, create the webpage metadata and empty copy file
   first, then invoke `author-webpage-content` with one resolved composition per locale.
+- Pass the actual verified Bootstrap major and any approved `designContext` with the resolved
+  composition. The Bootstrap 5 creation default is not evidence for an arbitrary existing site.
+  New sections on a blank page need version evidence from the site assets, not guessed classes.
 - If the site consistently uses a blank-page baseline and the request selects that
   convention, pass that baseline and its preservation requirements to the content skill.
 - Do not copy business content from an unrelated page as a shortcut.

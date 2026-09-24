@@ -71,6 +71,29 @@ function assertProjectRelativePath(value, label) {
   }
 }
 
+function validateExternalImageUrl(value, label) {
+  assertString(value, label);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid absolute HTTPS image URL`);
+  }
+  // URL parsing normalizes e.g. "https:\\host" and embedded newlines. Reject those
+  // raw forms before handing the exact approved string to native HTML/CSS owners.
+  // This validates the address only; it never fetches or attests to remote bytes.
+  if (!/^https:\/\//i.test(value) || /[\\\s\u0000-\u001f\u007f]/.test(value) ||
+      url.protocol !== 'https:' || url.username || url.password) {
+    throw new Error(`${label} must use absolute HTTPS without credentials, whitespace, or backslashes`);
+  }
+}
+
+function containsExactValue(value, expected) {
+  if (value === expected) return true;
+  return value !== null && typeof value === 'object' &&
+    Object.values(value).some((child) => containsExactValue(child, expected));
+}
+
 function validateAsset(asset, plan, operationsById) {
   assertObject(asset, 'every asset');
   if (typeof asset.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(asset.id)) {
@@ -85,8 +108,9 @@ function validateAsset(asset, plan, operationsById) {
     ASSET_SOURCE_TYPES,
     `asset ${asset.id}.source.type`
   );
-  if (asset.delivery !== 'web-file') {
-    throw new Error(`asset ${asset.id}.delivery must be web-file`);
+  const external = asset.delivery === 'external-url';
+  if (!external && asset.delivery !== 'web-file') {
+    throw new Error(`asset ${asset.id}.delivery must be web-file or external-url`);
   }
   if (!Array.isArray(asset.placements) || asset.placements.length === 0) {
     throw new Error(`asset ${asset.id}.placements must be a non-empty array`);
@@ -128,19 +152,42 @@ function validateAsset(asset, plan, operationsById) {
   }
   assertObject(asset.preparation, `asset ${asset.id}.preparation`);
   assertString(asset.preparation.status, `asset ${asset.id}.preparation.status`);
-  if (!['existing', 'staged'].includes(asset.preparation.status)) {
-    throw new Error(`asset ${asset.id}.preparation.status must be existing or staged`);
+  const statuses = external ? ['remote'] : ['existing', 'staged'];
+  if (!statuses.includes(asset.preparation.status)) {
+    throw new Error(`asset ${asset.id}.preparation.status must be ${statuses.join(' or ')}`);
+  }
+  if (external) {
+    if (asset.kind === 'font' || !['user-provided', 'unsplash'].includes(asset.source.type)) {
+      throw new Error(`asset ${asset.id} external-url delivery requires a user-provided or Unsplash image`);
+    }
+    validateExternalImageUrl(asset.externalUrl, `asset ${asset.id}.externalUrl`);
+    assertString(asset.source.license, `asset ${asset.id}.source.license`);
+    if ('webFileOperationId' in asset || 'existingPublicUrl' in asset ||
+        Object.keys(asset.preparation).some((key) => key !== 'status')) {
+      throw new Error(`asset ${asset.id} external images must not carry Web File or staged-file metadata`);
+    }
+    const consumer = [...operationsById.values()].find((operation) =>
+      operation.skill !== 'author-web-file' && containsExactValue(operation.inputs, asset.externalUrl)
+    );
+    if (!consumer) {
+      throw new Error(`asset ${asset.id} externalUrl must be consumed as an exact approved static input`);
+    }
   }
 
   if (asset.source.type === 'unsplash') {
-    for (const key of ['sourcePage', 'downloadUrl', 'photographer', 'license']) {
+    const sourceKeys = ['sourcePage', 'photographer', 'license'];
+    if (!external) sourceKeys.push('downloadUrl');
+    for (const key of sourceKeys) {
       assertString(asset.source[key], `asset ${asset.id}.source.${key}`);
+    }
+    if (external && 'downloadUrl' in asset.source && asset.source.downloadUrl !== asset.externalUrl) {
+      throw new Error(`asset ${asset.id} Unsplash downloadUrl must match externalUrl when supplied`);
     }
     let sourcePage;
     let downloadUrl;
     try {
       sourcePage = new URL(asset.source.sourcePage);
-      downloadUrl = new URL(asset.source.downloadUrl);
+      downloadUrl = new URL(external ? asset.externalUrl : asset.source.downloadUrl);
     } catch {
       throw new Error(`asset ${asset.id} Unsplash URLs must be valid absolute URLs`);
     }
@@ -162,6 +209,10 @@ function validateAsset(asset, plan, operationsById) {
     }
   }
 
+  if (external) return;
+  if ('externalUrl' in asset) {
+    throw new Error(`asset ${asset.id}.externalUrl requires external-url delivery`);
+  }
   if (asset.preparation.status === 'staged') {
     if (asset.source.type === 'existing-site') {
       throw new Error(`asset ${asset.id} existing-site sources must use existing preparation`);
@@ -234,6 +285,67 @@ function validateAsset(asset, plan, operationsById) {
       asset.existingPublicUrl.includes('\\')
     ) {
       throw new Error(`asset ${asset.id}.existingPublicUrl must be site-root-relative`);
+    }
+  }
+}
+
+function validateNewSiteDesign(plan, operationsById) {
+  if (!('newSiteDesign' in plan)) return;
+  const design = plan.newSiteDesign;
+  assertObject(design, 'newSiteDesign');
+  // The explicit policy is mandatory in new creation handoffs. Its absence leaves
+  // previously approved schema-1 Web File plans resumable without rewriting consent.
+  if ('imageDelivery' in design) {
+    if (design.imageDelivery !== 'external-url') {
+      throw new Error('newSiteDesign.imageDelivery must be external-url when supplied');
+    }
+    if (plan.assets.some((asset) =>
+      asset.kind !== 'font' && asset.source.type !== 'existing-site' && asset.delivery !== 'external-url'
+    )) {
+      throw new Error('newSiteDesign.imageDelivery requires external URLs for added images, not Web File imports');
+    }
+  }
+  if (![3, 5].includes(design.bootstrapMajor)) {
+    throw new Error('newSiteDesign.bootstrapMajor must be the verified Bootstrap major: 3 or 5');
+  }
+  if (design.bootstrapMajor === 3) {
+    assertString(design.compatibilityReason, 'newSiteDesign.compatibilityReason');
+  }
+  for (const key of ['typography', 'palette', 'spacing', 'composition', 'responsive']) {
+    assertString(design[key], `newSiteDesign.${key}`);
+  }
+  for (const key of ['aesthetic', 'mood']) assertString(plan[key], key);
+  assertEnum(design.imagery, new Set(['required', 'user-declined']), 'newSiteDesign.imagery');
+  if (design.imagery === 'user-declined') {
+    assertString(design.imageryReason, 'newSiteDesign.imageryReason');
+  } else if (!plan.assets.some((asset) =>
+    ['photograph', 'illustration', 'other-image'].includes(asset.kind) &&
+    ['informative', 'editorial'].includes(asset.role) &&
+    !asset.accessibility.decorative
+  )) {
+    throw new Error('newSiteDesign requires meaningful content imagery, not only branding or decoration');
+  }
+
+  const styling = plan.operations.filter((operation) => operation.skill === 'style-site');
+  if (styling.length === 0) {
+    throw new Error('newSiteDesign requires a style-site operation for the coordinated visual treatment');
+  }
+  const structuralIds = plan.operations
+    .filter((operation) => operation.skill !== 'style-site')
+    .map((operation) => operation.id);
+  // Earlier-operation validation makes this a DAG. Check transitive dependencies so
+  // the resumable executor cannot start styling while independent structure is pending.
+  for (const operation of styling) {
+    const dependencies = new Set();
+    const pending = [...operation.dependsOn];
+    while (pending.length > 0) {
+      const id = pending.pop();
+      if (dependencies.has(id)) continue;
+      dependencies.add(id);
+      pending.push(...operationsById.get(id).dependsOn);
+    }
+    if (structuralIds.some((id) => !dependencies.has(id))) {
+      throw new Error(`newSiteDesign styling operation ${operation.id} must depend on all structural operations`);
     }
   }
 }
@@ -364,6 +476,7 @@ function validateCustomizationPlan(plan) {
     }
   }
 
+  validateNewSiteDesign(plan, operationsById);
   return plan;
 }
 

@@ -1,68 +1,27 @@
 # Design Aesthetics Reference
 
-Design principles, typography, color, and motion guidance for Power Pages code sites. Used by the `create-site` skill during Step 6 (Design).
+Code-site adapter used by the `create-site` skill during Step 6 (Design), after SPA scaffolding. Read and apply [shared site design quality](../../../references/site-design-quality.md) first for cohesive aesthetic/mood, hierarchy, typography, palette/contrast, spacing, responsive composition, imagery, safe brand reuse, and accessible states/motion. Keep the shared reference as the source of those principles; this adapter owns code-site execution.
 
-## Frontend Aesthetics Principles
+The SPA font-loading, global CSS, and browser steps below apply only to code sites. Classic sites use [their own adapter](../../style-site/references/design-quality.md), not this workflow.
 
-> **CRITICAL: Follow these principles throughout ALL design decisions. Generic "AI slop" aesthetics are the enemy — make creative, distinctive choices that surprise and delight.**
+## Code-site design defaults
 
-### Typography
-Choose fonts that are beautiful, unique, and interesting. Load from Google Fonts.
+Choose distinctive typography using the shared mood directions. For new code-site font choices, prefer Google Fonts where the chosen family is available; confirm licensing and approved loading for other families. Preserve an already-approved brand font rather than replacing it solely for novelty.
 
-**Never use:** Inter, Roboto, Open Sans, Lato, Arial, default system fonts
+**Avoid as the default new code-site choice:** Inter, Roboto, Open Sans, Lato, Arial, default system fonts. This creative preference is not a prohibition on approved brand fonts or accessible fallback stacks, and does not apply to classic sites.
 
-**Recommended choices by mood:**
+**Code-site font candidates by mood:**
 - Code/Technical aesthetic: JetBrains Mono, Fira Code, Space Grotesk
 - Editorial/Content: Playfair Display, Crimson Pro, Fraunces
 - Modern/Startup: Clash Display, Satoshi, Cabinet Grotesk
 - Technical/Corporate: IBM Plex family, Source Sans 3
 - Distinctive/Unique: Bricolage Grotesque, Obviously, Newsreader
 
-**Pairing principle:** High contrast = interesting. Display + monospace, serif + geometric sans, variable font across weights. Use weight extremes — 100/200 vs 800/900, not 400 vs 600. Size jumps of 3x+, not 1.5x.
+Use the shared palette roles and aesthetic/mood mapping rather than a generic purple-gradient-on-white scheme. Match the approved brief and keep readable contrast ahead of stylistic novelty.
 
-### Color & Theme
-Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes. Draw from IDE themes and cultural aesthetics for inspiration.
+Apply the shared exact WCAG contrast rules: **4.5:1** for normal text; **3:1** only for large text at 24 CSS px regular or 14pt (approximately 18.667 CSS px) bold at weight 700+. **18px bold remains normal text at 4.5:1.** Compare ratios without rounding.
 
-**Never use:** Purple gradients on white backgrounds as the primary scheme. Avoid the cliched AI-generated color palette.
-
-### Motion
-Use animations for effects and micro-interactions. Prioritize CSS-only solutions. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (`animation-delay`) creates more delight than scattered micro-interactions.
-
-### Accessibility
-Accessibility is mandatory (WCAG 2.2 AA). Semantic structure, strong contrast, visible focus states, keyboard navigation, accessible form validation.
-
-- **Semantic HTML**: Use `<header>`, `<nav>`, `<main>`, `<section>`, `<footer>`, `<article>` — never rely on `<div>` soup. Headings (`h1`–`h6`) must follow a logical hierarchy with no skipped levels.
-- **Color contrast**: Text must meet WCAG AA minimums — 4.5:1 for normal text, 3:1 for large text (18px+ bold or 24px+ regular). Never convey meaning through color alone.
-- **Focus states**: Every interactive element must have a visible focus indicator. Use `outline` (not just `box-shadow`) with sufficient contrast against the background. Never use `outline: none` without a replacement.
-- **Keyboard navigation**: All functionality must be operable via keyboard. Tab order must follow a logical reading sequence. Use `tabindex="0"` for custom interactive elements, never positive `tabindex` values.
-- **Images & media**: All `<img>` tags must have meaningful `alt` text (or `alt=""` for purely decorative images). Icons used as actions need `aria-label`.
-- **Forms**: Every `<input>` must have an associated `<label>`. Use `aria-required`, `aria-invalid`, and `aria-describedby` for validation messages. Error messages must be announced to screen readers.
-- **Motion**: Wrap non-essential animations in `@media (prefers-reduced-motion: reduce)` to disable or minimize them. Essential transitions (e.g., loading indicators) may remain but should be simplified.
-- **Links**: Link text must be descriptive — never use "click here" or "read more" without context. Links that open new windows must indicate this (e.g., `aria-label` or visible icon with `sr-only` text).
-
-### Backgrounds
-Create atmosphere and depth rather than defaulting to solid colors. Layer CSS gradients, use geometric patterns, or add contextual effects that match the overall aesthetic.
-
----
-
-## Aesthetic x Mood Mapping
-
-Use this table to map aesthetic + mood preferences to concrete design choices:
-
-| Aesthetic | Mood | Font Direction | Color Direction | Motion Direction |
-|-----------|------|---------------|-----------------|------------------|
-| Minimal & Clean | Professional | IBM Plex Sans + JetBrains Mono | Neutral with one sharp accent | Subtle fades, minimal |
-| Minimal & Clean | Creative | Space Grotesk + Crimson Pro | Muted pastels with pop accent | Smooth reveals |
-| Bold & Vibrant | Professional | Cabinet Grotesk + Fira Code | Strong primary + contrasting accent | Confident slide-ins |
-| Bold & Vibrant | Creative | Clash Display + Bricolage Grotesque | Saturated complementary pair | Energetic staggers |
-| Dark & Moody | Technical | JetBrains Mono + Space Grotesk | Dark base (IDE-inspired) + neon accent | Terminal-style fades |
-| Dark & Moody | Elegant | Playfair Display + Source Sans 3 | Deep charcoals + gold/copper accent | Slow, cinematic reveals |
-| Warm & Organic | Professional | Newsreader + IBM Plex Sans | Earth tones + warm accent | Gentle eases |
-| Warm & Organic | Creative | Fraunces + Satoshi | Terracotta/sage/cream palette | Organic, springy motion |
-
-If the user provides a specific inspiration reference, adapt the design choices to match while maintaining the site's functionality.
-
----
+Implement shared accessibility requirements with semantic HTML/native controls, associated `<label>` elements, appropriate `aria-required`/`aria-invalid`/`aria-describedby` where needed, and accessible names for icon actions. Do not substitute a styled `<div>` and `tabindex` for a working keyboard-operable control.
 
 ## Design Application Steps
 
@@ -70,7 +29,7 @@ Apply design changes in this order. After each subsection, verify via `browser_s
 
 ### Typography
 
-1. **Add Google Fonts** — Add `<link>` tags to `index.html` (or the framework's HTML entry point) for the chosen fonts. Include the specific weights needed (e.g., 200, 400, 700, 900).
+1. **Add Google Fonts** — For approved Google Fonts choices not already loaded, add `<link>` tags to `index.html` (or the framework's HTML entry point). Include only the specific weights needed (e.g., 200, 400, 700, 900). Reuse existing approved loading for brand fonts.
 
    ```html
    <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -88,7 +47,7 @@ Apply design changes in this order. After each subsection, verify via `browser_s
    }
    ```
 
-3. **Apply to elements** — Update `body`, `h1`-`h6`, `code`, and any component-specific typography. Use extreme weight contrasts and large size jumps.
+3. **Apply to elements** — Update `body`, `h1`-`h6`, `code`, and any component-specific typography using the approved hierarchy. Keep display contrast deliberate and body text legible.
 
 4. **Verify via `browser_snapshot`**
 
@@ -115,7 +74,7 @@ Apply design changes in this order. After each subsection, verify via `browser_s
 
 ### Backgrounds & Atmosphere
 
-Add depth and atmosphere to key sections. Choose techniques matching the aesthetic:
+Compose the approved hero/supporting images using the shared imagery guidance; decorative effects do not replace meaningful photographs or illustrations. Add depth and atmosphere to key sections where it supports the aesthetic:
 
 - **Gradient backgrounds**: Layer multiple CSS gradients for depth
 - **Geometric patterns**: SVG patterns via `background-image` or pseudo-elements
@@ -162,16 +121,13 @@ Add CSS animations for high-impact moments. Prioritize CSS-only solutions:
 
 4. **Apply animation classes** to key components (header, hero, cards, navigation items)
 
+5. **Apply reduced-motion alternatives** — Keep content visible and controls usable with nonessential motion disabled, following the shared guidance.
+
 **Verify via `browser_snapshot`**
 
 ### Layout & Spacing Refinement
 
-Refine the overall visual rhythm:
-
-- Increase whitespace where the design feels cramped
-- Use consistent spacing scale (e.g., 4, 8, 16, 24, 32, 48, 64, 96px)
-- Ensure visual hierarchy through size contrast (headings should be dramatically larger than body text)
-- Add container max-widths for readability (prose content at 65-75ch)
+Apply the shared spacing and responsive-composition guidance to the SPA's layout containers and components. Refine the spacing scale, prose max-widths, heading hierarchy, image crops, and narrow-screen stacking without changing the logical reading order.
 
 **Verify via `browser_snapshot`**
 

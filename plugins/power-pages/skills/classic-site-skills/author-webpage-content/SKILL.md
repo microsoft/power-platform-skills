@@ -114,6 +114,8 @@ Stop before writing when a material choice remains unresolved, including:
 Prefer a structured specification containing:
 
 - the exact existing target file and its already-resolved locale;
+- the verified Bootstrap major and any approved `designContext`; require version evidence for
+  new sections, especially when the target page is blank;
 - operation mode: `create`, `replace`, `append`, or `modify`;
 - ordered sections;
 - each section's supported layout and ordered elements by column;
@@ -164,6 +166,9 @@ records. Do not continue with symbolic asset names or design-tool placeholders.
 Read the section-layout reference whenever the operation creates a section or
 changes a section's column structure. Then read one component-specific reference
 for each element type present in the normalized plan.
+Use its Bootstrap 5 examples only with verified Bootstrap 5 evidence. Preserve inspected
+Bootstrap 3/native and RTL patterns for existing sites; return missing evidence to the caller
+rather than assuming the creation default or changing the framework.
 
 Do not invoke one skill per page element. This skill is the single writer for
 the target HTML and assembles all approved element markup in memory before

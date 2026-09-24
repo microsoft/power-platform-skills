@@ -35,6 +35,12 @@ Prefer one compact clarification round. Resolve safe defaults from the site:
 - navigation: mirror comparable informational pages, but ask when primary versus footer placement
   materially changes the user's intent.
 
+For an explicit new-site design handoff, use the approved `newSiteDesign` and shared
+`${PLUGIN_ROOT}/references/site-design-quality.md` instead of the preservation-only styling
+default. Design a cohesive complete experience with purposeful imagery, hierarchy, and responsive
+section rhythm. The native Bootstrap/Studio structure and platform behavior remain protected;
+the baseline's generic appearance is not a design requirement.
+
 Do not ask about UUIDs, metadata filenames, serialization, indentation, escaping, or routine
 accessibility attributes.
 
@@ -69,10 +75,16 @@ Choose structure in this order:
 5. add `style-site` only when the requested result requires presentation not already supplied by
    the selected local pattern.
 
+For new-site designs, include the final coordinated `style-site` treatment from the approved
+brief after every structural operation. Pass the verified Bootstrap major to the page-content
+owner; use the Bootstrap 5 examples only on verified Bootstrap 5 sites.
+
 When an image is proposed, follow `visual-asset-planning.md` first. The content composition must
-consume an existing verified Web File URL or an `outputBindings` value from an earlier
-`author-web-file` operation. Never place an Unsplash hotlink, local filesystem path, symbolic
-asset name, or Design Studio placeholder data URI into the finished page.
+consume the approved direct HTTPS URL for a new-site image addition. Put it in static inputs or
+the image's `source`; do not invent an import dependency or create a Web File. Existing image
+URLs can be reused, and explicitly selected file imports outside URL-based creation use an
+`outputBindings` value from an earlier `author-web-file` operation. Never place a local filesystem
+path, symbolic asset name, gallery-page URL, or Design Studio placeholder data URI into the page.
 
 Do not invent a new Design Studio component serialization. If the request requires unsupported
 nested markup or behavior, disclose the boundary and propose the closest supported composition.

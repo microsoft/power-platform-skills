@@ -275,12 +275,17 @@ ordering purpose.
 
 ## CSS web files
 
-CSS files can participate in the site's global style loading order through
-`adx_displayorder`.
+When changing a CSS Web File, mention the Power Pages priority guidance: custom CSS has
+higher priority than `theme.css` and lower priority than `portalbasictheme.css`.
+See [Manage CSS files](https://learn.microsoft.com/power-pages/configure/manage-css).
 
-- Inspect all existing CSS web-file records before choosing an order.
-- Keep display-order values deliberate and non-conflicting.
-- Files loaded later have higher CSS precedence.
+- This is advisory, not an `adx_displayorder`/`displayorder` constraint or a requirement to prove
+  runtime loading order. Do not allocate numeric slots, renumber defaults, or block on absent,
+  equal, reversed, nonnumeric, or adjacent values.
+- Preserve existing ordering metadata. Omit `displayorder` on new CSS Web Files rather than
+  fabricating cascade evidence.
+- Inspect actual scope, selectors, specificity, inline declarations, and importance when a
+  rule is ineffective; ordering metadata is not proof of the winning declaration.
 - Do not deactivate, delete, rename, or reorder the default site CSS files as incidental
   cleanup.
 - Do not replace the site's Bootstrap version or base theme through a routine web-file
@@ -288,8 +293,10 @@ CSS files can participate in the site's global style loading order through
 - Custom CSS uploaded through the Styling workspace has separate product constraints,
   including its supported file-size limit.
 
-Changing a CSS order can alter the complete site. Treat it separately from changing the
-stylesheet's contents.
+For a visual styling request, delegate to `style-site` for source/cascade inspection, correct
+page/section/site placement, exact-diff approval, and guarded application. This owner still
+handles explicit asset imports and metadata/URL migrations. Never use a metadata change or a
+duplicated `<link>` to bypass the styling workflow.
 
 ## Referencing web files
 
@@ -354,7 +361,7 @@ change required.
 | Add or change release/expiration dates | Update only the requested scheduling fields and verify the intended visibility window |
 | Change search or sitemap behavior | Update the selected flag only |
 | Change inline/download behavior | Update `adx_contentdisposition` only |
-| Change CSS precedence | Update `adx_displayorder` after reviewing the full CSS order |
+| Change CSS visual priority | Use `style-site` to inspect the actual cascade and correct placement; do not infer priority from `adx_displayorder` |
 
 ### Identity preservation
 
@@ -433,7 +440,8 @@ After creating or modifying a web file:
 13. Confirm the file is within target-environment attachment-size and extension
     policies.
 14. Confirm all new or changed references resolve to the final URL.
-15. For CSS, confirm ordering and precedence against every site stylesheet.
+15. For CSS, include the advisory custom-CSS priority note, preserve existing ordering metadata,
+    and verify the approved placement and source changes without a numeric-order gate.
 16. Confirm existing IDs were preserved during replacement, rename, or move operations.
 17. Review the final diff for unrelated binary, metadata, or caller changes.
 

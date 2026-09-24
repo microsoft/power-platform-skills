@@ -42,7 +42,7 @@ Read when applicable:
   button, video, or other supported component on a page
 
 The references own PAC structure, attachment metadata, identity, URL hierarchy,
-MIME types, visibility, CSS ordering, file security, dependency handling,
+MIME types, visibility, advisory CSS priority, file security, dependency handling,
 modification rules, and verification. Do not duplicate or replace those
 contracts in this skill.
 
@@ -62,8 +62,8 @@ Choose independently when safe:
 - MIME type when the extension, signature, and existing convention agree;
 - inline delivery for browser-rendered assets and attachment delivery when the
   request clearly describes a download;
-- search, sitemap, publishing-state, and display-order values from the requested
-  behavior and comparable records;
+- search, sitemap, and publishing-state values from the requested behavior and comparable
+  records; preserve existing optional ordering metadata, never infer CSS priority from it;
 - the smallest files required for a content or metadata modification;
 - accessibility and safe loading details in explicitly requested callers.
 
@@ -81,7 +81,7 @@ the request or workspace, such as:
 - a rename, move, type migration, or deletion with unresolved callers;
 - an unsupported or blocked extension, secret-bearing content, or active content
   whose safety cannot be established;
-- an ambiguous CSS ordering change or visibility window.
+- an ambiguous CSS scope/caller change or visibility window.
 
 When stopped, report the candidates and evidence. Do not guess through an
 identity, security, permissions, or public-URL boundary.
@@ -169,7 +169,7 @@ Use the web-file reference section that owns the operation:
 | Resolve parent and URL | **Parent page, URL, and permissions** |
 | Resolve content type | **MIME type** and **File validation and security** |
 | Configure visibility or delivery | **Visibility and delivery fields** |
-| Add or reorder CSS | **CSS web files** |
+| Add CSS or review visual priority | **CSS web files** |
 | Add or migrate callers | **Referencing web files** and **Rename and move safety** |
 | Modify or replace | **Modifying an existing web file** |
 | Delete | **Deletion rules** |
@@ -201,7 +201,7 @@ Report:
 - the public URL, parent page, MIME type, and delivery behavior;
 - the stable web-file and annotation IDs;
 - updated callers and URL migrations;
-- CSS precedence or visibility changes;
+- advisory CSS priority, approved scope/caller changes, or visibility changes;
 - intentionally preserved optional fields or legacy behavior.
 
 State that the changes are local and were not uploaded or deployed.

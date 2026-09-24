@@ -1,10 +1,37 @@
 # Power Pages Plugin
 
-A plugin for creating, deploying, and managing Power Pages code sites. Supports static SPA frameworks (React, Vue, Angular, Astro) with Dataverse integration, Web API access, and browser-based previews via Playwright.
+A plugin for creating, deploying, and managing Power Pages code sites and classic declarative sites.
+Code sites support static SPA frameworks (React, Vue, Angular, Astro) with Dataverse integration,
+Web API access, and browser-based previews via Playwright. Classic sites use PAC-downloaded
+native metadata, Liquid, Bootstrap, and Design Studio-compatible content.
 
 **Server-rendered frameworks (Next.js, Nuxt, Remix, SvelteKit) are NOT supported.**
 
 Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creating new skills and agents.
+
+## Classic creation and shared design quality
+
+Keep the common visual-quality source in `references/site-design-quality.md`; code-site
+`create-site/references/design-aesthetics.md` and classic `style-site/references/design-quality.md`
+are platform adapters, not copies. Do not import SPA theme replacement, font installation,
+dev-server, or live-preview requirements into classic creation.
+
+New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
+the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using
+the shared inspector. Preserve an explicit Standard/Bootstrap 3 compatibility choice. Never add
+an undocumented Create Website property, change environment flags, silently migrate, or recreate
+an accepted site to resolve a mismatch.
+
+The `creationIntent: "new-site"` handoff requires a schema-1 `newSiteDesign` brief and meaningful
+content imagery unless explicitly declined. Existing-site plans remain preservation-first and
+backward-compatible. New creation sets `newSiteDesign.imageDelivery: "external-url"` and passes
+approved HTTPS image URLs directly to native content owners, without image downloads, staging,
+Web File imports or fake output bindings. Preserve suitable existing template images. Explicit
+file delivery outside that route still reuses `prepare-declarative-asset.js` and `author-web-file`.
+Keep final `style-site` guards and the plan's visual context hash-bound and visible in approval
+HTML. Review external-host availability, license, privacy and CSP; do not silently relax policies.
+The plan library validates completeness/dependencies, not visual fidelity. Status/approval HTML
+is not a site preview; local verification leaves Studio/runtime rendering pending.
 
 ## Classic styling — local-only exception
 
@@ -35,7 +62,7 @@ Missing classes/repeated wrappers alone are not blockers: `classEdits.context` /
 
 The pinned parser is vendored under `scripts/vendor/css-tools` with manifests/lockfile, `css-tools.cjs` and licenses, including mdn-data's license; plugin users need no npm installs. Maintainers rebuild from that bundle directory using `npm ci --ignore-scripts` then `npm run build`; see `PLUGIN_DEVELOPMENT_GUIDE.md`. Do not turn maintainer tooling into runtime/site dependencies.
 
-For palette/typography/redesign work, load `style-site/references/design-quality.md`: adapt create-site's coordinated palette/hierarchy, not its SPA theme replacement or font installation. Inspect child foreground rules against their surfaces and update the actual local declaration; native colors are not a Studio prerequisite. The coordinator flags readability review, without generating a browser checker. `check-style-contrast.js` uses shared `scripts/lib/style-site-contrast.js` math for supplied resolved pairs only; it does not verify the cascade or assume a background. Resolve known failures and local declaration dependencies before approval; unknown rendering remains pending, never a synthetic pass. This is not full WCAG/runtime/Studio proof.
+For palette/typography/redesign work, load `style-site/references/design-quality.md` and its shared `references/site-design-quality.md` source, not the code-site adapter's SPA theme replacement or font installation. Inspect child foreground rules against their surfaces and update the actual local declaration; native colors are not a Studio prerequisite. The coordinator flags readability review, without generating a browser checker. `check-style-contrast.js` uses shared `scripts/lib/style-site-contrast.js` math for supplied resolved pairs only; it does not verify the cascade or assume a background. Resolve known failures and local declaration dependencies before approval; unknown rendering remains pending, never a synthetic pass. This is not full WCAG/runtime/Studio proof.
 
 Own deterministic operations in `skills/style-site/scripts/`. Use `inspect-style-context.js --summary --out ...` for bounded discovery with full external evidence; candidates are advisory. Normal `style-site-workflow.js --operation prepare` validates and writes only plan/review JSON into a fresh external revision directory; `--operation apply` performs guarded writes plus independent validation using the plan-bound root. Read full review artifacts before approval if summaries truncate. Individual commands remain diagnostics, not extra normal round trips. Keep shared logic under `scripts/lib/` and contracts under `skills/style-site/references/`. Retain schema 2 without rendering payloads; regenerate legacy/invalid requests and obtain new approval, never edit plans or migrate consent. General CSS does not authorize component creation, DOM replacement, unsafe side effects or generated-source compilation.
 

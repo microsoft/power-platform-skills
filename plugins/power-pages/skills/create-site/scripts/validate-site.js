@@ -2,7 +2,7 @@
 
 // Validates either a generated code site or a PAC-downloaded declarative site.
 // The PostToolUse hook uses structural checks; the declarative workflow also passes the
-// expected website record ID for an identity match before creating the Git baseline.
+// expected website record ID and optional Bootstrap major before creating the Git baseline.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +13,11 @@ const {
   findProjectRoot,
   UUID_REGEX,
 } = require('../../../scripts/lib/validation-helpers');
+const { inspectSite } = require('../../../scripts/lib/classic-site-style-context');
+const {
+  normalizeBootstrapVersion,
+  parseBootstrapVersionArgs,
+} = require('../../../scripts/lib/site-templates');
 
 const PLACEHOLDER_RE = /__[A-Z][A-Z_]{2,}__/;
 const DECLARATIVE_COMPONENT_DIRS = new Set([
@@ -149,7 +154,7 @@ function listDeclarativeAssetFiles(siteDir) {
 
 function validateDeclarativeProject(
   projectRoot,
-  { expectedWebsiteRecordId = null, skipGit = false } = {},
+  { expectedWebsiteRecordId = null, expectedBootstrapMajor = null, skipGit = false } = {},
 ) {
   const errors = [];
   // Create-site stores its download under `.powerpages-site`, while users who download
@@ -189,6 +194,26 @@ function validateDeclarativeProject(
     errors.push(`Could not inspect declarative site assets: ${error.message}`);
   }
 
+  if (expectedBootstrapMajor !== null) {
+    try {
+      const expected = normalizeBootstrapVersion(expectedBootstrapMajor);
+      // Inspect the same selected download as the structural/identity checks.
+      // The shared inspector requires asset evidence and reconciles settings with
+      // it; an Enhanced model or Site/BootstrapV5Enabled alone is not proof.
+      const { bootstrap } = inspectSite(siteDir);
+      if (!bootstrap.major || !bootstrap.evidence.some((entry) => entry.kind === 'asset')) {
+        errors.push(
+          `Could not verify expected Bootstrap ${expected}: downloaded Bootstrap asset evidence ` +
+          'is missing, conflicting, or unsupported.',
+        );
+      } else if (bootstrap.major !== expected) {
+        errors.push(`Downloaded site uses Bootstrap ${bootstrap.major}; expected Bootstrap ${expected}.`);
+      }
+    } catch (error) {
+      errors.push(`Could not verify downloaded Bootstrap version: ${error.message}`);
+    }
+  }
+
   if (!skipGit && !fs.existsSync(path.join(projectRoot, '.git'))) {
     errors.push('Git repository not initialized');
   }
@@ -197,9 +222,18 @@ function validateDeclarativeProject(
 }
 
 function validateProject(projectRoot, options = {}) {
-  if (!projectRoot) return { siteType: null, errors: [] };
+  const missingProject = () => ({
+    siteType: null,
+    errors: options.expectedBootstrapMajor == null
+      ? [] : ['Cannot verify Bootstrap without a declarative Power Pages project.'],
+  });
+  if (!projectRoot) return missingProject();
   if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) {
-    return { siteType: 'code', errors: validateCodeProject(projectRoot) };
+    const errors = validateCodeProject(projectRoot);
+    if (options.expectedBootstrapMajor != null) {
+      errors.push('--bootstrapVersion is only supported for declarative sites, not code sites.');
+    }
+    return { siteType: 'code', errors };
   }
   if (
     fs.existsSync(path.join(projectRoot, '.powerpages-site')) ||
@@ -213,11 +247,12 @@ function validateProject(projectRoot, options = {}) {
       errors: validateDeclarativeProject(projectRoot, options),
     };
   }
-  return { siteType: null, errors: [] };
+  return missingProject();
 }
 
 function parseArgs(argv) {
   const args = {};
+  const bootstrapVersion = parseBootstrapVersionArgs(argv);
   for (let index = 0; index < argv.length; index += 1) {
     if (!argv[index].startsWith('--')) continue;
     const key = argv[index].slice(2);
@@ -227,6 +262,7 @@ function parseArgs(argv) {
       index += 1;
     }
   }
+  if (bootstrapVersion !== undefined) args.bootstrapVersion = bootstrapVersion;
   return args;
 }
 
@@ -244,27 +280,37 @@ function runHook() {
 }
 
 function runDirect() {
-  const args = parseArgs(process.argv.slice(2));
-  const projectRoot = args.projectRoot
-    ? path.resolve(args.projectRoot)
-    : findProjectRoot(process.cwd());
-  const result = validateProject(projectRoot, {
-    expectedWebsiteRecordId: args.websiteRecordId || null,
-    skipGit: args.skipGit === 'true',
-  });
-  if (!result.siteType) {
-    process.stderr.write('No Power Pages project found.\n');
+  try {
+    const args = parseArgs(process.argv.slice(2));
+    const cwd = process.cwd();
+    const directSite = fs.existsSync(path.join(cwd, '.portalconfig')) &&
+      fs.existsSync(path.join(cwd, 'website.yml'));
+    const projectRoot = args.projectRoot
+      ? path.resolve(args.projectRoot)
+      : directSite ? cwd : findProjectRoot(cwd);
+    const result = validateProject(projectRoot, {
+      expectedWebsiteRecordId: args.websiteRecordId || null,
+      expectedBootstrapMajor: args.bootstrapVersion ?? null,
+      skipGit: args.skipGit === 'true',
+    });
+    if (!result.siteType) {
+      process.stderr.write('No Power Pages project found.\n');
+      process.exitCode = 2;
+    } else if (result.errors.length > 0) {
+      process.stderr.write(`${validationMessage(result)}\n`);
+      process.exitCode = 2;
+    } else {
+      process.stdout.write(`Power Pages ${result.siteType} site validation passed.\n`);
+    }
+  } catch (error) {
+    process.stderr.write(`${validationMessage({ errors: [error.message] })}\n`);
     process.exitCode = 2;
-  } else if (result.errors.length > 0) {
-    process.stderr.write(`${validationMessage(result)}\n`);
-    process.exitCode = 2;
-  } else {
-    process.stdout.write(`Power Pages ${result.siteType} site validation passed.\n`);
   }
 }
 
 if (require.main === module) {
-  if (process.argv.includes('--projectRoot')) runDirect();
+  if (process.argv.includes('--projectRoot') ||
+      process.argv.some((arg) => /^--(?:bootstrapVersion|bootstrap-version)(?:=|$)/.test(arg))) runDirect();
   else runHook();
 }
 

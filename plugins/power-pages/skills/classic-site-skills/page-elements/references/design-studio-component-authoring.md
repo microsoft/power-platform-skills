@@ -25,6 +25,11 @@ metadata. For an edit, find candidate components using both the prompt and the l
 markup. Use section number, column, nearby heading/text, current properties, and sibling
 components to distinguish candidates.
 
+Before introducing version-specific markup, use the caller's verified Bootstrap evidence or
+inspect the site's actual assets. Follow **Bootstrap version** in `design-studio-section-layouts.md`:
+the examples using `text-start` target Bootstrap 5, not every classic site. Preserve existing
+Bootstrap 3 and RTL conventions; a narrow content edit is not permission to migrate the framework.
+
 If the prompt uniquely identifies one component or insertion point, use it. If several
 candidates remain plausible, present concise distinguishing details and ask the user to
 choose. Never apply a broad search-and-replace merely because multiple components share
