@@ -193,7 +193,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // whichever build it would have run (the no-identity fallback included). A tombstone no teardown still
   // holds (one that failed, or was killed and stopped being seen) does not block: it only makes the
   // baseline ineligible, through its debt. A teardown starting after this read is caught by the invalidate's
-  // generation fence.
+  // generation fence below — or, in the no-identity fallback, by the re-read before it builds.
   const running = store.teardownsInFlight(snapshot);
   if (running.length) {
     const who = running.map((t) => `pid ${t.pid}, last seen ${Math.max(0, Math.round((Date.now() - (typeof t.beat === 'number' ? t.beat : t.at)) / 1000))}s ago`).join('; ');
@@ -205,7 +205,19 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
 
   // No trustworthy live identity → we cannot safely gate a fast apply. Degrade to a normal full build and
   // do NOT touch the snapshot (writing one we can't identity-bind would be worse than none).
+  //
+  // Identity discovery takes seconds, and a teardown that began meanwhile is not in the read above. The
+  // branches below catch it through their fenced invalidate; this one writes no snapshot, so nothing would —
+  // and the build would recreate what the teardown is deleting. So the workspace is read again, and the build
+  // refused when the snapshot's generation moved: a teardown's tombstone rotates it (on a workspace with no
+  // snapshot too, where it creates one), and so does another build's invalidate.
   if (!live) {
+    const genOf = (s) => (s && s.generation) || null;
+    if (genOf(store.readSnapshot(ws)) !== genOf(snapshot)) {
+      const msg = 'changed-only: the workspace changed while the live identity was being resolved (a teardown or another build started) — re-run the build once it has finished';
+      log(`✗ ${msg}`);
+      return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace changed during identity discovery' } };
+    }
     log('▸ changed-only: could not resolve live identity (WhoAmI/app discovery) — running a normal full build');
     const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);
     return { ...r, changedOnly: { decision: 'full', reason: 'no live identity' } };

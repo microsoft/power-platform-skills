@@ -59,15 +59,23 @@ test('acquireLease is exclusive: a live young holder blocks a second acquire; re
   } finally { rm(d); }
 });
 
-test('acquireLease reclaims a STALE lease (token older than staleMs)', () => {
+// A live holder may be paused mid-write (a machine asleep): reclaiming its lease by age let it resume and
+// commit a stale view over the generation fence. So a lease that names a live holder is never reclaimed,
+// however old — and an old one says which file to delete, since a crashed holder's pid may have been reused.
+test('acquireLease never reclaims a live holder\u2019s lease, however old, and says how to clear an old one', () => {
   const d = ws();
   try {
     const a = store.acquireLease(d, { now: () => 1000, pid: 111, processAlive: () => true, staleMs: 10000 });
     assert.ok(a.ok);
-    // 20s later — older than the 10s stale window — a different build reclaims it.
     const b = store.acquireLease(d, { now: () => 21000, pid: 222, processAlive: () => true, staleMs: 10000 });
-    assert.ok(b.ok);
-    assert.strictEqual(b.reclaimed, true);
+    assert.strictEqual(b.ok, false, 'older than the stale window, but its holder is alive');
+    assert.match(b.reason, /held by pid 111/);
+    assert.ok(b.reason.includes(`delete ${store.leasePath(d)} and re-run`), b.reason);
+    assert.strictEqual(fs.readFileSync(store.leasePath(d), 'utf8'), a.token, 'the lock is untouched');
+    const young = store.acquireLease(d, { now: () => 5000, pid: 222, processAlive: () => true, staleMs: 10000 });
+    assert.ok(!young.ok && !/delete /.test(young.reason), 'a young one is simply held');
+    const dead = store.acquireLease(d, { now: () => 21000, pid: 222, processAlive: () => false, staleMs: 10000 });
+    assert.ok(dead.ok && dead.reclaimed, 'once its holder is dead, it is reclaimed');
   } finally { rm(d); }
 });
 
@@ -85,7 +93,7 @@ test('releaseLease is owner-checked: a late release does NOT delete a lock anoth
   const d = ws();
   try {
     const a = store.acquireLease(d, { now: () => 1000, pid: 111, processAlive: () => true, staleMs: 10000 });
-    const b = store.acquireLease(d, { now: () => 21000, pid: 222, processAlive: () => true, staleMs: 10000 });
+    const b = store.acquireLease(d, { now: () => 21000, pid: 222, processAlive: () => false, staleMs: 10000 });
     assert.ok(b.ok && b.reclaimed);
     store.releaseLease(a); // a's token no longer on disk — must be a no-op
     assert.ok(fs.existsSync(store.leasePath(d)), "the reclaimer's lock must survive the original holder's release");
@@ -564,6 +572,53 @@ test('acquireLease re-takes a lock that vanished meanwhile exclusively, never by
     writeMock.mock.restore();
     assert.strictEqual(lost.ok, false);
     assert.match(lost.reason, /reclaimed by another writer just now/);
+  } finally { rm(d); }
+});
+
+// The reclaim CLAIM follows the lock's own rule: a claimer that is alive keeps it however old it is — one
+// paused mid-reclaim lost it to age, a second writer reclaimed, and both held the lease — and a dead
+// claimer's is removed at once. A claim with no readable token is still aged by its file.
+test('a reclaim claim is abandoned only when its claimer is dead', () => {
+  const d = ws();
+  try {
+    const lp = store.leasePath(d);
+    const claim = `${lp}.reclaim`;
+    fs.writeFileSync(lp, JSON.stringify({ pid: 7, at: 0 }));
+    fs.writeFileSync(claim, JSON.stringify({ pid: 4242, at: 0 }));
+    const old = new Date(Date.now() - store.LEASE_STALE_MS - 60000);
+    fs.utimesSync(claim, old, old);
+    const attempt = (alive) => store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: (p) => alive.includes(p), staleMs: store.LEASE_STALE_MS });
+    const busy = attempt([4242]);
+    assert.strictEqual(busy.ok, false);
+    assert.match(busy.reason, /^lease being reclaimed by another writer/);
+    assert.ok(busy.reason.includes(`delete ${claim} and re-run`), `an old one says which file to delete: ${busy.reason}`);
+    assert.ok(fs.existsSync(claim), 'a live claimer keeps its claim, however old');
+    assert.strictEqual(attempt([]).ok, false);
+    assert.ok(!fs.existsSync(claim), 'a dead claimer\u2019s claim is removed');
+    const won = attempt([]);
+    assert.deepStrictEqual([won.ok, won.reclaimed], [true, true]);
+    store.releaseLease(won);
+  } finally { rm(d); }
+});
+
+// A reclaim whose write landed but whose read-back failed used to leave the lock holding this process's
+// token: nobody else reclaims it (the pid is alive), so the process then blocked itself. It is released.
+test('a reclaim that fails after its write leaves no lock holding its own token', (t) => {
+  const d = ws();
+  try {
+    const lp = store.leasePath(d);
+    fs.writeFileSync(lp, JSON.stringify({ pid: 7, at: 0 }));
+    const realRead = fs.readFileSync;
+    let reads = 0;
+    const readMock = t.mock.method(fs, 'readFileSync', (p, ...rest) => {
+      if (p === lp && ++reads === 3) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      return realRead(p, ...rest);
+    });
+    const r = store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: () => false, staleMs: store.LEASE_STALE_MS });
+    readMock.mock.restore();
+    assert.deepStrictEqual([r.ok, /stale lease reclaim failed: resource busy/.test(r.reason)], [false, true]);
+    assert.ok(!fs.existsSync(lp), 'the lock it wrote is released');
+    assert.ok(store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: () => true, staleMs: store.LEASE_STALE_MS }).ok, 'and the next acquire succeeds');
   } finally { rm(d); }
 });
 

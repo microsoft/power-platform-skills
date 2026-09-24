@@ -609,12 +609,18 @@ ONLY after effective success (apply+verify).
   that failed or threw keeps the tombstone. After a clean teardown the snapshot is deleted when the last
   live entry goes — whatever it has become by then — and until then it stays tombstoned, its generation
   rotated, fencing the deletes still running. A `--changed-only` build that reads a tombstone listing a
-  teardown still running refuses to build until it finishes (the no-identity fallback included). A
+  teardown still running refuses to build until it finishes (the no-identity fallback included, which
+  writes no snapshot and so reads the workspace again before it builds, refusing when the generation moved
+  during identity discovery). A
   running teardown refreshes its entry every minute, and an entry whose process is gone, or that has not
   been seen for five minutes, no longer counts — so a killed teardown's entry stops blocking within
   minutes, even under a reused pid. `--clear-workspace` leaves a workspace whose fence is still held. A
-  stale workspace lease is reclaimed by one writer only (an exclusive claim file, and a re-check of the
-  lock).
+  workspace lease is reclaimed only from a DEAD holder — or, for a lock with no readable token, one older
+  than five minutes — never from a live one however old: a holder paused mid-write would commit its stale
+  view over the fence on resuming. It is reclaimed by one writer only (an exclusive claim file, itself
+  abandoned only once its claimer is dead, and a re-check of the lock); a reclaim that fails after its
+  write releases what it wrote. An old lease whose holder's pid is alive names the file to delete, in case
+  that pid was reused.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

@@ -491,6 +491,27 @@ test('run: the no-identity fallback also waits for a teardown still running', as
   } finally { rm(dir); }
 });
 
+// …and a teardown that BEGINS while the identity is being resolved is not in the first read. The fenced
+// branches catch it through their invalidate; the no-identity one writes no snapshot, so it reads the
+// workspace again and refuses when it moved — a teardown's tombstone, or another build's invalidate.
+test('run: the no-identity fallback refuses when the workspace changed during identity discovery', async () => {
+  for (const [what, seed, during] of [
+    ['a teardown began', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.tombstoneSnapshot(dir)],
+    ['a teardown began on a workspace with no snapshot', () => {}, (dir) => store.tombstoneSnapshot(dir)],
+    ['another build invalidated it', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.invalidateSnapshot(dir, { expectedGeneration: store.readSnapshot(dir).generation })],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => { during(dir); return null; } }) });
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[0], /the workspace changed while the live identity was being resolved/, what);
+      assert.strictEqual(record.length, 0, `${what}: nothing is built`);
+    } finally { rm(dir); }
+  }
+});
+
 // A tombstone no teardown still holds — one that failed, or a day old — does not block: the build runs, and
 // the tombstone's debt keeps its baseline ineligible, as it always did.
 test('run: a tombstone no teardown still holds only makes the baseline ineligible', async () => {

@@ -210,8 +210,13 @@ downloads that round-trip Choice columns.
   tombstone. A first build, which has no snapshot yet, is fenced too: it claims one before it builds,
   and a teardown tombstones even a workspace with none. When two teardowns of one workspace overlap,
   the fence stays until the last of them finishes, a `--changed-only` build waits while one is still
-  running, and `--clear-workspace` leaves a workspace that still holds the fence. Teardown now also
+  running — and a build that cannot resolve its live identity also refuses when one began while it was
+  looking — and `--clear-workspace` leaves a workspace that still holds the fence. Teardown now also
   **refuses to delete anything when it cannot write that fence**, instead of warning and carrying on.
+  The workspace lease that guards the fence is never taken from a holder that is still alive, however
+  long it has held it: one paused mid-write, on a machine that slept, would otherwise commit its stale
+  view over the fence when it resumed. An old lease names the file to delete if its holder's pid was
+  reused by another process.
 - **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
   already kept its tables: a download flags all three `existing: true`. Deleting a relationship
   removed its lookup column — and that column's data — from a table teardown kept.
