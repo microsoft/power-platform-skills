@@ -29,11 +29,24 @@ function structuralProblems(code) {
   return problems;
 }
 
+// Every outcome is a result, never a throw: `ok:false` is what sends the orchestrator to its one inline
+// rewrite, and a folder or an unreadable file at the page path used to throw out of readFileSync — an
+// uncaught CLI failure instead of that recovery. lstat, not existsSync, so a link there (dangling ones
+// included) is reported as what it is: not a page written in place — the dispatch gate
+// (check-page-files.js) refuses a link at a page path before any worker runs.
 function validatePageOutput({ filePath }) {
   if (!filePath) return { ok: false, filePath, problems: ['--file is required'] };
   const abs = path.resolve(filePath);
-  if (!fs.existsSync(abs)) return { ok: false, filePath: abs, problems: ['file was never written'] };
-  const problems = structuralProblems(fs.readFileSync(abs, 'utf8'));
+  const fail = (problem) => ({ ok: false, filePath: abs, problems: [problem] });
+  let entry;
+  try { entry = fs.lstatSync(abs); } catch (e) {
+    return fail(e && e.code === 'ENOENT' ? 'file was never written' : `file could not be inspected (${(e && e.code) || e})`);
+  }
+  if (entry.isSymbolicLink()) return fail('is a symbolic link or junction, not a page file written in place');
+  if (!entry.isFile()) return fail('is not a regular file');
+  let code;
+  try { code = fs.readFileSync(abs, 'utf8'); } catch (e) { return fail(`file could not be read (${(e && e.code) || e})`); }
+  const problems = structuralProblems(code);
   return { ok: problems.length === 0, filePath: abs, problems };
 }
 

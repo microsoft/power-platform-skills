@@ -166,6 +166,13 @@ test('genpage orchestrator gates planner output with deterministic plan provenan
   assert.match(skill, /approved\s+plan\s+body/i, 'create flow must verify against the approved plan body, not mere file existence');
   assert.match(editFlow, /genpage-plan-provenance\.js[\s\S]{0,500}prepare/i, 'edit flow must quarantine stale genpage-edit-plan.md before planner writeback');
   assert.match(editFlow, /genpage-plan-provenance\.js[\s\S]{0,500}verify/i, 'edit flow must hash-check the written edit plan against the approved body');
+  // `prepare` refuses a link at the plan path or the quarantine folder; carrying on would let the
+  // planner write the approved plan through it.
+  for (const [flow, text] of [['create', skill], ['edit', editFlow]]) {
+    const prep = text.indexOf('genpage-plan-provenance.js" prepare');
+    assert.ok(prep > -1, `${flow} flow runs prepare`);
+    assert.match(text.slice(prep, prep + 700), /Continue only on `"ok":true`[\s\S]{0,300}halt/, `${flow} flow halts when prepare refuses`);
+  }
 });
 
 test('genpage orchestrator validates worker output completeness before accepting parallel results', () => {
@@ -218,6 +225,37 @@ test('the Custom API phase and the page builder never read a missing or malforme
   assert.match(builder, /That sentinel is the only way a plan says\s+"none"/);
   assert.match(builder, /\*\*stop and report it instead of writing the page\*\*/);
   assert.doesNotMatch(builder, /is missing entirely, or contains no binding row, the page has \*\*no Custom APIs\*\*/);
+});
+
+// A plan made while `custom-api` was ON still carries its binding table after the flag is turned OFF.
+// Page generation takes that table as permission to emit executeAction/executeFunction calls, while the
+// OFF branch drops actions.json and --actions — so skipping the phase "regardless of the plan" deployed
+// pages calling Custom APIs that were never bound. OFF with a real table must halt before generation.
+test('a disabled Custom API probe halts on a plan that still carries a binding table', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const start = skill.indexOf("**If it prints `disabled`:** Custom API support is OFF.");
+  assert.ok(start > -1, 'the disabled branch of the Custom API phase is where it was');
+  const off = skill.slice(start, skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
+  assert.match(off, /actual binding table[\s\S]{0,200}\*\*halt before page generation\*\*/, 'a real table under a disabled probe halts');
+  assert.match(off, /only a body of exactly `No custom API bindings\.` continues/, 'only the sentinel lets a disabled run go on');
+  assert.match(off, /missing, empty, or malformed section halts too/, 'a broken section halts under a disabled probe as well');
+  assert.doesNotMatch(off, /regardless of what the\s+plan's/i, 'the disabled branch must not ignore the plan');
+  assert.doesNotMatch(off, /Any other section body/i, 'no body but the sentinel means "none"');
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  assert.match(fastPath, /3b\. Only when the Phase 4\.6 probe printed `enabled` \*\*and\*\*/, 'inline generation reads Custom API guidance only under an enabled probe');
+});
+
+// The manifest generator exits 2 when an existing package.json lacks a package a requested feature needs
+// (and when the working directory is a link). The step used to say "do not block the workflow if the
+// script returns non-zero", so a charts rerun carried on over the stale manifest the check exists to stop.
+test('the manifest step halts on exit 2 instead of carrying on over a stale package.json', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const start = skill.indexOf('scripts/generate-page-manifest.js');
+  assert.ok(start > -1, 'the manifest step is where it was');
+  const step = skill.slice(start, skill.indexOf('### Phase 1: Plan', start));
+  assert.match(step, /\*\*Continue only on exit 0\.\*\*/);
+  assert.match(step, /\*\*Exit 2 — halt\*\*[\s\S]{0,400}--force/, 'exit 2 halts and surfaces the merge / --force choice');
+  assert.doesNotMatch(step, /do\s+not\s+block\s+the\s+workflow/i, 'no non-zero exit is waved through');
 });
 
 test('page generation rejects Griffel borderWidth shorthand before deploy', () => {

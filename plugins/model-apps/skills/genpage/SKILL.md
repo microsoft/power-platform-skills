@@ -101,15 +101,22 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
   the requirements clearly call for them; otherwise omit and keep the
   manifest lean.
 - The script keeps an existing `package.json` (no `--force`) only when it
-  already lists every package the requested features need. When one is
-  missing it exits 2 naming the packages: tell the user, who can merge them
-  or rerun with `--force`. A package present at a version the user changed
-  is kept and listed as `versionDrift` in the JSON summary — mention it, since
-  local type-checking then differs from the versions pages are written for.
-  Pass `--force` to overwrite (used in regeneration flows when versions drift).
-- Output is a JSON summary on stdout; pipe to stderr for visibility but do
-  not block the workflow if the script returns non-zero — the manifest is a
-  dev-ergonomics aid, not part of the deployed artifact.
+  already lists every package the requested features need. A package present
+  at a version the user changed is kept and listed as `versionDrift` in the
+  JSON summary — mention it, since local type-checking then differs from the
+  versions pages are written for. Pass `--force` to overwrite (used in
+  regeneration flows when versions drift).
+- Output is a JSON summary on stdout. **Continue only on exit 0.**
+  - **Exit 2 — halt** and show the user the error line. When it names
+    packages a requested feature needs that the existing `package.json`
+    lacks, ask whether they will merge them into it or want a rerun with
+    `--force` (which replaces the file), and rerun until it exits 0 before
+    Phase 1 — continuing would leave a `--features charts` run on a manifest
+    without `d3`, the stale state this check exists to stop. Exit 2 also
+    reports a working directory that is a link or not a directory: never
+    write through it.
+  - Any other non-zero exit is a usage error in the command above: fix it and
+    rerun.
 
 ### Phase 1: Plan
 
@@ -250,6 +257,12 @@ missing and stop, so the run can be re-driven with the decision supplied.
    ```powershell
    node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-plan.md"
    ```
+
+   Continue only on `"ok":true`. It refuses a plan path, approval sidecar
+   (`.approved-genpage-plan.md`) or `.genpage-provenance` folder that is a link or
+   junction (a dangling one included) or the wrong kind of entry, since the approved
+   plan would be written through it: on `"ok":false`, halt and tell the user to remove
+   what the error names.
 
    Also save the plan body the planner returned for approval — the one presented
    with `EnterPlanMode`, or approved by default when unattended — to a sidecar such
@@ -602,10 +615,16 @@ authored while the flag was ON must not deploy Custom API bindings after it is t
 node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-api
 ```
 
-**If it prints `disabled`:** Custom API support is OFF. Skip this phase entirely — do not
-create or pass `actions.json`, and never add `--actions` on upload — **regardless of what the
-plan's `## Custom API Bindings` section says**. (Backstop: `list-custom-apis.js` also fails
-closed with exit 3 if invoked while OFF.)
+**If it prints `disabled`:** Custom API support is OFF. Do not create or pass `actions.json`,
+and never add `--actions` on upload. The plan's `## Custom API Bindings` section still decides
+whether the run may go on: only a body of exactly `No custom API bindings.` continues, with no
+Custom APIs. For an **actual binding table** (a `| Name | Kind | …` header with at least one data
+row), **halt before page generation**. That plan was made while the flag was on, and page
+generation takes the table as permission to emit `executeAction` / `executeFunction` calls —
+deploying them with no bindings leaves pages calling Custom APIs that are not bound. Tell the user
+to turn the flag back on, or re-run planning (the Custom API builder writes no bindings while the
+flag is off). A missing, empty, or malformed section halts too, exactly as in the `enabled`
+branch. (Backstop: `list-custom-apis.js` also fails closed with exit 3 if invoked while OFF.)
 
 **If it prints `enabled`:** read the plan's `## Custom API Bindings` section. The section is
 mandatory: continue with no actions only when its body is exactly `No custom API bindings.`.
@@ -659,9 +678,14 @@ Before invoking any builders, verify:
   ```
 
   Continue only on `"ok":true`. It refuses absolute paths (drive-qualified ones included), `..`
-  traversal, backslash separator aliases, a parent that resolves through a link or junction to
-  outside the working directory, and case-insensitive collisions such as `Page.tsx` plus
-  `page.tsx`. On any problem, halt and re-plan instead of rewriting filenames here: a renamed
+  traversal, backslash separator aliases, a name Windows cannot store (a device name such as
+  `CON.tsx`, a reserved character such as `:`, or a trailing dot or space), a name that is not a
+  `.tsx` page file (such as `package.json` or `RuntimeTypes.ts`), a page path that is itself a link,
+  junction or hard link or is not a regular file, a parent that resolves through a link or junction
+  to outside the working directory or cannot be resolved at all (a dangling link, a folder it cannot
+  read), and case-insensitive collisions — `Page.tsx` plus `page.tsx` in the plan, two names that
+  reach one file through a link, or a name whose file or folder is already on disk under another
+  spelling. On any problem, halt and re-plan instead of rewriting filenames here: a renamed
   file is a page the user did not approve, and the provenance check compares page files.
   Duplicate filenames cause silent last-writer-wins data loss under parallel execution.
 
@@ -680,12 +704,14 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
    sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
-3b. Only when the plan's `## Custom API Bindings` section contains an **actual
-   binding table** (a `| Name | Kind | …` header with at least one data row),
-   also read `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
+3b. Only when the Phase 4.6 probe printed `enabled` **and** the plan's
+   `## Custom API Bindings` section contains an **actual binding table** (a
+   `| Name | Kind | …` header with at least one data row), also read
+   `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
    `No custom API bindings.` sentinel as no Custom APIs. If the section is
    missing, empty, or malformed, halt before inline generation (same contract as
    Phase 4.6); do not downgrade a planner/schema failure to "no Custom APIs."
+   (A `disabled` probe with a binding table has already halted in Phase 4.6.)
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read

@@ -26,6 +26,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { buildPagePlan, pageKey, pageFile, pageDataMode, mdText } = require('./lib/page-plan.js');
+const { pageFileProblems } = require('./lib/page-file-targets.js');
 
 function main() {
   const argv = process.argv.slice(2);
@@ -76,6 +77,19 @@ function main() {
   const missing = named.filter((n) => !fs.existsSync(path.join(samplesDir, n)));
   if (missing.length) {
     emitResult(false, new Error(`page plan references sample(s) that do not exist in samples/: ${missing.join(', ')}`));
+    return;
+  }
+
+  // The checks that need the disk — a link at a page path, a folder that links outside the working
+  // directory, a page already there under another spelling — run HERE, where the working directory is
+  // known: buildPagePlan is pure, so it applies only the lexical rules and collisions. /genpage runs the
+  // same checks through check-page-files.js before its workers; this is /app-builder's, before Phase 1.5
+  // dispatches any. Only the pages a worker will write are checked — a built page is written by nobody,
+  // and buildPagePlan has already held it to collisions.
+  const intentFiles = (spec.pages || []).filter((p) => p && (!p.source || p.source.kind === 'intent')).map(pageFile);
+  const problems = pageFileProblems(intentFiles, { workingDir: absWorkingDir });
+  if (problems.length) {
+    emitResult(false, new Error(`page file(s) are not safe to write in ${absWorkingDir}: ${problems.map((p) => p.message).join('; ')}`));
     return;
   }
 

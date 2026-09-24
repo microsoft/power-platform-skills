@@ -178,12 +178,12 @@ downloads that round-trip Choice columns.
   keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
   still commit, and a re-send could only be refused as a false version conflict. Activating a
   business process flow on a newly created table can take longer than the old 60 s.
-- **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
-  that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
-  first.
 - **`/genpage` runs only the plan you approved** ([#585]). A plan left over from an earlier run is
   quarantined before the planner writes, and the new file must build exactly the pages the approved
   plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
+  A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included) is
+  refused rather than written through, and an overlong or conflicting page id is refused, not
+  truncated to a valid-looking one.
 - **A truncated page is caught before deploy** ([#585]). Every page — each parallel worker's, and one
   written inline — is checked for a complete default export, balanced brackets and elided code
   (`// TODO`, `// ...`, "omitted for brevity"). A write cut off where every bracket still balances
@@ -193,7 +193,8 @@ downloads that round-trip Choice columns.
   "Loading…" in a label is UI copy, not elision.
 - **A missing `## Custom API Bindings` section halts instead of meaning "none"** ([#585]). Only the
   exact `No custom API bindings.` sentinel says a page has none, so a broken plan can no longer drop
-  an approved binding.
+  an approved binding. A plan made while `custom-api` was on halts too once the flag is off, instead
+  of generating Custom API calls that deploy with no bindings.
 - **Solution packaging checks every connection reference before changing anything** ([#585]). A
   missing reference used to fail after the app and pages had already been added to the solution.
 - **Connections without both ids are no longer offered for binding** ([#585]). A listing where no row
@@ -201,8 +202,8 @@ downloads that round-trip Choice columns.
 - **Right-to-left layout follows PAC's RTL column** ([#585]), not a list of six Arabic and Hebrew
   LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
 - **Re-running the manifest generator with a new feature no longer reports success over a stale
-  `package.json`** ([#585]). A missing package fails with the fix; a version you changed is kept and
-  reported as `versionDrift`.
+  `package.json`** ([#585]). A missing package fails with the fix, and `/genpage` halts there for you
+  to merge it or rerun with `--force`; a version you changed is kept and reported as `versionDrift`.
 - **The code-generation rules list exactly the packages the page installs** ([#585]), and a test
   fails when they drift from the dependency map. Three libraries the rules offered but the package
   never installed are gone from the list.
@@ -221,9 +222,16 @@ downloads that round-trip Choice columns.
   (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`. The same checks back
   `/genpage`'s new gate.
 - **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
-  `..`, backslash aliases, a folder that links outside the working directory, and names that collide
-  ignoring case (`Page.tsx` / `page.tsx`) halt the build; the same rule covers the pages `/app-builder`
-  generates, and the evals.
+  `..`, backslash aliases, a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
+  a trailing dot), a name that is not a `.tsx` page (`package.json`), a page path that is itself a link
+  or not a regular file, a folder that links outside the working directory or cannot be read, and
+  names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
+  already there) halt the build. The same rule covers the pages `/app-builder` generates — which now
+  runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
+  cannot be read fails its check instead of crashing it.
+- **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
+  that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
+  first.
 
 ### Changed
 
@@ -251,6 +259,7 @@ downloads that round-trip Choice columns.
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
 [#585]: https://github.com/microsoft/power-platform-skills/issues/585
+[#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
 [#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589

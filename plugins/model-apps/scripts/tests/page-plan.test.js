@@ -167,6 +167,19 @@ test('an implemented page keeps a path the spec gate accepted, Windows separator
   assert.deepEqual(validateGenpagePlanSchema(md), []);
 });
 
+// The spec gate accepts an implemented codeFile that is not `.tsx`, and no worker writes a built page,
+// so the write-target `.tsx` rule must not refuse the plan — as it did once that rule was added.
+test('an implemented page with a codeFile the spec gate accepts is not refused as a write target', () => {
+  const md = buildPagePlan({
+    app: { name: 'A' },
+    pages: [
+      { key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'pages/home.jsx' } },
+      { key: 'next', name: 'Next', source: { kind: 'intent', purpose: 'The next page' } },
+    ],
+  }, { workingDir: '/wd' });
+  assert.match(md, /\| Home \| home \| pages\/home\.jsx \|/);
+});
+
 test('the approved design contract reaches the worker', () => {
   // Regression: the adapter read `styling`/`theme`/`features`/`accessibility`, none of which are
   // valid `design` keys (app-spec.js rejects unknown keys), so every approved token was dropped and
@@ -306,6 +319,25 @@ test('CLI fails with usage when a required flag has no value', () => {
   const res = spawnSync(process.execPath, [cli, '--spec'], { encoding: 'utf8' });
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Usage:/);
+});
+
+// buildPagePlan is pure, so the checks that need the disk run in the CLI — /app-builder's equivalent of
+// /genpage's check-page-files.js, before any worker is dispatched. A folder squatting on a page path is
+// one of them; nothing is written when it fires.
+test('CLI refuses a page a worker could not write safely in the working directory, and writes no plan', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-disk-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+    fs.mkdirSync(path.join(dir, 'overview.tsx'));
+    const cli = path.join(__dirname, '..', 'write-page-plan.js');
+    const res = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });
+    assert.notEqual(res.status, 0, res.stdout);
+    assert.match(res.stdout + res.stderr, /not safe to write in .*"overview\.tsx" already exists and is not a regular file/);
+    assert.equal(fs.existsSync(path.join(dir, 'app-builder-page-plan.md')), false, 'no plan is written');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('CLI refuses to write a plan when a referenced sample is absent', (t) => {

@@ -116,17 +116,19 @@ function planFile(p) {
 // checks run here — the realpath check is I/O and belongs to check-page-files.js, which the genpage
 // flow runs before it dispatches workers. Collisions are named apart because they involve two pages.
 //
-// Only a page a worker will WRITE (an intent page) is held to the rule. An implemented page is in the
-// plan for the navigation graph only, and its codeFile already passed the spec gate's own confinement
-// check (codeFileConfined, app-spec.js), which accepts the Windows spelling `pages\home.tsx` — refusing
-// that here blocked /app-builder for a spec the gate had accepted. Implemented files still take part
-// in collision detection, normalized and listed first, so a new page is never written over one.
+// Only a page a worker will WRITE (an intent page) is held to the whole rule. An implemented page is in
+// the plan for the navigation graph only, and its codeFile already passed the spec gate's own
+// confinement check (codeFileConfined, app-spec.js), which accepts the Windows spelling `pages\home.tsx`
+// — refusing that here blocked /app-builder for a spec the gate had accepted. Implemented files are
+// passed as `built`: normalized, checked first by the lexical rules and for collisions, so a new page is
+// never written over one — but not by the write-target rules, such as the `.tsx` extension.
 function validatePageTargets(pages) {
   const targets = pages.map((p) => {
     const implemented = Boolean(p.source && p.source.kind === 'tsx' && p.source.codeFile);
     return { key: pageKey(p), file: planFile(p), implemented };
-  }).sort((a, b) => Number(b.implemented) - Number(a.implemented));
-  const [problem] = pageFileProblems(targets.map((t) => t.file));
+  });
+  const [problem] = pageFileProblems(targets.filter((t) => !t.implemented).map((t) => t.file),
+    { built: targets.filter((t) => t.implemented).map((t) => t.file) });
   if (!problem) return;
   if (problem.code === 'collision') throw new Error(`buildPagePlan: case-insensitive page file collision — ${problem.message}`);
   const owner = targets.find((t) => String(t.file).trim() === problem.file);

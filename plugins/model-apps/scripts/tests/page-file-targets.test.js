@@ -53,6 +53,155 @@ test('a parent that resolves through a link or junction to outside the working d
   assert.deepEqual(codes(['linked/page.tsx']), []);
 });
 
+// Every Pages File is a page `.tsx` (references/plan-schema.md). Any other name is some other file of the
+// working directory — the manifest, the generated types, the plan itself — which a worker would then
+// overwrite with a page.
+test('a name that is not a .tsx page file is refused', () => {
+  assert.deepEqual(codes(['package.json', 'genpage.d.ts', 'RuntimeTypes.ts', 'genpage-plan.md', '.tsx', 'pages/.tsx', 'page.tsx.bak']), [
+    'extension:package.json', 'extension:genpage.d.ts', 'extension:RuntimeTypes.ts', 'extension:genpage-plan.md',
+    'extension:.tsx', 'extension:pages/.tsx', 'extension:page.tsx.bak',
+  ]);
+  // CONTROLS: any case of the extension, dotted stems and nested folders are pages.
+  assert.deepEqual(codes(['Upper.TSX', 'a.b.tsx', 'pages/home.tsx']), []);
+});
+
+// existsSync follows a link and calls a DANGLING one absent, so the walk stepped past a planted link to
+// the in-directory folder above it, and the worker then wrote through the link. A link AT the target is
+// refused wherever it points — `page.tsx → package.json` inside the directory would put a page into the
+// manifest — and a parent link that cannot be resolved is refused rather than waved through.
+test('a link at the page path, or a parent link that cannot be resolved, is refused', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-outside-'));
+  t.after(() => {
+    // Unlink every link FIRST — `up` points at the temp folder itself — so the recursive removal below
+    // only ever sees this test's own entries.
+    for (const name of ['up', 'alias', 'dead', 'ghost.tsx', 'page.tsx', 'hard.tsx', 'inside.tsx']) {
+      try { fs.unlinkSync(path.join(root, name)); } catch { fs.rmSync(path.join(root, name), { force: true, recursive: true }); }
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  try {
+    fs.symlinkSync(path.join(outside, 'gone'), path.join(root, 'dead'), 'junction');
+  } catch (e) {
+    t.skip(`cannot create a directory link here: ${e.message}`);
+    return;
+  }
+  assert.deepEqual(codes(['dead/page.tsx', 'fine.tsx'], { workingDir: root }), ['unresolvable:dead/page.tsx']);
+  // A link to the working directory's own PARENT is outside it too (the relative path is exactly "..").
+  fs.symlinkSync(path.dirname(root), path.join(root, 'up'), 'junction');
+  assert.deepEqual(codes(['up/page.tsx'], { workingDir: root }), ['realpath-escape:up/page.tsx']);
+  let fileLinks = true;
+  try {
+    fs.symlinkSync(path.join(outside, 'target.tsx'), path.join(root, 'ghost.tsx'), 'file');
+    fs.writeFileSync(path.join(root, 'package.json'), '{}');
+    fs.symlinkSync(path.join(root, 'package.json'), path.join(root, 'page.tsx'), 'file');
+  } catch { fileLinks = false; }
+  if (fileLinks) {
+    assert.deepEqual(codes(['ghost.tsx', 'page.tsx', 'fine.tsx'], { workingDir: root }), ['link:ghost.tsx', 'link:page.tsx']);
+    assert.deepEqual(fs.readdirSync(outside), [], 'nothing was created through the dangling link');
+  }
+  // A HARD link has no link bit — lstat calls it a plain file and realpath leaves it where it is — yet a
+  // worker writing it rewrites the other name too, outside the directory included. No privilege needed
+  // on Windows, so it is the easier route.
+  fs.writeFileSync(path.join(outside, 'precious.txt'), 'keep me');
+  fs.linkSync(path.join(outside, 'precious.txt'), path.join(root, 'hard.tsx'));
+  const hard = pageFileProblems(['hard.tsx'], { workingDir: root });
+  assert.deepEqual(hard.map((p) => `${p.code}:${p.file}`), ['link:hard.tsx']);
+  assert.match(hard[0].message, /hard link \(2 names for one file\)/);
+  // Two names that reach ONE file through a link inside the directory are two workers on one file.
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.symlinkSync(path.join(root, 'sub'), path.join(root, 'alias'), 'junction');
+  const alias = pageFileProblems(['alias/a.tsx', 'sub/a.tsx', 'sub/b.tsx'], { workingDir: root });
+  assert.deepEqual(alias.map((p) => `${p.code}:${p.file}`), ['collision:sub/a.tsx']);
+  assert.match(alias[0].message, /"alias\/a\.tsx" and "sub\/a\.tsx" are the same file, reached through a link or junction/);
+  // Two spellings of one name still read as a case collision with a working directory, not as a link.
+  const cased = pageFileProblems(['Other.tsx', 'other.tsx'], { workingDir: root });
+  assert.deepEqual(cased.map((p) => `${p.code}:${p.file}`), ['collision:other.tsx']);
+  assert.match(cased[0].message, /"Other\.tsx" and "other\.tsx" collide on a case-insensitive filesystem/);
+});
+
+// /app-builder's implemented pages are in the plan for the navigation graph only — no worker writes
+// them — so they are held to the lexical rules and to collisions, never to the write-target rules.
+test('built pages keep the lexical rules and collisions, but not the write-target rules', () => {
+  assert.deepEqual(codes(['next.tsx'], { built: ['pages/home.jsx', 'report.ts'] }), [], 'no extension rule for a built page');
+  assert.deepEqual(codes(['next.tsx'], { built: ['x/../y.tsx', 'C:\\a.tsx'] }), ['traversal:x/../y.tsx', 'absolute:C:\\a.tsx']);
+  assert.deepEqual(codes(['home.tsx'], { built: ['Home.tsx'] }), ['collision:home.tsx'], 'a new page is never written over a built one');
+  assert.deepEqual(codes([], { built: ['Home.tsx', 'home.tsx'] }), ['collision:home.tsx'], 'two built pages still collide');
+});
+
+// Windows cannot store these, whatever the planner's platform — and `page:alt.tsx` is worse than refused:
+// it writes an NTFS alternate stream `alt.tsx` on a file `page`, so the page lands where no one looks.
+// (A single letter before the colon, `a:b.tsx`, is already refused as a drive-relative path.)
+test('a name Windows cannot store is refused on every platform', () => {
+  const bad = ['CON.tsx', 'nul.tsx', 'con.page.tsx', 'COM1.tsx', 'lpt9.x.tsx', 'page:alt.tsx', 'q?.tsx', 'pipe|x.tsx', 'x./a.tsx', 'x /a.tsx', 'REPORT~1.TSX', 'pages~2/a.tsx'];
+  assert.deepEqual(codes(bad), bad.map((f) => `unportable:${f}`));
+  assert.match(pageFileProblems(['page:alt.tsx'])[0].message, /a character Windows reserves in "page:alt\.tsx", which Windows cannot store as a file name$/);
+  // Windows stores a short-name form fine; the problem is that it can BE another file.
+  assert.match(pageFileProblems(['REPORT~1.TSX'])[0].message, /a Windows short-name form \(`~1`\) in "REPORT~1\.TSX", which on Windows can be the short name of another file$/);
+  // CONTROLS: names that only resemble a device, inner spaces, dotted stems, a tilde without a digit, and
+  // a lone "." segment.
+  assert.deepEqual(codes(['console.tsx', 'con-page.tsx', 'my page.tsx', 'a.b.tsx', './e.tsx', 'com10.tsx', 'tilde~page.tsx']), []);
+  // Built pages are not written, so the write-target rules — this one included — do not apply to them.
+  assert.deepEqual(codes(['next.tsx'], { built: ['CON.tsx'] }), []);
+});
+
+test('a page path that exists but is not a regular file is refused before any worker runs', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-notfile-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'folder.tsx'));
+  assert.deepEqual(codes(['folder.tsx', 'fine.tsx'], { workingDir: root }), ['not-a-file:folder.tsx']);
+});
+
+// "Could not look" is not "nothing there". Every lstat and readdir error except ENOENT/ENOTDIR — and a
+// working directory that exists but cannot be resolved — used to read as absence and wave the file through.
+test('a disk error other than "not there" refuses the file instead of reading as absence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-eacces-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'locked'));
+  const denied = (e) => Object.assign(new Error(`${e}: permission denied`), { code: e });
+  const realLstat = fs.lstatSync;
+  const lstat = t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+    if (String(p).includes(`${path.sep}locked${path.sep}`)) throw denied('EACCES');
+    return realLstat(p, ...rest);
+  });
+  assert.deepEqual(codes(['locked/page.tsx', 'fine.tsx'], { workingDir: root }), ['unresolvable:locked/page.tsx']);
+  lstat.mock.restore();
+  const realReaddir = fs.readdirSync;
+  const readdir = t.mock.method(fs, 'readdirSync', (p, ...rest) => {
+    if (String(p).endsWith(`${path.sep}locked`)) throw denied('EPERM');
+    return realReaddir(p, ...rest);
+  });
+  const listed = pageFileProblems(['locked/page.tsx'], { workingDir: root });
+  assert.deepEqual(listed.map((p) => p.code), ['unresolvable']);
+  assert.match(listed[0].message, /cannot be checked on disk \(EPERM\)/);
+  readdir.mock.restore();
+  t.mock.method(fs.realpathSync, 'native', (p) => { throw denied('EIO'); });
+  const rootless = pageFileProblems(['a.tsx', 'b.tsx'], { workingDir: root });
+  assert.deepEqual(rootless.map((p) => p.code), ['unresolvable', 'unresolvable']);
+  assert.match(rootless[0].message, /the working directory cannot be resolved \(EIO\)/);
+});
+
+// A name one case-insensitive filesystem stores as a page ALREADY in its folder is that page: the worker
+// would overwrite it. The plan's own names were compared with each other only.
+test('a name that differs only in case from a page already in its folder collides with it', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-existing-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'Page.tsx'), 'export default () => null;\n');
+  fs.mkdirSync(path.join(root, 'pages'));
+  fs.writeFileSync(path.join(root, 'pages', 'Home.tsx'), 'export default () => null;\n');
+  const problems = pageFileProblems(['page.tsx', 'pages/home.tsx', 'Page.tsx', 'pages/Home.tsx', 'new/page.tsx', 'PAGES/extra.tsx'], { workingDir: root });
+  assert.deepEqual(problems.map((p) => `${p.code}:${p.file}`), ['collision:page.tsx', 'collision:pages/home.tsx', 'collision:PAGES/extra.tsx']);
+  assert.match(problems[0].message, /the existing "Page\.tsx"/);
+  assert.match(problems[1].message, /the existing "pages\/Home\.tsx"/);
+  // A FOLDER under another spelling is the same folder on a case-insensitive filesystem, and a second
+  // tree beside it on a case-sensitive one — so the plan's path is refused at the folder already.
+  assert.match(problems[2].message, /the existing "pages"/);
+  // The identical spelling is that very page, rewritten — and with no working directory nothing is listed.
+  assert.deepEqual(codes(['Page.tsx'], { workingDir: root }), []);
+  assert.deepEqual(codes(['page.tsx']), []);
+});
+
 test('the File column is read from the plan\'s Pages table, and a plan without one is not "no pages"', () => {
   const plan = [
     '## Pages',

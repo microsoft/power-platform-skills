@@ -638,7 +638,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
-    page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/link escape/case collision), shared with check-page-files.js and the evals
+    page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK

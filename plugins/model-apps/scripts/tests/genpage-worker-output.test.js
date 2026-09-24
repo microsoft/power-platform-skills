@@ -92,6 +92,31 @@ test('the CLI accepts with exit 0 and sends a failed page to the fallback with e
   assert.equal(run().status, 3, 'no --file is not a pass');
 });
 
+// A folder or an unreadable file at the page path threw out of readFileSync — an uncaught CLI failure
+// instead of the ok:false that sends the page to its one inline rewrite. A link there is not a page
+// written in place (the dispatch gate refuses one before any worker runs).
+test('a folder, a link or an unreadable file at the page path is a failed validation, never a throw', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-worker-output-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const folder = path.join(dir, 'folder.tsx');
+  fs.mkdirSync(folder);
+  assert.deepEqual(validatePageOutput({ filePath: folder }).problems, ['is not a regular file']);
+  const real = path.join(dir, 'real.tsx');
+  fs.writeFileSync(real, 'export default function GeneratedComponent() {\n  return <div>ok</div>;\n}\n');
+  const linked = path.join(dir, 'linked.tsx');
+  let linkedOk = true;
+  try { fs.symlinkSync(real, linked, 'file'); } catch { linkedOk = false; }
+  if (linkedOk) {
+    const r = validatePageOutput({ filePath: linked });
+    assert.equal(r.ok, false, 'a complete page behind a link is still not the page written in place');
+    assert.deepEqual(r.problems, ['is a symbolic link or junction, not a page file written in place']);
+  }
+  t.mock.method(fs, 'readFileSync', () => { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; });
+  assert.deepEqual(validatePageOutput({ filePath: real }).problems, ['file could not be read (EACCES)']);
+  t.mock.method(fs, 'lstatSync', () => { const e = new Error('operation not permitted'); e.code = 'EPERM'; throw e; });
+  assert.deepEqual(validatePageOutput({ filePath: real }).problems, ['file could not be inspected (EPERM)']);
+});
+
 // Elision is judged where it can mean elision — a comment, or a bare line standing in for code. The
 // same words as UI copy are fine, and rejecting them would throw away a good page and regenerate it.
 test('elided code is rejected, but the same words as UI copy are not', () => {

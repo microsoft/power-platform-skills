@@ -287,6 +287,11 @@ cannot be replaced by an inline fallback that invents its approved contract.
   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-edit-plan.md"
   ```
 
+  Continue only on `"ok":true` — on `"ok":false` (a link, junction or wrong kind of
+  entry at the plan path, its `.approved-` sidecar or `.genpage-provenance`, which the
+  approved plan would be written through), halt and tell the user to remove what the
+  error names.
+
   Save the edit-plan body the planner returned for approval to a sidecar such as
   `<working-dir>/.approved-genpage-edit-plan.md`, exactly as returned, then after the
   planner returns, verify the file it wrote targets the page that plan named:
