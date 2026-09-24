@@ -1533,7 +1533,9 @@ recalculation, or rejection path required by its Action Contract.
 reordering, limits, metrics, versions, category management, ranking, role-scoped record
 management, review decisions, program periods, or export/report output:
 
-1. Apply the relevant acceptance criteria from `${PLUGIN_ROOT}/references/BehaviorGuide.md`.
+1. Apply the relevant acceptance criteria from `${PLUGIN_ROOT}/references/BehaviorCore.md`,
+   `${PLUGIN_ROOT}/references/MutationBehavior.md`, and `${PLUGIN_ROOT}/references/DataBehavior.md` for the
+   capabilities present.
 2. Match every path named by the brief to a reachable event or binding that reads and
    writes the named source of truth.
 3. Confirm visible evidence reads that source rather than seeded or copied state.

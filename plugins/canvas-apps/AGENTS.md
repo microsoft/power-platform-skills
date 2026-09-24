@@ -36,7 +36,17 @@ references/
   PowerFxGuide.md              ← State, events, named formulas, and mock data
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
   QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
-  PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures
+  QAChecksCompact.md           ← Compact self-QA contract loaded by planners and builders
+  BehaviorCore.md              ← Shared action and behavior contracts
+  MutationBehavior.md          ← Mutation, stable-ID, receipt, and continuation contracts
+  DataBehavior.md              ← Query, filter, reorder, reporting, and temporal contracts
+  LayoutPolicies.md            ← Named responsive layout policies
+  PlanModel.md                 ← Compact in-memory planning model
+  PlanIndexCreate.md           ← CREATE-mode plan index projection
+  PlanIndexEdit.md             ← EDIT-mode plan index projection
+  SharedPlanArtifact.md        ← Shared plan artifact projection
+  ScreenCreateArtifact.md      ← New-screen brief projection
+  ScreenModifyArtifact.md      ← Existing-screen brief projection
   CreateWorkflow.md            ← Empty-app planning and planner handoff
   EditWorkflow.md              ← Simple vs complex edit routing and planning
   ValidationWorkflow.md        ← Wave compile gates and bounded diagnostic convergence
