@@ -76,7 +76,7 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsUnboundControl, claimedByAuthoredName } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1967,11 +1967,13 @@ async function runSdkBuild(spec, opts = {}) {
           // authored fields into it. Such a host is simply not a candidate: the want is matched or created
           // like any other authored section. A section a maker filled with a control but that carries an
           // AUTHORED name stays a candidate: the name is the evidence it is the author's (see
-          // isEngineHostSection). An ENGINE want, in turn, takes only a section holding an engine control:
-          // its name is shared with any authored `section_notes`, and taking the author's field section for
-          // its host meant an existing form never got its timeline (see holdsUnboundControl).
+          // isEngineHostSection). An ENGINE want, in turn, takes only a section holding its own control
+          // (the notes timeline's class id): its name is shared with any authored `section_notes`, and taking
+          // the author's section for its host meant an existing form never got its timeline (see
+          // holdsControlOf).
           const authoredWant = !isEngineOwnedSection(wantSection);
-          const candidate = (s) => (authoredWant ? !isEngineHostSection(s) : holdsUnboundControl(s));
+          const engineHost = authoredWant ? null : holdsControlOf(wantSection);
+          const candidate = (s) => (authoredWant ? !isEngineHostSection(s) : engineHost(s));
           const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase() && candidate(s);
           const inColumn = wantSection.name ? liveList.findIndex((s, i) => !claimedHere.has(i) && sameName(s)) : -1;
           let global = inColumn >= 0 ? { pointer: columnPointer + '/sections/' + inColumn, section: liveList[inColumn] }

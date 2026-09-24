@@ -5429,7 +5429,7 @@ test('form topology: an engine-owned section a maker moved is left where it is',
   spec.forms[0].notes = true;
   const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
   deployed.tabs[1].columns[0].sections.push({ id: 's7', name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
-    rows: [{ cells: [{ control: { classId: 'notes-class', fieldName: null } }] }] });
+    rows: [{ cells: [{ control: { classId: '{06375649-C143-495E-A496-C962E5B4488E}', fieldName: null } }] }] });
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
   await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
   assert.deepStrictEqual(sectionMoves(calls), [], 'the timeline is not dragged back to the first tab');
@@ -5442,8 +5442,10 @@ test('form topology: an engine-owned section a maker moved is left where it is',
 // dragged the timeline into the author's tab and the field pass poured the author's fields into it.
 // An engine-owned host is simply not a candidate for an authored want; the want is matched or created
 // like any other authored section, and the host stays exactly as it was.
+// The timeline's real control class id, as the SDK projects it (no braces, its original case).
+const NOTES_CONTROL = '06375649-c143-495e-a496-c962e5b4488e';
 const timelineHost = (id) => ({ id, name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
-  rows: [{ cells: [{ control: { classId: 'notes-class', fieldName: null } }] }] });
+  rows: [{ cells: [{ control: { classId: NOTES_CONTROL, fieldName: null } }] }] });
 test('form topology: an authored section named like the timeline host never takes the host from another tab', async () => {
   const spec = relocateSpec();
   spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
@@ -5553,6 +5555,38 @@ test('form topology: with notes on and no timeline deployed, the maker section a
         `${what}, build ${build}: exactly one timeline, created on the first build`);
     }
   }
+});
+
+// The timeline's host holds the timeline's own control. An authored `section_notes` holding a field and a
+// maker's web resource holds AN unbound control but not that one — taking it for the host meant the form
+// never got its timeline, and the notes want re-patched the author's section on every build.
+test('form topology: with notes on, a section_notes holding a field and a maker web resource is never the timeline host', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections[1].rows.push({ cells: [{ control: { classId: 'webresource-class', fieldName: null } }] });
+  const before = JSON.parse(JSON.stringify(deployed.tabs[0].columns[0].sections[1]));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  for (const build of [1, 2]) {
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+    const sections = form.tabs[0].columns[0].sections;
+    assert.deepStrictEqual(sections.find((s) => s.id === 's3'), before, `build ${build}: the author's section is untouched`);
+    assert.strictEqual(sections.filter((s) => s.rows.some((r) => r.cells.some((c) => c.control && String(c.control.classId).toLowerCase() === NOTES_CONTROL))).length, 1,
+      `build ${build}: exactly one timeline`);
+  }
+});
+
+// …while a timeline host a maker put a field into still holds that control, so it is still found and no
+// second timeline is added.
+test('form topology: with notes on, a timeline host a maker added a field to is still the host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const host = timelineHost('s7');
+  host.rows.push({ cells: [{ control: { fieldName: 'new_x' } }] });
+  deployed.tabs[0].columns[0].sections.push(host);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), [], 'no second timeline section');
 });
 
 // A section is engine-owned by STRUCTURE (only unbound controls), which cannot say who laid it out: an

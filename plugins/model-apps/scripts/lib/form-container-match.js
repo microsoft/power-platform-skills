@@ -65,12 +65,20 @@ function isEngineHostSection(s) {
   return isEngineOwnedSection(s) && ENGINE_SECTION_NAME.test(String((s && s.name) || ''));
 }
 
-// Does the section hold a control that binds no field — the notes timeline, a sub-grid, a web resource?
-// An ENGINE want's host is recognised by that. The compiler's notes want shares its name with any
-// authored `section_notes`, and taking the author's field section for its host meant an existing form
-// never got its timeline: every build "found" the host there.
-function holdsUnboundControl(s) {
-  return ((s && s.rows) || []).some((r) => ((r && r.cells) || []).some((c) => c && c.control && !c.control.fieldName));
+// A control class id as compared: the SDK projects `classid` without its braces and in its original case,
+// and the compiler writes the constant in upper case.
+const classIdOf = (c) => String((c && c.control && c.control.classId) || '').replace(/[{}]/g, '').trim().toLowerCase();
+const cellsOf = (s) => ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+
+// The host an ENGINE want is recognised by: a section holding, unbound, the want's OWN control — the notes
+// timeline's class id. The compiler's notes want shares its name with any authored `section_notes`, and
+// taking one of those for its host — any unbound control once qualified, a maker's web resource beside the
+// author's field included — meant the form never got its timeline, and the want re-patched the author's
+// section on every build. A timeline host a maker added a field to still holds the control, so it is still
+// found. A want whose cells name no class id falls back to any unbound control.
+function holdsControlOf(want) {
+  const ids = new Set(cellsOf(want).map(classIdOf).filter(Boolean));
+  return (s) => cellsOf(s).some((c) => c && c.control && !c.control.fieldName && (!ids.size || ids.has(classIdOf(c))));
 }
 
 // A deployed section an authored section claims BY NAME: the LABEL and POSITION passes must not hand
@@ -87,4 +95,4 @@ function claimedByAuthoredName(authoredNames) {
   };
 }
 
-module.exports = { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsUnboundControl, claimedByAuthoredName };
+module.exports = { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName };
