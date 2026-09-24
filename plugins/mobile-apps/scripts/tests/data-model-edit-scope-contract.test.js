@@ -72,6 +72,83 @@ test('data-model proposals and actual inventory keep separate lifecycle ownershi
   assert.match(plan, /Record any failure and\nremaining operations in memory-bank/);
 });
 
+test('setup plan-only exits before saving or applying every proposal path', () => {
+  const approval = section(setup, '### Phase 4', '### Phase 5');
+  const guard = section(approval, '**Proposal-only exit:**', 'Present the full plan');
+  assert.match(guard, /`--plan-only` is present or the caller's phase is\nplanning/);
+  assert.match(guard, /Data Model, Connectors, and retirement\/offline\nimpact/);
+  assert.match(guard, /STOP before the execution approval/);
+  assert.match(guard, /Do not save `native-app-plan\.md`, mint approval receipts/);
+  assert.match(guard, /or invoke Phases 5–7/);
+  assert.match(guard, /separate request without that flag/);
+  assert.ok(approval.indexOf('**Proposal-only exit:**') < approval.indexOf('- **Approved**'));
+});
+
+test('proposal-only data workflows do not run the configuration-persisting resolver', () => {
+  const shared = read('shared/shared-instructions.md');
+  assert.match(shared, /proposal-only environment context/);
+  assert.match(shared, /conflicting\nor incomplete context returns `NEEDS_CONTEXT`/);
+  assert.match(shared, /do not run it during `--plan-only` or a planning-phase handoff/);
+  for (const [content, start, end] of [
+    [setup, '### Phase 1', '### Phase 2'],
+    [skill('add-dataverse'), '### Step 1', '### Step 2'],
+  ]) {
+    const discovery = section(content, start, end);
+    assert.match(discovery, /For `--plan-only` or a planning-phase handoff/);
+    assert.match(discovery, /Skip the resolver command/);
+    assert.match(discovery, /returns `NEEDS_CONTEXT`/);
+    assert.ok(discovery.indexOf('Skip the resolver command') < discovery.indexOf('resolve-environment.js'));
+  }
+});
+
+test('direct Dataverse requests cannot replay an unrelated existing plan', () => {
+  const dataverse = skill('add-dataverse');
+  const plan = section(dataverse, '### Step 2 — Resolve plan', '#### Step 2a');
+  const gate = section(plan, '**Resolve the current request', 'Before reading plan content');
+  assert.match(gate, /direct\nimplementation-only invocation must compare its requested/);
+  assert.match(gate, /Present and approve\nthat exact delta/);
+  assert.match(gate, /do not apply other pending rows/);
+  assert.match(gate, /`NEEDS_CONTEXT` without mutation/);
+  assert.match(gate, /`--plan-only` returns the proposal and STOPs before plan saving/);
+  assert.match(plan, /same restriction to the newly approved standalone request delta/);
+  const services = section(dataverse, '### Step 6 — Add data sources', '### Step 6b');
+  assert.match(services, /Preserve verified unchanged services outside the approved delta/);
+  assert.match(services, /Only an approved missing binding takes\nthe add command/);
+});
+
+test('setup distinguishes retained-source refresh from schema and connector addition', () => {
+  const data = section(setup, '### Phase 5', '### Phase 6 —');
+  const connectors = section(setup, '### Phase 6 —', '### Phase 6.25');
+  for (const phase of [data, connectors]) {
+    assert.match(phase, /--refresh --data-source-name "<registered-name>"/);
+    assert.match(phase, /approved_scope/);
+  }
+  assert.match(data, /do not execute the schema-add handoff/);
+  assert.match(connectors, /return without connection creation or `add-data-source`/);
+});
+
+test('offline retirement survives no-op addition checks, summaries, and resume', () => {
+  const removal = read('shared/references/data-source-removal.md');
+  const reconcile = read('shared/references/offline-profile-reconciliation.md');
+  for (const status of ['not-applicable', 'retained', 'pending', 'reconciled']) {
+    assert.ok(removal.includes(`| \`${status}\` |`), status);
+  }
+  assert.match(removal, /offlineRetirement.*leaf result and the existing\nmemory-bank entry/);
+  assert.match(removal, /Preserve pending outcomes on retries\/resume/);
+  assert.match(removal, /could break retained offline behavior blocks app-binding removal/);
+  assert.match(removal, /`in-sync`, `no-manifest`, or `no-profile` result never clears `offlineRetirement`/);
+  assert.match(reconcile, /None of `in-sync`, `no-manifest`, or `no-profile` clears a pending retirement/);
+  const offline = section(setup, '### Phase 6.5', '### Phase 7');
+  const summary = section(setup, '### Phase 7', '## Reference');
+  assert.match(offline, /never discard a recorded `offlineRetirement` outcome/);
+  assert.match(offline, /existing `offlineRetirement` outcomes unchanged/);
+  assert.match(summary, /`pending` returns `DONE_WITH_CONCERNS`, not a clean `DONE`/);
+  assert.match(summary, /whether to retain or remove that coverage is pending/);
+  assert.match(edit, /Carry each leaf's `offlineRetirement` status into Step 8/);
+  assert.match(edit, /If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS`/);
+  assert.match(edit, /Never remove profile entries automatically/);
+});
+
 test('sample seeding resolves a required explicit scope before auth or discovery', () => {
   const scope = section(seed, '### Step 0', '## Prototype Seed Reuse');
   assert.match(scope, /--tables <comma-separated-logical-names>/);

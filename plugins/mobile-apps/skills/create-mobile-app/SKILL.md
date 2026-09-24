@@ -2007,9 +2007,11 @@ const brandedDarkTheme: ThemeTokens = {
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-The generated schema has one brand palette, so the exported dark app theme
-retains Config v5 dark surfaces and text while carrying brand accents and
-statuses. For runtime theme switching, use `useThemeControl()` from
+Without an approved custom dark palette, the exported dark app theme retains
+Config v5 dark surfaces and text while carrying brand accents and statuses.
+With an approved custom dark palette, `appDarkTheme` instead resolves the full
+`darkTokens.color` palette, including its surfaces and text, and the provider
+mapping above uses that same resolved theme. For runtime theme switching, use `useThemeControl()` from
 `@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors

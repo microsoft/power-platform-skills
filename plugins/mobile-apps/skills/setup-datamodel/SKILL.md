@@ -10,12 +10,11 @@ model: opus
 
 # Set Up Data Model + Connectors
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before the workflow below. Existing-app redesigns, including diagram imports,
-use the entry-choice gate before invoking `/edit-app` for screen integration.
-Offer data-only implementation or cancel; approved orchestrated calls skip the
-question. Keep this standalone workflow for the data-only choice or a project
-without a complete app plan, subject to the shared missing-plan safeguards.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+This standalone workflow implements the data-only choice or a project without
+a complete app plan, subject to the shared missing-plan safeguards.
 
 Combined orchestrator for standalone data source planning. Designs the Dataverse schema, plans connectors, gets approval on both, then delegates execution to `/add-dataverse` and `/add-connector`.
 
@@ -54,6 +53,12 @@ writes app-local files with `cd "<working_dir>" || exit 1`; shell state does not
 carry across tool calls.
 
 Confirm the selected root is a Power Apps mobile app:
+
+For `--plan-only` or a planning-phase handoff, perform the file/environment
+checks read-only and use the shared proposal-only environment-context rule.
+Skip the resolver command below in that mode; incomplete or conflicting context
+returns `NEEDS_CONTEXT`, not permission to persist environment configuration.
+The shell block below is for the implementation-mode workflow only.
 
 ```bash
 cd "<working_dir>" || exit 1
@@ -170,6 +175,14 @@ to classify and approve removals explicitly. Omitted tables are not automatic
 deletions; retain anything required by existing consumers or route the feature
 through `/edit-app` for their planned update.
 
+**Proposal-only exit:** if `--plan-only` is present or the caller's phase is
+planning, present the proposed Data Model, Connectors, and retirement/offline
+impact, then return to the caller and STOP before the execution approval below.
+Do not save `native-app-plan.md`, mint approval receipts, update the materialized
+manifest, or invoke Phases 5–7. A scratch proposal is not an applied plan.
+Approval to review the proposal does not override `--plan-only`; implementation
+requires a separate request without that flag and approval of its exact delta.
+
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
 ```
@@ -207,6 +220,11 @@ Invoke `/add-dataverse` with `--skip-planning` so it reads the approved plan dir
 Apply only additions/refreshes here. Skip this phase for a removal-only delta;
 approved retirements have their own Phase 6.25 handoff.
 
+For a service-only refresh of an already registered table, use the leaf's
+`--refresh --data-source-name "<registered-name>"` branch and pass its exact
+registered identity in `approved_scope`; do not execute the schema-add handoff
+below for that row. For schema changes, retain the normal handoff below.
+
 ```
 Invoke skill: /add-dataverse
 
@@ -241,6 +259,12 @@ Skip if Phase 2 chose Path C (no Dataverse).
 Read `## Connectors` from `native-app-plan.md`. For each approved added/refreshed
 connector row (not retained or retiring rows), invoke `/add-connector`:
 
+Separate the operation before dispatch: an added row takes the normal handoff;
+a refreshed row adds `--refresh --data-source-name "<registered-name>"` and
+includes the verified API/dataset/connection identity in `approved_scope`.
+Do not infer the registered name from the connector display label. The refresh
+branch must return without connection creation or `add-data-source`.
+
 ```
 Invoke skill: /add-connector
 
@@ -269,12 +293,15 @@ This standalone data-only flow does not edit consumers: if any remain, stop and
 return their integration work to `/edit-app` instead of breaking them.
 Verify the CLI cleanup and reconcile the actual remaining generated-service
 snapshot and app manifest before the summary. No retirement set means skip.
+Preserve each leaf's `offlineRetirement` outcome from the shared removal contract,
+including unresolved outcomes recorded in memory-bank by an earlier attempt.
+App-binding cleanup and offline-profile migration have separate completion states.
 
 ### Phase 6.5 — Offline profile reconciliation
 
 **Telemetry checkpoint: `reconcile_offline_profile`**
 
-If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip when Phase 2 chose Path C (no Dataverse).
+If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip the addition check when Phase 2 chose Path C (no Dataverse), but never discard a recorded `offlineRetirement` outcome.
 
 Run the local, no-network delta check:
 
@@ -283,7 +310,7 @@ cd "<working_dir>" || exit 1
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → no addition work; continue to Phase 7 with the existing `offlineRetirement` outcomes unchanged (do not nag when no profile exists). `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Declined or incomplete addition work remains a separate concern.
 
 These offline helpers also inherit the same absolute `working_dir`; no new root
 discovery is permitted during reconciliation.
@@ -301,6 +328,14 @@ Render the summary from verified results, not the example's possible artifacts.
 For connector-only work without a Dataverse inventory, report Data Model and
 Manifest as `not applicable`; do not print a nonexistent manifest path. If a
 verified inventory already exists but was untouched, label it `unchanged`.
+
+Include every affected table's `offlineRetirement` status in memory-bank and the
+final response. `pending` returns `DONE_WITH_CONCERNS`, not a clean `DONE`:
+"App changes completed. The offline profile still includes Orders; deciding
+whether to retain or remove that coverage is pending."
+Use actual table names and verified app results; if app cleanup failed, report
+that failure instead of claiming completion. `retained` reports the approved
+reason; `reconciled` requires verified profile migration, not an `in-sync` result.
 
 ```
 ✅ Data sources set up

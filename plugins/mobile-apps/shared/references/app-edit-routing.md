@@ -1,9 +1,10 @@
 # App edit routing
 
-Use this contract before executing `add-native`, `add-connector`, `add-datasource`,
-`add-dataverse`, `add-sharepoint`, `setup-datamodel`, or a mutating `design-system`
-request. Adding a wrapper or registering a service is not the same as delivering
-the feature that uses it.
+Use this contract for every native, connector/data-source, data-model, or
+mutating design feature request classified by the shared entry preflight.
+This includes future feature skills; it is not an allowlist of current names.
+Adding a wrapper or registering a service is not the same as delivering the
+feature that uses it.
 
 ## Direct requests
 

@@ -64,6 +64,20 @@ Resolve the approved artifact keys before this check. Missing/ambiguous intent
 returns to the owner (ask standalone); do not assume all artifacts. Substitute
 the exact JSON list, e.g. `["scanner"]` or `["photo","upload"]`, below:
 
+Use the owner's normalized public capability to resolve those keys:
+
+| Public capability | Artifact keys |
+|---|---|
+| `camera` | `["photo"]` |
+| `image-picker` | `["gallery"]` |
+| `barcode-scanner` | `["scanner"]` |
+| `qr-scanner` | `["scanner"]` |
+
+For combined approved capabilities use the union. Add `upload` only for an
+explicitly approved custom Dataverse Image-upload helper, not automatically for
+capture or scanning. The checker accepts artifact-key JSON, not raw `$ARGUMENTS`
+or a public capability string. Missing/ambiguous intent still returns to the owner.
+
 ```bash
 node - '<approved-artifact-keys-json>' <<'NODE'
 const p = require('./package.json');

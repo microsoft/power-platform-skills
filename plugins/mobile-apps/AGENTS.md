@@ -103,6 +103,17 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     Lookup fanout, prototype seeds, media uploads, and retries cannot widen that
     scope. Preserve transitional manifest entries until verified removal; never
     prune the inventory merely to steer seeding.
+19. **Shared entry policy is not copied into every skill** — Every new public
+    app workflow starts with a read-first link to `shared/shared-instructions.md`
+    and allows `Read`. The shared preflight classifies feature work before
+    operational commands; leaves only link to it. Invocation discovery tests
+    cover newly added skills automatically. These static checks verify the
+    instruction contract, not model compliance; do not claim smaller-model or
+    host reliability without agent-run evidence.
+20. **Offline retirement survives addition checks** — Preserve per-table
+    `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
+    `in-sync` never clears a pending profile decision/migration. App-binding
+    approval is not permission to delete offline profile items or server data.
 
 ## Telemetry
 

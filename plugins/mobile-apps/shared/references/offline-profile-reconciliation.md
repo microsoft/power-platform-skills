@@ -48,6 +48,18 @@ A `delta` result carries:
 - `columnBaselineMissing[]` — profiled tables whose snapshot predates the `schemaColumns`
   baseline (see below). Column delta can't be computed for these; treat as advisory only.
 
+### Retirement outcomes are independent
+
+This checker detects additions, not excess profile tables or completed removals.
+Preserve the per-table `offlineRetirement` outcomes from
+[data-source-removal.md](data-source-removal.md) and prior memory-bank entries.
+None of `in-sync`, `no-manifest`, or `no-profile` clears a pending retirement.
+Report pending decisions/migrations even when the addition check needs no work;
+do not silently delete profile items or edit the local snapshot to simulate a
+server change. Only approved retention or verified profile migration resolves
+that pending outcome. A failure to read/verify the profile is not evidence of
+`not-applicable`.
+
 ---
 
 ## The `schemaColumns` baseline (why column delta is precise, not noisy)

@@ -4,6 +4,44 @@
 
 All skills reference this single file. When new shared instructions are added, update this file only — no changes needed to individual skills.
 
+## App feature entry points
+
+Read this shared file before any workflow commands or app/cloud writes. If it
+cannot be loaded, STOP and report the missing prerequisite; do not proceed from
+a remembered or copied fragment. This preflight applies to new skills too, not
+only the currently named feature leaves.
+
+Classify the current request from supplied intent, caller context, and minimal
+local app markers before version/auth checks, metadata discovery, or planners:
+
+- Native capability, connector/data-source, data-model, or design feature work:
+  read and execute [app-edit-routing.md](references/app-edit-routing.md).
+  It alone owns the implementation-only/full-integration/cancel entry-choice
+  gate, forwarding, and approved-child exceptions. Do not repeat or narrow the
+  choices in individual skills.
+- Direct `/edit-app` and fresh creation keep their own approval workflows.
+  Approved child calls carry `MOBILE_APP_ORCHESTRATING=1` and matching owner,
+  absolute working directory, phase, and scope; a marker alone is not approval.
+- Pure operational/configuration requests (connection management, diagnostics,
+  publishing, telemetry, sample seeding, offline administration) keep their own
+  scoped approvals; they do not authorize an unrelated feature integration.
+
+`--plan-only` or a planning-phase handoff never authorizes mutating leaves,
+connection creation, generated services, native wrappers, brand tokens, or
+dependency installation. Return the proposal before implementation; only a
+workflow's explicit plan-document approval may save planning documents.
+Propagate the mode and current scoped context through routers; missing or
+conflicting context returns `NEEDS_CONTEXT` before mutation.
+
+For proposal-only environment context, read the selected `power.config.json`
+environment ID and reuse matching complete caller context or the local
+`.resolved-environment.json` / `auth.config.json` environment record without
+editing it. Require a matching environment ID, HTTPS URL, and tenant; conflicting
+or incomplete context returns `NEEDS_CONTEXT`. The ordinary
+`resolve-environment.js` command persists cache/auth/telemetry configuration, so
+do not run it during `--plan-only` or a planning-phase handoff. Ask for verified
+context rather than silently changing configuration to obtain it.
+
 ---
 
 ## Version Check
@@ -116,18 +154,6 @@ Approved creation/edit child calls reuse their scoped handoff without repeating
 the entry question. Direct operational `/list-connections` requests keep their own workflow;
 they do not require full app integration or authorize unrelated feature changes.
 
-## App feature entry points
-
-Before native, connector, data-model, or design feature work, apply
-[app-edit-routing.md](references/app-edit-routing.md). Direct requests on existing
-apps first ask implementation-only vs full integration vs cancel; invoke
-`/edit-app` only after the integration choice is approved. Approved child calls carry
-`MOBILE_APP_ORCHESTRATING=1` and explicit scoped context so they do not recurse.
-They skip the entry-choice gate. Operational/configuration-only skills keep
-their own workflows.
-
----
-
 ## Safety Guardrails
 
 ### Mandatory changed-file validation
@@ -221,7 +247,7 @@ not approval to initialize, add, refresh, or remove anything.
 | Operation | Exact mobile command |
 |---|---|
 | Initialize a fresh approved app | `npx --no-install power-apps init -t MobileApp --display-name '<name>' --environment-id '<id>' --non-interactive` |
-| Add Dataverse table service | `npx --no-install power-apps add-data-source --api-id dataverse --org-url '<environment-url>' --resource-name '<table-logical-name>'` |
+| Add Dataverse table service | `npx --no-install power-apps add-data-source --api-id dataverse --org-url '<environment-url>' --resource-name '<table-logical-name>' --non-interactive` |
 | Add action connector | `npx --no-install power-apps add-data-source --api-id '<apiId>' --connection-id '<connection-id>'` |
 | Add tabular connector source | `npx --no-install power-apps add-data-source --api-id '<apiId>' --connection-id '<connection-id>' --dataset '<dataset>' --resource-name '<table>'` |
 | Add SQL stored procedure | `npx --no-install power-apps add-data-source --api-id shared_sql --connection-id '<connection-id>' --dataset '<dataset>' --sql-stored-procedure '<procedure>'` |

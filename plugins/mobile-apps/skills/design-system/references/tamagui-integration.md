@@ -114,9 +114,10 @@ declare module 'tamagui' {
 }
 ```
 
-The generated schema has one palette. Light mode receives its approved
-surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces
-and text while carrying the approved accent and status colors.
+Without an approved custom dark palette, light mode receives the brand palette's
+surfaces, text, accents, and statuses. This default dark branch keeps Config v5
+dark surfaces and text while carrying the approved accent and status colors.
+When custom dark is approved, apply the conditional branch below instead.
 
 Never copy `parseColorChannels`, `readableForeground`, or
 `withSemanticAliases` into the app. The host helper owns those rules.
@@ -178,6 +179,26 @@ the owner's approved screen scope.
 Missing files, missing exports/keys, or unresolved placeholder values block
 custom-dark integration. Do not silently fall back to default dark surfaces
 and report the approved palette as applied. Return the mismatch to the owner.
+
+## Restored dark state
+
+For refresh or rollback, first follow
+[the snapshot contract](./refresh-flow.md#snapshot-contract) and reconcile the
+Design plan with the resulting approved state. Do not choose a branch from the
+mere presence of `brand/tokens.dark.ts` or the abandoned newer plan.
+
+- **Approved custom dark restored:** verify the exact restored `darkTokens`
+  artifact, then apply the conditional branch above so `appDarkTheme` consumes
+  the restored `darkTokens.color`, not the previous palette.
+- **Default dark restored or custom dark removed:** remove only stale
+  `tokens.dark` imports and custom-dark overrides from the theme configuration.
+  Use the unchanged Brand Import default dark declaration, retaining Config v5
+  dark surfaces/text and approved light-brand accents/statuses. Do not import or
+  create an absent dark file, and do not delete unrelated theme customizations.
+- **Both branches:** rebuild `brandedDarkTheme` from the same resolved
+  `appDarkTheme` using Root Provider Wiring below, preserving unrelated provider
+  props, and perform the validation below. Artifact-only callers must return
+  this runtime dependency to their owner, not claim the app already uses it.
 
 ## Root Provider Wiring
 
@@ -264,3 +285,7 @@ For the custom-dark branch, also verify the `darkTokens` import, that
 `appDarkTheme` consumes `darkTokens.color`, and that the resolved dark
 surface/text values reflect the approved palette rather than the light/default
 palette. A generated dark file alone does not satisfy this integration check.
+After restoring default dark, verify there is no stale `tokens.dark` import or
+custom-dark override and the provider reflects the base dark branch. Runtime
+verification belongs to the owning create/edit flow; instruction-contract tests
+alone are not native rendering evidence.

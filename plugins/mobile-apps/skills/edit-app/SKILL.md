@@ -509,7 +509,7 @@ answers, and return to the approval gate if an unresolved choice changes scope.
    for correction, not a fallback to project-wide seeding. Pass the handoff below.
    If insertion fails, record the partial result and continue only if the app
    handles empty states; never report complete seed coverage.
-3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
+3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. For a retained source refresh, pass skill-only `--refresh --data-source-name "<registered-name>"` with its verified identity in `approved_scope`; do not route refreshes through addition. Use the same refresh branch for service-only Dataverse repairs without schema changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute the approved `/design-system` operation (refresh,
@@ -591,6 +591,10 @@ node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
 Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+
+These statuses concern additions only. Preserve any `offlineRetirement` outcomes
+from earlier attempts, and collect the removal leaf's updated outcomes in
+Step 6.5; an `in-sync` result never resolves a pending retirement.
 
 ### Step 6 — Rebuild affected screens
 
@@ -696,6 +700,9 @@ and generated output, and reconcile the app manifest and offline impact.
 Refresh the Generated Services snapshot again before final validation.
 A no-op, partial cleanup, or remaining consumer blocks completion; do not mark
 the new plan as fully applied or manually patch generated/config files.
+Carry each leaf's `offlineRetirement` status into Step 8, including intentionally
+retained coverage and pending decisions/migrations. Do not replace those statuses
+with Step 5.6's addition-only result.
 
 ### Step 7 — Verify
 
@@ -766,10 +773,16 @@ Append an edit entry to `memory-bank.md`:
 - Verification: <commands/gates + pass/fail/skipped with reason>
 - Preview: <preview.html path or not generated>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
+- Offline retirement: <per-table not-applicable / retained with reason / pending / reconciled with verification>
 - Blocks/concerns: <none or list>
 ```
 
 Final summary must say what changed in the app, what verification ran, where the preview is, and whether a symptom-debug handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
+If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS` and
+state the unfinished decision separately: "App changes completed. The offline
+profile still includes Orders; deciding whether to retain or remove that coverage
+is pending." Substitute the actual table and only claim app completion when its
+verification passed. Never remove profile entries automatically to clear this note.
 
 ## Notes
 

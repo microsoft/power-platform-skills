@@ -10,11 +10,9 @@ model: opus
 
 # Add Dataverse
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before project/auth work. For direct changes to an existing app, the entry-choice
-gate asks before invoking `/edit-app` to plan schema and screen changes together.
-Offer implementation-only work or cancel. Approved orchestrated calls skip the
-question; implementation-only choices use this leaf.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
 An existing plan alone does not mean it includes or approves the new request;
 never replay the old Data Model instead of resolving the requested delta.
 
@@ -25,9 +23,14 @@ returns without entering Steps 1-9. Removing a plan row is not implemented by
 re-running table creation or by deleting Dataverse metadata. For a mixed edit,
 the owner adds/refreshes first and invokes removal separately after consumer edits.
 
+**Refresh branch:** after entry routing, `--refresh` or an approved service-only
+refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-9. Preserve the exact `--data-source-name` and approved
+binding identity. Do not replay schema writes, publish, or run `add-data-source`.
+
 Two paths:
 
-- **Existing tables only** — skip to Step 5 (just runs `npx power-apps add-data-source` per table)
+- **Existing tables only** — resolve the current scope in Steps 1–2, then skip schema writes and use Step 6 to add only missing approved bindings or refresh approved retained sources.
 - **New / extended tables** — full workflow with Web API mutations in dependency order
 
 ## Workflow
@@ -39,6 +42,11 @@ Two paths:
 ### Step 1 — Verify project & auth
 
 Confirm Power Apps mobile app:
+
+For `--plan-only` or a planning-phase handoff, check the app files read-only and
+use the shared proposal-only environment-context rule. Skip the resolver command
+below; incomplete or conflicting context returns `NEEDS_CONTEXT`. The ordinary
+resolver persists configuration and must not run in that mode.
 
 ```bash
 test -f power.config.json && test -f app.config.js
@@ -56,6 +64,18 @@ Look for `native-app-plan.md` in the project root:
 ```bash
 test -f native-app-plan.md
 ```
+
+**Resolve the current request before consuming an existing plan.** A direct
+implementation-only invocation must compare its requested tables/columns/service
+changes with the existing plan and read-only live evidence. Present and approve
+that exact delta, then save only the accepted plan changes before implementation.
+If the request adds nothing, verify the existing outcome and report a no-op;
+do not apply other pending rows. If intent or scope is missing, ask or return
+`NEEDS_CONTEXT` without mutation. An explicit request to apply the whole existing
+plan still requires approval of the reconciled operation set.
+For an approved child call, use only the supplied current `approved_scope`.
+In either case, `--plan-only` returns the proposal and STOPs before plan saving,
+approval-receipt creation, service generation, or Steps 3–9.
 
 Before reading plan content, inspect `$ARGUMENTS` for the five fast-path
 artifact flags in Step 2a. When all are present, only confirm
@@ -80,6 +100,7 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
 
 For an edit handoff, restrict schema writes to the exact `approved_scope` delta;
 unaffected plan rows are context, not permission to replay their mutations.
+Apply the same restriction to the newly approved standalone request delta.
 Retain the full required-service set for existing screens. If reconciliation
 would change an approved name, storage target, or screen contract, return the
 proposed adaptation to the owner before writing; update and approve the dependent
@@ -1073,10 +1094,20 @@ When `<operation_manifest_mode> = valid`, set `SERVICE_REQUIRED_TABLES` from
 names and exclude only explicit deferred rows. Service generation remains
 sequential outside BATCH-METADATA.
 
-For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
+For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create),
+verify its registered service before deciding whether generation is needed.
+Preserve verified unchanged services outside the approved delta. For an approved
+refresh or a service affected by this run's approved schema changes, use
+[Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+with the exact existing registration. Only an approved missing binding takes
+the add command below. A required unregistered service outside approved scope
+returns `NEEDS_CONTEXT`, not permission to register unrelated tables.
+Do not derive the service list from Creation Order alone because reused tables
+are intentionally absent from creation tiers. The CLI reads the environment ID
+from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
+npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name> --non-interactive
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.

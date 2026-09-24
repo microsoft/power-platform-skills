@@ -16,11 +16,10 @@ model: sonnet
 
 # Add SharePoint
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before the workflow below. Direct requests on an existing app use the entry-choice
-gate before invoking `/edit-app`; offer implementation-only work or cancel.
-Approved orchestrated calls skip the question and execute this leaf. Keep
-SharePoint list/library schemas in Connectors, not the Dataverse
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+Keep SharePoint list/library schemas in Connectors, not the Dataverse
 Data Model. Forward supplied site/list/connection choices and ask only for missing
 values; return scope changes to the orchestrator before mutation.
 
@@ -29,6 +28,11 @@ binding removal executes
 [data-source-removal.md](../../shared/references/data-source-removal.md) and
 returns. Do not create a connection/list or run Steps 1-12 for removal; the
 SharePoint list/library and its contents remain on the server.
+
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-list
+service refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-12. Preserve the exact `--data-source-name` and approved
+binding identity; do not create a list/connection or run `add-data-source`.
 
 Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 

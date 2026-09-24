@@ -10,11 +10,8 @@ model: sonnet
 
 # Add Native Capability
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before the workflow below. On an existing app, the entry-choice gate asks before
-invoking `/edit-app` for intent, plan, storage, and screen integration. Offer
-implementation-only work or cancel instead. Approved orchestrated calls skip
-this question; implementation-only choices execute the leaf workflow.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 The leaf generates typed wrappers under `src/native/` for native capabilities that
 the upstream template already ships. Screens import the wrapper instead of touching

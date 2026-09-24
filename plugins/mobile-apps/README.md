@@ -246,6 +246,18 @@ generated services. `npm run generate-schemas` refreshes the runtime map afterwa
 it is not an unused-table scanner. Server tables/records and shared dependencies
 are preserved. See [data-source retirement](shared/references/data-source-removal.md).
 
+For retained-source repairs, the same data leaves accept skill-only
+`--refresh --data-source-name "<registered-name>"`. They validate the existing
+binding and refresh generated output without adding a source or connection.
+`/setup-datamodel --plan-only` returns a proposal without saving or applying an
+execution plan.
+
+Offline retirement has a separate result: a source may be gone from the app
+while its profile coverage is intentionally retained or awaiting a decision.
+Pending coverage remains visible in the final summary and memory-bank; the
+addition-only offline check cannot clear it with `in-sync`. Profile changes
+need separate approval and verification, never automatic deletion.
+
 During a mixed replacement, the manifest may temporarily include a retiring
 table until its consumers and app binding are removed. Sample-data seeding uses
 an explicit approved table list, not that whole manifest; retiring targets are

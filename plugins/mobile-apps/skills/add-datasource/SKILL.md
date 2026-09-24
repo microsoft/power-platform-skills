@@ -10,12 +10,8 @@ model: sonnet
 
 # Add Data Source
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-first. For direct requests on an existing app, use the entry-choice gate before
-invoking `/edit-app` with the complete intent. Offer implementation-only work or
-cancel. In an approved child call or implementation-only choice, use the router
-below and forward the same scoped context or `--implementation-only` to every
-leaf; do not repeat the entry question or send the call back to `/edit-app`.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 Router skill that understands the user's goal and connects them to the right data source — without requiring them to know Power Platform terminology.
 
@@ -39,6 +35,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 | User's goal | Best approach | Invoke |
 |---|---|---|
+| Refresh generated services for a retained data source | Resolve the existing registration; preserve its platform and binding | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--refresh --data-source-name "<registered-name>"` |
 | Stop using a registered table, connector, or flow in this app | Preserve the removal intent and resolve its existing registration type; do not infer a new data platform | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--remove` |
 | Store and manage structured business data (custom tables, forms, CRUD) | Dataverse is the platform's native database | `/add-dataverse` |
 | Invoke an existing Dataverse action/function/API | Discover with Power Apps CLI `find-dataverse-api`; this plugin only adds Dataverse table CRUD | `/add-connector` |
@@ -49,6 +46,10 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 **Note:** Dedicated skills for Teams, Excel, OneDrive, Office 365, and Azure DevOps are planned for v1. Until then, `/add-connector` handles all of them — it covers every connector the platform supports and generates the same `src/generated/` service layer.
 
 **Important routing rules:**
+- For refreshes, forward the exact registered identity, `--refresh`,
+  `--data-source-name`, mode, and current approved scope to the matching leaf.
+  Never convert a refresh into an add or request a new connection.
+  Conflicting add/refresh/remove scopes return to the owner for separate calls.
 - For removals, forward the approved identities and scope unchanged to the
   matching leaf's removal branch; never turn "remove this source" into an add
   command. Use [data-source-removal.md](../../shared/references/data-source-removal.md).

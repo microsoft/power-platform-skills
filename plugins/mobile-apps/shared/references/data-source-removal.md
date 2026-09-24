@@ -17,9 +17,26 @@ removes the source's schema registration, updates `power.config.json`, and
 regenerates models/services from the remaining schemas. Follow it with
 `npm run generate-schemas` to update the mobile runtime map.
 
+## Refresh a retained source
+
 For a source that remains in use but whose server schema changed, use the CLI's
 `refresh-data-source` instead. Hiding a field or dropping it from a screen spec
 does not mean deleting its server column or unregistering the whole table.
+
+After entry consent and mutation approval, `--refresh` or an approved refresh
+operation selects this branch in the data-source leaves. It is skill-only:
+do not pass `--refresh` to the CLI. A refresh-only call returns from this branch
+without running the normal add workflow, creating a connection, or changing
+server schema. `--plan-only` returns the proposed refresh without executing it.
+Mixed requests are split by the owner into separately scoped add/refresh/remove
+calls; conflicting operation flags return `NEEDS_CONTEXT`.
+
+Resolve `--data-source-name` against `power.config.json` and `.power/schemas/`
+in the owner's absolute `working_dir`. Match the approved API, dataset/table or
+procedure, and connection binding as applicable. Require one unambiguous stored
+registration; never guess from a display label or silently add an absent source.
+If the CLI's name-only selector could refresh unrelated registrations, STOP.
+Capture the existing binding identities before executing the command.
 
 ```bash
 npx --no-install power-apps refresh-data-source --data-source-name '<registered-name>' --non-interactive
@@ -29,6 +46,14 @@ npx tsc --noEmit
 
 Refresh only the approved retained source. Inspect per-source failure output as
 well as generated artifacts; an exit code alone is not a refresh success check.
+Verify the expected fields/operations in the regenerated schema/model/service,
+preserve unrelated registration identities and app/environment configuration,
+and verify the runtime schema map and type-check. Report missing/partial results
+as failures; do not repair generator output by hand or retry through addition.
+For Dataverse, also run the existing service verifier for the exact logical
+tables and update their app-inventory facts only from verified metadata.
+Refresh the Generated Services snapshot and return generator-owned outputs
+separately from authored files. No refresh authorizes retiring another source.
 
 Sources: [Power Apps CLI reference](https://learn.microsoft.com/power-apps/developer/code-apps/reference/cli#pa-app-remove-data-source)
 and [connecting to data](https://learn.microsoft.com/power-apps/developer/code-apps/how-to/connect-to-data#add-a-connection-to-a-code-app).
@@ -161,6 +186,25 @@ and are server configuration: do not silently remove them or edit the local
 snapshot to pretend the server changed. Keep required bindings, or obtain a
 separate approved profile migration; report any intentionally retained profile
 coverage and unresolved offline work.
+
+Carry a per-table `offlineRetirement` outcome in the leaf result and the existing
+memory-bank entry; do not invent a second profile snapshot:
+
+| Status | Evidence required |
+|---|---|
+| `not-applicable` | No profile coverage or dependency on the retiring table was found. |
+| `retained` | Coverage is intentionally kept; record the approved reason and any required app binding that must also remain. |
+| `pending` | Retain/remove decision is unanswered, migration is deferred, or the approved profile change is not yet verified. |
+| `reconciled` | The separately approved profile migration and its live readback succeeded. |
+
+Inspect offline dependencies before unregistering. An unresolved dependency that
+could break retained offline behavior blocks app-binding removal; record `pending`
+and return the blocker, not a completed app edit. When app removal is independently
+safe but coverage disposition remains pending, report both outcomes separately.
+Preserve pending outcomes on retries/resume until the user explicitly approves
+retention or the approved migration is verified. A later addition-only
+`in-sync`, `no-manifest`, or `no-profile` result never clears `offlineRetirement`.
+Do not infer permission to remove server profile items from app-binding approval.
 
 Update memory-bank with removed/retained sources, verification, and any partial
 failure. In orchestrated mode return to the owner for final validation/preview.

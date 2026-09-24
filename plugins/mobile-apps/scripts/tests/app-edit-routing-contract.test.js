@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { isInvocable, readInvocationMetadata } = require('../lib/mobileapp-hook-utils');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 // Windows checkouts can use CRLF; the prose contracts should not depend on Git's EOL setting.
@@ -37,23 +38,62 @@ for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   });
 }
 
-// These are instruction-contract tests, not live native-app or model evaluations.
-// Keep all alternate feature entry points covered so a dedicated leaf cannot
-// silently bypass the same edit gate that the generic router uses.
-for (const name of [
-  'add-native', 'add-connector', 'add-datasource', 'add-dataverse',
-  'add-sharepoint', 'setup-datamodel', 'design-system',
-]) {
-  test(`${name} gates full integration before executing its leaf workflow`, () => {
+function assertSharedEntry(content, name) {
+  const body = content.replace(/^---\n[\s\S]*?\n---\n/, '').trimStart();
+  const firstLine = body.split('\n')[0];
+  assert.match(firstLine, /\[shared-instructions\.md\]\([^)]+\/shared-instructions\.md\)/, `${name}: shared policy must be the first instruction`);
+  assert.match(firstLine, /read (?:this |both )?first/i, `${name}: read-first prerequisite`);
+  assert.match(content.match(/^allowed-tools: (.+)$/m)?.[1] || '', /\bRead\b/, `${name}: allow reading policy`);
+}
+
+// Discover invocable skills instead of allowing new entry points to escape a
+// fixed list. This verifies instructions, not whether a model obeys them.
+const invocableSkills = fs.readdirSync(path.join(pluginRoot, 'skills'), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && isInvocable(readInvocationMetadata(
+    path.join(pluginRoot, 'skills', entry.name, 'SKILL.md'),
+  )))
+  .map((entry) => entry.name)
+  .sort();
+
+for (const name of invocableSkills) {
+  test(`${name} starts with the shared entry preflight`, () => {
     const content = skill(name);
-    const entry = section(content, '**Entry routing:**', '\n## ');
-    assert.match(entry, /app-edit-routing\.md/);
-    assert.match(entry, /entry-choice\s+gate/);
-    assert.match(entry, /\/edit-app/);
-    assert.match(content.match(/^allowed-tools: (.+)$/m)[1], /\bSkill\b/);
-    assert.ok(content.indexOf('**Entry routing:**') < content.indexOf('**Telemetry checkpoint:'));
+    // The cross-plugin telemetry preference wrapper has no app workflow.
+    if (name === 'telemetry') {
+      assert.match(content, /\*\*Workflow:.*telemetry-workflow\.md/);
+      return;
+    }
+    assertSharedEntry(content, name);
+    if (content.includes('**Entry routing:**')) {
+      const entry = content.split('**Entry routing:**')[1].split('\n\n')[0];
+      assert.match(entry, /shared-instructions\.md#app-feature-entry-points/);
+      assert.doesNotMatch(entry, /Offer|implementation-only|full integration|cancel/);
+      assert.ok(content.indexOf('**Entry routing:**') < content.indexOf('**Telemetry checkpoint:'));
+    }
   });
 }
+
+test('a future skill cannot omit, defer, or disable reading shared policy', () => {
+  const valid = '---\nallowed-tools: Read, Bash\n---\n\n**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first.\n\n## Workflow\n';
+  assert.doesNotThrow(() => assertSharedEntry(valid, 'future-feature'));
+  assert.throws(() => assertSharedEntry(valid.replace('**Shared instructions:', 'Run auth first.\n**Shared instructions:'), 'future-feature'));
+  assert.throws(() => assertSharedEntry(valid.replace('shared-instructions.md', 'other.md'), 'future-feature'));
+  assert.throws(() => assertSharedEntry(valid.replace('read first', 'optional'), 'future-feature'));
+  assert.throws(() => assertSharedEntry(valid.replace('Read, Bash', 'Bash'), 'future-feature'));
+});
+
+test('shared policy classifies future feature skills before operational commands', () => {
+  const shared = read('shared/shared-instructions.md');
+  const preflight = section(shared, '## App feature entry points', '## Version Check');
+  assert.match(preflight, /before any workflow commands or app\/cloud writes/);
+  assert.match(preflight, /cannot be loaded, STOP/);
+  assert.match(preflight, /applies to new skills too/);
+  assert.match(preflight, /read and execute \[app-edit-routing\.md\]/);
+  assert.match(preflight, /Do not repeat or narrow the\n\s+choices in individual skills/);
+  assert.match(preflight, /Pure operational\/configuration requests/);
+  assert.match(preflight, /`--plan-only` or a planning-phase handoff never authorizes mutating leaves/);
+  assert.match(routing, /includes future feature skills/);
+});
 
 test('direct requests preserve intent and do not infer implementation-only work', () => {
   assert.match(routing, /original request,\nall arguments, supplied answers/);
@@ -95,7 +135,7 @@ test('shared connector setup follows entry consent and approved implementation',
   const connector = section(
     read('shared/shared-instructions.md'),
     '## Connector Reference',
-    '## App feature entry points',
+    '## Safety Guardrails',
   );
   assert.doesNotMatch(connector, /Always run `\/list-connections` first/);
   assert.match(connector, /entry-choice gate precedes `\/list-connections`/);
@@ -317,7 +357,31 @@ for (const name of ['add-connector', 'add-dataverse', 'add-sharepoint']) {
     assert.match(branch, /return/);
     assert.ok(content.indexOf('**Removal branch:**') < content.indexOf('**Telemetry checkpoint:'));
   });
+  test(`${name} returns from targeted refresh before the add workflow`, () => {
+    const content = skill(name);
+    const branch = section(content, '**Refresh branch:**', '\n## ');
+    assert.match(branch, /--refresh/);
+    assert.match(branch, /data-source-removal\.md#refresh-a-retained-source/);
+    assert.match(branch, /--data-source-name/);
+    assert.match(branch, /returns before Steps/);
+    assert.match(branch, /(?:do not|Do not)[\s\S]*add-data-source/);
+    assert.ok(content.indexOf('**Refresh branch:**') < content.indexOf('**Telemetry checkpoint:'));
+  });
 }
+
+test('refresh preserves registration identity and never falls back to an add', () => {
+  const refresh = section(removal, '## Refresh a retained source', '## 1.');
+  assert.match(refresh, /`--plan-only` returns the proposed refresh without executing it/);
+  assert.match(refresh, /Require one unambiguous stored\nregistration/);
+  assert.match(refresh, /name-only selector could refresh unrelated registrations, STOP/);
+  assert.match(refresh, /never guess from a display label or silently add an absent source/);
+  assert.match(refresh, /per-source failure output/);
+  assert.match(refresh, /preserve unrelated registration identities/);
+  assert.match(refresh, /do not repair generator output by hand or retry through addition/);
+  assert.match(skill('add-datasource'), /--refresh --data-source-name "<registered-name>"/);
+  assert.match(skill('debug-app'), /--refresh --data-source-name "<registered-name>"/);
+  assert.match(edit, /do not route refreshes through addition/);
+});
 
 test('the router and data-only orchestrator retain the removal operation', () => {
   assert.match(skill('add-datasource'), /matching leaf's removal branch/);
@@ -368,6 +432,7 @@ test('generator ownership names exact CLI verbs and their command forms', () => 
   assert.match(ownership, /not modified afterward by the skill or its subagents/);
   assert.match(commands, /command templates, not a batch to run/);
   assert.match(commands, /--force --non-interactive/);
+  assert.match(commands, /--api-id dataverse --org-url '<environment-url>' --resource-name '<table-logical-name>' --non-interactive/);
   assert.match(commands, /`npm run generate-schemas` is the separate template command/);
 });
 

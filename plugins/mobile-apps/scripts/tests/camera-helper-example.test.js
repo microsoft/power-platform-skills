@@ -135,6 +135,27 @@ test('scanner-only and upload-only prerequisites do not require capture packages
   assert.doesNotThrow(() => checkPackages(['photo', 'gallery'], { 'expo-image-picker': 'installed' }));
 });
 
+test('public camera capabilities map to canonical artifact keys before the check', () => {
+  const mappings = [...camera.matchAll(/^\| `(camera|image-picker|barcode-scanner|qr-scanner)` \| `(\[[^\n]+\])` \|$/gm)];
+  assert.equal(mappings.length, 4);
+  const expected = {
+    camera: ['photo'],
+    'image-picker': ['gallery'],
+    'barcode-scanner': ['scanner'],
+    'qr-scanner': ['scanner'],
+  };
+  for (const [row, capability, json] of mappings) {
+    const keys = JSON.parse(json);
+    assert.deepEqual(keys, expected[capability]);
+    assert.ok(camera.indexOf(row) < camera.indexOf("node - '<approved-artifact-keys-json>'"));
+    assert.doesNotThrow(() => checkPackages(keys, {
+      [keys[0] === 'scanner' ? 'expo-camera' : 'expo-image-picker']: 'installed',
+    }));
+  }
+  assert.match(camera, /Add `upload` only for an\nexplicitly approved custom Dataverse Image-upload helper/);
+  assert.match(camera, /not raw `\$ARGUMENTS`/);
+});
+
 test('combined artifact prerequisites require the union and reject invalid scope', () => {
   assert.throws(() => checkPackages(['photo', 'scanner'], { 'expo-camera': 'installed' }), /exit 1/);
   assert.doesNotThrow(() => checkPackages(['photo', 'scanner'], {

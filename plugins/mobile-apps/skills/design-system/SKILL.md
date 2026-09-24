@@ -10,13 +10,9 @@ model: opus
 
 # Design System
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before writing brand artifacts. Direct changes to an existing app (including
-refresh, reskin, themes, and rollback) use the entry-choice gate before invoking
-`/edit-app` for runtime/screen integration. Offer artifact-only implementation,
-full app integration, or cancel. On full integration, delegate to `/edit-app`
-before entering this leaf workflow or writing artifacts. Approved orchestrated
-calls skip the question and execute this leaf.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
 Read-only `--history` / `--diff` and standalone brand generation without an app
 remain here.
 
@@ -273,6 +269,11 @@ Store result as `picked_direction` with all resolved dimensions.
 > "→ [design-system] Writing brand/design-system.md…"
 
 Generate the full spec deterministically from the locked direction. Follow the schema in [`references/design-system-schema.md`](./references/design-system-schema.md).
+
+After approval and before the first write (including reskin or regeneration),
+capture the state using the [snapshot contract](./references/refresh-flow.md#snapshot-contract).
+Include optional `brand/tokens.dark.ts` and explicit absence; retain this
+pre-write snapshot afterward rather than replacing it with edited artifacts.
 
 **Sections (required):**
 
@@ -557,7 +558,8 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 4. Prompt for the specific change to the named dimension
 5. Update ONLY that section (refuse bundled changes)
 6. Regenerate `brand/tokens.ts`
-7. Retain the pre-write snapshot captured before steps 5-6 in `brand/.history/`
+7. Retain the pre-write snapshot captured before steps 5-6 in `brand/.history/`,
+   including dark-token presence/absence per the shared snapshot contract
 8. Re-render `brand/design-system.html`
 9. Review the applied diff (approval must precede steps 5-6)
 10. Append to `## Design history` in memory-bank
@@ -596,6 +598,9 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 
 3. User approval gate (show derived palette, allow [y/N/edit])
 
+   After approval, capture the pre-write [snapshot contract](./references/refresh-flow.md#snapshot-contract),
+   including whether `brand/tokens.dark.ts` exists, before Step 4 writes it.
+
 4. Write `brand/tokens.dark.ts` using the named `darkTokens` export and complete
    `color` shape in
    [Approved dark palette](./references/tamagui-integration.md#approved-dark-palette-conditional).
@@ -610,7 +615,8 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
    implementation-only mode, report the unwired runtime dependency rather than
    claiming dark mode is active.
 
-7. Snapshot + history
+7. Retain the pre-write snapshot and record the approved dark palette in design
+   history; do not overwrite the rollback target with the newly generated file.
 
 ---
 
@@ -623,6 +629,8 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 ```
 
 History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
+Follow the [snapshot contract and rollback flow](./references/refresh-flow.md#snapshot-contract)
+for light/dark artifacts, explicit absence, and restoration of runtime wiring.
 
 ---
 

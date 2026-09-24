@@ -10,17 +10,20 @@ model: sonnet
 
 # Add Connector (Generic)
 
-**Entry routing:** apply [app-edit-routing.md](../../shared/references/app-edit-routing.md)
-before the workflow below. For direct requests on an existing app, the entry-choice
-gate asks before invoking `/edit-app`; offer implementation-only work or cancel.
-Approved orchestrated calls skip this question and run the scoped leaf.
-Preserve the original intent, chosen mode, and orchestration context when delegating.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
 Action connectors and cloud flows do not imply Dataverse Data Model changes.
 
 **Removal branch:** after entry routing, if `--remove` or the approved scope
 requests removal, execute
 [data-source-removal.md](../../shared/references/data-source-removal.md) and return.
 Do not run Steps 1-6, connection creation, or `add-data-source` for a removal.
+
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-source
+refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-6. Preserve the exact `--data-source-name` and approved
+binding identity; do not create connections or run `add-data-source`.
 
 Fallback skill for any connector not covered by a dedicated `/add-*` skill. For common connectors, prefer the dedicated skills:
 
