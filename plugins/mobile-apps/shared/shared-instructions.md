@@ -34,13 +34,22 @@ Propagate the mode and current scoped context through routers; missing or
 conflicting context returns `NEEDS_CONTEXT` before mutation.
 
 For proposal-only environment context, read the selected `power.config.json`
-environment ID and reuse matching complete caller context or the local
-`.resolved-environment.json` / `auth.config.json` environment record without
-editing it. Require a matching environment ID, HTTPS URL, and tenant; conflicting
-or incomplete context returns `NEEDS_CONTEXT`. The ordinary
-`resolve-environment.js` command persists cache/auth/telemetry configuration, so
-do not run it during `--plan-only` or a planning-phase handoff. Ask for verified
-context rather than silently changing configuration to obtain it.
+environment ID and reuse matching complete caller context, or run
+`resolve-environment.js <selected-environment-id> --no-cache --require-tenant`
+from the owner's absolute working directory. This mode may read existing
+identity metadata but does not persist environment/auth caches, change telemetry
+routing, or replay pending telemetry. It is not a forced-fresh metadata read.
+Require a matching environment ID, HTTPS URL, and tenant; conflicting or still
+incomplete context returns `NEEDS_CONTEXT` after bounded read-only recovery.
+The ordinary, configuration-persisting resolver remains forbidden before
+implementation approval, including `--plan-only` and planning-phase child
+calls. Do not remove flags or redirect resolver output into app configuration
+to recover a planning failure. Scratch planning artifacts are allowed.
+
+For scoped Dataverse proposals, follow
+[dataverse-change-planning.md](references/dataverse-change-planning.md).
+It reuses creation's compact-evidence helpers without importing the create
+wizard or its approval gates into setup/edit.
 
 ---
 

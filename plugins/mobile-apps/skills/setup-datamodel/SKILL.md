@@ -56,9 +56,9 @@ Confirm the selected root is a Power Apps mobile app:
 
 For `--plan-only` or a planning-phase handoff, perform the file/environment
 checks read-only and use the shared proposal-only environment-context rule.
-Skip the resolver command below in that mode; incomplete or conflicting context
-returns `NEEDS_CONTEXT`, not permission to persist environment configuration.
-The shell block below is for the implementation-mode workflow only.
+The same non-persisting lookup is used before approval in a normal invocation.
+Incomplete or conflicting context returns `NEEDS_CONTEXT` after read-only
+recovery; never retry without the safety flags or redirect into app configuration.
 
 ```bash
 cd "<working_dir>" || exit 1
@@ -71,11 +71,11 @@ if [ -z "$environment_id" ]; then
   printf '%s\n' 'ERROR: selected app has no environmentId' >&2
   exit 1
 fi
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id" --no-cache --require-tenant
 ```
 
 Stop on failure; do not switch directories or re-scaffold. Capture the
-**environment URL**, **environment ID**, **tenant ID**, and **organization ID**
+**environment URL**, **environment ID**, and **tenant ID**
 for this root for Phase 5. Pass this same absolute root in every planner/skill
 handoff and on retries.
 
@@ -101,6 +101,14 @@ Recommend "architect propose" only when Dataverse schema is needed. Connector-on
 requirements take Path C without inventing Dataverse tables. Empty/cancel input
 does not approve a choice; wait for an answer or stop.
 
+For Paths A and B, read and execute
+[dataverse-change-planning.md](../../shared/references/dataverse-change-planning.md).
+The foreground owns scoped discovery, compact-evidence validation, and recovery;
+pass `Dataverse planning mode: required` to the architect, never the legacy
+live-discovery path. Preserve the current request, absolute root, and
+proposal-only mode through every handoff. Path C, removal-only work, and a
+retained-service-only refresh skip schema planning and its artifacts.
+
 #### Artifact storage rules for PDFs and signatures
 
 When requirements mention signatures, sign-off, ink, drawings, generated PDFs, exported reports, evidence packets, or retained documents, make the storage target explicit in `## Data Model` before approval:
@@ -117,9 +125,11 @@ PDF content must never be modeled as long text/base64 text. Use Dataverse File c
 #### Path A — Parse user-provided diagram
 
 Accept PNG/JPG (use `Read` to view), Mermaid syntax (paste in chat), or text
-description. Parse tables, columns, and relationships. Query existing Dataverse
-tables to mark each as new / extend / reuse. Draft the Mermaid diagram and Data
-Model section for the combined Phase 4 approval; do not update the live plan yet.
+description. Parse tables, columns, and relationships as requested intent.
+Use the shared compact-evidence workflow to draft `_dm_section.md` and the
+normalized `.tmp/dataverse-schema-contract.json`; diagram names alone do not
+prove existing schema. Run the same decision validation as Path B before the
+combined Phase 4 approval; do not update the live plan yet.
 
 #### Path B — Spawn data-model-architect
 
@@ -132,8 +142,16 @@ Prompt:
   Working directory: <working_dir>
   Output proposal: <working_dir>/_dm_section.md
   Plugin root: ${PLUGIN_ROOT}
+  Phase: planning
+  Proposal only: <true for --plan-only or a planning-phase caller>
+  Dataverse planning mode: required
+  Normalized Dataverse foreground planning snapshot (validator input only): <SNAPSHOT_PATH>
+  Compact Dataverse architect evidence: <ARCHITECT_EVIDENCE_PATH>
+  Structured schema contract output: <working_dir>/.tmp/dataverse-schema-contract.json
+  Scope: <current requested delta and necessary dependencies; unrelated rows are context only>
+  Native capabilities and connector ownership: <retained approved constraints>
 
-  Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
+  Follow your snapshot-only path. Return a ## Data Model section with Mermaid ER diagram,
   reuse/extend/create table, and dependency-tier ordering. If requirements mention
   signatures, pen/ink, generated PDFs, report exports, evidence packets, or uploaded
   documents, include the artifact storage target: on-device/share-only, Dataverse
@@ -141,9 +159,12 @@ Prompt:
   PDF content must use a File column, not long text/base64.
 ```
 
-Parse the agent's first-line status using the `AGENTS.md` return protocol.
-Keep the returned section as a proposal for Phase 4; stop on `BLOCKED` and return
-missing context to the foreground rather than treating the proposal as approved.
+Handle structured Dataverse signals through the shared planning recovery before
+the generic `AGENTS.md` return protocol. Require both the section and normalized
+contract, then run the shared decision gate even for `DONE`/`DONE_WITH_CONCERNS`.
+If agents are unavailable, draft both artifacts inline from the same compact
+evidence and run the same validation. Keep the result as a proposal for Phase 4;
+stop on an unresolved blocker rather than treating the proposal as approved.
 
 #### Path C — No Dataverse
 
@@ -174,6 +195,12 @@ writing it. Apply [data-source-removal.md](../../shared/references/data-source-r
 to classify and approve removals explicitly. Omitted tables are not automatic
 deletions; retain anything required by existing consumers or route the feature
 through `/edit-app` for their planned update.
+
+For a Dataverse proposal from any path, require the current normalized contract
+and snapshot to pass `validate-dataverse-planning-decisions.js` with exit `0`
+before this gate. Revisions repeat validation, not broad discovery or another
+approval ceremony. Connector-only, retirement-only, and refresh-only proposals
+keep their own checks and must not reuse stale schema-planning artifacts.
 
 **Proposal-only exit:** if `--plan-only` is present or the caller's phase is
 planning, present the proposed Data Model, Connectors, and retirement/offline
@@ -210,6 +237,10 @@ Save the accepted proposal into `<working_dir>/native-app-plan.md`; scratch
 `_dm_section.md` is not a second source of truth. Do not reuse operation manifests
 or approval receipts bound to the previous plan. The verified materialized
 manifest is updated after execution/verification, not by copying proposed rows.
+For approved Dataverse implementation, retain the shared planning paths and
+freeze the accepted `contract_sha256` and saved `plan_sha256` in
+`approved_scope`. This is not a create-flow receipt and does not grant unrelated
+native, connector, or screen approvals.
 
 ### Phase 5 — Execute Data Model
 
@@ -233,7 +264,10 @@ Context:
   orchestrator: setup-datamodel
   working_dir: <working_dir>
   phase: implementation
-  approved_scope: <approved Data Model operations and answers>
+  planning_snapshot: <SNAPSHOT_PATH>
+  architect_evidence: <ARCHITECT_EVIDENCE_PATH>
+  schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
+  approved_scope: <approved Data Model delta and answers, contract_sha256, plan_sha256>
 
 Arguments:
   --working-dir "<working_dir>"
@@ -241,7 +275,12 @@ Arguments:
   --skip-planning
 ```
 
-`/add-dataverse` creates tables in tier order, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
+`/add-dataverse` creates tables in tier order within this scope, adds only
+approved missing bindings or refreshes approved retained services, publishes
+customizations when needed, writes `.datamodel-manifest.json`, and type-checks.
+It validates the scoped planning context and performs fresh live reconciliation;
+do not send partial create-only fast-path flags. Wait for it to return before
+Phase 6.
 
 **Cross-entity reads from the screen plan** — the approved
 `### Cross-entity Reads` subsection contains formatted lookups, bounded chained

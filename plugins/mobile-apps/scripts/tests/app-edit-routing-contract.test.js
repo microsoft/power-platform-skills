@@ -201,6 +201,43 @@ test('edit planning defers connector and design execution until approval', () =>
   assert.match(edit, /If `--plan-only` is present, do not invoke the configuration skill/);
 });
 
+test('edit validates scoped Dataverse planning before its existing gate and preserves docs-only approval', () => {
+  const planning = section(edit, '### Step 2 — Re-plan', '### Step 3 — Gate');
+  const gate = section(edit, '### Step 3 — Gate', '### Step 4 — Write');
+  const save = section(edit, '### Step 4 — Write', '### Step 5 — Apply');
+  assert.ok(planning.indexOf('dataverse-change-planning.md') < planning.indexOf('Spawn agent:'));
+  assert.match(planning, /structured Dataverse context\/revision signals[\s\S]*before generic retry limits/);
+  assert.match(planning, /Every Data Model result, including inline output, must pass[\s\S]*`DONE` alone never authorizes Step 3/);
+  assert.match(gate, /require exit `0` from\n`validate-dataverse-planning-decisions\.js`[\s\S]*before showing this gate/);
+  assert.ok(gate.indexOf('validate-dataverse-planning-decisions.js') < gate.indexOf('Show the user'));
+  assert.match(gate, /no extra create-flow approval gate/);
+  assert.match(gate, /If cancel → STOP, leave the plan and app untouched/);
+  assert.match(gate, /`--plan-only`[\s\S]*"Approve and save plan only"[\s\S]*stop after Step 4/);
+  assert.match(save, /preserve all other sections verbatim/);
+  assert.match(save, /`--plan-only`[\s\S]*`plan_only: true`[\s\S]*and stop/);
+  assert.match(save, /A plan-only save does not create this implementation approval context/);
+  assert.ok(save.indexOf('and stop') < save.indexOf('freeze the shared workflow'));
+  assert.doesNotMatch(planning, /Invoke skill: \/add-dataverse|--approval-receipt|--operation-manifest/);
+});
+
+test('planning-phase edit children return to their owner before the direct docs-only approval path', () => {
+  const gate = section(edit, '### Step 3 — Gate', '### Step 4 — Write');
+  const childReturn = section(gate, 'If this is a planning-phase handoff from another owner', 'Show the user');
+  const directGate = gate.slice(gate.indexOf('Show the user'));
+  assert.match(childReturn, /return the validated\nproposal and concerns to that owner now/);
+  assert.match(childReturn, /without saving the live plan or\nopening an implementation gate/);
+  assert.match(childReturn, /Do not turn the caller's planning consent\ninto approval to apply the edit/);
+  assert.match(childReturn, /A direct `--plan-only` request retains the\nexplicit plan-document approval below/);
+  assert.doesNotMatch(childReturn, /Approve and apply|Approve and save plan only|Invoke skill:|--skip-planning/);
+  const validation = gate.indexOf('validate-dataverse-planning-decisions.js');
+  const returnToOwner = gate.indexOf('If this is a planning-phase handoff');
+  const localGate = gate.indexOf('Show the user');
+  assert.ok(validation >= 0 && validation < returnToOwner && returnToOwner < localGate);
+  assert.match(directGate, /If cancel → STOP, leave the plan and app untouched/);
+  assert.match(directGate, /If `\$ARGUMENTS` includes `--plan-only`, change option \(a\) to "Approve and save plan only" and stop after Step 4/);
+  assert.ok(directGate.indexOf('Approve this edit') < directGate.indexOf('Approve and save plan only'));
+});
+
 test('connector and native intent do not unconditionally create Dataverse schema', () => {
   for (const expected of [
     /Teams\/email action, profile lookup, or cloud flow/,
@@ -232,6 +269,25 @@ test('setup-datamodel saves every approved path and passes scope to its leaves',
     assert.match(handoff, /orchestrator: setup-datamodel/);
     assert.match(handoff, /approved_scope:/);
   }
+});
+
+test('setup validates all Dataverse proposal paths before the one combined approval', () => {
+  const setup = skill('setup-datamodel');
+  const planning = section(setup, '### Phase 2', '### Phase 3');
+  const gate = section(setup, '### Phase 4', '### Phase 5');
+  const workflow = planning.indexOf('dataverse-change-planning.md');
+  assert.ok(workflow >= 0 && workflow < planning.indexOf('#### Path A'));
+  assert.ok(workflow < planning.indexOf('Task: mobile-app:data-model-architect'));
+  assert.match(planning, /Path C, removal-only work, and a\nretained-service-only refresh skip schema planning and its artifacts/);
+  assert.match(gate, /Dataverse proposal from any path[\s\S]*exit `0`\nbefore this gate/);
+  const validate = gate.indexOf('validate-dataverse-planning-decisions.js');
+  const proposalExit = gate.indexOf('**Proposal-only exit:**');
+  const approval = gate.indexOf('Present the full plan');
+  const save = gate.indexOf('- **Approved**');
+  assert.ok(validate >= 0 && validate < proposalExit && proposalExit < approval && approval < save);
+  assert.match(gate, /Connector-only, retirement-only, and refresh-only proposals[\s\S]*must not reuse stale schema-planning artifacts/);
+  assert.match(gate, /Revisions repeat validation, not broad discovery or another\napproval ceremony/);
+  assert.doesNotMatch(planning, /EnterPlanMode|ExitPlanMode|--approval-receipt/);
 });
 
 test('connector aliases and operations preserve dedicated routing and dependency gates', () => {

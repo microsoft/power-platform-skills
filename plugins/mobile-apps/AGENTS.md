@@ -114,6 +114,15 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
     `in-sync` never clears a pending profile decision/migration. App-binding
     approval is not permission to delete offline profile items or server data.
+21. **Dataverse change planning shares creation's helpers, not its gates** —
+    Setup/edit/standalone proposals use compact hash-bound evidence, required
+    snapshot-only architect context, and decision validation before the owner's
+    existing approval. The same checks apply to diagrams and inline fallbacks.
+    Preapproval environment resolution uses `--no-cache --require-tenant`;
+    never downgrade to the persistent resolver to recover a planning failure.
+    Follow [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
+    Its accepted contract/plan hashes travel in the existing scoped context;
+    do not fabricate the four-approval create-only execution receipt for an edit.
 
 ## Telemetry
 

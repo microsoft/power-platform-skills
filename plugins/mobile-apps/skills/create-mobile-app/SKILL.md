@@ -506,6 +506,11 @@ call `detect-publisher-prefix.js`.
 
 ### Foreground Dataverse planning snapshot and evidence
 
+This read-only helper recipe is also used by
+[scoped Dataverse change planning](../../shared/references/dataverse-change-planning.md).
+Those callers supply their own request scope and approvals; they do not run
+the create wizard or dispatch its native-app planner.
+
 Planning stays read-only. The resolver's `--no-cache` mode may read existing
 identity metadata, but must not persist the environment cache, auth settings,
 or telemetry cluster, and must not replay pending telemetry. Normal resolution
@@ -680,6 +685,8 @@ pair activates the architect's `snapshot-only` path: no Bash discovery and no
 live Dataverse calls inside the agent. For `connector-only`, pass the mode
 explicitly and state that both paths are not supplied; never provide placeholder
 file paths.
+
+#### Planner completion dispatch
 
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
@@ -900,6 +907,8 @@ queues concerns for the memory bank; `NEEDS_CONTEXT:` re-dispatches with missing
 non-Dataverse context, capped at 2 retries; `BLOCKED:` reports the blocker. Unknown first
 lines are malformed. Recoverable artifact/input failures return to their
 owning phase for repair; they never authorize skipping an applicable gate.
+
+#### Dataverse planning recovery
 
 The structured Dataverse signals below use monotonic name tracking or
 deterministic revision instead of the generic retry cap. In `required` only,

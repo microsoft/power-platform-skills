@@ -252,6 +252,14 @@ binding and refresh generated output without adding a source or connection.
 `/setup-datamodel --plan-only` returns a proposal without saving or applying an
 execution plan.
 
+Dataverse proposals in setup, edit, and standalone addition use the same
+compact-evidence helpers and decision validation as creation, scoped to the
+requested change and its required dependencies. Diagram and inline proposals
+cross the same checks before the existing approval gate; no extra approval
+round is added. Planning may resolve the selected environment with
+`--no-cache --require-tenant` without persisting app/auth configuration.
+See [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
+
 Offline retirement has a separate result: a source may be gone from the app
 while its profile coverage is intentionally retained or awaiting a decision.
 Pending coverage remains visible in the final summary and memory-bank; the

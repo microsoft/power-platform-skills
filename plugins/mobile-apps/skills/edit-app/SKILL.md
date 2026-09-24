@@ -381,20 +381,32 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
+For Dataverse schema/new-binding work, first read and execute
+[dataverse-change-planning.md](../../shared/references/dataverse-change-planning.md).
+Use the requested delta and necessary dependencies, not all historical plan
+rows. The foreground obtains and validates compact evidence; the architect
+uses `Dataverse planning mode: required`, not legacy live discovery.
+Native/design/connector-only edits, app-binding removals, and retained-service
+refreshes skip this planning path and never reuse its old artifacts.
+
 Before the first `Task`, run a silent preflight for the leaf agent you need (`mobile-app:data-model-architect`, `mobile-app:screen-planner`, or `mobile-app:screen-builder` preflight later). If the host cannot spawn agents, print once:
 
 > "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
 
 Inline fallback rules:
 
-- Data Model: draft the section inline from the existing plan, `.datamodel-manifest.json`, generated models, and the user's edit brief; then gate it exactly like an agent result.
+- Data Model: use the existing plan, manifest, models, and edit brief as context,
+  but ground decisions in the shared workflow's validated compact evidence.
+  Produce `_dm_section.md` and the normalized schema contract and run the same
+  decision validator as for an agent result; local files alone are not proof
+  of current server schema.
 - Screens: draft Screen Map / Navigation Contracts / per-screen spec changes inline using `agents/screen-planner.md`, `shared/references/screen-templates.md`, and the existing screen TSX; then gate it exactly like an agent result.
 - Native Capabilities and Connectors: already handled inline by this skill.
 - Never skip approval just because a leaf agent is unavailable.
 
 | Section | Agent (read-only) | Output file |
 |---|---|---|
-| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
+| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` + `.tmp/dataverse-schema-contract.json` |
 | Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
 | Screens | `mobile-app:screen-planner` | `_screens_section.md` |
 
@@ -408,13 +420,32 @@ Prompt:
   Current section content: <verbatim>
   Working directory: <absolute path>
   Plugin root: ${PLUGIN_ROOT}
+  Phase: planning
+  Proposal only: <true for --plan-only or a planning-phase caller>
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
   Return the updated section as a markdown file.
 ```
 
-Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
+For the Data Model handoff, also include these fields verbatim:
+
+```text
+Dataverse planning mode: required
+Normalized Dataverse foreground planning snapshot (validator input only): <SNAPSHOT_PATH>
+Compact Dataverse architect evidence: <ARCHITECT_EVIDENCE_PATH>
+Structured schema contract output: <working_dir>/.tmp/dataverse-schema-contract.json
+Scope: <requested delta and necessary dependencies; preserve unrelated rows>
+Native capabilities and connector ownership: <retained approved constraints>
+```
+
+Handle structured Dataverse context/revision signals with the shared planning
+recovery before generic retry limits. For other signals, use `AGENTS.md`:
+`DONE` continues to output validation, `DONE_WITH_CONCERNS:` must be surfaced
+and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before
+app mutation, and unknown first lines are `BLOCKED: malformed agent return`.
+Every Data Model result, including inline output, must pass the shared decision
+validator; `DONE` alone never authorizes Step 3.
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
@@ -440,6 +471,17 @@ server tables/records, and carry the approved removal set through Step 6.5.
 ### Step 3 — Gate intent, plan + app mutation preview
 
 **Telemetry checkpoint: `approve_app_mutation_plan`**
+
+For Dataverse planning, require exit `0` from
+`validate-dataverse-planning-decisions.js` for the current normalized contract
+and snapshot before showing this gate. Revisions repeat that check. There is
+no extra create-flow approval gate; preserve this edit's existing UX.
+
+If this is a planning-phase handoff from another owner, return the validated
+proposal and concerns to that owner now, without saving the live plan or
+opening an implementation gate. Do not turn the caller's planning consent
+into approval to apply the edit. A direct `--plan-only` request retains the
+explicit plan-document approval below.
 
 Show the user a side-by-side diff (or before/after) for every changed plan section. Also show an app mutation preview:
 
@@ -486,6 +528,10 @@ sections and do not reuse execution artifacts/approval receipts bound to an olde
 updates `.datamodel-manifest.json` only from verified schema/service outcomes;
 pending retirements stay transitional until Step 6.5. Record any failure and
 remaining operations in memory-bank rather than claiming this plan is applied.
+For approved Dataverse implementation, freeze the shared workflow's
+`contract_sha256` and final saved `plan_sha256` in `approved_scope`, and retain
+the absolute `planning_snapshot`, `architect_evidence`, and `schema_contract`
+paths. A plan-only save does not create this implementation approval context.
 
 ### Step 5 — Apply app mutations
 
@@ -499,7 +545,14 @@ above on each handoff, including through routers and on retries. Reuse supplied
 answers, and return to the approval gate if an unresolved choice changes scope.
 
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
-1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
+1. **Data Model** — invoke `/add-dataverse --skip-planning` with the approved
+   delta and the scoped planning context below, not every row in the plan.
+   The leaf verifies the evidence/approval hashes and performs fresh live
+   reconciliation before scoped mutations; no partial create-only fast-path
+   flags or fabricated create receipt. It refreshes the affected services,
+   updates verified inventory, and leaves generated services compiling.
+   After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`;
+   do not continue to screens until clean.
 2. **Sample Data** — seed only the explicit table allowlist approved in Step 3.
    Propose newly created Dataverse tables used by changed screens as candidates,
    not the entire project manifest. Distinguish `createdThisEdit` from historical
@@ -529,6 +582,27 @@ plan: it would neither unregister the old source nor safely update its consumers
 Defer approved retirements until Step 6.5, after source consumers are updated.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
+
+Dataverse handoff (only for approved schema/new-binding work):
+
+```text
+Invoke skill: /add-dataverse
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: edit-app
+  working_dir: <working_dir>
+  phase: implementation
+  planning_snapshot: <SNAPSHOT_PATH>
+  architect_evidence: <ARCHITECT_EVIDENCE_PATH>
+  schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
+  approved_scope: <accepted delta and dependencies, contract_sha256, plan_sha256>
+
+Arguments:
+  --working-dir "<working_dir>"
+  --plan-section "<working_dir>/native-app-plan.md#data-model"
+  --skip-planning
+```
 
 Sample-data handoff (only for a nonempty approved seed scope):
 

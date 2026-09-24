@@ -84,20 +84,28 @@ test('setup plan-only exits before saving or applying every proposal path', () =
   assert.ok(approval.indexOf('**Proposal-only exit:**') < approval.indexOf('- **Approved**'));
 });
 
-test('proposal-only data workflows do not run the configuration-persisting resolver', () => {
-  const shared = read('shared/shared-instructions.md');
-  assert.match(shared, /proposal-only environment context/);
-  assert.match(shared, /conflicting\nor incomplete context returns `NEEDS_CONTEXT`/);
-  assert.match(shared, /do not run it during `--plan-only` or a planning-phase handoff/);
-  for (const [content, start, end] of [
-    [setup, '### Phase 1', '### Phase 2'],
-    [skill('add-dataverse'), '### Step 1', '### Step 2'],
+test('every preapproval environment lookup permits only non-persisting tenant resolution', () => {
+  const shared = section(read('shared/shared-instructions.md'), 'For proposal-only environment context', '\n---');
+  assert.match(shared, /reuse matching complete caller context, or run/);
+  assert.match(shared, /conflicting or still\nincomplete context returns `NEEDS_CONTEXT`/);
+  assert.match(shared, /configuration-persisting resolver remains forbidden before\nimplementation approval/);
+  assert.match(shared, /Do not remove flags or redirect resolver output into app configuration/);
+  assert.match(shared, /not a forced-fresh metadata read/);
+  assert.doesNotMatch(shared, /Skip the resolver command|do not run it during `--plan-only`/);
+
+  for (const [name, content, start, end] of [
+    ['setup-datamodel', setup, '### Phase 1', '### Phase 2'],
+    ['add-dataverse', skill('add-dataverse'), '### Step 1', '### Step 2'],
   ]) {
     const discovery = section(content, start, end);
     assert.match(discovery, /For `--plan-only` or a planning-phase handoff/);
-    assert.match(discovery, /Skip the resolver command/);
+    assert.match(discovery, /(?:non-persisting lookup is used|non-persisting\nlookup) before approval in a normal invocation/);
     assert.match(discovery, /returns `NEEDS_CONTEXT`/);
-    assert.ok(discovery.indexOf('Skip the resolver command') < discovery.indexOf('resolve-environment.js'));
+    const commands = [...discovery.matchAll(/^node "[^"\n]*\/resolve-environment\.js" [^\n]+$/gm)];
+    assert.equal(commands.length, 1, `${name}: one explicit resolver command`);
+    assert.match(commands[0][0], / --no-cache --require-tenant$/);
+    assert.doesNotMatch(discovery, /Skip the resolver command|>\s*(?:auth\.config|app|\.resolved-environment)\.json/);
+    assert.ok(discovery.indexOf('read-only') < discovery.indexOf('resolve-environment.js'));
   }
 });
 
