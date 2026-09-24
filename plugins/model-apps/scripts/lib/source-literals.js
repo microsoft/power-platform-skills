@@ -595,15 +595,18 @@ function defaultExportIsComplete(bare, at) {
     // cut before its call: `export default React.memo` of `export default React.memo(Page);`.
     if (/^[\p{ID_Start}$_][\p{ID_Continue}$]*(?:\s*\??\.\s*[\p{ID_Start}$_][\p{ID_Continue}$]*)+[ \t]*$/u.test(rest)) return false;
     // So is an arrow's parameter list with the arrow cut off — `export default ()`,
-    // `(props: { a: string })`, `(props: P): JSX.Element` of `export default (props: P) => <div/>;` —
-    // when the group cannot be an expression: empty, spread, or annotating a type at its own level.
-    // Such a group is parameters, so an `=>` must follow. A ternary's `:` is not an annotation, nor is
-    // a return type's, which follows `)`. A bare `(props)` reads exactly like the valid
-    // `export default (GeneratedComponent)`, so it passes; so does a parenthesized function or class.
+    // `(props: { a: string })`, `(props): JSX.Element` of `export default (props) => <div/>;` —
+    // when the group cannot be an expression: empty, spreading at its own level, annotating a type at
+    // its own level, or followed by a return type (after a leading group a `:` can only start one; a
+    // ternary needs its `?` first). Such a group is parameters, so an `=>` must follow. A ternary's
+    // `:` inside the group is not an annotation, nor is a return type's, which follows `)`. A bare
+    // `(props)` reads exactly like the valid `export default (GeneratedComponent)`, so it passes; so
+    // does a parenthesized function or class.
     if (rest[0] === '(' && !/^\(\s*(?:async\s+)?(?:function|class)\b/.test(rest)) {
       let depth = 0;
       let annotated = false;
       let ternary = false;
+      let spread = false;
       for (let k = 0; k < rest.length; k += 1) {
         const c = rest[k];
         if (c === '(' || c === '[' || c === '{') depth += 1;
@@ -611,10 +614,13 @@ function defaultExportIsComplete(bare, at) {
           if (--depth > 0) continue;
           if (c === ')') {
             const inner = rest.slice(1, k).trim();
-            const params = !inner || inner.startsWith('...') || (annotated && !ternary);
+            const params = !inner || spread || (annotated && !ternary) || /^\s*:/.test(rest.slice(k + 1));
             if (params && !/=>/.test(rest.slice(k + 1))) return false;
           }
           break;
+        } else if (depth === 1 && c === '.' && rest.startsWith('...', k)) {
+          spread = true;
+          k += 2;
         } else if (depth === 1 && c === ':') {
           let p = k - 1;
           while (p >= 0 && /\s/.test(rest[p])) p -= 1;

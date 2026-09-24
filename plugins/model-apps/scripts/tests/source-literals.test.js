@@ -393,6 +393,9 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     ['a parenthesized object at the end', 'export default ({ a: 1 })'],
     ['a parenthesized arrow with a return type at the end', 'export default ((props: P): JSX.Element => <Page {...props} />)'],
     ['a typed arrow export', 'export default (props: P): JSX.Element => <Page {...props} />;\n'],
+    ['an untyped arrow export with a return type', 'export default (props): JSX.Element => <Page {...props} />;\n'],
+    ['a ternary after a leading group', 'const a = 1, b = 2, c = 3;\nexport default (a) ? b : c'],
+    ['a spread inside a call in the group', 'const f = (...x) => x, args = [];\nexport default (f(...args))'],
     ['an arrow with its body', 'export default (props) => null;\n'],
     ['an array pattern inside an object pattern', 'const { a: [Page] } = lib;\nexport default Page;\n'],
     // A member chain followed by a line break is a complete statement (a cut would have removed it).
@@ -465,6 +468,9 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     ['cut after optional typed arrow parameters', 'export default (props?: P)'],
     ['cut after spread arrow parameters', 'export default (...args)'],
     ['cut before the arrow of a typed arrow', 'export default (props: P): JSX.Element'],
+    ['cut before the arrow of an untyped arrow with a return type', 'export default (props): JSX.Element'],
+    ['cut before the arrow of a destructuring arrow with a return type', 'export default ({ id }): JSX.Element'],
+    ['cut after parameters with a later rest parameter', 'export default (a, ...rest)'],
     // Not a legal arrow: no line break may come between `async` and its parameters (a SyntaxError).
     ['async, a line break, then an arrow', 'export default async\n(x) => x;\n'],
   ]) {
