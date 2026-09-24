@@ -49,13 +49,13 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
  * All three live on the returned `state`, which the fake reads on every call, so a test can change the
  * server under the SDK — e.g. the operator publishing between two runs, which also moves the etag.
  */
-async function freshSdk({ ai, componentstate = 0, headerStatus = 204 } = {}) {
+async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapStatus = 204 } = {}) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-description-'));
   tempDirs.push(dir);
   const writes = [];
   const reads = [];
-  const state = { ai, componentstate, headerStatus, etag: 'W/"1"' };
+  const state = { ai, componentstate, headerStatus, sitemapStatus, etag: 'W/"1"' };
   const appRow = () => ({ appmoduleid: APP_ID, appmoduleidunique: APP_IDUNIQUE, name: 'Probe', uniquename: APP_UNIQUE, description: 'Tickets', componentstate: state.componentstate, ...(state.ai !== undefined ? { aiappdescription: state.ai } : {}), '@odata.etag': state.etag });
   const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': state.etag });
   const httpClient = {
@@ -101,6 +101,11 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204 } = {}) {
           return { status: state.headerStatus, headers: {}, body: { error: { code: '0x80060882', message } } };
         }
         if (body && body.aiappdescription !== undefined) state.ai = body.aiappdescription;
+        // LIVE-MEASURED: a header write that is not yet published leaves the row an unpublished layer.
+        state.componentstate = 1;
+      }
+      if (/\/sitemaps\(/.test(url) && state.sitemapStatus !== 204) {
+        return { status: state.sitemapStatus, headers: {}, body: { error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } } };
       }
       return { status: 204, headers: { etag: 'W/"2"' }, body: {} };
     },
@@ -179,6 +184,8 @@ test('REAL BUNDLE: a 412 on the header resolves saved:false, and only a PROVEN d
     // never run and the operator would get a raw SDK error.
     assert.strictEqual(res.saved, false);
     assert.strictEqual(res.error && res.error.code, 'VERSION_CONFLICT');
+    // …and the refused request is named, which is how the halt tells the header's 412 from the sitemap's.
+    assert.match(String(res.error.detail), /^Version conflict \(412\) from https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v[\d.]+\/appmodules\(11111111-1111-1111-1111-111111111111\)$/);
 
     const readsBefore = reads.length;
     let halt;
@@ -192,6 +199,26 @@ test('REAL BUNDLE: a 412 on the header resolves saved:false, and only a PROVEN d
     assert.ok(draftRead, 'the draft state is read through the SDK\'s own Dataverse client');
     assert.match(decodeURIComponent(draftRead), /appmoduleid eq 11111111-1111-1111-1111-111111111111/);
   }
+});
+
+// The SDK writes an app header first and its sitemap second. A 412 on the SITEMAP — someone saved a
+// sitemap edit since this run's fetch — comes after this push's header write has committed, so the draft
+// read finds the unpublished layer that write just left. It is still a concurrent edit: the copy is kept,
+// and a blind re-run stops instead of overwriting the other edit.
+test('REAL BUNDLE: a sitemap 412 after the header committed is a concurrent edit, and the copy is kept', async () => {
+  const { sdk, state, reads } = await freshSdk({ ai: 'Route Q1', sitemapStatus: 412 });
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
+  const readsBefore = reads.length;
+  const res = await pushAppHeader(sdk, APP_ID, 'Probe', true);
+  assert.deepStrictEqual([state.ai, state.componentstate], [WANT, 1], 'precondition: the header PATCH committed and left the unpublished layer');
+  assert.strictEqual(res.saved, false);
+  assert.match(String(res.error && res.error.detail), /^Version conflict \(412\) from https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v[\d.]+\/sitemaps\(55555555-5555-5555-5555-555555555555\)$/);
+  assert.throws(() => requireSuccessfulPush(res, 'app Probe'), (e) => e.code === 'version-conflict');
+  assert.ok(!reads.slice(readsBefore).some((u) => /componentstate/.test(decodeURIComponent(u))), 'not re-diagnosed as a pending draft');
+  // Someone saved the sitemap: the server has moved, and the kept copy stops the re-run's plain fetch.
+  state.etag = 'W/"9"';
+  await assert.rejects(sdk.fetchArtifact('app', APP_ID), (e) => e && e.code === 'LOCAL_EDITS_WOULD_BE_LOST');
 });
 
 test('REAL BUNDLE: after the pending-draft halt, "publish, then re-run" really converges', async () => {

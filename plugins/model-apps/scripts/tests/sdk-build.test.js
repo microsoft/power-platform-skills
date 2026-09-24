@@ -677,8 +677,17 @@ test('#583 when the sitemap write is deferred, the routing description is pushed
 });
 
 // #583: the SDK refuses a header write with a 412 while an earlier header change is unpublished, and the
-// generic remedy (re-download) cannot clear that. The explanation is keyed on a PROVEN draft only.
-const HEADER_412 = { saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error('Version conflict for app/x: local=W/"2", server=(none). Re-fetch and reapply changes.'), { code: 'VERSION_CONFLICT' }) };
+// generic remedy (re-download) cannot clear that. The explanation is keyed on a PROVEN draft only. The
+// error is shaped as the real bundle returns it: `detail` names the refused request (pinned in
+// app-ai-description-real-bundle.test.js), and the message carries it too.
+const conflictOn = (row) => {
+  const detail = `Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/${row}`;
+  return { saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(`Version conflict for app/x: local=W/"2", server=(none). Re-fetch and reapply changes. ${detail}`), { code: 'VERSION_CONFLICT', detail }) };
+};
+const HEADER_412 = conflictOn('appmodules(x)');
+// The SDK writes the header first, then the sitemap: a 412 on the SITEMAP comes after this push's own
+// header write committed, and so over the very unpublished layer the header state is proven by.
+const SITEMAP_412 = conflictOn('sitemaps(y)');
 // Models ONLY the app draft read. The data-model phase's narrow metadata reads also go through
 // `dataverse.get`; a failed read is the input each of them already tolerates (they fall back to
 // findTables/findColumns/fetchEntityMetadata), so they are handed one rather than a fake draft row.
@@ -750,6 +759,26 @@ test('#583 a push refused for another reason keeps its own halt, even over a pen
   assert.strictEqual(seen.length, 0, 'only a VERSION_CONFLICT is re-diagnosed');
 });
 
+// Only the APPMODULE row's 412 can be the unpublished-header state. A sitemap 412 is a concurrent sitemap
+// edit, over the unpublished layer this very push's header write just left — relabelling it reset the copy,
+// and "publish, then re-run" then overwrote the other edit. So is a conflict that names no request at all.
+test('#583 a 412 that is not the appmodule row\u2019s keeps the generic halt and the copy, over a pending draft too', async () => {
+  const unnamed = { ...HEADER_412, error: Object.assign(new Error('Version conflict for app/x: local=W/"2", server=W/"3". Re-fetch and reapply changes.'), { code: 'VERSION_CONFLICT' }) };
+  for (const [what, result] of [['a sitemap 412', SITEMAP_412], ['a conflict naming no request', unnamed]]) {
+    for (const phases of [appShellPhases, fullPhases]) {
+      const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: result });
+      const seen = [];
+      sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+      await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases, genpageCli: noPages }), (e) => {
+        assert.strictEqual(e.code, 'version-conflict', `${what}, ${phases.join(',')}: ${e.message}`);
+        return true;
+      });
+      assert.strictEqual(seen.length, 0, `${what}: not re-diagnosed, so no draft read`);
+      assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, `${what}: the copy is kept as the fence`);
+    }
+  }
+});
+
 // With the pages phase in the run — every CLI apply — the finalizer is the only existing-app sitemap
 // writer, so the routing description must ride ITS push. An app-shell push would re-send the live
 // sitemap, which the SDK validates reference by reference: a subarea whose page was deleted in Maker
@@ -797,16 +826,74 @@ test('#583 a never-published app\u2019s THROWN refusal halts the same way, after
   }
 });
 
-test('#583 any other thrown push error is left exactly as it was', async () => {
-  for (const [what, spec] of [['with a routing change', routingSpec()], ['without one', makeSpec()]]) {
+// A push that carried the routing change and failed for any reason but a concurrent edit left that change
+// unrecorded in the workspace copy — where the re-run's plain fetch refuses it once the server moves, and
+// where applyAppAiDescription (which reads the copy) mistakes it for "already set". So the copy is reset
+// before the error propagates — unchanged. Without a routing change nothing is touched.
+test('#583 any other thrown push error propagates unchanged, and resets the copy only when it carried the routing change', async () => {
+  for (const [what, spec, resets] of [['with a routing change', routingSpec(), 1], ['without one', makeSpec(), 0]]) {
     const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
     sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
     await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
       assert.strictEqual(e.code, 'SITEMAP_TARGET_NOT_FOUND', `${what}: ${e.message}`);
       return true;
     });
-    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, `${what}: no reset`);
+    const overwrite = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
+    assert.strictEqual(overwrite.length, resets, `${what}: ${resets ? 'the copy is reset' : 'no reset'}`);
+    if (resets) assert.ok(calls.indexOf(overwrite[0]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the failed push');
   }
+  // A reset that itself fails leaves the error exactly as it was.
+  const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND', failOverwriteFetch: true });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_TARGET_NOT_FOUND');
+  // A THROWN failure with no code (the connection dropped mid-push) resets too: the code-less 412 that
+  // keeps the copy is one the SDK RETURNS by value.
+  const dropped = mockSdk({ artifactsExist: true });
+  const push = dropped.sdk.pushArtifact;
+  dropped.sdk.pushArtifact = async (t, id) => {
+    if (t !== 'app') return push(t, id);
+    dropped.calls.push({ name: 'pushArtifact', args: [t, id] });
+    throw new Error('socket hang up');
+  };
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk: dropped.sdk, apply: true, phases: appShellPhases }), (e) => /socket hang up/.test(e.message));
+  assert.strictEqual(appCalls(dropped.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+test('#583 a returned push failure resets the copy, but a concurrent edit keeps it as the fence', async () => {
+  const withCode = (code, message) => ({ saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(message), code ? { code } : {}) });
+  for (const [what, result, haltCode, resets] of [
+    ['a failure with its own code', withCode('SITEMAP_REFERENCE_UNRESOLVED', 'subarea target missing'), 'SITEMAP_REFERENCE_UNRESOLVED', 1],
+    // requireSuccessfulPush asks for a fresh download on these; the unrecorded copy is what stops a blind
+    // re-run from overwriting the other edit.
+    ['a VERSION_CONFLICT on a settled row', HEADER_412, 'version-conflict', 0],
+    ['a code-less 412', withCode(null, 'version conflict (412)'), 'version-conflict', 0],
+  ]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: result });
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 0 }] } });
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, haltCode, `${what}: ${e.message}`);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, resets, what);
+  }
+  // `success` (the older SDK spelling) is read the same way as `saved`.
+  const legacy = { success: false, error: Object.assign(new Error('subarea target missing'), { code: 'SITEMAP_REFERENCE_UNRESOLVED' }) };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: legacy });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_REFERENCE_UNRESOLVED');
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+// Without the pages phase the live-page gate guards the page-less sitemap write. The routing description
+// used to be applied BEFORE it, so a gate that halted left the edit unrecorded in the workspace copy.
+test('#583 without the pages phase, a live-page gate that halts leaves no routing edit behind', async () => {
+  const spec = routingSpec();
+  const appUnique = appUniqueName(spec);
+  const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`; // the live app HAS a genpage
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP, selfAppUnique: appUnique, liveSitemapXml: sm });
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true, env: 'https://x', phases: appShellPhases }), (e) => e && e.phase === 'app-shell' && e.code === 'pages-removed');
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 0, 'not even compared');
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0);
 });
 
 test('#583 a 412 on a push that carries no routing change is never re-diagnosed', async () => {

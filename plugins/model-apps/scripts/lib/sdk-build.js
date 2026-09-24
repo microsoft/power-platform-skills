@@ -44,6 +44,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
   requireSuccessfulPush,
+  pushFailed,
   reportPartialPush,
   errorCodeChain,
   makeEntitySetResolver,
@@ -963,9 +964,18 @@ async function applyAppAiDescription(provision, spec, appId) {
 //     SDK's next header PATCH fails with 412 although nothing changed since the fetch; a sitemap-only
 //     push over the same state still succeeds, and publishing clears it. The state arises from a header
 //     edit saved in Maker but not published, or from a build whose publish did not complete. A 412 is
-//     relabelled only when a draft read PROVES that state (componentstate 1 = Unpublished:
+//     relabelled only when it was the APPMODULE row's and a draft read PROVES that state (componentstate
+//     1 = Unpublished:
 //     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_ComponentState);
 //     any other outcome — a settled row, a read that fails — returns and leaves the generic halt in place.
+//
+//     Whose 412 it was matters because the SDK writes an app in two PATCHes, the header then the sitemap,
+//     each conditional on its own version, and names the refused one in the error's `detail`:
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/appmodules(<id>)
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/sitemaps(<id>)
+//     A sitemap 412 is a concurrent sitemap edit — and by then this push's own header write has committed,
+//     leaving exactly the unpublished layer the draft read finds. Relabelling it reset the copy, and
+//     "publish, then re-run" then overwrote the other edit; the kept copy is what makes that re-run stop.
 //
 // Before halting it RESETS the workspace copy to the server's. The refused push left this run's edits in
 // it; once the operator publishes, the server moves, and a plain fetch then refuses to discard unpushed
@@ -977,6 +987,7 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
   const neverPublished = code === 'APP_DRAFT_HEADER_NOT_WRITABLE';
   if (!neverPublished) {
     if (code !== 'VERSION_CONFLICT' || !provision.dataverse || typeof provision.dataverse.get !== 'function') return;
+    if (!/\/appmodules\(/i.test(`${pushed.error.detail || ''} ${pushed.error.message || ''}`)) return;
     let pending = false;
     try {
       // No `$top`: look for the unpublished layer among EVERY row the draft read returns. Measured, it
@@ -1009,17 +1020,43 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 
 // #583: push an app artifact whose header this run may have changed (the routing description). A refusal
 // that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
-// else is exactly the plain push (the result is still for requireSuccessfulPush to judge).
+// else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
+// FAILED push which carried a header change first resets the workspace copy (discardUnrecordedHeader).
 async function pushAppHeader(provision, appId, name, headerChanged) {
   let pushed;
   try {
     pushed = await provision.pushArtifact('app', appId);
   } catch (e) {
-    if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
+    if (headerChanged) {
+      await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
+      await discardUnrecordedHeader(provision, appId, e, true);
+    }
     throw e;
   }
-  if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+  if (headerChanged) {
+    await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+    if (pushFailed(pushed)) await discardUnrecordedHeader(provision, appId, pushed.error, false);
+  }
   return pushed;
+}
+
+// #583: after a push that carried this run's header change FAILED, reset the workspace copy to the
+// server's. The edit was never recorded, and a copy still holding it hurts the re-run twice: its plain
+// fetch refuses to discard the unpushed edit (LOCAL_EDITS_WOULD_BE_LOST) once the server has moved, and
+// applyAppAiDescription compares against that local copy, so the pending change reads as "already set"
+// and the re-run's push goes out as a header-less one — losing the precise halt above if it is refused.
+// The edits are projected from the spec, so the re-run re-applies them and nothing is lost.
+//
+// A concurrent edit is the one failure that KEEPS the copy: a VERSION_CONFLICT, or a returned failure
+// with no code at all (the bare 412 requireSuccessfulPush reads the same way). There the remedy is a
+// fresh download, and the unrecorded copy is what makes a blind re-run stop instead of overwriting the
+// other edit. Best-effort: a reset that fails leaves the copy exactly as it was before this existed.
+async function discardUnrecordedHeader(provision, appId, error, thrown) {
+  const code = error && error.code;
+  if (code === 'VERSION_CONFLICT' || (!thrown && !code)) return;
+  try {
+    await provision.fetchArtifact('app', appId, { overwrite: true });
+  } catch { /* see above */ }
 }
 
 // A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
@@ -3501,8 +3538,9 @@ async function runSdkBuild(spec, opts = {}) {
         // sitemap writer, and applies it there, after its own re-fetch and after the removal gate. Pushing
         // the fetched app HERE would re-send the LIVE sitemap, which the SDK validates reference by
         // reference, so a subarea whose page or table was deleted in Maker would halt the run before the
-        // pages phase could drop it.
-        const aiDescriptionChanged = !has('pages') && await applyAppAiDescription(provision, spec, existingId);
+        // pages phase could drop it. Without the pages phase it is applied below, right before the push
+        // that carries it — after the live-page gate, so a gate that halts leaves no unrecorded edit in
+        // the workspace copy for the re-run's plain fetch to refuse.
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
         // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
         // stay pinned. Explicit forms/views/charts component pins are applied at CREATE only (below):
@@ -3534,9 +3572,10 @@ async function runSdkBuild(spec, opts = {}) {
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+          const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
           requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
-        } else if (aiDescriptionChanged) {
+        } else if (!has('pages') && await applyAppAiDescription(provision, spec, existingId)) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
           // needs its own push. That push re-sends the live sitemap, which the SDK validates.
