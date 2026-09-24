@@ -341,7 +341,15 @@ function tombstoneSnapshot(workspaceDir, deps = {}) {
   } catch (e) {
     // Any other code (EBUSY, EMFILE, ENOSPC, EIO, …) is transient: a build could still get the folder, so
     // the teardown fails closed rather than proceed unfenced.
-    if (e && CANNOT_CREATE.has(e.code)) return { ok: true, reason: `no workspace can exist at ${workspaceDir} (${e.code}), so there is no snapshot to fence` };
+    // …but only when the workspace really is not there. mkdir over an EXISTING folder succeeds, so these codes
+    // mean the folder is absent — unless a platform refuses it anyway (a folder it cannot write, say): then
+    // a snapshot may sit there unfenced, and that fails closed like any other failure.
+    if (e && CANNOT_CREATE.has(e.code)) {
+      let absent;
+      try { absent = !fs.statSync(workspaceDir).isDirectory(); } catch (se) { absent = !!se && (se.code === 'ENOENT' || se.code === 'ENOTDIR'); }
+      if (absent) return { ok: true, reason: `no workspace can exist at ${workspaceDir} (${e.code}), so there is no snapshot to fence` };
+      return { ok: false, reason: `tombstone failed: the workspace at ${workspaceDir} is there but could not be prepared (${e.code}), so its snapshot cannot be fenced` };
+    }
     return { ok: false, reason: `tombstone failed: ${e && e.message}` };
   }
   let lease;

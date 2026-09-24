@@ -258,6 +258,22 @@ test('tombstoneSnapshot where no folder can exist has nothing to fence, and writ
   } finally { rm(parent); }
 });
 
+// Those codes mean "no workspace" only when none is there: a platform that refuses mkdir over an EXISTING folder
+// would otherwise leave that folder's snapshot unfenced while the teardown deletes the app.
+test('tombstoneSnapshot fails closed when mkdir is refused over a workspace that exists', () => {
+  const d = ws();
+  try {
+    store.writeSnapshotAtomic(d, eligible('g1'));
+    for (const code of ['EACCES', 'EPERM', 'EROFS']) {
+      const refuse = () => { throw Object.assign(new Error(`refused (${code})`), { code }); };
+      const r = store.tombstoneSnapshot(d, { mkdirSync: refuse });
+      assert.strictEqual(r.ok, false, code);
+      assert.match(r.reason, /is there but could not be prepared/, code);
+    }
+    assert.strictEqual(store.readSnapshot(d).eligible, true, 'the snapshot is untouched, so the teardown stops before it deletes');
+  } finally { rm(d); }
+});
+
 // A TRANSIENT mkdir failure is not proof that no build can use the folder, so the fence fails closed.
 test('tombstoneSnapshot fails closed when the folder cannot be created for a transient reason', () => {
   const busy = () => { const e = new Error('resource busy or locked'); e.code = 'EBUSY'; throw e; };

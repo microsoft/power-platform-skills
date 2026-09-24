@@ -741,6 +741,29 @@ test('appEntityComponents(): matches an objectid whose CASING differs from the r
 // The dashboard oracle through the REAL reader seam: `dashboardComponents` is implemented here with
 // the SDK's own deserializer (fetch, then read the artifact), so a stub-only test would prove nothing
 // about the reader verify actually runs with.
+// A dashboard the SDK returns no artifact for, or a component list that is not a list, is not "no tiles": verify
+// reports it unverified. Converting it to an empty list passed the check having read nothing.
+test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unverified, never passed', async () => {
+  for (const [what, art] of [['no artifact', null], ['a malformed component list', { components: { chart: 1 } }]]) {
+    const sdk = {
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1' }] : []),
+      fetchArtifact: async () => {},
+      getArtifact: async () => art,
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    };
+    const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+      dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+    const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+    const chk = r.checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, new RegExp(`its tiles could not be read \\(the SDK returned ${what}`), what);
+  }
+});
+
 test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
   const calls = [];
   const sdk = {

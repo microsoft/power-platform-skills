@@ -255,7 +255,13 @@ function readerFor(sdk, appUnique, opts) {
     dashboardComponents: async (dashboardId) => {
       await sdk.fetchArtifact('dashboard', dashboardId);
       const art = await sdk.getArtifact('dashboard', dashboardId);
-      return (art && art.components) || [];
+      // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
+      // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
+      // has no tiles, as download-model-app.js reads it.
+      if (!art || (art.components !== undefined && !Array.isArray(art.components))) {
+        throw new Error(`the SDK returned ${art ? 'a malformed component list' : 'no artifact'} for dashboard ${dashboardId}`);
+      }
+      return art.components || [];
     },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
