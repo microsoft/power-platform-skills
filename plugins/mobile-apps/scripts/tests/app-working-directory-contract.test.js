@@ -165,7 +165,8 @@ npm() { record_call npm "$@"; }
   assert.equal(expectedCalls, 9);
   assert.equal(calls.length, expectedCalls);
   for (const call of calls) {
-    assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(owner));
+    // Native realpath expands Windows 8.3 aliases retained by the JS resolver.
+    assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
   }
   for (const operation of ['refresh-data-source', 'delete-data-source', 'remove-flow', 'generate-schemas', 'tsc']) {
     assert.ok(calls.some((call) => call.args.includes(operation)), operation);
