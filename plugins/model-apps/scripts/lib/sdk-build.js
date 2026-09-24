@@ -1887,6 +1887,9 @@ async function runSdkBuild(spec, opts = {}) {
     // function verify uses, so the label and position passes cannot hand one want's named section to
     // another (see claimedByAuthoredName) — and build and verify skip the same containers.
     const authoredSectionNames = new Set(def.__authoredSectionNames || []);
+    // …and the subset the author NAMED. Only those are looked for across the form (see the form-wide
+    // lookup below): a generated name encodes the section's place.
+    const namedSectionNames = new Set(def.__namedSectionNames || []);
     // A section MOVE shifts its siblings: the ones after it in the source column slide up one. Every
     // recorded target pointer there is corrected, not only the name-less ones resolveSectionPointer
     // falls back to — the vacated-section sweep also treats recorded pointers as claims, and a stale
@@ -1976,8 +1979,16 @@ async function runSdkBuild(spec, opts = {}) {
           const candidate = (s) => (authoredWant ? !isEngineHostSection(s) : engineHost(s));
           const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase() && candidate(s);
           const inColumn = wantSection.name ? liveList.findIndex((s, i) => !claimedHere.has(i) && sameName(s)) : -1;
+          // The form-wide lookup is for a section the author NAMED — and for an engine want, whose host a
+          // maker may have moved. A GENERATED name (`section_<tab>[_<column>]_<index>`) encodes the
+          // section's place, so a section of that name elsewhere — dragged there in Maker, or another one
+          // that carries it after a reorder — is not taken from there: as documented for a generated
+          // section (app-spec-schema.md, "Moving a section"), it is created where the layout places it,
+          // its fields follow, and the emptied original is removed. The in-column hit above still finds it
+          // where it belongs, so an unchanged layout converges.
+          const lookFormWide = !!wantSection.name && (!authoredWant || namedSectionNames.has(String(wantSection.name).toLowerCase()));
           let global = inColumn >= 0 ? { pointer: columnPointer + '/sections/' + inColumn, section: liveList[inColumn] }
-            : (wantSection.name ? findSectionLocation(form, wantSection.name, candidate) : null);
+            : (lookFormWide ? findSectionLocation(form, wantSection.name, candidate) : null);
           // A named section the spec places in THIS column but that lives elsewhere is MOVED here: the
           // same node, so its id, name, rows and any maker-set properties travel with it. It used to be
           // reused in place — its attributes patched, its location left alone — so the build reported
@@ -2016,10 +2027,17 @@ async function runSdkBuild(spec, opts = {}) {
           const local = (global || !authoredWant) ? null : matchContainer((liveSections || {}).sections, wantSection, si,
             { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
           if (!global && !local) {
-            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
+            // An authored section is created where the layout places it: right after the furthest section this
+            // column has already matched, the index the move above uses. Appended, it landed after every
+            // section still to come — a new one declared mid-column, or a generated one recreated after a
+            // drag in Maker — and the build never reorders what exists, so the wrong order was permanent (and
+            // verify does not check order). Nothing recorded sits at or after that index, so no recorded
+            // pointer shifts. An ENGINE want is still appended: the compiler puts the notes section last.
+            const at = authoredWant ? Math.min(liveList.length, claimedHere.size ? Math.max(...claimedHere) + 1 : 0) : null;
+            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection), ...(at === null ? [] : [{ position: { index: at } }]));
             form = await provision.getArtifact('form', formId) || {};
             const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
-            const addedIdx = addedList.length - 1;
+            const addedIdx = at === null ? addedList.length - 1 : at;
             claimedHere.add(addedIdx);
             if (authoredWant) sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
             continue;
