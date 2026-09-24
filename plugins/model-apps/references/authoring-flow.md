@@ -745,6 +745,7 @@ even though the underlying spec stores the schemaName as provided:
 ### App
 - Name: [app name]
 - Description: [description]
+- Routing description: [app.aiDescription — omit the line when the spec does not set one]
 - Action: [Create new | Use existing: <app-id>]
 
 ### Solution
@@ -843,7 +844,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 {
   "schemaVersion": 2,
   "solution": { "uniqueName": "...", "displayName": "...", "publisherPrefix": "..." },
-  "app": { "name": "...", "description": "..." },
+  "app": { "name": "...", "description": "...", "aiDescription?": "..." },
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],

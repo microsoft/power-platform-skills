@@ -47,7 +47,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 ```jsonc
 {
   "solution": { "uniqueName": "ContosoSupportDesk", "displayName": "Contoso Support Desk", "publisherPrefix": "new" },
-  "app":      { "name": "Support Desk", "description": "Track tickets", "icon": "new_appicon" },
+  "app":      { "name": "Support Desk", "description": "Track tickets", "icon": "new_appicon" /* , "aiDescription": "…" — optional routing description */ },
   "entities":      [ /* tables — see below */ ],
   "relationships": [ /* 1:N links — see below */ ],
   "globalChoices": [ /* optional shared option sets */ ],
@@ -104,6 +104,19 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
+- **`app.aiDescription`** *(optional)* — the app's **routing description**: what an agent or router
+  reads to decide whether *this* app is the right place for a request. It is **separate from
+  `app.description`**, the text on the app tile, and maps to the platform's
+  [`appmodule.aiappdescription`](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_aiappdescription)
+  column. Write who the app is for, the tasks it covers, what it deliberately excludes and — when
+  sibling apps expose the same tables — how to tell them apart (see *Descriptions* below).
+  **Absent means "leave it alone":** the platform can write this text itself, so the build writes the
+  field only when the spec sets it (at create, or on an existing app when the value differs) and never
+  blanks it. A download carries it back when the app has one, and `--verify` checks the deployed value
+  whenever the spec sets one. Changing it on an app that has an **unpublished** change to its name,
+  description or routing description (saved in Maker but not published) halts the build: Dataverse
+  refuses the write until that change is published, so publish the app (or discard the change) first.
+  **Rules:** a non-empty string of at most 1,048,576 characters, the column's maximum.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
   reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
@@ -234,18 +247,6 @@ agent later inspects an app it did not build — to extend it, debug it, or answ
 Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
 Weak: `"The priority column."` (restates the name and adds nothing)
 
-**`app.description` additionally has to ROUTE.** It is the one field an orchestrator reads to decide
-whether *this* app is the right place to send a request, and there is no separate "AI description"
-field — the SDK's app surface has nowhere to put one, so anything extra would be silently dropped.
-Write the routing signal into `app.description` itself: who the app is for, the tasks it covers,
-what it deliberately **excludes**, and — when two apps expose the same tables — how to tell them
-apart. Sibling apps over the same data are precisely where a purpose-only description fails.
-
-Good: `"Project-manager and portfolio work: planning projects, assigning and reprioritizing work,
-and managing sprints, budgets, risks and releases. Prefer the My Work app when the request is about
-the signed-in contributor's own assigned items."`
-Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
-
 **Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
 truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
 than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
@@ -269,6 +270,26 @@ Everything else is **create-only** — the description reaches Dataverse when th
 created and is not revisited: tables, columns, the solution, global choices, `webResources[]`,
 `app.description`, forms, dashboards and business rules. Adding a description to one of those *after*
 it exists is accepted by validation, builds green, and does not change the deployed artifact.
+
+**The routing signal goes in `app.aiDescription`, not `app.description`.** An orchestrator deciding
+whether *this* app is the right place to send a request needs more than the app tile can hold, so the
+routing text has its own field (`appmodule.aiappdescription`), leaving `app.description` short. Write
+who the app is for, the tasks it covers, what it deliberately **excludes**, and — when two apps expose
+the same tables — how to tell them apart. Sibling apps over the same data are precisely where a
+purpose-only description fails.
+
+Good: `"Project-manager and portfolio work: planning projects, assigning and reprioritizing work,
+and managing sprints, budgets, risks and releases. Prefer the My Work app when the request is about
+the signed-in contributor's own assigned items."`
+Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
+
+It follows its own rules, not the ones above: up to **1,048,576** characters, and **one string for
+every language** — the column is not localizable, so it takes no LCID map. Unlike `app.description`
+it is **reconciled on an existing app**: a rebuild writes it whenever it differs from the deployed
+value. A download copies the deployed value into the spec — including one the platform generated —
+and from then on the spec owns it: if the platform later rewrites it, `--verify` reports the
+difference and the next full build restores the spec's value (a `--changed-only` apply compares the
+spec with its last snapshot, not with the deployed row, so it does not notice).
 
 ## entities[]
 ```jsonc

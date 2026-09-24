@@ -12,6 +12,12 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **`app.aiDescription` — a routing description for agents** ([#583]). The text an orchestrator reads
+  to choose between sibling apps over the same tables, kept apart from the tile's `app.description`.
+  It is written to the platform's `appmodule.aiappdescription` at create, and on an existing app when
+  it differs. A download carries it back, and `--verify` checks it. Leave it out and the build never
+  touches the deployed value. If the app has an unpublished change in Maker, the build halts and tells
+  you to publish first, rather than failing with a remedy that cannot work.
 - **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
   **Deliberately out of scope** beside the traceability table. Documentary only.
 - **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell

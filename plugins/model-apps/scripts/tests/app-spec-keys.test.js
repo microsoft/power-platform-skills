@@ -197,6 +197,28 @@ test('app.newLook must be a boolean', () => {
   assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
 });
 
+// #583: the routing description. A non-empty string up to the column's 1,048,576-character maximum.
+// Blank is refused rather than written: absent means "leave the deployed value alone", so an empty
+// string is the one value that could blank a description nobody asked to remove.
+test('app.aiDescription is a non-empty string within the column maximum', () => {
+  const withValue = (v) => { const s = base(); s.app.aiDescription = v; return validateAppSpec(s, { profile: 'plan' }); };
+  const ok = withValue('Dispatch work. Prefer My Work for your own assigned items.');
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.strictEqual(withValue('x'.repeat(1048576)).ok, true, 'exactly the maximum is accepted');
+  for (const [v, re] of [
+    [42, /app.aiDescription must be a string/],
+    ['', /app.aiDescription must not be blank/],
+    ['   ', /app.aiDescription must not be blank/],
+    ['x'.repeat(1048577), /app.aiDescription is 1048577 characters \(max 1048576\)/],
+  ]) {
+    const r = withValue(v);
+    assert.strictEqual(r.ok, false, String(v).slice(0, 20));
+    assert.ok(r.errors.some((e) => re.test(e)), JSON.stringify(r.errors));
+  }
+  assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true, 'absent is fine');
+  assert.strictEqual(withValue(null).ok, true, 'null reads as absent, like an omitted key');
+});
+
 // ---------------------------------------------------------------------------------------------
 // #537 — entities[] had no allow-list, so a key with no reader validated clean and was dropped.
 //

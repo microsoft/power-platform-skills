@@ -195,8 +195,14 @@ function mockSdk(opts = {}) {
     },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
-    fetchArtifact: async (t, id) => {
-      calls.push({ name: 'fetchArtifact', args: [t, id] });
+    fetchArtifact: async (t, id, o) => {
+      calls.push({ name: 'fetchArtifact', args: o === undefined ? [t, id] : [t, id, o] });
+      // `{ overwrite: true }` resets the local copy to the server's, as the real SDK does; a test can
+      // make that reset fail with `failOverwriteFetch`.
+      if (o && o.overwrite) {
+        if (opts.failOverwriteFetch) throw new Error('fetch failed: network down');
+        delete store[`${t}:${id}`];
+      }
       // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
       if (!store[`${t}:${id}`]) {
         // `existingFormJson` overrides the single-tab default so a test can seed a deployed form
@@ -210,7 +216,7 @@ function mockSdk(opts = {}) {
         // when its pointer resolves to undefined, whereas this mock's jpSet would happily create the
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
-        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
+        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
         // The chart description reconcile reads through fetchArtifact/getArtifact rather than
         // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
         // unpublished one (measured live). Seed `description` for the same reason as the view.
@@ -284,12 +290,28 @@ function mockSdk(opts = {}) {
           const n = arr.findIndex((x) => x && x.id === pos.after); at = n < 0 ? arr.length : n + 1;
         } else throw new TypeError(`Cannot use 'in' operator to search for 'index' in ${pos}`);
         arr.splice(at, 0, clone(el));
+      } else if (arr !== null && typeof arr === 'object' && el !== null && typeof el === 'object' && !Array.isArray(el)) {
+        // An OBJECT parent: the real SDK adds each property of `el` (refusing `id` and `position`),
+        // which is how a key the fetched artifact lacks — the app's `aiDescription` — gets added.
+        if (opts && opts.position !== undefined) throw new Error('position is not supported for an object parent');
+        for (const k of Object.keys(el)) {
+          if (k === 'id') throw new Error("refusing to write 'id' — that re-keys the node rather than adding a property");
+          arr[k] = clone(el[k]);
+        }
       }
       return clone(art);
     },
     updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
       calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
+      // The real SDK THROWS PathNotFoundError when the pointer resolves to nothing. Modelled here for
+      // the app's `aiDescription` — which a fetched app carries only when the row has one — because
+      // the build's routing-description write depends on that failure to fall back to addElement.
+      if (t === 'app' && ptr === '/aiDescription' && jpGet(art, ptr) === undefined) {
+        const e = new Error(`Path ${ptr} not found in ${t}/${id}`);
+        e.code = 'PATH_NOT_FOUND';
+        throw e;
+      }
       // The real SDK MERGES when the current value and the patch are BOTH plain objects, and
       // replaces otherwise:  `Xu(o) && Xu(i) ? {...o, ...i} : i`.
       // Measured against the vendored bundle: updateElement('/…/cells/0/control', {isReadOnly:true})
@@ -325,7 +347,15 @@ function mockSdk(opts = {}) {
       return clone(art || { id });
     },
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
-    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
+    // `appPushResult` lets a test answer an APP push the way the real SDK answers a 412: it RESOLVES with
+    // `saved:false` and a VERSION_CONFLICT error rather than throwing. `appPushThrows` is the other shape:
+    // refusals the SDK THROWS (a never-published app's header, a sitemap target that no longer exists).
+    pushArtifact: async (t, id) => {
+      calls.push({ name: 'pushArtifact', args: [t, id] });
+      if (t === 'app' && opts.appPushThrows) throw Object.assign(new Error(`push refused: ${opts.appPushThrows}`), { code: opts.appPushThrows });
+      if (t === 'app' && opts.appPushResult) return { type: t, id, ...opts.appPushResult };
+      return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } };
+    },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => {
       calls.push({ name: 'publishArtifact', args: [t, id] });
@@ -574,6 +604,217 @@ test('sitemap: an existing (edit) app also gets its sitemap added to the solutio
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'] });
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'app'), 'no duplicate app created on the edit path');
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 62 && c.args[0].componentId === 'sm-1'), 'sitemap added to solution on the edit path too');
+});
+
+// #583: the routing description (`app.aiDescription` → appmodule.aiappdescription). Written at create;
+// on an existing app only when the spec sets one that differs from the FETCHED artifact; never blanked
+// and never written when the spec omits it (the platform can author this text itself).
+const ROUTING = 'Dispatch work: assigning and rescheduling tickets. Prefer My Work for your own assigned items.';
+const appShellPhases = ['solution', 'data-model', 'app-shell'];
+const appCalls = (calls, name, pred = () => true) => find(calls, name).filter((c) => c.args[0] === 'app' && pred(c));
+
+test('#583 appDef carries app.aiDescription only when the spec sets one', () => {
+  const built = { forms: {}, views: {}, charts: {}, dashboards: {} };
+  assert.ok(!('aiDescription' in appDef(makeSpec(), built)));
+  assert.strictEqual(appDef(makeSpec({ app: { name: 'Support Desk', aiDescription: ROUTING } }), built).aiDescription, ROUTING);
+});
+
+test('#583 a new app is created with its routing description', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'createArtifact')[0].args[1].aiDescription, ROUTING);
+});
+
+test('#583 an existing app without one gets it added, on the same push as its sitemap', async () => {
+  // The mock's updateElement THROWS PATH_NOT_FOUND for an absent `/aiDescription`, as the real SDK does,
+  // so this also proves the key is added rather than "updated" onto a path that is not there.
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  const added = appCalls(calls, 'addElement', (c) => c.args[2] === '');
+  assert.deepStrictEqual(added.map((c) => c.args[3]), [{ aiDescription: ROUTING }], 'added at the artifact root');
+  // One push: the sitemap rewrite carries the new field. A second push from the same fetch would race
+  // the first on the row's If-Match.
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  const addAt = calls.indexOf(added[0]);
+  assert.ok(addAt < calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'added before the push that writes it');
+  assert.ok(calls.indexOf(appCalls(calls, 'fetchArtifact')[0]) < calls.indexOf(appCalls(calls, 'getArtifact')[0]), 'compared against the FETCHED artifact');
+});
+
+test('#583 an existing app with a different routing description is updated in place', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Old routing text.' });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').map((c) => c.args[3]), [ROUTING]);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 an existing app whose routing description already matches is left alone', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: ROUTING });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 a spec with no routing description never reads or writes one', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Written by the platform.' });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 0, 'not even read');
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 when the sitemap write is deferred, the routing description is pushed on its own', async () => {
+  // A page subarea defers the existing app's sitemap write to the pages finalizer, which does not run
+  // in an app-shell-only build, so the routing description needs its own push or it never lands.
+  const spec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap').length, 0, 'the sitemap write is deferred');
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 1);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push carries the routing description');
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1);
+});
+
+// #583: the SDK refuses a header write with a 412 while an earlier header change is unpublished, and the
+// generic remedy (re-download) cannot clear that. The explanation is keyed on a PROVEN draft only.
+const HEADER_412 = { saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error('Version conflict for app/x: local=W/"2", server=(none). Re-fetch and reapply changes.'), { code: 'VERSION_CONFLICT' }) };
+// Models ONLY the app draft read. The data-model phase's narrow metadata reads also go through
+// `dataverse.get`; a failed read is the input each of them already tolerates (they fall back to
+// findTables/findColumns/fetchEntityMetadata), so they are handed one rather than a fake draft row.
+const draftReader = (answer, seen = []) => ({ get: async (url) => {
+  if (!/^\/appmodules\//.test(url)) throw new Error(`not modelled by this test: ${url}`);
+  seen.push(url);
+  if (answer instanceof Error) throw answer;
+  return answer;
+} });
+const routingSpec = () => makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+
+test('#583 a 412 over an unpublished header change halts with the step that works', async () => {
+  // The last case puts the PUBLISHED row first: the unpublished layer must be found wherever it is.
+  for (const [deferred, value] of [[false, [{ componentstate: 1 }]], [true, [{ componentstate: 1 }]], [false, [{ componentstate: 0 }, { componentstate: 1 }]]]) {
+    const spec = routingSpec();
+    if (deferred) spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    const seen = [];
+    sdk.dataverse = draftReader({ status: 200, body: { value } }, seen);
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'app-header-unpublished', `${deferred ? 'deferred' : 'sitemap'} path, rows ${JSON.stringify(value)}: ${e.message}`);
+      assert.match(e.message, /unpublished change to its name, description or routing description/);
+      assert.match(e.message, /publish the app in Power Apps \(or discard the change\), then re-run the build\.$/);
+      return true;
+    });
+    assert.strictEqual(seen.length, 1);
+    assert.match(seen[0], /^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=componentstate&\$filter=appmoduleid eq \S+$/);
+    assert.strictEqual(appCalls(calls, 'publishArtifact').length, 0, 'nothing is published after the refused push');
+    // The refused push left this run's edits in the workspace copy; it is reset so the re-run's plain
+    // fetch is not refused with LOCAL_EDITS_WOULD_BE_LOST once the operator has published.
+    const resets = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
+    assert.strictEqual(resets.length, 1, 'the workspace copy is reset');
+    assert.ok(calls.indexOf(resets[0]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the refused push');
+  }
+});
+
+test('#583 when the workspace copy cannot be reset, the halt names the workspace to delete', async () => {
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412, failOverwriteFetch: true });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /then re-run the build\. First delete the \.maker-workspace directory \(or the --workspace one\)/);
+    return true;
+  });
+});
+
+test('#583 any other 412 keeps the generic re-download halt', async () => {
+  for (const [what, answer] of [
+    ['a settled row', { status: 200, body: { value: [{ componentstate: 0 }] } }],
+    ['no row', { status: 200, body: { value: [] } }],
+    ['a non-2xx draft read, whatever its body', { status: 500, body: { value: [{ componentstate: 1 }] } }],
+    ['a failed draft read', new Error('network down')],
+  ]) {
+    const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    sdk.dataverse = draftReader(answer);
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'version-conflict', `${what}: ${e.message}`);
+      return true;
+    });
+  }
+});
+
+test('#583 a push refused for another reason keeps its own halt, even over a pending draft', async () => {
+  const refused = { ...HEADER_412, error: Object.assign(new Error('a row already exists at that id'), { code: 'ARTIFACT_ALREADY_EXISTS' }) };
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: refused });
+  const seen = [];
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'already-exists');
+  assert.strictEqual(seen.length, 0, 'only a VERSION_CONFLICT is re-diagnosed');
+});
+
+// With the pages phase in the run — every CLI apply — the finalizer is the only existing-app sitemap
+// writer, so the routing description must ride ITS push. An app-shell push would re-send the live
+// sitemap, which the SDK validates reference by reference: a subarea whose page was deleted in Maker
+// would halt the run before the pages phase could drop it.
+const fullPhases = ['solution', 'data-model', 'app-shell', 'pages'];
+const noPages = { enumerateEnv: async () => ({ ok: true, ids: [] }) };
+
+test('#583 with the pages phase, the routing description rides the finalizer push — app-shell pushes nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(routingSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  const pushes = appCalls(calls, 'pushArtifact');
+  const fetches = appCalls(calls, 'fetchArtifact');
+  assert.strictEqual(pushes.length, 1, 'one app push in the whole run');
+  assert.strictEqual(fetches.length, 2, 'app-shell fetches, the finalizer re-fetches');
+  const added = appCalls(calls, 'addElement', (c) => c.args[2] === '');
+  assert.deepStrictEqual(added.map((c) => c.args[3]), [{ aiDescription: ROUTING }]);
+  const at = (c) => calls.indexOf(c);
+  assert.ok(at(fetches[1]) < at(added[0]) && at(added[0]) < at(pushes[0]), 'applied after the finalizer fetch, before its push');
+  assert.ok(at(pushes[0]) > at(appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap')[0]), 'on the same push as the finalized sitemap');
+});
+
+test('#583 the finalizer push halts precisely over an unpublished header change, after resetting the copy', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /^pages failed: push app Support Desk failed: the app has an unpublished change/);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+test('#583 a never-published app\u2019s THROWN refusal halts the same way, after resetting the copy', async () => {
+  for (const phases of [appShellPhases, fullPhases]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+    const seen = [];
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases, genpageCli: noPages }), (e) => {
+      assert.strictEqual(e.code, 'app-header-unpublished', `${phases.join(',')}: ${e.message}`);
+      assert.match(e.message, /the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is\. .*: publish the app in Power Apps, then re-run the build\.$/);
+      return true;
+    });
+    assert.strictEqual(seen.length, 0, 'the SDK\u2019s own code proves the state; no draft read');
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset');
+  }
+});
+
+test('#583 any other thrown push error is left exactly as it was', async () => {
+  for (const [what, spec] of [['with a routing change', routingSpec()], ['without one', makeSpec()]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'SITEMAP_TARGET_NOT_FOUND', `${what}: ${e.message}`);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, `${what}: no reset`);
+  }
+});
+
+test('#583 a 412 on a push that carries no routing change is never re-diagnosed', async () => {
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+  const seen = [];
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'version-conflict');
+  assert.strictEqual(seen.length, 0, 'the draft is not even read');
 });
 
 test('Tier 1 data model: global choices, rich column types, customer, status, alt keys, N:N', async () => {
