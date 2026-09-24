@@ -137,12 +137,14 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` type-checks the page but does not execute
-`makeStyles`; unsupported Griffel shorthands can therefore compile and then log
-runtime errors in the browser. Before returning, Grep the generated `.tsx` with
-the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted, and spaced property
-syntax are all caught. Replace every match with the four explicit longhands:
-`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
+`pac model genpage transpile` only transpiles the page: it does not type-check it
+(a type error, or a reference to a column that does not exist, still transpiles
+and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
+therefore no proof that the page is type-safe, and unsupported Griffel shorthands
+can compile and then log runtime errors in the browser. Before returning, Grep the
+generated `.tsx` with the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted,
+and spaced property syntax are all caught. Replace every match with the four
+explicit longhands: `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
 `borderLeftWidth`. Do not return a file that still matches the regex.
 
 ## Step 3 — Read References and Samples

@@ -176,6 +176,24 @@ test('page generation rejects Griffel borderWidth shorthand before deploy', () =
   }
 });
 
+// Measured against the PAC CLI: `pac model genpage transpile` accepted a `string` assigned to a
+// `number` and a selected column that does not exist, exited 0 and wrote JavaScript. So no instruction
+// may present it as a type check — a worker that believes it is one ships unchecked types with false
+// confidence — and the page-builder, the one place that names the command, must say what it is not.
+test('no genpage instruction presents transpilation as a type check', () => {
+  const docs = [
+    ['page-builder', path.join(PLUGIN, 'agents', 'genpage-page-builder.md')],
+    ['create flow', path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')],
+    ['edit flow', path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md')],
+    ['rules', path.join(PLUGIN, 'references', 'rules.md')],
+  ];
+  for (const [name, file] of docs) {
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /genpage transpile`?\s+type-checks/i, `${name} must not claim transpilation type-checks`);
+  }
+  const builder = fs.readFileSync(docs[0][1], 'utf8');
+  assert.match(builder, /genpage transpile`\s+only transpiles the page: it does not type-check it/, 'the page-builder must say transpilation is not a type check');
+});
+
 // --- App Spec schema split -------------------------------------------------
 //
 // app-spec-schema.md is read IN FULL at the start of every /app-builder run, so the conditional
