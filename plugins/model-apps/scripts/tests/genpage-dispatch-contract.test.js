@@ -210,9 +210,9 @@ test('page generation rejects Griffel borderWidth shorthand before deploy', () =
 //     "does **not** type-check" is a denial.
 //   · List items, table cells, headings and paragraphs are separate units, so a "not" in one bullet never
 //     excuses the next; fenced code is skipped.
-const CATCHING = ['catch', 'detect', 'flag', 'report', 'find', 'surface', 'prevent', 'reject', 'stop', 'spot'];
+const CATCHING = ['catch', 'detect', 'flag', 'report', 'find', 'surface', 'prevent', 'reject', 'stop', 'spot', 'check', 'warn', 'raise', 'throw'];
 // The same verbs as past participles, in the same order: "type errors are caught".
-const CAUGHT = ['caught', 'detected', 'flagged', 'reported', 'found', 'surfaced', 'prevented', 'rejected', 'stopped', 'spotted'];
+const CAUGHT = ['caught', 'detected', 'flagged', 'reported', 'found', 'surfaced', 'prevented', 'rejected', 'stopped', 'spotted', 'checked', 'warned', 'raised', 'thrown'];
 // The verbs of a step that FAILS on them: "fails on type errors", "errors out on a type mismatch".
 const FAILING = ['fail', 'error', 'break', 'abort', 'halt', 'exit'];
 const CHECKING = ['validat', 'verif', 'check'];
@@ -225,8 +225,11 @@ const CLAIM_FAMILIES = [
   // attributed), so it counts only when transpiling runs it — "Transpile uses the type checker".
   String.raw`\btype[- ]?check\w*`,
   String.raw`\btype[- ]?safe\w*`,
-  // A catching VERB: a bare "a type error … still transpiles" says the opposite of a claim.
-  String.raw`\b(?:${CATCHING.join('|')})\w* (?:\w+ ){0,3}?${TYPE_ERROR}\b`,
+  // A catching VERB, a few words or a condition away ("checks whether the page has type errors"). A bare
+  // "a type error … still transpiles" says the opposite of a claim, and so do a contrast in between
+  // ("checks syntax even with type errors") and a denial right after ("warns that type errors are not
+  // checked").
+  String.raw`\b(?:${CATCHING.join('|')})\w* (?:(?:(?:an? |the )?(?:error|exception|warning|user|maker|developer) )?(?:whether|if|when) (?:\w+ ){0,3}?(?:has|have|contains?|hits?) (?:any )?|(?:(?!even\b|despite\b|regardless\b|though\b|although\b|while\b|yet\b)\w+ ){0,3}?)${TYPE_ERROR}\b(?! (?:(?:are|is|were|was) (?:not|never)\b|(?:aren|isn|weren|wasn)['’]t\b|(?:remain|remains|go|goes|stay|stays) un\w+))`,
   // …the same in the passive. A negation never stands in for the adverb: "are not caught" is no claim.
   String.raw`\b${TYPE_ERROR} (?:are|is|get|gets|will be|would be)(?: (?!not\b|never\b)\w+)? (?:${CAUGHT.join('|')})\b`,
   // …and a step that FAILS on them, or exits non-zero: "exits non-zero on type errors". A plain exit is
@@ -418,6 +421,19 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile returns a non-zero exit code for type errors.',
     'Run the transpile. It exits non-zero on type errors.',
     'Run the transpile. It returns non-zero on type errors.',
+    // A checking or warning verb reaches the type errors across a few words, as the catching verbs do.
+    'Transpile checks for type errors.',
+    'The transpile step checks the page for type errors.',
+    'Transpile warns about type errors.',
+    'Transpile throws on type errors.',
+    'Transpile raises an error on type mismatches.',
+    'Transpile raises type errors early.',
+    'Transpile checks whether the page has type errors.',
+    'Transpile warns when the page has type errors.',
+    'Transpile throws if the code contains type errors.',
+    'Transpile throws an exception if the page has type errors.',
+    'Transpile warns the user when the page has type errors.',
+    'Type errors are checked during transpilation.',
     'Transpile includes a type-check step.',
     'Transpile has a type-check step.',
     'Transpile contains a type-check step.',
@@ -477,6 +493,19 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Type-check the page before you transpile it.',
     'Type-check the page in a separate step before transpiling it.',
     'Type-check, transpile, upload.',
+    // …and so does a check for type errors the reader runs, or one that is denied.
+    'Transpile the page, then check it for type errors with `tsc`.',
+    'Transpile does not check for type errors.',
+    'After transpiling, `tsc` checks for type errors.',
+    // A contrast between the verb and the type errors, or a denial right after them, is the truth.
+    'Transpile checks syntax even with type errors.',
+    'Transpile reports success despite type errors.',
+    'Transpile warns that type errors are not checked.',
+    'Transpile warns that type errors aren’t checked.',
+    "Transpile warns that type errors aren't checked.",
+    'Transpile warns that type errors remain unchecked.',
+    'Transpile checks syntax while type errors remain.',
+    'Transpile reports success yet type errors remain.',
     // `It` continues the MOST RECENT subject — here `tsc`.
     'Transpile the page, then run `tsc`. It type-checks every prop.',
     'Transpile before invoking the type checker.',
