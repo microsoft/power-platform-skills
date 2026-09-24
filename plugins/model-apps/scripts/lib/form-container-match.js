@@ -47,28 +47,42 @@ function isEngineOwnedSection(s) {
   return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
 }
 
-// The names the COMPILER gives the sections it adds itself: `section_notes` (notesSectionIntent) and
-// `section_grid_<relationship>` (subgridSectionIntent), both in artifact-intent.js.
-const ENGINE_SECTION_NAME = /^(?:section_notes|section_grid_.*)$/i;
-
-// An engine HOST: an engine-owned section that still carries the name the compiler gave it. This — not
-// isEngineOwnedSection alone — is what an AUTHORED want's NAME pass skips. The structure says a section
-// holds only unbound controls; it cannot say who laid the section out. An authored section declared with
-// no fields that a maker then filled with a web resource, an iframe or a sub-grid is structurally the
-// same, and its name is the one positive evidence that it is the author's: skipping it created an empty
-// duplicate beside it, and when the spec moved it, left the maker's control behind in the old tab. The
-// label and position passes still skip every engine-owned section — those carry no such evidence.
-//
-// Limit: an authored section that takes an engine name AND holds no bound field cannot be told from the
-// host, so it is treated as one. An authored section with fields never is.
-function isEngineHostSection(s) {
-  return isEngineOwnedSection(s) && ENGINE_SECTION_NAME.test(String((s && s.name) || ''));
-}
-
 // A control class id as compared: the SDK projects `classid` without its braces and in its original case,
-// and the compiler writes the constant in upper case.
+// FormXML carries it in braces, and the compiler writes the constant in upper case.
 const classIdOf = (c) => String((c && c.control && c.control.classId) || '').replace(/[{}]/g, '').trim().toLowerCase();
 const cellsOf = (s) => ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+
+// The names the COMPILER gives the sections it adds itself — `section_notes` (notesSectionIntent) and
+// `section_grid_<relationship>` (subgridSectionIntent), both in artifact-intent.js — each with the control
+// that host exists to hold: the notes timeline and a sub-grid. These are the stable platform class ids
+// sdk-build.js pins as NOTES_CLASS_ID and SUBGRID_CLASS_ID (the SDK's ControlClassIds).
+const ENGINE_HOSTS = [
+  { name: /^section_notes$/i, classId: '06375649-c143-495e-a496-c962e5b4488e' },
+  { name: /^section_grid_.*$/i, classId: 'e7a81278-8635-4d9e-8d4d-59480b391c5b' },
+];
+
+// An engine HOST: a section that still carries the name the compiler gave it, and is either engine-owned
+// or holds the control that name's host exists for — never a bound field: a bound control's class id comes
+// from its attribute's type. This — not isEngineOwnedSection alone — is what an AUTHORED want never takes,
+// by name, label or position.
+//
+// The structure alone is not enough, in either direction. It says a section holds only unbound controls;
+// it cannot say who laid the section out. An authored section declared with no fields that a maker then
+// filled with a web resource, an iframe or a sub-grid is structurally the same, and its name is the one
+// positive evidence that it is the author's: skipping it created an empty duplicate beside it, and when
+// the spec moved it, left the maker's control behind in the old tab. And a host a maker added a bound
+// field to is no longer engine-owned, yet still the host — it holds the timeline or the sub-grid the
+// engine put it there for. Taking it, an authored `section_notes` moved the timeline into the author's
+// tab and poured the author's fields into it.
+//
+// Limit: an authored section that takes an engine name cannot be told from the host when it holds no
+// bound field, or holds that host's own control, so it is treated as one. An authored section with fields
+// and no such control never is.
+function isEngineHostSection(s) {
+  const host = ENGINE_HOSTS.find((h) => h.name.test(String((s && s.name) || '')));
+  if (!host) return false;
+  return isEngineOwnedSection(s) || cellsOf(s).some((c) => classIdOf(c) === host.classId);
+}
 
 // The host an ENGINE want is recognised by: a section holding, unbound, the want's OWN control — the notes
 // timeline's class id. The compiler's notes want shares its name with any authored `section_notes`, and

@@ -748,10 +748,12 @@ matched only by `name`: a label or a position is not evidence about what a conta
 matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
 Their name is the engine's own, so a section **you** declare never takes one even by name: a section
 of yours called `section_notes` gets a section of its own rather than the timeline host of that name.
-A host is known by that name *and* by holding only controls without a field; a section of yours that a
-maker filled with a web resource or sub-grid keeps its own name, and is still found by it. (One you
-name `section_notes` or `section_grid_…` and give no fields is indistinguishable from a host — give it
-another name.)
+A host is known by that name *and* by what it holds: only controls without a field, or the control the
+host exists for — the timeline in `section_notes`, a sub-grid in `section_grid_…` — even after a maker
+added a field beside it. A section of yours that a maker filled with a web resource or sub-grid keeps
+its own name, and is still found by it. (One you name `section_notes` or `section_grid_…` is
+indistinguishable from a host when it has no fields, or when a maker puts that host's control into it:
+the build then gives your fields a section of their own beside it. Give it another name.)
 
 ⚠ **Moving a section.** A section with an explicit `name` is found wherever it is on the deployed
 form and moved to the tab and form-column the layout places it in — the same section, so its fields,

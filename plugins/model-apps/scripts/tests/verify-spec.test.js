@@ -1328,6 +1328,27 @@ test('verify never matches an authored section to an engine host that shares its
   assert.strictEqual(chk.present, true, `the authored section is the one holding its field; got ${chk && chk.detail}`);
 });
 
+// A host a maker added a bound field to is no longer engine-owned by structure, yet it still holds the
+// timeline — and verify reads FormXML, so it must see the control's classid to know. The build skips such a
+// host by name, label and position, so verify must too, or it grades the author's fields against it.
+test('verify never matches an authored section to an engine host a maker added a field to', async () => {
+  const host = `<section name="section_notes"><labels><label description="Notes" languagecode="1033" /></labels><rows>`
+    + `<row><cell><control id="notescontrol" classid="{06375649-C143-495E-A496-C962E5B4488E}" /></cell></row>`
+    + `<row><cell><control id="new_x" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_x" /></cell></row></rows></section>`;
+  const xml = (second) => `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>${host}${second}</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  // By name: the author's own section_notes sits after the host.
+  const byName = await topoCheck(xml(`<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(byName.present, true, `by name; got ${byName && byName.detail}`);
+  // By label: the author's section was deployed under another name, and carries the host's label.
+  const byLabel = await topoCheck(xml(`<section name="section_x"><labels><label description="Notes" languagecode="1033" /></labels><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => Object.assign(spec.forms[0].tabs[0].columns[1].sections[0], { name: 'sec_renamed', label: 'Notes' }));
+  assert.strictEqual(byLabel.present, true, `by label; got ${byLabel && byLabel.detail}`);
+});
+
 // Engine-owned is a STRUCTURE (only unbound controls), which cannot say who laid a section out: an
 // authored section declared with no fields that a maker filled with a web resource looks the same. Its
 // authored name is the evidence it is the author's, so verify finds it by that name — as the build does —

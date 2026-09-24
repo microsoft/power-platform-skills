@@ -694,6 +694,8 @@ function compileFormIntent(spec, formSpec, opts) {
     // The section names the author declared (see `authoredSectionNames`), so the engine's reconcile
     // skips the same containers verify skips. An array, because the compiled def is plain data.
     __authoredSectionNames: [...authoredSectionNames(formSpec)],
+    // …and the subset the author NAMED, which the engine's sweep reads to word its report.
+    __namedSectionNames: [...authoredSectionNames(formSpec, { named: true })],
     // Ordering anchors: { <logical>: <anchorLogical> }. Consumed by the engine's reconcile, which
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).

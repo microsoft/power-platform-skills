@@ -1965,9 +1965,9 @@ async function runSdkBuild(spec, opts = {}) {
           // carry the name the engine gives its host — `section_notes` is a natural name for a section
           // holding a notes field — and taking the host MOVED it into the author's column and poured
           // authored fields into it. Such a host is simply not a candidate: the want is matched or created
-          // like any other authored section. A section a maker filled with a control but that carries an
-          // AUTHORED name stays a candidate: the name is the evidence it is the author's (see
-          // isEngineHostSection). An ENGINE want, in turn, takes only a section holding its own control
+          // like any other authored section — and a host a maker added a field to is still one, since it
+          // still holds its control. A section a maker filled with a control but that carries an AUTHORED
+          // name stays a candidate: the name is the evidence it is the author's (see isEngineHostSection). An ENGINE want, in turn, takes only a section holding its own control
           // (the notes timeline's class id): its name is shared with any authored `section_notes`, and taking
           // the author's section for its host meant an existing form never got its timeline (see
           // holdsControlOf).
@@ -2014,7 +2014,7 @@ async function runSdkBuild(spec, opts = {}) {
           // no host qualified, take whatever maker section sat at its index — relabelled "Notes", re-flowed
           // to one column, and still no timeline.
           const local = (global || !authoredWant) ? null : matchContainer((liveSections || {}).sections, wantSection, si,
-            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
+            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
           if (!global && !local) {
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
             form = await provision.getArtifact('form', formId) || {};
@@ -2568,8 +2568,10 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.removeElement('form', formId, o.pointer);
         if (typeof opts.warn === 'function') {
           // The naming hint helps only a GENERATED name (`section_<tab>[_<column>]_<index>`), which is
-          // the one that loses its identity on a move; a named copy or a dropped section needs none.
-          const generated = /^section_\d+(?:_\d+)?_\d+$/.test(String(o.name));
+          // the one that loses its identity on a move; a named copy or a dropped section needs none. The
+          // shape alone is not proof: an author may NAME a section `section_0_0`, and a copy of that
+          // needs no advice to give it a name.
+          const generated = /^section_\d+(?:_\d+)?_\d+$/.test(String(o.name)) && !(def.__namedSectionNames || []).includes(String(o.name).toLowerCase());
           opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it.${generated ? ' Give a section an explicit `name` if you intend to move it between tabs or form-columns.' : ''}`);
         }
       }

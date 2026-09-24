@@ -1179,12 +1179,14 @@ function formColumnsOf(tab) {
 // The build and verify both take it from here, so their label and position passes skip exactly the
 // same containers (form-container-match.js `claimedByAuthoredName`). Engine-owned sections — the
 // notes section, sub-grid hosts — are never in it: the compiler appends those, the author does not.
-function authoredSectionNames(formSpec) {
+// `{ named: true }` keeps only the names the author GAVE, leaving out the ones generated from a
+// section's position.
+function authoredSectionNames(formSpec, { named = false } = {}) {
   const names = new Set();
   const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
   tabs.forEach((t, ti) => formColumnsOf(t).forEach((col, ci) => {
     ((col && Array.isArray(col.sections)) ? col.sections : []).forEach((sec, si) => {
-      if (sec && typeof sec === 'object') names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
+      if (sec && typeof sec === 'object' && (!named || sec.name)) names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
     });
   }));
   return names;

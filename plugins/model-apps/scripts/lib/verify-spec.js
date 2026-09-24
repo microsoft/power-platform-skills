@@ -336,10 +336,11 @@ async function verifySpec(spec, read, opts = {}) {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
             // Every want here is authored (the spec's own sections), and an authored section never
-            // matches an engine HOST by name — the same rule the build's topology pass follows. A section
-            // a maker filled with a control but that carries the authored name is still found by it.
+            // matches an engine HOST by name, label or position — the same rule the build's topology pass
+            // follows, a host a maker added a field to included. A section a maker filled with a control
+            // but that carries the authored name is still found by it.
             const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
-              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredNames)(s), nameSkip: isEngineHostSection });
+              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredNames)(s), nameSkip: isEngineHostSection });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;
@@ -1369,10 +1370,13 @@ function parseFormTopology(xml) {
       // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
       // notes timeline or a web resource — engine-owned, never something the spec's field list
       // claims to place. The CELL still records that a control was present, because that is what
-      // distinguishes an engine-owned section from a merely empty one.
+      // distinguishes an engine-owned section from a merely empty one — and its `classid`
+      // (`{06375649-C143-495E-A496-C962E5B4488E}`, braces and case as written), which is what still
+      // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
+      const classId = attr(raw, 'classid');
       if (f) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = f ? { fieldName: String(f).toLowerCase() } : {};
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {});
     }
   }
   return tabs;
