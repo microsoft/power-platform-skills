@@ -44,4 +44,18 @@ function isEngineOwnedSection(s) {
   return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
 }
 
-module.exports = { matchContainer, isEngineOwnedSection };
+// A deployed section an authored section claims BY NAME: the LABEL and POSITION passes must not hand
+// it to a different want. Its own want finds it through the name pass, which `skip` does not apply to
+// — and the build MOVES a named section to the tab and form-column the spec places it in — so a label
+// or position claim by another want would be followed by that move and route two authored sections'
+// fields into one. `authoredNames` is every authored section name on the form, lower-cased
+// (validation keeps them unique). Build and verify both pass it, so they keep matching the same
+// containers.
+function claimedByAuthoredName(authoredNames) {
+  return (s) => {
+    const name = String((s && s.name) || '').toLowerCase();
+    return !!name && authoredNames.has(name);
+  };
+}
+
+module.exports = { matchContainer, isEngineOwnedSection, claimedByAuthoredName };

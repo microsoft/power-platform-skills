@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 
 // Arrange field cells into `columns` cells-per-row.
@@ -691,6 +691,9 @@ function compileFormIntent(spec, formSpec, opts) {
     // combination, but `compileFormIntent` is called directly too, so the flag states what actually
     // happened rather than what was asked for.
     __explicitLayout: Array.isArray(formSpec.tabs),
+    // The section names the author declared (see `authoredSectionNames`), so the engine's reconcile
+    // skips the same containers verify skips. An array, because the compiled def is plain data.
+    __authoredSectionNames: [...authoredSectionNames(formSpec)],
     // Ordering anchors: { <logical>: <anchorLogical> }. Consumed by the engine's reconcile, which
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).

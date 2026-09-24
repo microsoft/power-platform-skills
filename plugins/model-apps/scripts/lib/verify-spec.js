@@ -5,9 +5,9 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
@@ -309,6 +309,9 @@ async function verifySpec(spec, read, opts = {}) {
       // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
+      // The section names the author declared — the same set the build's compiler records — so the
+      // label and position passes skip a section another want owns by name, exactly as the build does.
+      const authoredNames = authoredSectionNames(f);
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -332,7 +335,7 @@ async function verifySpec(spec, read, opts = {}) {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
             const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
-              { claimed: claimedSections, skip: isEngineOwnedSection });
+              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredNames)(s) });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;

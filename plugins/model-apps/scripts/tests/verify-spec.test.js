@@ -1674,3 +1674,29 @@ test('verify PASSES when the field really is in the requested tab', async () => 
   });
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
 });
+
+// Verify matches containers exactly as the build does, and the build no longer lets a label or
+// position match take a section ANOTHER authored section owns by name (it moves that section to where
+// its own want places it). Here the section NAMED sec_wide sits in tab_one holding sec_main's field,
+// and an unnamed one in tab_two holds sec_wide's: every field is in the right tab, but a form script
+// that addresses sec_wide by name reaches tab_one. Matching sec_main to it by label passed that form.
+test('verify: the label pass skips a section another authored section owns by name', async () => {
+  const section = (name, label, field) => `<section${name ? ` name="${name}"` : ''}><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<rows><row><cell><control datafieldname="${field}" /></cell></row></rows></section>`;
+  const tab = (name, label, sections) => `<tab name="${name}"><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<columns><column width="100%"><sections>${sections}</sections></column></columns></tab>`;
+  const twoTabs = (spec) => {
+    spec.forms[0].tabs = [
+      { name: 'tab_one', label: 'One', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] }] },
+      { name: 'tab_two', label: 'Two', columns: [{ width: '100%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_notes'] }] }] },
+    ];
+  };
+  const misnamed = `<form><tabs>${tab('tab_one', 'One', section('sec_wide', 'Main', 'new_name'))}${tab('tab_two', 'Two', section(null, 'Wide', 'new_notes'))}</tabs></form>`;
+  const chk = await topoCheck(misnamed, twoTabs);
+  assert.strictEqual(chk.present, false, 'a form whose sec_wide is in the wrong tab must not verify');
+  assert.match(chk.detail, /section 'sec_main' is absent from tab 'tab_one'/);
+  // Control: the shape the build produces for that spec verifies.
+  const built = `<form><tabs>${tab('tab_one', 'One', section('sec_main', 'Main', 'new_name'))}${tab('tab_two', 'Two', section('sec_wide', 'Wide', 'new_notes'))}</tabs></form>`;
+  const ok = await topoCheck(built, twoTabs);
+  assert.strictEqual(ok.present, true, `got ${ok.detail}`);
+});

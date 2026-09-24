@@ -76,7 +76,7 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1821,20 +1821,6 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
-  // After a whole tab or form-column is appended, record where each of its sections landed, so the
-  // field pass places into them through the same locator the converge path produces. A freshly
-  // added container's sections occupy indices 0..n-1 in declaration order.
-  const recordColumnSectionTargets = (out, wantColumn, tabIndex, columnIndex, liveColumns) => {
-    const live = ((liveColumns || [])[columnIndex] || {}).sections || [];
-    (wantColumn.sections || []).forEach((s, si) => {
-      out[s.name] = { pointer: '/tabs/' + tabIndex + '/columns/' + columnIndex + '/sections/' + si, name: (live[si] || {}).name };
-    });
-  };
-
-  const recordSectionTargets = (out, wantTab, tabIndex, liveTab) => {
-    (wantTab.columns || []).forEach((c, ci) => recordColumnSectionTargets(out, c, tabIndex, ci, (liveTab || {}).columns));
-  };
-
   // Identity of a deployed tab/section across rebuilds, in descending order of confidence:
   //   1. NAME  — what the compiler emits, so a form this plugin created matches itself exactly.
   //   2. LABEL — what the author sees and types; survives a name this plugin did not choose
@@ -1891,6 +1877,25 @@ async function runSdkBuild(spec, opts = {}) {
     // vacated-section sweep would then treat a section the layout explicitly claimed as unclaimed.
     const sectionTargets = Object.create(null);
     const wantTabs = def.tabs || [];
+    // The section names the AUTHOR declared, computed by the compiler from the spec with the same
+    // function verify uses, so the label and position passes cannot hand one want's named section to
+    // another (see claimedByAuthoredName) — and build and verify skip the same containers.
+    const authoredSectionNames = new Set(def.__authoredSectionNames || []);
+    // A section MOVE shifts its siblings: the ones after it in the source column slide up one. Every
+    // recorded target pointer there is corrected, not only the name-less ones resolveSectionPointer
+    // falls back to — the vacated-section sweep also treats recorded pointers as claims, and a stale
+    // one would spare a section it should reclaim. Nothing recorded can sit at or after the INSERTION
+    // point: the target column's own matches all precede it, and every other column's matches live in
+    // that column (a name hit in another column is moved, never recorded in place).
+    const shiftRecordedSectionPointers = (fromPointer) => {
+      const split = (p) => { const m = /^(.*\/sections)\/(\d+)$/.exec(p || ''); return m ? { list: m[1], index: Number(m[2]) } : null; };
+      const from = split(fromPointer);
+      if (!from) return;
+      for (const t of Object.values(sectionTargets)) {
+        const at = t && split(t.pointer);
+        if (at && at.list === from.list && at.index > from.index) t.pointer = at.list + '/' + (at.index - 1);
+      }
+    };
     // Indices already taken by an earlier want, so two wants can never converge on one container.
     const claimedTabs = new Set();
     const claimedSections = new Map(); // column pointer -> Set(index)
@@ -1900,15 +1905,19 @@ async function runSdkBuild(spec, opts = {}) {
       // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
       // computed against an earlier snapshot can address the wrong container.
       let form = await provision.getArtifact('form', formId) || {};
-      const tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
       if (!tabMatch) {
+        // A new tab is added with EMPTY form-columns, and its sections then go through the same
+        // per-section pass as an existing tab's: a section the deployed form already carries elsewhere
+        // is MOVED in, and only a genuinely new one is created. Adding the tab with its sections created
+        // a same-named DUPLICATE of any section it relocated — the field pass then emptied the original,
+        // which the vacated-section sweep spared for its claimed name.
         await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
-          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: (c.sections || []).map(stripRows) })),
+          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: [] })),
         }));
         form = await provision.getArtifact('form', formId) || {};
-        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
-        if (added) { claimedTabs.add(added.index); recordSectionTargets(sectionTargets, wantTab, added.index, added.item); }
-        continue;
+        tabMatch = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        if (!tabMatch) continue; // defensive: the added tab could not be found again
       }
       claimedTabs.add(tabMatch.index);
       const tabPointer = '/tabs/' + tabMatch.index;
@@ -1918,18 +1927,17 @@ async function runSdkBuild(spec, opts = {}) {
       const wantColumns = wantTab.columns || [];
       for (let ci = 0; ci < wantColumns.length; ci++) {
         form = await provision.getArtifact('form', formId) || {};
-        const liveTab = (form.tabs || [])[tabMatch.index];
+        let liveTab = (form.tabs || [])[tabMatch.index];
         if (!liveTab) break; // defensive: the tab vanished mid-reconcile
-        const liveColumns = liveTab.columns || [];
-        if (ci >= liveColumns.length) {
-          // A tab that gained a form-column — e.g. a single-column form widened into two.
-          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], {
-            sections: (wantColumns[ci].sections || []).map(stripRows),
-          }));
+        if (ci >= (liveTab.columns || []).length) {
+          // A tab that gained a form-column — e.g. a single-column form widened into two. Added EMPTY,
+          // for the same reason as a new tab: its sections go through the per-section pass below.
+          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], { sections: [] }));
           form = await provision.getArtifact('form', formId) || {};
-          recordColumnSectionTargets(sectionTargets, wantColumns[ci], tabMatch.index, ci, ((form.tabs || [])[tabMatch.index] || {}).columns);
-          continue;
+          liveTab = (form.tabs || [])[tabMatch.index];
+          if (!liveTab || ci >= (liveTab.columns || []).length) break; // defensive: the add did not land
         }
+        const liveColumns = liveTab.columns || [];
         if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
           await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
         }
@@ -1939,11 +1947,49 @@ async function runSdkBuild(spec, opts = {}) {
           form = await provision.getArtifact('form', formId) || {};
           const columnPointer = tabPointer + '/columns/' + ci;
           const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
-          // A section may have been dragged to a different tab in Maker; it is still THAT section,
-          // so a form-wide name hit outranks a positional one inside this column.
-          const global = wantSection.name ? findSectionLocation(form, wantSection.name) : null;
           const claimedHere = claimedIn(columnPointer);
-          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si, { claimed: claimedHere, skip: isEngineOwnedSection });
+          // A section may have been dragged to a different tab in Maker, or the spec may now place it
+          // somewhere else; either way it is still THAT section, so a form-wide name hit outranks a
+          // positional one inside this column. A name hit INSIDE this column is preferred, so a pair of
+          // same-named sections left by an older build resolves to the one already in place.
+          const liveList = ((liveSections || {}).sections) || [];
+          const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase();
+          const inColumn = wantSection.name ? liveList.findIndex((s, i) => !claimedHere.has(i) && sameName(s)) : -1;
+          let global = inColumn >= 0 ? { pointer: columnPointer + '/sections/' + inColumn, section: liveList[inColumn] }
+            : (wantSection.name ? findSectionLocation(form, wantSection.name) : null);
+          // A named section the spec places in THIS column but that lives elsewhere is MOVED here: the
+          // same node, so its id, name, rows and any maker-set properties travel with it. It used to be
+          // reused in place — its attributes patched, its location left alone — so the build reported
+          // success, the section stayed in the wrong tab, and verify, which checks placement, failed.
+          // It lands right after the furthest section this column has already matched — exactly the
+          // sections the layout places before it here — so it follows all of them (or goes first when
+          // there are none) and stays ahead of any sub-grid host appended after them.
+          //
+          // An ENGINE-owned want (the notes section, a sub-grid host) is never moved: the author did
+          // not place it — the compiler appends it to the first tab — so a maker who moved the
+          // timeline elsewhere keeps it there, and nothing verifies its placement either.
+          if (global && !isEngineOwnedSection(wantSection) && !global.pointer.startsWith(columnPointer + '/sections/')) {
+            const liveCount = liveList.length;
+            const index = Math.min(liveCount, claimedHere.size ? Math.max(...claimedHere) + 1 : 0);
+            // Named for the report before the move: after it, `global` addresses the new place.
+            const fromTab = ((form.tabs || [])[global.tabIndex] || {}).name || `#${global.tabIndex + 1}`;
+            const fromColumn = global.columnIndex + 1;
+            // Source and target are different arrays here, so moveElement's remove-then-splice needs no
+            // index compensation (it is only off by one within a single array).
+            await provision.moveElement('form', formId, global.pointer, columnPointer + '/sections', { index });
+            shiftRecordedSectionPointers(global.pointer);
+            // Moving a section a maker may have dragged there on purpose is the spec winning, as it does
+            // for a section's columns and label — so it is reported, never silent.
+            if (typeof opts.warn === 'function') {
+              opts.warn(`form ${def.name}: moved section '${wantSection.name}' from tab '${fromTab}' (form-column ${fromColumn}) `
+                + `to tab '${liveTab.name || `#${tabMatch.index + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
+            }
+            form = await provision.getArtifact('form', formId) || {};
+            const moved = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            global = { pointer: columnPointer + '/sections/' + index, section: moved[index] || global.section };
+          }
+          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si,
+            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredSectionNames)(s) });
           if (!global && !local) {
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
             form = await provision.getArtifact('form', formId) || {};
@@ -2005,6 +2051,15 @@ async function runSdkBuild(spec, opts = {}) {
   // back to the recorded pointer for a section that carries no name at all.
   const resolveSectionPointer = (form, target) => {
     if (!target) return null;
+    // The recorded pointer, when the section there still carries the recorded name, is EXACT — and
+    // only it can tell two same-named sections apart (a real one and an empty twin an older build left
+    // in another tab), where a name search always returns the first in document order. Section indices
+    // do not move under the field pass (it mutates rows and cells; the topology pass corrects them
+    // across its own section moves), so a mismatch means the pointer went stale, and the name decides.
+    if (target.name && target.pointer) {
+      const at = sectionAt(form, target.pointer);
+      if (at && String(at.name || '').toLowerCase() === String(target.name).toLowerCase()) return target.pointer;
+    }
     if (target.name) {
       const loc = findSectionLocation(form, target.name);
       if (loc) return loc.pointer;
@@ -2449,7 +2504,10 @@ async function runSdkBuild(spec, opts = {}) {
     //     out of. Without this the sweep deleted a section a maker had created empty and may
     //     show/hide from a form script — an unchanged layout would silently destroy it, and the
     //     destructive preflight cannot see it because that compares fields, not containers.
-    //   · the section is NOT one the authored layout claimed (by pointer or by deployed name).
+    //   · the section is NOT one the authored layout claimed — judged by the section each target
+    //     RESOLVES to on the live form, not by name: two same-named sections (a real one and a copy an
+    //     older build left in another tab) share a name, and a name test spared the emptied copy
+    //     forever while the field pass had moved everything into the real one.
     //   · it holds NO cells at all — not merely no bound fields. A section can carry a spacer or a
     //     control this reader does not model, and an empty-LOOKING section is not an empty one.
     //
@@ -2459,24 +2517,21 @@ async function runSdkBuild(spec, opts = {}) {
     // and is spared above. Mutation testing proved it unkillable, and a guard that cannot fail
     // implies coverage that does not exist.
     if (def.__explicitLayout && def.__prune !== false) {
-      const claimedPointers = new Set();
-      const claimedNames = new Set();
-      for (const t of Object.values(sectionTargets || {})) {
-        if (!t) continue;
-        if (t.pointer) claimedPointers.add(t.pointer);
-        if (t.name) claimedNames.add(String(t.name).toLowerCase());
-      }
       // Collected from a single read and removed from the BACK, because removeElement shifts the
       // indices of later siblings — deleting front-first would silently target the wrong section.
       const orphans = [];
       const live = await provision.getArtifact('form', formId) || {};
+      const claimedPointers = new Set();
+      for (const t of Object.values(sectionTargets || {})) {
+        const p = t && resolveSectionPointer(live, t);
+        if (p) claimedPointers.add(p);
+      }
       (live.tabs || []).forEach((tab, ti) => {
         (tab.columns || []).forEach((col, ci) => {
           (col.sections || []).forEach((sec, si) => {
             const pointer = `/tabs/${ti}/columns/${ci}/sections/${si}`;
             if (claimedPointers.has(pointer)) return;
             const secName = sec && sec.name ? String(sec.name).toLowerCase() : null;
-            if (secName && claimedNames.has(secName)) return;
             if (!secName || !vacatedSections.has(secName)) return;
             const cells = ((sec && sec.rows) || []).flatMap((r) => (r && r.cells) || []);
             if (cells.length) return;
@@ -2487,7 +2542,10 @@ async function runSdkBuild(spec, opts = {}) {
       for (const o of orphans.slice().reverse()) {
         await provision.removeElement('form', formId, o.pointer);
         if (typeof opts.warn === 'function') {
-          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it. Give a section an explicit \`name\` if you intend to move it between tabs or form-columns.`);
+          // The naming hint helps only a GENERATED name (`section_<tab>[_<column>]_<index>`), which is
+          // the one that loses its identity on a move; a named copy or a dropped section needs none.
+          const generated = /^section_\d+(?:_\d+)?_\d+$/.test(String(o.name));
+          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it.${generated ? ' Give a section an explicit `name` if you intend to move it between tabs or form-columns.' : ''}`);
         }
       }
     }

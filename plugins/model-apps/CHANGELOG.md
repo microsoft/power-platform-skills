@@ -29,6 +29,10 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A named form section moves to the tab the spec puts it in.** A section found elsewhere on the
+  deployed form — dragged in Maker, or moved in the spec — used to be updated where it stood, so the
+  build succeeded, the section stayed in the old tab, and `--verify` failed the form. It is now moved
+  (the same section, fields and all), and a neighbour with the same label can no longer take it over.
 - **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
   anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
   summary read as authoritative — and a truncated-but-authoritative listing is what drives a
