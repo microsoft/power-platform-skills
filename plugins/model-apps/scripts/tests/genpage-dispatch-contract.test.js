@@ -187,7 +187,9 @@ test('page generation rejects Griffel borderWidth shorthand before deploy', () =
 // every agent, skill and reference document is read CLAUSE by clause, and a clause fails when it
 // ATTRIBUTES a type guarantee to transpiling that no negation governs. It is a tripwire, not a parser: a
 // correct sentence it flags is reworded with the checker as its subject, or with the denial stated
-// directly.
+// directly. And its vocabulary is FINITE — the claim families below, each pinned by a predicate — so it
+// catches the wordings those families describe and their near variants, not every sentence that could
+// mean the same. A new wording it misses is a new family (and a new predicate), not a bug in the rest.
 //   · Attribution, not co-occurrence. A claim belongs to the actor named nearest before it in its clause
 //     — transpiling, a checker the reader runs itself (`tsc`, the TypeScript compiler, the type checker,
 //     an `npm run` script) or the reader ("you") — so "Use `tsc` to type-check the page after
@@ -235,7 +237,10 @@ const CLAIM_FAMILIES = [
   // …and a step that FAILS on them, or exits non-zero: "exits non-zero on type errors". A plain exit is
   // left out on purpose — "exits 0 even with type errors" is the truth, and says so.
   String.raw`\b(?:(?:${FAILING.join('|')})\w*(?: out)?|(?:exit|return)\w* (?:with )?(?:a )?non-?zero(?: (?:exit )?(?:code|status))?) (?:on|over|with|for|at) (?:\w+ ){0,2}?${TYPE_ERROR}\b`,
-  String.raw`\btype (?:correctness|analysis|validation|verification)\b`,
+  String.raw`\btype (?:correctness|soundness|analysis|validation|verification)\b`,
+  // The ABSENCE of type errors: "guarantees no type errors", "the page is free of type errors". The "no" is
+  // the claim's own word, so it never reads as a negation governing it.
+  String.raw`\b(?:no|zero|free of|without any) ${TYPE_ERROR}\b`,
   String.raw`\btypes? (?:are|is) (?:valid|correct|checked|verified|sound|safe)\b`,
   String.raw`\b(?:${CHECKING.join('|')})\w* (?:the |its |their |all |every )?types?\b`,
   String.raw`\b(?:correct|valid|sound|safe) typ(?:es|ing)\b`,
@@ -255,7 +260,7 @@ const CONTINUES = new RegExp(String.raw`^(?:(?:and|but|then|so|yet|while|whereas
 const NEGATION = /\b(?:not|never|no|nor|without|neither|cannot)\b|n't\b/gi;
 // The only words that may stand between a negation and the claim it denies. No hedge: "always",
 // "necessarily", "fully" and "really" each turn the denial into "sometimes".
-const BRIDGE = /^(?:a|an|the|any|its|their|this|that|page|pages|code|file|types?|is|are|be|being|been|by|itself|on|own|proof|guarantee|evidence|sign|mean|means|imply|implies|ensure|ensures|show|shows|prove|proves|of|for|actually|also|even|therefore|thus|in|way)$/i;
+const BRIDGE = /^(?:a|an|the|any|its|their|this|that|there|page|pages|code|file|types?|is|are|be|being|been|by|itself|on|own|proof|guarantee|evidence|sign|mean|means|imply|implies|ensure|ensures|show|shows|prove|proves|of|for|actually|also|even|therefore|thus|in|way)$/i;
 // Clause boundaries: `;`, a `:` that is not a URL's, a spaced dash, a comma before a conjunction, and the
 // conjunctions that start a new statement.
 const CLAUSE_BREAK = /\s*(?:;|:(?!\/\/)|\s[—–]\s|,(?=\s*(?:and|but|then|so|yet|while|whereas|although|though|however)\b)|(?<=\S)\s+(?=(?:and|but|then|whereas|although|though)\s))\s*/i;
@@ -429,6 +434,10 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile raises an error on type mismatches.',
     'Transpile raises type errors early.',
     'Transpile checks whether the page has type errors.',
+    // Type soundness, and the absence of type errors, are the same guarantee.
+    'The transpiler proves type soundness.',
+    'Transpilation guarantees no type errors.',
+    'A clean transpile means the page is free of type errors.',
     'Transpile warns when the page has type errors.',
     'Transpile throws if the code contains type errors.',
     'Transpile throws an exception if the page has type errors.',
@@ -499,6 +508,9 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'After transpiling, `tsc` checks for type errors.',
     // A contrast between the verb and the type errors, or a denial right after them, is the truth.
     'Transpile checks syntax even with type errors.',
+    // …and so is denying that absence.
+    'A clean transpile does not mean there are no type errors.',
+    'Transpile does not guarantee the page is free of type errors.',
     'Transpile reports success despite type errors.',
     'Transpile warns that type errors are not checked.',
     'Transpile warns that type errors aren’t checked.',
@@ -545,6 +557,7 @@ const FAMILY_PREDICATES = [
   'ensures type errors are caught',
   'fails on type errors',
   'guarantees type correctness',
+  'guarantees no type errors',
   'means the types are correct',
   'validates the types',
   'guarantees correct types',
