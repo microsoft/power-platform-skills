@@ -33,11 +33,14 @@ function mdFiles() {
 }
 
 const rel = (p) => p.replace(PLUGIN + path.sep, '').replace(/\\/g, '/');
+// Every document is read with its line endings normalized: a Windows checkout turns them into CRLF, and a
+// check measured in characters then read differently there than on the LF checkout it was written on.
+const readDoc = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
 test('no Connectors dispatch line uses the retired enabled/disabled vocabulary', () => {
   const offenders = [];
   for (const f of mdFiles()) {
-    const lines = fs.readFileSync(f, 'utf8').split(/\r?\n/);
+    const lines = readDoc(f).split(/\r?\n/);
     lines.forEach((line, i) => {
       // Only DECLARATION lines: a dispatch template row (`> - Connectors: …`) or an input-spec
       // bullet (`- **Connectors** — …` / `- **Connectors: …**`). Prose that merely mentions the
@@ -51,8 +54,8 @@ test('no Connectors dispatch line uses the retired enabled/disabled vocabulary',
 });
 
 test('the orchestrator emits the exact token the page-builder triggers on', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
 
   // Consumer side: the page-builder reads connectors.md and emits connector code only on the
   // positive token, and treats the negative token (or an absent line) as no connectors.
@@ -77,8 +80,8 @@ test('the connectors rollback gate is documented where the scripts enforce it', 
   // When the follow-up change removes the gate, invert it again: assert NO prose references the
   // flag, because a probe of a removed flag prints `disabled` (unknown flags are fail-closed) and
   // would silently turn connector authoring back off.
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'));
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const probe = /feature-flags\.js"?\s+connectors\b/;
   assert.match(builder, probe, 'the connector-builder owns the gate and must probe it');
   assert.match(skill, probe, 'Phase 4.5 must re-probe the gate before deploying bindings');
@@ -88,7 +91,7 @@ test('the connectors rollback gate is documented where the scripts enforce it', 
 });
 
 test('connector metadata discovery uses the PAC connector name, not the full API resource path', () => {
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'));
   assert.match(
     builder,
     /terminal segment|final path segment/i,
@@ -107,7 +110,7 @@ test('connector metadata discovery uses the PAC connector name, not the full API
 });
 
 test('connector-builder defines setup when no suitable connection exists', () => {
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'));
   assert.match(builder, /power-apps\s+create-connection/, 'connector-builder must document the connection-creation command');
   assert.match(builder, /POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION/, 'interactive connector setup gate must be explicit');
   // Bare /needs_input/ is the agent's universal return shape and was already present, so it
@@ -134,8 +137,8 @@ test('connector-builder defines setup when no suitable connection exists', () =>
 });
 
 test('genpage orchestrator defines inline recovery for a worker missing declared tools', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
-  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
+  const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
   // No `s` flag and no unbounded `[\s\S]*`: with them, `.*` spans the whole document and any doc
   // containing "missing" … "file" … "tool" anywhere passes. Anchor to the new sentence instead.
   assert.match(skill, /declared\s+file\s+or\s+process-execution\s+tools\s+are\s+unavailable/i);
@@ -158,8 +161,8 @@ test('genpage orchestrator defines inline recovery for a worker missing declared
 });
 
 test('genpage orchestrator gates planner output with deterministic plan provenance checks', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
-  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
+  const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
 
   assert.match(skill, /genpage-plan-provenance\.js[\s\S]{0,500}prepare/i, 'create flow must quarantine stale genpage-plan.md before planner writeback');
   assert.match(skill, /genpage-plan-provenance\.js[\s\S]{0,500}verify/i, 'create flow must hash-check the written plan against the approved body');
@@ -176,7 +179,7 @@ test('genpage orchestrator gates planner output with deterministic plan provenan
 });
 
 test('genpage orchestrator validates worker output completeness before accepting parallel results', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
 
   assert.match(skill, /genpage-worker-output\.js/, 'multi-page flow must call the deterministic worker-output validator');
   assert.match(skill, /unbalanced|default export|markdown code fence/i, 'skill text must name the completeness checks that trigger inline fallback');
@@ -186,7 +189,7 @@ test('genpage orchestrator validates worker output completeness before accepting
 // #585 item 2: every page that can ship passes the gate — a worker's (5c), and one the orchestrator
 // writes itself (5b), which is also what the 5c fallback runs.
 test('the completeness gate also runs on pages written inline, including the fallback', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
   assert.match(fastPath, /genpage-worker-output\.js/, 'the single-page path runs the gate');
   assert.match(fastPath, /rewrite the page once[\s\S]{0,120}halt/i, 'a page that keeps failing halts instead of deploying');
@@ -196,16 +199,19 @@ test('the completeness gate also runs on pages written inline, including the fal
 // #588 item 4: page filenames are checked by the deterministic gate BEFORE any worker is dispatched —
 // a link or junction escape cannot be spotted by reading the plan.
 test('genpage orchestrator runs the page-file gate before dispatching page workers', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const gate = skill.indexOf('check-page-files.js');
   assert.ok(gate > -1, 'the skill must run scripts/check-page-files.js');
   const dispatch = skill.indexOf('genpage-worker-output.js');
   assert.ok(dispatch > gate, 'the filename gate must come before workers run and their output is checked');
-  assert.match(skill.slice(gate, gate + 900), /halt and\s+re-plan/i, 'a refused filename halts; it is never rewritten after approval');
+  // Anywhere in the gate's own section: a fixed window broke as the list of refused names grew.
+  const rest = skill.slice(gate);
+  const next = rest.search(/\n#{2,6}\s/);
+  assert.match(next < 0 ? rest : rest.slice(0, next), /halt and\s+re-plan/i, 'a refused filename halts; it is never rewritten after approval');
 });
 
 test('single-page inline generation treats missing or malformed Custom API Bindings as a halt', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
 
   assert.match(fastPath, /No custom API bindings\./, 'the exact sentinel must remain the only no-actions value');
@@ -216,12 +222,12 @@ test('single-page inline generation treats missing or malformed Custom API Bindi
 // #585 item 3, the other two readers: the orchestrator's Custom API phase and the page-builder worker.
 // Only the exact sentinel means "none" — a missing, empty or malformed section is a broken plan.
 test('the Custom API phase and the page builder never read a missing or malformed section as none', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const phase = skill.slice(skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
   assert.ok(phase.length > 0, 'the Custom API phase is where it was');
   assert.match(phase.slice(0, 700), /only when its body is exactly `No custom API bindings\.`/);
   assert.match(phase.slice(0, 700), /missing, empty, or malformed, \*\*halt\*\*/);
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
   assert.match(builder, /That sentinel is the only way a plan says\s+"none"/);
   assert.match(builder, /\*\*stop and report it instead of writing the page\*\*/);
   assert.doesNotMatch(builder, /is missing entirely, or contains no binding row, the page has \*\*no Custom APIs\*\*/);
@@ -232,7 +238,7 @@ test('the Custom API phase and the page builder never read a missing or malforme
 // OFF branch drops actions.json and --actions — so skipping the phase "regardless of the plan" deployed
 // pages calling Custom APIs that were never bound. OFF with a real table must halt before generation.
 test('a disabled Custom API probe halts on a plan that still carries a binding table', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const start = skill.indexOf("**If it prints `disabled`:** Custom API support is OFF.");
   assert.ok(start > -1, 'the disabled branch of the Custom API phase is where it was');
   const off = skill.slice(start, skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
@@ -249,7 +255,7 @@ test('a disabled Custom API probe halts on a plan that still carries a binding t
 // (and when the working directory is a link). The step used to say "do not block the workflow if the
 // script returns non-zero", so a charts rerun carried on over the stale manifest the check exists to stop.
 test('the manifest step halts on exit 2 instead of carrying on over a stale package.json', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const start = skill.indexOf('scripts/generate-page-manifest.js');
   assert.ok(start > -1, 'the manifest step is where it was');
   const step = skill.slice(start, skill.indexOf('### Phase 1: Plan', start));
@@ -259,10 +265,10 @@ test('the manifest step halts on exit 2 instead of carrying on over a stale pack
 });
 
 test('page generation rejects Griffel borderWidth shorthand before deploy', () => {
-  const rules = fs.readFileSync(path.join(PLUGIN, 'references', 'rules.md'), 'utf8');
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
-  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+  const rules = readDoc(path.join(PLUGIN, 'references', 'rules.md'));
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
+  const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
   assert.match(rules, /borderWidth/i, 'rules must name the runtime-only Griffel failure');
   assert.match(builder, /borderWidth/i, 'page-builder must scan its output for the shorthand');
   assert.match(skill, /borderWidth/i, 'inline page generation must run the same scan');
@@ -288,8 +294,8 @@ test('page generation rejects Griffel borderWidth shorthand before deploy', () =
 // missing a business process flow nobody realised it could have) rather than as an error.
 
 test('every advanced schema section is named in the pointer table, and vice versa', () => {
-  const core = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema.md'), 'utf8');
-  const adv = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema-advanced.md'), 'utf8');
+  const core = readDoc(path.join(PLUGIN, 'references', 'app-spec-schema.md'));
+  const adv = readDoc(path.join(PLUGIN, 'references', 'app-spec-schema-advanced.md'));
 
   // Sections in the advanced doc: "## globalChoices[] (optional — …)" → "globalChoices[]"
   const sections = [...adv.matchAll(/^## (\S+)/gm)].map((m) => m[1]);
@@ -310,7 +316,7 @@ test('every advanced schema section is named in the pointer table, and vice vers
 test('the core schema no longer carries the moved sections', () => {
   // A section left in BOTH docs is worse than in neither: the two copies drift and an author
   // follows whichever they happened to read.
-  const core = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema.md'), 'utf8');
+  const core = readDoc(path.join(PLUGIN, 'references', 'app-spec-schema.md'));
   const coreSections = [...core.matchAll(/^## (\S+)/gm)].map((m) => m[1]);
   for (const moved of ['globalChoices[]', 'webResources[]', 'commands[]', 'businessRules[]', 'dashboards[]', 'roleGrants[]']) {
     assert.ok(!coreSections.includes(moved), `${moved} must live only in app-spec-schema-advanced.md`);
@@ -321,7 +327,7 @@ test('the skill tells the agent when to read the advanced schema', () => {
   // The split only stays safe while the skill body routes the reader to it. Without this line an
   // agent reads the core doc, never opens the advanced one, and quietly cannot author half the
   // conditional features.
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md'));
   assert.match(skill, /app-spec-schema-advanced\.md/, '/app-builder must point at the advanced schema');
   assert.match(skill, /conditional feature/i, 'and say when to read it');
 });
@@ -337,7 +343,7 @@ function dispatchTemplates() {
     [path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), /^> - (.+)$/gm],
     [path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md'), /^\s+> - (.+)$/gm],
   ]) {
-    const src = fs.readFileSync(file, 'utf8');
+    const src = readDoc(file);
     const lines = [...src.matchAll(re)].map((m) => m[1].trim());
     // Split into blocks on "Target file", which starts each template.
     let cur = null;
@@ -365,7 +371,7 @@ test('every page-builder dispatch template carries the same required field set',
 test('every dispatch field the page-builder documents is one a template actually sends', () => {
   // Catches the reverse drift: a consumer input bullet nobody produces is dead documentation that
   // an agent will still try to honour.
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
   // The input spec is the bulleted block under "You will be invoked with a prompt that includes:".
   const specBlock = builder.split(/You will be invoked with a prompt that includes:/)[1] || '';
   const spec = specBlock.split(/\n#{2,}\s/)[0];
@@ -397,7 +403,7 @@ test('Telemetry uses enabled|disabled and is never conflated with the Connectors
 // A worker that writes nothing leaves an earlier attempt's page in place, and it passes every content check.
 // Each target is stamped before it is written, in both paths, so the gate can refuse a page left as it was.
 test('genpage stamps every page target before it is written, in both paths', () => {
-  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
   const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
   const multi = skill.split(/#### 5c\. Multi-page/)[1];
   const stamp = /genpage-worker-output\.js" --stamp --file/;
