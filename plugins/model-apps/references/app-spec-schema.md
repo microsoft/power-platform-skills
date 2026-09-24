@@ -753,7 +753,9 @@ host exists for — the timeline in `section_notes`, a sub-grid in `section_grid
 added a field beside it. A section of yours that a maker filled with a web resource or sub-grid keeps
 its own name, and is still found by it. (One you name `section_notes` or `section_grid_…` is
 indistinguishable from a host when it has no fields, or when a maker puts that host's control into it:
-the build then gives your fields a section of their own beside it. Give it another name.)
+the build then gives your fields a section of their own beside it. Give it another name. And a host
+that a maker both renamed and gave a field carries neither mark, so it is matched like any other
+section — keep the engine's section names when you customise its sections in Maker.)
 
 ⚠ **Moving a section.** A section with an explicit `name` is found wherever it is on the deployed
 form and moved to the tab and form-column the layout places it in — the same section, so its fields,
