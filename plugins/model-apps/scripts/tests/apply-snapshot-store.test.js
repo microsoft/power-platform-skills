@@ -622,6 +622,25 @@ test('a reclaim that fails after its write leaves no lock holding its own token'
   } finally { rm(d); }
 });
 
+// Node 22 on Windows returns the folder a recursive mkdirSync created in its NAMESPACED form (`\\?\C:\…`),
+// and the teardown then never recognised the folder it had made, and left it behind. The same return is
+// simulated here, so every Node version runs the case CI hit.
+test('the folder tombstoneSnapshot created is reported, and removed, in its plain form', () => {
+  const base = ws();
+  try {
+    const d = path.join(base, 'a', 'ws');
+    const r = store.tombstoneSnapshot(d, { mkdirSync: (p, o) => { const first = fs.mkdirSync(p, o); return first && (first.startsWith('\\\\?\\') ? first : `\\\\?\\${first}`); } });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.createdDir, path.join(base, 'a'), 'the namespace prefix is dropped');
+    store.deleteSnapshot(d);
+    store.removeCreatedDir(d, `\\\\?\\${r.createdDir}`);
+    assert.deepStrictEqual(fs.readdirSync(base), [], 'and the folders it created are removed, a namespaced one too');
+    for (const [p, plain] of [['\\\\?\\C:\\x', 'C:\\x'], ['\\\\?\\UNC\\srv\\share\\x', '\\\\srv\\share\\x'], ['C:\\x', 'C:\\x'], ['/tmp/x', '/tmp/x']]) {
+      assert.strictEqual(store.plainPath(p), plain, p);
+    }
+  } finally { rm(base); }
+});
+
 // The 'wx' create makes the lock BEFORE it writes the token, so a reader can find it empty. Presuming such
 // a lock abandoned let two writers hold the lease at once; an unreadable token is aged by its FILE instead.
 test('acquireLease treats an unreadable token as held until the lock file itself is stale', () => {

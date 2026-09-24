@@ -320,12 +320,24 @@ function beatTeardown(workspaceDir, teardownId, deps = {}) {
   }
 }
 
+// A Windows NAMESPACED path in its plain form: `\\?\C:\x` → `C:\x`, `\\?\UNC\server\share\x` →
+// `\\server\share\x`; anything else unchanged. Node 22 on Windows returns the folder a recursive mkdirSync
+// created in the namespaced form (Node 20 returns it plain), and every path it is compared with is plain —
+// so the teardown never recognised the folder it had created, and left it behind.
+function plainPath(p) {
+  if (typeof p !== 'string') return p;
+  if (/^\\\\\?\\UNC\\/i.test(p)) return `\\\\${p.slice(8)}`;
+  if (p.startsWith('\\\\?\\')) return p.slice(4);
+  return p;
+}
+
 function tombstoneSnapshot(workspaceDir, deps = {}) {
   const mkdir = typeof deps.mkdirSync === 'function' ? deps.mkdirSync : fs.mkdirSync;
   let createdDir;
   try {
-    // Returns the first folder it created, or undefined when the whole path already existed.
-    createdDir = mkdir(workspaceDir, { recursive: true }) || null;
+    // Returns the first folder it created, or undefined when the whole path already existed — namespaced
+    // on Node 22 for Windows (see plainPath).
+    createdDir = plainPath(mkdir(workspaceDir, { recursive: true })) || null;
   } catch (e) {
     // Any other code (EBUSY, EMFILE, ENOSPC, EIO, …) is transient: a build could still get the folder, so
     // the teardown fails closed rather than proceed unfenced.
@@ -391,7 +403,7 @@ function claimBaselineSnapshot(workspaceDir, identity, deps = {}) {
 // teardown from a folder that never had a workspace then leaves none behind. Best-effort.
 function removeCreatedDir(workspaceDir, createdDir) {
   if (!createdDir) return;
-  const top = path.resolve(createdDir);
+  const top = path.resolve(plainPath(createdDir));
   // Deepest first. The walk ends when it steps above `top` — or at once, for a caller passing an unrelated
   // pair — so nothing outside what mkdir created is ever touched.
   for (let dir = path.resolve(workspaceDir); ; dir = path.dirname(dir)) {
@@ -480,6 +492,7 @@ module.exports = {
   tombstoneSnapshot,
   claimBaselineSnapshot,
   removeCreatedDir,
+  plainPath,
   deleteSnapshot,
   releaseTombstone,
   teardownsInFlight,
