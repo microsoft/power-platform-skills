@@ -274,6 +274,8 @@ After approval and before the first write (including reskin or regeneration),
 capture the state using the [snapshot contract](./references/refresh-flow.md#snapshot-contract).
 Include optional `brand/tokens.dark.ts` and explicit absence; retain this
 pre-write snapshot afterward rather than replacing it with edited artifacts.
+For first-time generation with no prior brand state, use the initial-state
+branch in History completion below instead of inventing a pre-write snapshot.
 
 **Sections (required):**
 
@@ -382,12 +384,18 @@ export const tokens = {
 export type BrandTokens = typeof tokens;
 ```
 
-**Snapshot to history:**
+**History completion:**
 
-```bash
-mkdir -p brand/.history
-cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial.md" 2>/dev/null || true
-```
+- If a pre-write snapshot was captured, retain it unchanged. Do not create a
+  second post-write `-initial` snapshot on refresh, reskin, or regeneration.
+- Only for first-time generation with no prior brand state, record one complete
+  approved initial snapshot after generation using the same
+  [snapshot contract](./references/refresh-flow.md#snapshot-contract): spec,
+  light tokens, optional dark-token payload, and explicit presence/approval
+  state. Do not save only the Markdown spec.
+- Verify every expected member before reporting success. A failed or incomplete
+  snapshot is a visible failure, not a suppressed copy error or a valid
+  rollback target.
 
 ---
 

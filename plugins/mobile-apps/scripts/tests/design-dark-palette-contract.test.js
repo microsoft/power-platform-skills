@@ -169,6 +169,22 @@ test('generation and dark-mode writes use the same pre-write snapshot contract',
   assert.doesNotMatch(dark, /7\. Snapshot \+ history/);
 });
 
+test('generation records complete history once without a legacy post-write snapshot', () => {
+  const generation = design.slice(
+    design.indexOf('## Sub-step 4 —'),
+    design.indexOf('## Sub-step 5 —'),
+  );
+  const completion = generation.slice(generation.indexOf('**History completion:**'));
+  assert.match(completion, /If a pre-write snapshot was captured, retain it unchanged/);
+  assert.match(completion, /Do not create a\n\s+second post-write `-initial` snapshot/);
+  assert.match(completion, /Only for first-time generation with no prior brand state/);
+  assert.match(completion, /record one complete\n\s+approved initial snapshot after generation/);
+  assert.match(completion, /light tokens, optional dark-token payload, and explicit presence\/approval\n\s+state/);
+  assert.match(completion, /Verify every expected member before reporting success/);
+  assert.match(completion, /failed or incomplete\n\s+snapshot is a visible failure/);
+  assert.doesNotMatch(generation, /cp brand\/design-system\.md|2>\/dev\/null|\|\| true/);
+});
+
 test('the conditional example forwards approved dark surfaces and text to provider values', () => {
   const theme = /export const appDarkTheme = (withPowerAppsSemanticAliases\([\s\S]*?\n\));/.exec(branch)?.[1];
   const provider = /const brandedDarkTheme: ThemeTokens = (\{[\s\S]*?\n\});/.exec(integration)?.[1];

@@ -1193,7 +1193,7 @@ are intentionally absent from creation tiers. The CLI reads the environment ID
 from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name> --non-interactive
+npx --no-install power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name> --non-interactive
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
