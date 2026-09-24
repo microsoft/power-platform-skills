@@ -6,6 +6,24 @@ Follow [app-edit-routing.md](app-edit-routing.md) first. Removing a source from
 the app does not authorize deleting the server table, its columns/records, a
 connection, a solution component, or the cloud flow itself.
 
+## Bind refresh, removal, and verification to the app root
+
+Before any app-local read or command, resolve the invocation's absolute
+`working_dir`. A child requires the owner's root; missing, relative, or conflicting
+owner context returns `NEEDS_CONTEXT`, never a fallback to the process cwd.
+For a direct call, resolve `--working-dir` against the initial cwd when supplied,
+or capture that initial cwd once. Canonicalize the existing directory; an absent
+or inaccessible root is `BLOCKED`. Keep that root unchanged for this operation.
+
+Every shell call must enter this root using the fail-closed `cd` below, including
+CLI help, refresh, removal, regeneration, type-checking, service verification, and
+retries. A prior call's cwd does not persist. Replace the entire quoted
+`"<working_dir>"` placeholder with the resolved path as one shell-quoted literal
+argument; never execute an unresolved placeholder.
+File tools do not inherit shell cwd: use absolute Read/Edit/Write/Grep/Glob paths
+under this root for configuration, schemas, generated output, consumers, and
+inventory. Root binding does not grant removal approval or relax plan-only mode.
+
 ## Removal is not schema-map generation
 
 The template's `npm run generate-schemas` rebuilds the runtime connector schema
@@ -39,6 +57,7 @@ If the CLI's name-only selector could refresh unrelated registrations, STOP.
 Capture the existing binding identities before executing the command.
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx --no-install power-apps refresh-data-source --data-source-name '<registered-name>' --non-interactive
 npm run generate-schemas
 npx tsc --noEmit
@@ -107,6 +126,7 @@ After approval, `--force` acknowledges the CLI's destructive-action prompt;
 `--non-interactive` alone is not removal consent. The template-pinned CLI supports:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Dataverse: use the registered data-source key, not a guessed display label.
 npx --no-install power-apps delete-data-source --api-id dataverse --data-source-name '<registered-name>' --force --non-interactive
 
@@ -153,6 +173,7 @@ generator-owned files or continue to deployment.
 After verified removal:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
 npx tsc --noEmit
 ```

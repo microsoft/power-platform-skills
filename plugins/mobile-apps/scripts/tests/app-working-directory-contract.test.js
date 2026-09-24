@@ -55,7 +55,7 @@ const dependencies = {
 };
 
 function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'native-working-dir-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'app-working-dir-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const owner = path.join(directory, "owner's app with spaces");
   const caller = path.join(directory, 'different app');
@@ -78,7 +78,7 @@ function run(block, owner, caller) {
     .replaceAll('"<working_dir>"', shellQuote(owner.replaceAll('\\', '/')))
     .replaceAll('<approved-artifact-keys-json>', '["scanner"]')
     .replaceAll('<expo-module-name>', 'expo-secure-store');
-  // Execute the documented gates with the current Node executable; no installs or cloud calls.
+  // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
     input: `node() { "$REAL_NODE" "$@"; }\n${command}`,
     cwd: caller,
@@ -109,6 +109,68 @@ test('native root contract distinguishes direct defaults from required child con
   assert.match(scope, /File tools do not inherit shell cwd/);
   assert.match(scope, /Read\/Edit\/Write\/Grep\/Glob absolute\s+project paths/);
   assert.match(scope, /grants no additional approval and does not relax plan-only mode/);
+});
+
+const removal = read(path.join(pluginRoot, 'shared/references/data-source-removal.md'));
+
+for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  test(`data-source refresh, removal, and verification each re-enter the app root (${eolName})`, () => {
+    const blocks = shellBlocks(removal.replace(/\n/g, eol));
+    assert.equal(blocks.length, 3);
+    for (const block of blocks) {
+      assert.ok(block.startsWith(`${guard}\n`), 'Each call needs its own fail-closed root guard');
+    }
+    const scope = removal.split('## Bind refresh, removal, and verification to the app root\n')[1]
+      ?.split('## Removal is not schema-map generation')[0];
+    assert.ok(scope);
+    assert.match(scope, /Before any app-local read or command/);
+    assert.match(scope, /missing, relative, or conflicting\s+owner context returns `NEEDS_CONTEXT`/);
+    assert.match(scope, /never a fallback to the process cwd/);
+    assert.match(scope, /direct call[\s\S]*`--working-dir`[\s\S]*initial cwd once/);
+    assert.match(scope, /Canonicalize the existing directory/);
+    assert.match(scope, /Every shell call[\s\S]*CLI help[\s\S]*service verification, and\s+retries/);
+    assert.match(scope, /shell-quoted literal\s+argument/);
+    assert.match(scope, /absolute Read\/Edit\/Write\/Grep\/Glob paths/);
+    assert.match(scope, /does not grant removal approval or relax plan-only mode/);
+  });
+}
+
+test('documented data-source commands stay in the owner app across fresh calls and stop on missing roots', (t) => {
+  const { directory, owner, caller } = fixture(t);
+  const blocks = shellBlocks(removal);
+  const trace = path.join(owner, 'root-commands.jsonl');
+  const callerConfig = fs.readFileSync(path.join(caller, 'power.config.json'), 'utf8');
+  // Record the actual command arguments/cwd instead of invoking any real CLI or package manager.
+  const probes = `
+record_call() {
+  node -e 'require("node:fs").appendFileSync("root-commands.jsonl", JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1) }) + "\\n")' "$@"
+}
+npx() { record_call npx "$@"; }
+npm() { record_call npm "$@"; }
+`;
+  let expectedCalls = 0;
+  for (const block of blocks) {
+    const command = `${probes}\n${block}`;
+    const result = run(command, owner, caller);
+    assert.equal(result.status, 0, result.stderr);
+    expectedCalls += block.split('\n').filter((line) => /^(npx|npm) /.test(line)).length;
+    const before = fs.readFileSync(trace, 'utf8');
+    const missingRoot = run(command, path.join(directory, 'missing app'), caller);
+    assert.equal(missingRoot.status, 1);
+    assert.match(missingRoot.stderr, /BLOCKED: cannot enter working_dir/);
+    assert.equal(fs.readFileSync(trace, 'utf8'), before, 'Failed cd must run no follow-up commands');
+    assert.equal(fs.existsSync(path.join(caller, 'root-commands.jsonl')), false);
+  }
+  const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(expectedCalls, 9);
+  assert.equal(calls.length, expectedCalls);
+  for (const call of calls) {
+    assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(owner));
+  }
+  for (const operation of ['refresh-data-source', 'delete-data-source', 'remove-flow', 'generate-schemas', 'tsc']) {
+    assert.ok(calls.some((call) => call.args.includes(operation)), operation);
+  }
+  assert.equal(fs.readFileSync(path.join(caller, 'power.config.json'), 'utf8'), callerConfig);
 });
 
 for (const file of files) {
