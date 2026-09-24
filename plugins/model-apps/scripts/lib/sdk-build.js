@@ -983,7 +983,9 @@ async function applyAppAiDescription(provision, spec, appId) {
 // vendored bundle. The edits were projected from the spec and the re-run re-applies them, so nothing is
 // lost; if the reset itself fails, the halt names the workspace to delete instead.
 async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
-  const code = pushed && pushed.saved === false && pushed.error && pushed.error.code;
+  // pushFailed reads `saved`, then the older SDK spelling `success`, then a bare error — the same reading
+  // requireSuccessfulPush applies, so the precise halt fires for either result shape.
+  const code = pushFailed(pushed) && pushed.error && pushed.error.code;
   const neverPublished = code === 'APP_DRAFT_HEADER_NOT_WRITABLE';
   if (!neverPublished) {
     if (code !== 'VERSION_CONFLICT' || !provision.dataverse || typeof provision.dataverse.get !== 'function') return;

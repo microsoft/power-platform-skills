@@ -759,6 +759,19 @@ test('#583 a push refused for another reason keeps its own halt, even over a pen
   assert.strictEqual(seen.length, 0, 'only a VERSION_CONFLICT is re-diagnosed');
 });
 
+// The halt reads a push result the way requireSuccessfulPush does: `saved`, then the older SDK spelling
+// `success`. Reading `saved` alone sent a legacy-shaped refusal to the generic conflict remedy.
+test('#583 the unpublished-header halt reads the older `success` result shape as well', async () => {
+  const legacy = { success: false, error: HEADER_412.error };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: legacy });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'and resets the copy');
+});
+
 // Only the APPMODULE row's 412 can be the unpublished-header state. A sitemap 412 is a concurrent sitemap
 // edit, over the unpublished layer this very push's header write just left — relabelling it reset the copy,
 // and "publish, then re-run" then overwrote the other edit. So is a conflict that names no request at all.
