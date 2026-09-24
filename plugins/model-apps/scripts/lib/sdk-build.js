@@ -3435,6 +3435,23 @@ async function runSdkBuild(spec, opts = {}) {
             throw new Error(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to reuse. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
           });
         }
+      } else if (existing.length === 1 && typeof opts.warn === 'function') {
+        // A LONE match is reused without that proof. A downloaded app's dashboard may never have joined
+        // the solution the download recovered — the one holding the APP; a dashboard made in Maker outside
+        // it stays in Default — and refusing or duplicating it would break that rebuild. It is not ADDED to
+        // the solution either (only a dashboard the build creates is), so teardown, which deletes solution
+        // members only, keeps it. But a lone match outside the solution may be another app's namesake, and
+        // this app is then bound to it with nothing to tell — so the build says so. A read that fails
+        // proves nothing either way and is no reason to fail the step: the reuse is today's behaviour.
+        let members = null;
+        try {
+          members = await dashboardsInSolution(provision, sol.uniqueName, [existing[0].id]);
+        } catch {
+          members = null;
+        }
+        if (members && !members.has(String(existing[0].id).replace(/[{}]/g, '').toLowerCase())) {
+          opts.warn(`dashboard "${dash.name}": the one dashboard with this name is not in this app's solution '${sol.uniqueName}', so nothing proves it is this app's. It is reused; teardown will keep it, and a solution export will leave it out. If it is this app's, add it to the solution in Maker; if it is another app's, give this dashboard a different name.`);
+        }
       }
       if (existingId) {
         runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse; tile edits aren't applied on rebuild, recreate to change)`);

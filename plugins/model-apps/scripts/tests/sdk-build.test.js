@@ -1250,6 +1250,33 @@ test('dashboards: among several same-named dashboards the build reuses the one i
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'reused, not duplicated');
 });
 
+// A LONE match is still reused: a downloaded app's dashboard may never have joined the solution the
+// download recovered. But when the solution does not hold it, nothing proves it is this app's rather than
+// another app's namesake, so the build says so — never when the solution holds it, when there is no real
+// solution to ask, or when the read fails.
+test('dashboards: a lone same-named dashboard outside the solution is reused, with a warning', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const lone = [{ id: 'd-1', name: 'Ops' }];
+  for (const [what, opts, warned, failRead] of [
+    ['outside the solution', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: [] }, true],
+    ['in the solution', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: ['d-1'] }, false],
+    ['no solution to ask', { existingDashboards: lone }, false],
+    ['a membership read that fails', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: [] }, false, true],
+  ]) {
+    const { sdk, calls } = mockSdk(opts);
+    if (failRead) {
+      const query = sdk.queryRecords;
+      sdk.queryRecords = async (set, q) => { if (set === 'solutioncomponent') throw new Error('read refused'); return query(set, q); };
+    }
+    const warnings = [];
+    const result = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+    assert.strictEqual(result.created.dashboards.Ops, 'd-1', `${what}: reused`);
+    assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), `${what}: not duplicated`);
+    assert.strictEqual(warnings.some((w) => /dashboard "Ops": the one dashboard with this name is not in this app's solution/.test(w)), warned, `${what}: ${JSON.stringify(warnings)}`);
+  }
+});
+
 // The vendored name lookup reads one page of ten, in no defined order, so with more matches the app's
 // own dashboard can sort beyond it — and reuse, verify and teardown would all decide without it. A full
 // page is re-read in full, and membership is then asked in bounded chunks.

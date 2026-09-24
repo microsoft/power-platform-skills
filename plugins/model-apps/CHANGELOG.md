@@ -196,7 +196,9 @@ downloads that round-trip Choice columns.
   checks that same one — including the sitemap entry that opens it, which took the first match and
   failed a correctly wired app. A dashboard the build cannot add to its solution is removed again
   rather than left outside it; if that fails too, the build halts naming it and does not auto-retry,
-  since a retry would reuse it outside the solution.
+  since a retry would reuse it outside the solution. A lone match outside the solution is still reused
+  (a downloaded app's dashboard may never have joined the solution that holds the app), and the build
+  now warns that nothing proves it is this app's rather than another app's namesake.
 - **A Choice written as a label, its translation, or its number is one sample-data key** ([#586]). The
   loader always saw them that way; the spec gate compared them as written, so a duplicate passed it
   and the seed then failed after tables and forms had deployed. A Choice column with no `schemaName`
