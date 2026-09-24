@@ -191,11 +191,12 @@ downloads that round-trip Choice columns.
 - **A dashboard belongs to the app through the app's solution** ([#586]). A name can also match another
   app's dashboard, and teardown used to delete every match. It now deletes only the dashboards the app's
   solution holds, none when the spec has no real solution to ask, and keeps the solution while any step
-  failed so a re-run can still tell. When several match, the build reuses the solution's own or halts
-  instead of reusing an arbitrary one, and verify checks that same one — including the sitemap entry
-  that opens it, which took the first match and failed a correctly wired app. A dashboard the build
-  cannot add to its solution is removed again rather than left outside it; if that fails too, the
-  build halts naming it and does not auto-retry, since a retry would reuse it outside the solution.
+  failed — a solution it could not read counts as one — so a re-run can still tell. When several
+  match, the build reuses the solution's own or halts instead of reusing an arbitrary one, and verify
+  checks that same one — including the sitemap entry that opens it, which took the first match and
+  failed a correctly wired app. A dashboard the build cannot add to its solution is removed again
+  rather than left outside it; if that fails too, the build halts naming it and does not auto-retry,
+  since a retry would reuse it outside the solution.
 - **A Choice written as a label, its translation, or its number is one sample-data key** ([#586]). The
   loader always saw them that way; the spec gate compared them as written, so a duplicate passed it
   and the seed then failed after tables and forms had deployed. A Choice column with no `schemaName`
@@ -204,7 +205,10 @@ downloads that round-trip Choice columns.
   its solution owns or its columns bind — instead of every unmanaged option set in the environment.
 - **A teardown fences any `--changed-only` run already in flight** ([#587]). Its tombstone kept the
   snapshot's generation, so a run that had read the snapshot first could re-bless it over the
-  tombstone. Teardown now also **refuses to delete anything when it cannot write that fence**,
+  tombstone. A first build, which has no snapshot yet, is fenced too: it claims one before it builds,
+  and a teardown tombstones even a workspace with none. When two teardowns of one workspace overlap,
+  the fence stays until the last of them finishes, and `--clear-workspace` leaves a workspace that
+  still holds it. Teardown now also **refuses to delete anything when it cannot write that fence**,
   instead of warning and carrying on.
 - **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
   already kept its tables: a download flags all three `existing: true`. Deleting a relationship
@@ -244,8 +248,10 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585
 [#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 

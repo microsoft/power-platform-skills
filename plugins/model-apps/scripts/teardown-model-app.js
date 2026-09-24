@@ -8,7 +8,8 @@
 //
 // Usage:
 //   node scripts/teardown-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
-//        [--clear-workspace] [--workspace <dir>]  (--workspace only scopes --clear-workspace)
+//        [--clear-workspace] [--workspace <dir>]  (--workspace names the build's workspace: teardown
+//        fences its --changed-only snapshot there, and --clear-workspace removes it after a clean run)
 //
 // Order: app -> security roles -> dashboards -> command bars -> forms -> charts -> views
 //   (then reset enriched default views) -> relationships -> AI row summaries -> tables
@@ -111,6 +112,12 @@ async function teardownModelApp(spec, opts, deps) {
   // gone, the old ELIGIBLE snapshot survived describing a state that no longer existed. The usual cause
   // is a build holding the workspace lease right now; a stale lease is reclaimed automatically, so a
   // persistent failure means real contention or an unwritable workspace, and waiting is the fix.
+  //
+  // A workspace with NO snapshot gets a fresh tombstone too (a first changed-only build has none until it
+  // finishes — see tombstoneSnapshot), creating the folder if it has to; `createdDir` is what to remove
+  // again once the teardown is clean, so a folder that never had a workspace is left without one.
+  let createdWorkspaceDir = null;
+  let teardownId = null;
   if (opts.apply && opts.workspaceDir) {
     const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
     if (!tomb.ok) {
@@ -118,13 +125,35 @@ async function teardownModelApp(spec, opts, deps) {
       log(`\n✗ ${msg}`);
       return { ok: false, errors: [msg] };
     }
+    createdWorkspaceDir = tomb.createdDir || null;
+    teardownId = tomb.teardownId || null;
   }
-  const r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
-  // After a CLEAN teardown, DELETE the snapshot envelope — the app is gone, so a fresh rebuild must start a
-  // new baseline. A teardown that finished WITH ERRORS leaves the tombstone in place (a surviving artifact
-  // must not be rebaselined). Best-effort.
-  if (opts.apply && opts.workspaceDir && r && r.ok && !r.dryRun) {
-    snapStore.deleteSnapshot(opts.workspaceDir);
+  let r;
+  try {
+    r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
+  } finally {
+    // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
+    // clean one, one that finished with errors, and one that threw. An entry left behind read as a
+    // teardown still running whenever its pid was alive (reused, slow to exit, or this very process), and
+    // a later clean teardown then kept the fence for up to a day.
+    //
+    // Only a CLEAN teardown may also delete the snapshot — the app is gone, so a fresh rebuild must start a
+    // new baseline — and then only as the last one to finish: an overlapping teardown still deleting keeps
+    // its fence (releaseTombstone). One that failed or threw keeps the tombstone (`keep`: a surviving
+    // artifact must not be rebaselined), in a folder it created too, since that tombstone is what keeps it.
+    if (teardownId) {
+      const clean = !!(r && r.ok && !r.dryRun);
+      const rel = snapStore.releaseTombstone(opts.workspaceDir, teardownId, clean ? {} : { keep: true });
+      if (clean && rel.ok && !rel.left) {
+        if (createdWorkspaceDir) snapStore.removeCreatedDir(opts.workspaceDir, createdWorkspaceDir);
+      } else if (clean) {
+        // On the result, so main() leaves the workspace alone: --clear-workspace would delete the fence.
+        r.snapshotKept = rel.reason;
+        log(`\n▸ the changed-only snapshot stays tombstoned: ${rel.reason}.${rel.left ? ' The last of them to finish removes it.' : ' A --changed-only build full-builds until a clean teardown removes it.'}`);
+      } else if (!rel.ok) {
+        log(`\n▸ could not drop this teardown from the changed-only fence (${rel.reason}); the snapshot stays tombstoned, and a later teardown may keep it until this process has exited.`);
+      }
+    }
   }
   if (opts.apply && r && !r.dryRun) {
     // A skip is one of three different facts, and the summary used to call all of them "not found" —
@@ -145,7 +174,7 @@ async function main() {
   const { positional, flags } = parseArgs(argv);
   const USAGE =
     'Usage: node scripts/teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n' +
-    '  Note: --workspace only controls the optional --clear-workspace cleanup; teardown itself uses a throwaway SDK workspace.';
+    '  Note: --workspace names the build\'s workspace (default: .maker-workspace next to the spec). Teardown fences its --changed-only snapshot there before deleting anything, and --clear-workspace removes it after a clean run; the SDK itself uses a throwaway workspace.';
   // Strictness matters more here than anywhere else: this tool deletes. A mistyped
   // `--allow-destructiv` was previously dropped in silence, and the safety flag the operator
   // believed they had passed simply did not exist.
@@ -185,7 +214,12 @@ async function main() {
       // shell variable that expanded to a repo root, destroyed real work. Refusal is a WARNING,
       // not a failure: the teardown itself already succeeded, and the cost of refusing is only a
       // stale cache directory the operator can remove by hand.
-      const clearable = checkWorkspaceClearable(workspaceDir);
+      //
+      // A workspace whose changed-only snapshot is still tombstoned — another teardown of it is running,
+      // or the release failed — is left whole: deleting it deletes the fence that teardown depends on.
+      const clearable = r.snapshotKept
+        ? { ok: false, reason: `the workspace still holds the changed-only fence (${r.snapshotKept}); clear it once that is done` }
+        : checkWorkspaceClearable(workspaceDir);
       if (clearable.ok) {
         fs.rmSync(clearable.target, { recursive: true, force: true });
         process.stderr.write(`\ncleared workspace ${clearable.target}\n`);

@@ -393,6 +393,94 @@ for (const [path_, spec, content] of [
   });
 }
 
+// The same fence for a FIRST build, which has no snapshot to be fenced by. Its baseline write expected
+// "no snapshot", and a teardown that found none either wrote nothing, so the build blessed an app the
+// teardown had just deleted — the fence above only covered a workspace that already had a snapshot. The
+// build now claims a placeholder before it builds, and a teardown tombstones even an empty workspace.
+const FRESH = { orgId: 'org-1', envUrl: 'https://e', appUniqueName: 'new_app', appId: null };
+test('run: a teardown landing during identity discovery stops a FIRST build before it builds anything', async () => {
+  const dir = ws();
+  try {
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, {
+      buildModelApp: stubBuild(record), readContent: readFor('v1'),
+      resolveLiveIdentity: async () => { assert.ok(store.tombstoneSnapshot(dir).ok); return FRESH; },
+    }) });
+    assert.match(r.changedOnly.reason, /no snapshot/, 'precondition: the run read no snapshot');
+    assert.strictEqual(r.ok, false, 'the run must fail closed');
+    assert.strictEqual(record.length, 0, 'nothing may be built while a teardown holds the workspace');
+    assert.match(r.errors[0], /could not claim the workspace for the first baseline \(a snapshot appeared since/);
+    const disk = store.readSnapshot(dir);
+    assert.ok(snap.isTombstoned(disk) && disk.eligible === false, 'the tombstone survives');
+  } finally { rm(dir); }
+});
+
+for (const [when, teardown] of [
+  ['finishes with errors', (dir) => assert.ok(store.tombstoneSnapshot(dir).ok)],
+  ['finishes cleanly', (dir) => { assert.ok(store.tombstoneSnapshot(dir).ok); assert.ok(store.deleteSnapshot(dir).ok); }],
+]) {
+  test(`run: a teardown that ${when} during a FIRST build leaves no eligible baseline behind`, async () => {
+    const dir = ws();
+    try {
+      const build = async () => {
+        teardown(dir);
+        return { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: true } };
+      };
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+      assert.match(r.changedOnly.reason, /no snapshot/);
+      const disk = store.readSnapshot(dir);
+      assert.ok(!disk || (disk.eligible === false && snap.isTombstoned(disk)), `no eligible baseline may be written over a teardown; got ${JSON.stringify(disk && { eligible: disk.eligible, debt: disk.debt })}`);
+    } finally { rm(dir); }
+  });
+}
+
+// The placeholder a crashed first build leaves must not poison the next one: no debt (a baseline inherits
+// its prior's), and no identity mismatch in the reason a reader sees.
+test('run: a FIRST build that fails leaves a debt-free placeholder, and the next run still certifies a fresh baseline', async () => {
+  const dir = ws();
+  try {
+    const failed = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: async () => ({ ok: false, errors: ['boom'] }), resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+    assert.strictEqual(failed.ok, false);
+    const placeholder = store.readSnapshot(dir);
+    assert.ok(placeholder && placeholder.eligible === false && placeholder.debt.length === 0 && placeholder.priorSpec === null, JSON.stringify(placeholder));
+    const d = flow.decideChangedOnly({ annotatedSpec: annotate(baseSpec(), 'v1'), snapshot: placeholder, live: FRESH });
+    assert.strictEqual(d.decision, 'full');
+    assert.match(d.reason, /not eligible/, `reported as not eligible, not as an identity mismatch: ${d.reason}`);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(record.length, 1);
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, true, `the retry certifies its fresh baseline; debt ${JSON.stringify(disk.debt)}`);
+    assert.strictEqual(disk.appId, 'app-1');
+  } finally { rm(dir); }
+});
+
+// A full build that reads a tombstone — a teardown still running — writes an INELIGIBLE baseline over it,
+// and that baseline carries the tombstone's list of teardowns in flight. Dropping the list let the first of
+// two overlapping teardowns to finish delete the snapshot, and with it the fence the other still relied on.
+test('run: a baseline written over a tombstone carries its teardowns, so only the last to finish removes it', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const a = store.tombstoneSnapshot(dir);
+    const b = store.tombstoneSnapshot(dir);
+    const record = [];
+    const logs = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), log: (m) => logs.push(m) }) });
+    assert.strictEqual(r.changedOnly.decision, 'full');
+    assert.strictEqual(record.length, 1);
+    assert.ok(logs.some((m) => /baseline snapshot recorded INELIGIBLE/.test(m)), `precondition: the baseline was written over the tombstone\n${logs.join('\n')}`);
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, false, 'the teardown debt keeps it ineligible');
+    assert.deepStrictEqual(disk.teardowns.map((t) => t.id), [a.teardownId, b.teardownId], 'the list of teardowns in flight is carried forward');
+    assert.strictEqual(store.releaseTombstone(dir, a.teardownId).left, true, 'the first teardown to finish leaves the fence');
+    assert.strictEqual(store.claimBaselineSnapshot(dir, FRESH).ok, false, 'so no first build can claim while the other still deletes');
+    assert.deepStrictEqual(store.releaseTombstone(dir, b.teardownId), { ok: true, deleted: true }, 'the last one deletes it');
+    assert.strictEqual(store.readSnapshot(dir), null);
+  } finally { rm(dir); }
+});
+
 test('run: FULL fallback for an unsupported edit records the sticky debt (ineligible baseline)', async () => {
   const dir = ws();
   try {

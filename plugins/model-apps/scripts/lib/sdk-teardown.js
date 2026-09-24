@@ -358,7 +358,14 @@ const KIND_HANDLERS = {
       try {
         members = await dashboardsInSolution(sdk, target.solutionUniqueName, items.map((x) => x.id));
       } catch (err) {
-        return { items: [], skipReason: `could not read solution '${target.solutionUniqueName}' to tell whether a dashboard named '${target.name}' is this app's (${errMsg(err)}), so none is deleted` };
+        // A FAILED step, not a skip. A skip leaves `result.errors` empty, so runTeardown went on to delete
+        // the solution — the only thing a re-run can ask to tell this app's dashboards from same-named
+        // ones — and every later run then kept them for good. As a failure, the solution is kept and a
+        // re-run asks again. `failClosed` stops runTeardown's not-found shortcut from turning this back
+        // into an empty resolution when the read error happens to say "not found" (a proxy's 404).
+        const e = new Error(`could not read solution '${target.solutionUniqueName}' to tell whether a dashboard named '${target.name}' is this app's (${errMsg(err)}) — none is deleted; re-run the teardown`);
+        e.failClosed = true;
+        throw e;
       }
       const bare = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
       if (members) {
@@ -1249,8 +1256,10 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       } catch (resolveErr) {
         // Resolving forms/charts/views filters by an entity's typecode; if that entity was never
         // created (partial build) or is already gone, Dataverse answers 400 "entity ... not found
-        // in the MetadataCache". There is nothing to delete — treat it as an empty resolution.
-        if (isNotFound(resolveErr)) { resolved = []; } else { throw resolveErr; }
+        // in the MetadataCache". There is nothing to delete — treat it as an empty resolution. A resolver
+        // marks an error `failClosed` when not being able to look is itself the failure (the dashboard
+        // ownership read): its message may quote a "not found", but it must never read as nothing there.
+        if (isNotFound(resolveErr) && !resolveErr.failClosed) { resolved = []; } else { throw resolveErr; }
       }
       // resolve returns either an array of items, or `{ items, skipReason }` when the step is
       // intentionally NOT torn down (e.g. a reused/system table the build did not create). The

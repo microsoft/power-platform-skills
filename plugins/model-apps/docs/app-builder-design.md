@@ -588,7 +588,10 @@ ONLY after effective success (apply+verify).
 - **INVALIDATE (→false) before any write** of every full/unsupported/fast apply and teardown; abort if
   the invalidation write fails. A `--changed-only` invalidate is **fenced** to the generation its
   decision was read at: a snapshot tombstoned, rewritten or deleted since that read aborts the run
-  before it writes anything.
+  before it writes anything. A run that read **no** snapshot (a first build) **claims** one instead — an
+  ineligible, debt-free placeholder written under the lease only while there is still none — so its
+  baseline write has a generation to be fenced by; a claim refused because a snapshot appeared aborts
+  the run the same way.
 - **debt** accrues on any unsupported change/removal; `eligible:true` requires empty debt; debt clears
   ONLY by proven-fresh recreation (artifact absent before build) or an exact verifier — never by a plain
   full rebuild that re-skips a stale artifact.
@@ -598,7 +601,16 @@ ONLY after effective success (apply+verify).
   also **rotates the generation** — without that, a run that read the snapshot first still matched it
   and re-blessed its stale view over the tombstone — and a teardown that cannot write it **deletes
   nothing**. The CAS write takes the workspace lease itself, so a tombstone cannot land between its
-  compare and its write.
+  compare and its write. A workspace with **no** snapshot gets a fresh tombstone too (creating the folder
+  if needed, and removing it again after a clean teardown): with none, a first build's baseline write
+  expected "none", nothing ever changed that, and the build blessed the app the teardown was deleting.
+  The tombstone **lists every teardown in flight** (id, pid, start time), and every teardown that
+  finishes removes its own entry, under the lease (retried briefly if another writer holds it): one
+  that failed or threw keeps the tombstone. After a clean teardown the snapshot is deleted when the last
+  live entry goes — whatever it has become by then, since a baseline written over the tombstone carries
+  the list — and until then it stays tombstoned, its generation rotated, fencing the deletes still
+  running. An entry whose process is gone, or that is a day old, no longer counts. `--clear-workspace`
+  leaves a workspace whose fence is still held.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

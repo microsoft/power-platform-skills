@@ -2,20 +2,24 @@
 // Impure persistence for the apply-snapshot envelope (changed-only deliverable #3, part 2).
 //
 // The DECISION logic lives in apply-snapshot.js (pure); this module is the I/O boundary: an atomic
-// snapshot write, a build-wide WORKSPACE lease, a generation-CAS write, and the invalidate / tombstone /
-// delete primitives the build and teardown flows will call. Correctness rests on TWO mechanisms:
+// snapshot write, a build-wide WORKSPACE lease, a generation-CAS write, and the invalidate / claim /
+// tombstone / delete primitives the build and teardown flows call. Correctness rests on TWO mechanisms:
 //   · Atomic write (temp→fsync→rename) so a crash never leaves a truncated, half-trusted snapshot.
 //   · Generation CAS so a concurrent build that re-wrote the snapshot between our read and our write is
 //     detected and the loser's write is REFUSED (never a lost update).
 // The lease is an OPTIMIZATION that reduces contention around the read-modify-write; unlike the pages
 // lease (sdk-build.js acquireAppPagesLease, which must NOT steal because duplicate CREATE isn't CAS-
-// guarded), this lease MAY reclaim a stale holder because the generation CAS is the actual guard — a
-// reclaimed-but-still-alive original holder simply loses the CAS on its own write.
+// guarded), this lease MAY reclaim a stale holder. That is only as safe as the lease is exclusive in
+// practice, because every write here — the CAS write included — compares and then writes as two steps
+// under it: a holder paused past LEASE_STALE_MS between them can still overwrite. So reclaim is limited
+// to a holder that is dead or past LEASE_STALE_MS (minutes, against writes of milliseconds), a token
+// caught mid-write is aged by its file rather than presumed abandoned, and a lock released meanwhile is
+// re-taken exclusively (acquireLease).
 
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  parseEnvelope, serializeEnvelope, markIneligible, tombstone, generationMatches, newGeneration, bumpGeneration,
+  parseEnvelope, serializeEnvelope, makeEnvelope, markIneligible, tombstone, generationMatches, newGeneration, bumpGeneration,
 } = require('./apply-snapshot.js');
 
 const SNAPSHOT_FILE = 'apply-snapshot.json';
@@ -90,14 +94,37 @@ function acquireLease(workspaceDir, deps = {}) {
   if (r.code !== 'EEXIST') return { ok: false, reason: `lease create failed: ${r.error && r.error.message}` };
   // Held — decide staleness.
   let held;
-  try { held = JSON.parse(fs.readFileSync(lp, 'utf8')); } catch { held = null; }
-  const age = held && typeof held.at === 'number' ? now() - held.at : Infinity;
-  const stale = age > staleMs || !(held && isAlive(held.pid));
+  let gone = false;
+  try { held = JSON.parse(fs.readFileSync(lp, 'utf8')); } catch (e) { held = null; gone = !!e && e.code === 'ENOENT'; }
+  const heldToken = held && typeof held.at === 'number' ? held : null;
+  let age = 0;
+  if (heldToken) {
+    age = now() - heldToken.at;
+  } else if (!gone) {
+    // No complete token. The 'wx' create makes the file BEFORE it writes the token, so an empty file is
+    // usually a holder caught mid-write — and presuming it abandoned let two writers hold the lease at
+    // once. Age it by the file itself; with no pid to test, only that age can make it stale. Any other
+    // stat failure leaves it held (age 0): fail-closed.
+    try { age = Date.now() - fs.statSync(lp).mtimeMs; } catch (e) { gone = !!e && e.code === 'ENOENT'; }
+  }
+  if (gone) {
+    // Released between our create and our look. Free — but free for everyone, so it is taken the same
+    // exclusive way as a fresh lock. Overwriting it let a writer that created it meanwhile hold it too.
+    r = tryCreate();
+    if (r.ok) return r;
+    return { ok: false, reason: r.code === 'EEXIST' ? 'lease taken by another writer just now' : `lease create failed: ${r.error && r.error.message}` };
+  }
+  const stale = age > staleMs || (heldToken !== null && !isAlive(heldToken.pid));
   if (!stale) return { ok: false, reason: `lease held by pid ${held && held.pid} (age ${age}ms)`, heldBy: held };
-  // Reclaim: overwrite the stale token. The generation CAS — not this reclaim — is what actually prevents a
-  // lost update if the reclaimed holder is still alive.
-  try { fs.writeFileSync(lp, token); return { ok: true, path: lp, token, reclaimed: true }; }
-  catch (e) { return { ok: false, reason: `stale lease reclaim failed: ${e.message}` }; }
+  // Reclaim: overwrite the stale token, then read it back. Two writers reclaiming one stale lock both
+  // overwrite it, and only the one whose token is still there holds the lease. Not airtight — the other
+  // can read back before the second write lands — but that window is two writes to one small file, on a
+  // lock already minutes stale.
+  try {
+    fs.writeFileSync(lp, token);
+    if (fs.readFileSync(lp, 'utf8') !== token) return { ok: false, reason: 'lease reclaimed by another writer just now' };
+    return { ok: true, path: lp, token, reclaimed: true };
+  } catch (e) { return { ok: false, reason: `stale lease reclaim failed: ${e.message}` }; }
 }
 
 // Owner-checked release: remove the lock ONLY if it still holds OUR exact token (a build that reclaimed our
@@ -191,23 +218,108 @@ function invalidateSnapshot(workspaceDir, options = {}) {
 // against it, so a tombstone that kept the old token let such a run erase it. The teardown caller refuses
 // to delete anything when this returns { ok:false } (#587 item 2).
 //
-// No snapshot ⇒ nothing to fence ⇒ ok, answered WITHOUT the lease: acquiring it creates the workspace
-// directory, and a teardown from a folder that never had one must not leave one behind.
+// NO snapshot is fenced as well, with a fresh tombstone. A first changed-only build has no snapshot until
+// it finishes, and this used to answer "nothing to fence" there — so that build went on to write an
+// eligible baseline for the app this teardown had just deleted. The fresh tombstone refuses such a build's
+// claim (claimBaselineSnapshot) if it has not claimed yet; a placeholder it already claimed is tombstoned
+// like any snapshot, which rotates the generation its baseline write expects. An unreadable file is
+// replaced the same way: parseEnvelope answers null for it, and a build would overwrite it just the same.
+//
+// That needs the workspace folder, so a missing one is created and reported as `createdDir` (the first
+// folder mkdir made), for the caller to remove after a clean teardown (removeCreatedDir). A folder that
+// CANNOT be created is one no build can use either — it keeps its SDK state there, and a claim or a
+// baseline write needs the same mkdir — so that one case still answers ok without writing.
+const CANNOT_CREATE = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOTDIR', 'EEXIST', 'ENOENT', 'EINVAL', 'ENAMETOOLONG']);
+
+// The teardowns in flight, as a tombstone lists them (see releaseTombstone). An entry is dropped once its
+// process is gone, or once it is older than any teardown runs: a pid can be reused, and an entry that
+// never went would keep the workspace tombstoned for good.
+const TEARDOWN_STALE_MS = 24 * 60 * 60 * 1000;
+function liveTeardowns(disk, deps = {}) {
+  const now = typeof deps.now === 'function' ? deps.now : Date.now;
+  const isAlive = typeof deps.processAlive === 'function' ? deps.processAlive : processAlive;
+  const list = disk && Array.isArray(disk.teardowns) ? disk.teardowns : [];
+  return list.filter((t) => t && typeof t.id === 'string' && typeof t.at === 'number' && now() - t.at < TEARDOWN_STALE_MS && isAlive(t.pid));
+}
+
 function tombstoneSnapshot(workspaceDir, deps = {}) {
-  if (!fs.existsSync(snapshotPath(workspaceDir))) return { ok: true, reason: 'no snapshot to tombstone' };
-  const lease = acquireLease(workspaceDir, deps);
+  const mkdir = typeof deps.mkdirSync === 'function' ? deps.mkdirSync : fs.mkdirSync;
+  let createdDir;
+  try {
+    // Returns the first folder it created, or undefined when the whole path already existed.
+    createdDir = mkdir(workspaceDir, { recursive: true }) || null;
+  } catch (e) {
+    // Any other code (EBUSY, EMFILE, ENOSPC, EIO, …) is transient: a build could still get the folder, so
+    // the teardown fails closed rather than proceed unfenced.
+    if (e && CANNOT_CREATE.has(e.code)) return { ok: true, reason: `no workspace can exist at ${workspaceDir} (${e.code}), so there is no snapshot to fence` };
+    return { ok: false, reason: `tombstone failed: ${e && e.message}` };
+  }
+  let lease;
+  try { lease = acquireLease(workspaceDir, deps); } catch (e) { return { ok: false, reason: `tombstone failed: ${e.message}` }; }
   if (!lease.ok) return { ok: false, reason: lease.reason };
   try {
-    const disk = readSnapshot(workspaceDir);
-    if (!disk) return { ok: true, reason: 'no snapshot to tombstone' };
+    const disk = readSnapshot(workspaceDir) || makeEnvelope({});
     tombstone(disk);
+    // Every teardown in flight is listed, so one that finishes first leaves the fence standing for the
+    // others (releaseTombstone). The id names this one — the generation cannot, since any later write
+    // rotates it.
+    const teardownId = newGeneration();
+    const now = typeof deps.now === 'function' ? deps.now : Date.now;
+    disk.teardowns = [...liveTeardowns(disk, deps), { id: teardownId, pid: deps.pid != null ? deps.pid : process.pid, at: now() }];
     bumpGeneration(disk, newGeneration());
     writeSnapshotAtomic(workspaceDir, disk);
-    return { ok: true };
+    return { ok: true, createdDir, generation: disk.generation, teardownId };
   } catch (e) {
     return { ok: false, reason: `tombstone failed: ${e.message}` };
   } finally {
     releaseLease(lease);
+  }
+}
+
+// CLAIM the workspace for a FIRST changed-only baseline — the no-snapshot twin of the fenced invalidate.
+//
+// A run that read no snapshot had nothing to be fenced by: its baseline write expects "no snapshot"
+// (casWriteSnapshot with expected null), and a concurrent teardown that found none either never changed
+// that. The claim gives the run a generation of its own. Under the lease, and only while there is still no
+// snapshot, it writes a placeholder whose generation the run passes as its baseline CAS `expected`: a
+// teardown that lands after the claim tombstones the placeholder (rotating that generation), so the write
+// is refused; one that landed since the run's read left a tombstone, so the claim is refused and the run
+// stops before it builds anything.
+//
+// The placeholder is ineligible with no priorSpec — exactly "no baseline yet" — and carries NO debt on
+// purpose: a later run that reads it (this one crashed) passes it as the `prior` of its own baseline, which
+// inherits prior debt, and a debt here would keep that app ineligible for good. `identity` is the live
+// identity the run resolved, so a later read reports "not eligible" rather than an identity mismatch.
+// Returns { ok, generation } or { ok:false, reason }.
+function claimBaselineSnapshot(workspaceDir, identity, deps = {}) {
+  let lease;
+  try { lease = acquireLease(workspaceDir, deps); } catch (e) { return { ok: false, reason: `claim failed: ${e.message}` }; }
+  if (!lease.ok) return { ok: false, reason: `snapshot lease unavailable (${lease.reason})` };
+  try {
+    if (readSnapshot(workspaceDir)) return { ok: false, reason: 'a snapshot appeared since this run found none (a concurrent teardown or build) — re-run' };
+    const env = makeEnvelope(identity || {});
+    writeSnapshotAtomic(workspaceDir, env);
+    return { ok: true, generation: env.generation };
+  } catch (e) {
+    return { ok: false, reason: `claim failed: ${e.message}` };
+  } finally {
+    releaseLease(lease);
+  }
+}
+
+// Undo tombstoneSnapshot's folder creation after a clean teardown: remove the folders it created, deepest
+// first, up to and including `createdDir`. rmdir — never a recursive rm — so a folder that is no longer
+// empty (a build started meanwhile and wrote into it) is left alone, and so is every folder above it. A
+// teardown from a folder that never had a workspace then leaves none behind. Best-effort.
+function removeCreatedDir(workspaceDir, createdDir) {
+  if (!createdDir) return;
+  const top = path.resolve(createdDir);
+  // Deepest first. The walk ends when it steps above `top` — or at once, for a caller passing an unrelated
+  // pair — so nothing outside what mkdir created is ever touched.
+  for (let dir = path.resolve(workspaceDir); ; dir = path.dirname(dir)) {
+    const rel = path.relative(top, dir);
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
+    try { fs.rmdirSync(dir); } catch { return; }
   }
 }
 
@@ -216,6 +328,62 @@ function tombstoneSnapshot(workspaceDir, deps = {}) {
 function deleteSnapshot(workspaceDir) {
   try { fs.rmSync(snapshotPath(workspaceDir), { force: true }); return { ok: true }; }
   catch (e) { return { ok: false, reason: `delete failed: ${e.message}` }; }
+}
+
+// End a teardown's hold on the snapshot. tombstoneSnapshot lists every teardown in flight, and every
+// teardown that has FINISHED drops its entry here, under the lease — a finished teardown is no longer in
+// flight, and an entry left behind read as one still running whenever its pid was alive (reused, slow to
+// exit, or the very process a caller runs teardowns in), so a later clean teardown kept the fence for up to
+// a day. Then:
+//   · `deps.keep` (the teardown failed or threw) → the tombstone stays whatever else is running — a
+//     surviving artifact must not be rebaselined — with its generation rotated. → { kept: true, left }
+//   · other teardowns of this workspace are still running → the tombstone stays, with the generation
+//     rotated, and goes on fencing their deletes. Deleting it when the first of two overlapping teardowns
+//     finished — in either order — let a first changed-only build claim and bless a baseline for an app
+//     the other was still deleting. → { left: true }
+//   · this was the last → the snapshot is deleted, WHATEVER it now is: this tombstone, a baseline a build
+//     wrote over it meanwhile (it carries the list forward, and the teardown debt), or anything else — a
+//     snapshot is never left behind once the app is gone. → { deleted: true }
+//   · there is no snapshot (or no workspace at all) → nothing to release, and the folder is not recreated
+//     for it. → { gone: true }
+// A lease another writer holds for a moment (a build persisting its snapshot) is retried briefly, for the
+// same reason: giving up at once left the entry behind.
+const RELEASE_ATTEMPTS = 5;
+const RELEASE_WAIT_MS = 200;
+// A synchronous pause: the store is synchronous throughout, and a teardown waiting 200 ms blocks nothing
+// else in its own process.
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function releaseTombstone(workspaceDir, teardownId, deps = {}) {
+  if (!fs.existsSync(snapshotPath(workspaceDir))) return { ok: true, deleted: false, gone: true };
+  const attempts = deps.attempts != null ? deps.attempts : RELEASE_ATTEMPTS;
+  const sleep = typeof deps.sleep === 'function' ? deps.sleep : sleepSync;
+  let lease;
+  for (let attempt = 1; ; attempt += 1) {
+    try { lease = acquireLease(workspaceDir, deps); } catch (e) { return { ok: false, deleted: false, reason: `release failed: ${e.message}` }; }
+    if (lease.ok || attempt >= attempts) break;
+    sleep(RELEASE_WAIT_MS);
+  }
+  if (!lease.ok) return { ok: false, deleted: false, reason: `snapshot lease unavailable (${lease.reason})` };
+  try {
+    if (!fs.existsSync(snapshotPath(workspaceDir))) return { ok: true, deleted: false, gone: true };
+    // An unreadable file is replaced like tombstoneSnapshot replaces it; a clean last release deletes it.
+    const disk = readSnapshot(workspaceDir) || makeEnvelope({});
+    const others = liveTeardowns(disk, deps).filter((t) => t.id !== teardownId);
+    if (others.length || deps.keep) {
+      disk.teardowns = others;
+      tombstone(disk);
+      bumpGeneration(disk, newGeneration());
+      writeSnapshotAtomic(workspaceDir, disk);
+      if (deps.keep) return { ok: true, deleted: false, kept: true, left: others.length > 0 };
+      return { ok: true, deleted: false, left: true, reason: `${others.length} other teardown(s) of this workspace are still running` };
+    }
+    fs.rmSync(snapshotPath(workspaceDir), { force: true });
+    return { ok: true, deleted: true };
+  } catch (e) {
+    return { ok: false, deleted: false, reason: `release failed: ${e.message}` };
+  } finally {
+    releaseLease(lease);
+  }
 }
 
 module.exports = {
@@ -233,5 +401,10 @@ module.exports = {
   persistSnapshot,
   invalidateSnapshot,
   tombstoneSnapshot,
+  claimBaselineSnapshot,
+  removeCreatedDir,
   deleteSnapshot,
+  releaseTombstone,
+  TEARDOWN_STALE_MS,
+  RELEASE_ATTEMPTS,
 };

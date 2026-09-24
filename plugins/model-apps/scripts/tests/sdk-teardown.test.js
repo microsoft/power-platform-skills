@@ -729,29 +729,41 @@ test('teardown deletes only the dashboards the app\'s solution holds, never anot
     const deleted = [];
     const events = [];
     const sdk = {
-      resolveArtifact: async (kind) => (kind === 'dashboard' ? ids.map((id) => ({ id, name: 'Operations' })) : []),
+      resolveArtifact: async (kind) => (kind === 'dashboard' ? ids.map((id) => ({ id, name: 'Operations' })) : kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : []),
       deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
       deleteAppCascade: async () => {},
+      deleteSolution: async (id) => { deleted.push(`solution ${id}`); },
       queryRecords: async (set, opts) => {
-        if (failRead && set === 'solutioncomponent') throw new Error('HTTP 503');
+        if (failRead && set === 'solutioncomponent') throw new Error(failRead);
         if (set === 'solution') return solutionExists ? [{ solutionid: 'sol-1' }] : [];
         if (set === 'solutioncomponent') return (inSolution || []).filter((id) => opts.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
         return [];
       },
     };
     const which = noSolution ? { app: spec.app, entities: [], dashboards: spec.dashboards } : sln ? { ...spec, solution: { ...spec.solution, uniqueName: sln } } : spec;
-    await runTeardown(which, { apply: true }, { sdk, emit: (e) => events.push(e) });
+    const r = await runTeardown(which, { apply: true }, { sdk, emit: (e) => events.push(e) });
     const skip = events.find((e) => e.status === 'skip' && /^dashboard "Operations"/.test(e.label));
-    return { deleted, skip };
+    return { deleted: deleted.filter((d) => !/^solution /.test(d)), skip, r, events, solutionDeleted: deleted.includes('solution sol-1') };
   };
   assert.deepStrictEqual((await run(['d-foreign', 'd-ours'], { inSolution: ['d-ours'] })).deleted, ['d-ours'], 'the namesake outside the solution survives');
   assert.deepStrictEqual((await run(['d-1', 'd-2'], { inSolution: ['d-1', 'd-2'] })).deleted, ['d-1', 'd-2'], 'every one the solution holds is this app\'s');
   const foreign = await run(['d-foreign'], { inSolution: [] });
   assert.deepStrictEqual(foreign.deleted, [], 'a lone namesake the solution does not hold is not this build\'s');
   assert.ok(foreign.skip && /none is in this app's solution 'ContosoSln'/.test(foreign.skip.label) && foreign.skip.skip === 'kept', JSON.stringify(foreign.skip));
-  const unreadable = await run(['d-ours'], { inSolution: ['d-ours'], failRead: true });
-  assert.deepStrictEqual(unreadable.deleted, [], 'an unreadable solution proves nothing, so nothing is deleted');
-  assert.match(unreadable.skip.label, /could not read solution 'ContosoSln'.*HTTP 503/);
+  // An unreadable solution proves nothing, so nothing is deleted — and it is a FAILED step, not a skip.
+  // As a skip it left no error behind, so the solution step then deleted the one thing a re-run needs to
+  // tell this app's dashboards from same-named ones. A read error that says "not found" (a proxy's 404)
+  // must not slip through runTeardown's not-found shortcut either.
+  for (const failRead of ['HTTP 503', 'HTTP 404 Not Found']) {
+    const unreadable = await run(['d-ours'], { inSolution: ['d-ours'], failRead });
+    assert.deepStrictEqual(unreadable.deleted, [], `${failRead}: nothing is deleted`);
+    assert.strictEqual(unreadable.r.ok, false, `${failRead}: the step fails`);
+    assert.ok(unreadable.r.errors.some((e) => /^dashboard "Operations"/.test(e.step) && e.message.includes(`could not read solution 'ContosoSln'`) && e.message.includes(failRead)), JSON.stringify(unreadable.r.errors));
+    assert.strictEqual(unreadable.skip, undefined, `${failRead}: not reported as a skip`);
+    assert.strictEqual(unreadable.solutionDeleted, false, `${failRead}: the solution survives for the re-run`);
+    assert.ok(unreadable.events.some((e) => e.phase === 'solution' && e.status === 'skip' && e.skip === 'kept' && /kept — 1 earlier step\(s\) failed/.test(e.label)), JSON.stringify(unreadable.events.filter((e) => e.phase === 'solution')));
+  }
+  assert.strictEqual((await run(['d-ours'], { inSolution: ['d-ours'] })).solutionDeleted, true, 'a readable solution is still deleted once every step succeeds');
   // The named solution is gone (e.g. a re-run after a completed teardown): a lone namesake can only
   // be somebody else's now, so it is kept — the name posture would have deleted it.
   const gone = await run(['d-foreign'], { solutionExists: false });

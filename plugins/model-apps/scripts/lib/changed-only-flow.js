@@ -139,6 +139,11 @@ function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreE
   env.sampleDataApplied = !!sampleDataApplied;
   for (const d of (prior && Array.isArray(prior.debt) ? prior.debt : [])) snap.addDebt(env, d);
   for (const d of classify.debt) snap.addDebt(env, d);
+  // A baseline written while a teardown is still running (this build read its tombstone) carries the
+  // tombstone's list of teardowns in flight, as it carries its debt — so the last of them to finish still
+  // finds its own entry and deletes the snapshot (apply-snapshot-store.js releaseTombstone), and none of
+  // them finishing first can drop the fence the others still depend on.
+  if (prior && Array.isArray(prior.teardowns) && prior.teardowns.length) env.teardowns = prior.teardowns.map((t) => ({ ...t }));
   // A pre-existing app cannot be certified fresh — record the uncertified-baseline debt so it stays
   // ineligible (a full build re-skipped any diverged additive artifact; we cannot prove deployed==spec).
   if (appPreExisted) snap.addDebt(env, { artifactType: 'app', identity: live.appUniqueName || '', reason: 'uncertified-baseline (app pre-existed; additive edits may not have converged)' });
@@ -265,6 +270,26 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       return { ok: false, errors: [msg], changedOnly: decision };
     }
     expectedGen = inv.generation;
+  } else {
+    // No snapshot to fence against, so CLAIM one. The baseline write below would otherwise expect "none",
+    // and a teardown running alongside that found none either never changes that — this build then
+    // blessed an app the teardown had just deleted. The claim's generation is what the baseline CAS
+    // compares: a teardown landing during the build tombstones the placeholder, so the write is refused;
+    // one that landed since the read above left its tombstone, so the claim is refused and nothing runs.
+    // `snapshot` stays null, so the baseline is assembled with no prior exactly as before.
+    const claim = store.claimBaselineSnapshot(ws, {
+      orgId: live.orgId,
+      envUrl: live.envUrl,
+      appUniqueName: live.appUniqueName,
+      appId: live.appId,
+      solutionUniqueName: annotatedSpec.solution && annotatedSpec.solution.uniqueName,
+    });
+    if (!claim.ok) {
+      const msg = `changed-only: could not claim the workspace for the first baseline (${claim.reason}) — aborting before any change`;
+      log(`✗ ${msg}`);
+      return { ok: false, errors: [msg], changedOnly: decision };
+    }
+    expectedGen = claim.generation;
   }
   const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);
   if (r && r.ok && !r.dryRun && (!r.verify || r.verify.ok)) {

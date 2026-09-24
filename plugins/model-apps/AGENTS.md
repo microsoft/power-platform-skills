@@ -350,14 +350,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   still tears down cleanly instead of erroring. It is also **kept while any earlier step failed**:
   dashboards are found by name, and the app's own are the ones its solution holds (a built-in container
   holds every dashboard, so with no real solution teardown deletes none), which makes the solution the
-  only proof a re-run has — deleted after a failure, the retry kept the app's dashboards for good. Command teardown
+  only proof a re-run has — deleted after a failure, the retry kept the app's dashboards for good. A
+  membership read that fails is itself a failed step, never a skip or a not-found (as either, the
+  solution was deleted right after it). Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
   writes); best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
   error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
   and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
-  `--clear-workspace` prunes `.maker-workspace/` after a clean apply. `planTeardown(spec)` is pure (dry-run +
+  `--clear-workspace` prunes `.maker-workspace/` after a clean apply (not while another teardown of it
+  still holds the changed-only fence). `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
@@ -686,7 +689,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
