@@ -275,6 +275,13 @@ test('a working directory that is itself a link or junction refuses every page w
   assert.deepEqual(codes(['overview.tsx'], { workingDir: real }), []);
   fs.mkdirSync(path.join(real, 'app'));
   assert.deepEqual(codes(['overview.tsx'], { workingDir: path.join(linked, 'app') }), []);
+  // A DANGLING link has no realpath, and reading that as "not created yet" left only the lexical checks, so a
+  // worker's `mkdir -p` created the directory through it. It is refused like any other link — while a working
+  // directory that is simply not there yet still gets the lexical checks alone.
+  const dangling = path.join(parent, 'dangling');
+  fs.symlinkSync(path.join(parent, 'nowhere'), dangling, 'junction');
+  assert.deepEqual(codes(['overview.tsx'], { workingDir: dangling }), ['link:overview.tsx']);
+  assert.deepEqual(codes(['overview.tsx'], { workingDir: path.join(parent, 'not-yet') }), []);
 });
 
 // A built page is not refused for its disk state, but a new page must not reach it through a link: with

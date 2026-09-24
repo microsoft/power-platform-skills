@@ -122,13 +122,18 @@ function pageFileProblems(files, opts = {}) {
   if (root) {
     // A working directory that does not exist yet leaves only the lexical checks (see above). One that
     // exists but cannot be resolved is not "nothing to check": every written file is refused.
-    try { rootReal = fs.realpathSync.native(root); } catch (e) { if (!(e && e.code === 'ENOENT')) rootError = e; }
     // The working directory ITSELF must not be a link, the rule generate-page-manifest.js applies to the
     // same directory: `mkdir -p` succeeds silently on a link already at that path, so one planted there
     // redirected every page a worker wrote, and each target resolved inside its realpath and passed. A
     // linked ANCESTOR is still followed — a normal setup (macOS temp dirs sit under a symlinked /var).
-    if (rootReal) {
-      try { const at = fs.lstatSync(root); rootLink = at.isSymbolicLink(); } catch (e) { rootError = e; }
+    // It is inspected with lstat FIRST, apart from realpath: a DANGLING link there has no realpath
+    // (ENOENT), and reading that as "not created yet" left only the lexical checks, so a worker's
+    // `mkdir -p` then created the directory through the link.
+    let at = null;
+    try { at = fs.lstatSync(root); } catch (e) { if (!(e && e.code === 'ENOENT')) rootError = e; }
+    rootLink = !!at && at.isSymbolicLink();
+    if (at && !rootLink) {
+      try { rootReal = fs.realpathSync.native(root); } catch (e) { rootError = e; }
     }
   }
   const seen = new Map();

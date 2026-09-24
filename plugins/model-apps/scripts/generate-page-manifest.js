@@ -110,8 +110,14 @@ function buildPackageJson(slug, features) {
 // It is still reported (`drift`), so a pin left behind by an older plugin release is visible.
 function comparePackageDependencies(pkg, expectedDependencies, expectedDevDependencies) {
   const section = (key) => (pkg && pkg[key] && typeof pkg[key] === 'object' && !Array.isArray(pkg[key]) ? pkg[key] : {});
-  // Either section installs the package, so either satisfies it.
-  const installed = { ...section('devDependencies'), ...section('dependencies') };
+  // Either section installs the package, so either satisfies it — but only with a version npm can use. A key
+  // whose value is null, an object or an empty string installs nothing, so it counts as missing (not as a
+  // version that drifted), and it never hides a usable entry for the same package in the other section.
+  const usable = (v) => typeof v === 'string' && v.trim() !== '';
+  const installed = {};
+  for (const key of ['devDependencies', 'dependencies']) {
+    for (const [name, version] of Object.entries(section(key))) if (usable(version)) installed[name] = version;
+  }
   const missing = [];
   const drift = [];
   const check = (group, expected) => {

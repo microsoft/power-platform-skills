@@ -69,7 +69,15 @@ function readStamp(abs) {
   try {
     if (!side.isFile() || side.nlink > 1) return { unreadable: 'is not a plain file' };
     const stamp = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
-    if (!stamp || typeof stamp.existed !== 'boolean') return { unreadable: 'is not a dispatch stamp' };
+    // Trusted only whole, and only for THIS page. A truncated sidecar (`{"existed":true}`) left every field
+    // the check compares undefined, so an unchanged page matched nothing and was accepted, the stamp consumed
+    // with it; and a stamp copied from another page compared that page's state.
+    const whole = !!stamp && typeof stamp.existed === 'boolean' && typeof stamp.filePath === 'string'
+      && (!stamp.existed || (Number.isFinite(stamp.size) && Number.isFinite(stamp.mtimeMs) && /^[0-9a-f]{64}$/.test(String(stamp.sha256))));
+    if (!whole) return { unreadable: 'is not a dispatch stamp' };
+    // The path as stampPageTarget recorded it (path.resolve). Windows compares names ignoring case.
+    const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+    if (!same(path.resolve(stamp.filePath), abs)) return { unreadable: 'belongs to another page' };
     return stamp;
   } catch (e) {
     return { unreadable: `could not be read (${(e && e.code) || (e && e.message) || e})` };

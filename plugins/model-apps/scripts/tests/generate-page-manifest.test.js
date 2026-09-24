@@ -236,6 +236,30 @@ test('CLI: an existing package.json that cannot be verified is refused, not skip
   }
 });
 
+// A dependency whose value npm cannot use — null, an object, an empty string — installs nothing, so it is
+// missing, not drifted: the stale-manifest gate refuses it instead of reporting success over it. A usable
+// entry for the same package in the other section still counts.
+test('CLI: a dependency with no usable version counts as missing', () => {
+  for (const bad of [null, {}, '', '   ']) {
+    const dir = mkdirTemp();
+    try {
+      const pkg = buildPackageJson('odd-deps', []);
+      const [name] = Object.keys(pkg.dependencies);
+      pkg.dependencies[name] = bad;
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+      const r = runScript([dir, 'odd-deps']);
+      assert.equal(r.code, 2, `${JSON.stringify(bad)}: ${r.stdout}`);
+      assert.match(r.stderr, new RegExp(`missing requested generated-page dependencies: dependencies\\.${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`), JSON.stringify(bad));
+      // CONTROL: the same package, usable in the other section, satisfies it.
+      pkg.devDependencies[name] = buildPackageJson('x', []).dependencies[name];
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+      assert.equal(runScript([dir, 'odd-deps']).code, 0, `${JSON.stringify(bad)} beside a usable entry`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 // A version the user pinned or bumped is their edit, not staleness: failing on it would make every
 // rerun fail unless --force threw the edit away. It is kept, and reported, so an old pin is visible.
 test('CLI: a package present at a different version is kept and reported, not refused', () => {

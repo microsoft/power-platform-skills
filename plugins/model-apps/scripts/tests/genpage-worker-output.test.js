@@ -175,11 +175,21 @@ test('a dispatch stamp that cannot be trusted fails closed, and a linked stamp p
   const page = path.join(dir, 'overview.tsx');
   const sidecar = path.join(dir, '.overview.tsx.dispatch-stamp.json');
   fs.writeFileSync(page, COMPLETE);
-  for (const [what, content] of [['unparseable', '{ not json'], ['not a stamp', '{"filePath":"x"}']]) {
+  // A stamp is trusted only whole and only for this page: a truncated one compared nothing and let an unchanged
+  // page through, and one copied from another page compared that page's state.
+  const other = { filePath: path.join(dir, 'other.tsx'), existed: true, size: 1, mtimeMs: 1, sha256: 'a'.repeat(64) };
+  for (const [what, content, why] of [
+    ['unparseable', '{ not json', /could not be read/],
+    ['not a stamp', '{"filePath":"x"}', /is not a dispatch stamp/],
+    ['truncated', JSON.stringify({ filePath: page, existed: true }), /is not a dispatch stamp/],
+    ['a bad digest', JSON.stringify({ filePath: page, existed: true, size: 1, mtimeMs: 1, sha256: 'nope' }), /is not a dispatch stamp/],
+    ['another page\u2019s', JSON.stringify(other), /belongs to another page/],
+  ]) {
     fs.writeFileSync(sidecar, content);
     const r = validatePageOutput({ filePath: page });
     assert.equal(r.ok, false, what);
-    assert.match(r.problems[0], /^the dispatch stamp (could not be read|is not a dispatch stamp)/, what);
+    assert.match(r.problems[0], /^the dispatch stamp /, what);
+    assert.match(r.problems[0], why, what);
     assert.ok(fs.existsSync(sidecar), `${what}: kept, so the check keeps failing until the page is stamped again`);
   }
   fs.rmSync(sidecar);
