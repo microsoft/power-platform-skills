@@ -25,12 +25,15 @@ Choosing a control type, and writing properties and enum values that the compile
 
 ## Discover before you choose
 
-**⚠️ Required — not optional:** run `list_controls` before planning your layout. Controls
-you don't know exist can't influence your design, and the catalog includes high-level
-controls (`ModernTabList`, `ModernCard`, and others) that are easy to miss and expensive
-to reinvent with primitives.
+Run `list_controls` before planning the layout when a required control's discovery name
+is unknown or control selection is still open. Skip the inventory when the approved plan
+already names every required control and their discovery names are known. The catalog
+includes high-level controls (`ModernTabList`, `ModernCard`, and others) that are easy to
+miss and expensive to reinvent with primitives.
 
-The resulting list will also specify if any Code Components or Canvas Components are available as control instances in the app. The result identifies the `ComponentName` to pass to `describe_control`.
+When required, the list also specifies whether Code Components or Canvas Components are
+available as control instances in the app and identifies the `ComponentName` to pass to
+`describe_control`.
 
 Run `describe_control` on every type you plan to use.
 

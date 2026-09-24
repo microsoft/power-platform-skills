@@ -4,6 +4,38 @@ The orchestrator owns compilation, evidence-based functional acceptance, and the
 summary. Completion is fail-closed: the final successful compile must occur after the last
 app-YAML mutation.
 
+Simple CREATE, Simple EDIT, Bounded Structural Edit, and Bounded Behavioral Edit are
+direct workflows. They do not produce planner or builder artifacts. For a direct
+workflow:
+
+1. Compare the approved direct plan or requested edit with the final YAML. Confirm every
+   requested control, property, formula, and visible result is present and reachable.
+2. Confirm structural ownership: a newly generated screen has one responsive root as the
+   sole top-level visible child, and every visible control is nested inside that root.
+   Preserve a valid existing root or a deliberately fixed desktop layout. Do not extend a
+   malformed generated hierarchy. Direct navigation formulas must reference an existing
+   screen, and added screens must appear in `[working directory]/_EditorState.pa.yaml`.
+   This generated-screen check does not apply to a Simple Edit that adds one leaf control
+   to an existing screen. For that route, verify that the current hierarchy is unchanged
+   and no container, AutoLayout conversion, or reparenting was introduced.
+   For Bounded Behavioral Edit, verify that the final YAML matches the validated
+   `ChangeSet`, only the allowed app and target-screen files changed, every local mutation
+   and observer read the same source and stable identity, and no editor-state, planning,
+   or acceptance artifact was added.
+3. Repair any mismatch.
+4. Follow Section 1 until the app compiles cleanly. If diagnostic repair mutates app
+   YAML, repeat the direct comparison before compiling again.
+5. After the final successful compile, skip Section 2, do not create
+   `[working directory]/canvas-app-plan.md`, `[working directory]/canvas-app-shared.md`, screen-plan files, or
+   `[working directory]/canvas-app-acceptance.md`, and follow the applicable summary format in Section 3.
+6. A direct workflow without runtime interaction reports static verification only. If it
+   adds `App.OnStart` initialization, state that runtime evaluation was not run and the
+   current authoring session may require rerunning `OnStart` or restarting the app. Never
+   claim immediate interaction behavior from compile evidence alone.
+
+The remaining instructions apply to planned workflows unless they explicitly mention a
+direct workflow.
+
 ## Contents
 
 - Section 0 — Compile gates: when to compile, and why gate 3 exists
@@ -191,8 +223,8 @@ because functional conformance still writes the acceptance artifact.
 ## 2. Functional Conformance
 
 A clean compile proves syntax and formula binding, not that named actions change the
-state users observe. After the final clean compile, read the plan index and generated
-files and evaluate every `## Functional Test Matrix` row.
+state users observe. For a planned workflow, after the final clean compile, read the plan
+index and generated files and evaluate every `## Functional Test Matrix` row.
 
 For each scenario, record one result:
 
@@ -607,6 +639,8 @@ late agent waves from changing the workspace and lets external generation proof
 distinguish a completed app from an app changed after validation.
 
 ## 3. Summary
+
+Direct workflows omit the Acceptance evidence line and do not cite planner artifacts.
 
 For CREATE:
 

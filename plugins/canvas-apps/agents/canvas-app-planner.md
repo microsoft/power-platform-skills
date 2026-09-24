@@ -37,12 +37,13 @@ exactly, record an explicit approximation and reason; never silently rename butt
 the controls do not provide.
 
 
-Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop with
+Before discovery, read the supplied plugin root's `references/QAChecksCompact.md`. Stop with
 `Status: Provenance Blocked` unless the QA guide defines
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
 working directory.
 
-Consume discovery and compose every artifact before attempting the first write. Use
+Consume discovery, compose the `PlanModel` in working memory, validate it fail-closed,
+and compose every artifact before attempting the first write. Use
 `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If `apply_patch` is
 unavailable or the call is denied, return `Status: Writing Blocked`, the exact write
 failure, and the complete intended contents of the plan index, shared plan, every screen
@@ -62,19 +63,32 @@ between separate screen files, plan a repeated ModernButton row with direct `OnS
 
 ## 1. Read Guidance
 
-Read:
+Read each reference at most once per invocation.
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
-- `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
-- `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
-- `${PLUGIN_ROOT}/references/BehaviorGuide.md` — action contracts, lifecycle behavior, mutation evidence
-- `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
-- `${PLUGIN_ROOT}/references/PlanTemplates.md` — the exact shape of every artifact you write
+- `${PLUGIN_ROOT}/references/PlanModel.md` — the compact working-memory plan contract
 
-If any approved screen uses `GroupContainer` with `Variant: GridLayout`, also read
-`${PLUGIN_ROOT}/references/GridLayoutGuide.md`. Do not load it for apps that use only AutoLayout or
-ManualLayout.
+Read the remaining references only when the approved plan needs them, and at most once:
+
+- `${PLUGIN_ROOT}/references/PlanIndexCreate.md` in CREATE mode or
+  `${PLUGIN_ROOT}/references/PlanIndexEdit.md` in EDIT mode before projecting the plan index.
+- `${PLUGIN_ROOT}/references/SharedPlanArtifact.md` before projecting the shared plan.
+- `${PLUGIN_ROOT}/references/ScreenCreateArtifact.md` when any dispatch row creates a screen.
+- `${PLUGIN_ROOT}/references/ScreenModifyArtifact.md` when any dispatch row modifies a screen.
+- `${PLUGIN_ROOT}/references/LayoutPolicies.md` when the plan establishes or changes screen layout.
+- `${PLUGIN_ROOT}/references/ControlGuide.md` when the plan adds controls or changes control properties
+  or enums.
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` when the plan requires nontrivial layout, scrolling,
+  sizing, or color decisions.
+- `${PLUGIN_ROOT}/references/PowerFxGuide.md` when the plan contains formulas.
+- `${PLUGIN_ROOT}/references/BehaviorCore.md` when the plan defines user actions.
+- `${PLUGIN_ROOT}/references/MutationBehavior.md` when the plan creates, edits, deletes, approves,
+  rejects, categorizes, or otherwise mutates records.
+- `${PLUGIN_ROOT}/references/DataBehavior.md` when the plan queries, filters, reorders, reports,
+  compares, visualizes, ranks, or constrains data.
+- `${PLUGIN_ROOT}/references/DesignGuide.md` when the plan requires design decisions.
+- `${PLUGIN_ROOT}/references/GridLayoutGuide.md` when an approved screen uses `GroupContainer` with
+  `Variant: GridLayout`. Do not load it for AutoLayout or ManualLayout.
 
 
 ## 2. Consume Discovered Resources
@@ -88,7 +102,10 @@ Blocked` for missing MCP access.
 
 ### CREATE
 
-1. Require list results for controls, APIs, and data sources.
+1. Require either a list result or an explicit `not required` entry for controls, APIs,
+   and data sources. A controls list is required only when a required discovery name was
+   unknown. API and data source lists are required only when the approved plan uses those
+   resource families.
 2. Require a `describe_control` result for every control type in the approved plan.
 3. Require API descriptions and data source schemas only for connectors and data sources
    the approved plan uses.
@@ -152,8 +169,9 @@ Before writing plans:
    no existing configured grid to preserve, plan a sortable Gallery table with explicit
    headers instead.
 10. Classify the approved requirements with the capability inventory in
-    `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Use it to find missing behaviors, not to invent
-    unrequested features.
+    `${PLUGIN_ROOT}/references/BehaviorCore.md`. Apply `${PLUGIN_ROOT}/references/MutationBehavior.md` and
+    `${PLUGIN_ROOT}/references/DataBehavior.md` only for the capability families they own. Use the
+    references to find missing behaviors, not to invent unrequested features.
 11. Write `## Required Record Fields` when the app has a repeated record card, row, or
     immediately reachable detail. Add one stable field key for the canonical identity and
     every field the requirements say users must see, including named title, person, time
@@ -183,7 +201,7 @@ Before writing plans:
     consumes the same resettable operation state. Separate direct-action controls remain
     valid when each owns its mutation and complete selected-ID and input eligibility gates.
     Apply the exact selector, empty-state, numeric-input, reset, and guard contracts from
-    `${PLUGIN_ROOT}/references/BehaviorGuide.md` and copy the resulting compile-ready formulas and
+    `${PLUGIN_ROOT}/references/MutationBehavior.md` and copy the resulting compile-ready formulas and
     properties into the owning screen brief.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
@@ -195,7 +213,8 @@ Before writing plans:
     state, and one labeled binding per proof-set field. The changed list, detail, dashboard,
     or metric must also read the updated source, but navigation, a notification, or a record
     somewhere in a longer list cannot replace the receipt.
-    Fill the additive `## Mutation Lifecycle Evidence` table from `PlanTemplates.md`.
+    Fill the additive `## Mutation Lifecycle Evidence` table from the applicable
+    plan-index and screen-brief artifact references.
     Name the canonical source and requested destination, trace the same stable ID through
     the operation, receipt, canonical observer, and destination observer, and specify
     success-path synchronization when those surfaces read different sources. For a
@@ -238,7 +257,8 @@ Before writing plans:
     completion and one for cancellation. Both clear continuation ID/mode; cancellation
     leaves the canonical source unchanged.
 18. When Action Contracts contain an opposing directional pair, write the
-    `## Directional Mutation Evidence` table from `PlanTemplates.md`. Declare exact
+    `## Directional Mutation Evidence` table from the applicable plan-index and
+    screen-brief artifact references. Declare exact
     compile-ready planned bindings for selected ID, resettable operation state, invalid
     amount and submit gates, both directional formulas, the canonical observer, and all
     five receipt values. When both directions act on the same record type, also fill the
@@ -286,8 +306,15 @@ Builders implement exactly what the brief specifies. If the brief describes only
 desktop composition, the screen will break on a phone — this is the most frequently
 observed defect in finished apps, and no compile diagnostic reports it.
 
+Cite named policies from `${PLUGIN_ROOT}/references/LayoutPolicies.md` and record only
+instance-specific measurements. Apply `ResponsiveRoot`, `NestedVisibleChildren`,
+`TouchTarget44`, `HorizontalReflow`, `FieldGroups`, `GalleryRows`, `ScrollableRoot`,
+`LongestLabelFit`, and `ContrastPairs` instead of restating their arithmetic.
+
 For every screen brief, state explicitly:
 
+- Applied policies and the instance-specific available width, longest label, gallery
+  `Height`/`TemplateSize`, named color pair, and protected controls.
 - Which horizontal rows wrap (`LayoutWrap: =true`) and which stack below a width
   breakpoint. Logical canvas sources such as `App.Width`, a root container's `Width`, and
   root-level `Parent.Width` can remain at design width when an embedded or scale-to-fit
@@ -295,44 +322,19 @@ For every screen brief, state explicitly:
   never rely on those sources alone to activate the narrow branch. Make required field and
   action groups safe even when the wide/default branch remains active: wrap, stack
   unconditionally, use deliberate scrolling, or fit the entire wide branch within a
-  statically proven bound. Layout Budget Evidence is arithmetic documentation, not proof
-  that the runtime host changes a logical width value. Use the approved app's
-  breakpoints consistently; when none are specified, use 640 for phone and 1024 for tablet.
+  statically proven bound. Use the approved app's breakpoints consistently; when none are
+  specified, use 640 for phone and 1024 for tablet.
 - That responsive layout properties derive from the declared screen-level width source.
   Do not initialize layout variables such as `varIsMobile` or `varColumns` in `OnVisible`;
   they can be unset in Studio and become stale after resize.
-- That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
-- That the sole responsive root uses exact `Width: =Parent.Width`,
-  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`.
-- That the screen-level `Children:` list contains only that root, with every visible
-  section nested under the root's `Children:` list.
-- The foreground color for text on every colored surface, so nothing renders
-  dark-on-dark.
-- A width or `LayoutMinWidth` for status badges and KPI values that fits the longest value
-  they can display.
-- That vertical containers holding text use `LayoutAlignItems: =LayoutAlignItems.Stretch`.
-  With `Start`, `Center` or `End`, a heading or a concatenated total is sized to its
-  intrinsic width and silently clipped — the text is correct and simply not shown.
-- A `TemplateSize` for every gallery that fits its row template **at each width branch**.
-  Use the same deliberate breakpoint source as the row layout or budget every reachable
-  cross-branch pair. Record numeric row-height arithmetic including every required field,
-  badge, and action; a field that clips outside the template fails.
+- Named `ContrastPairs` and `LongestLabelFit` measurements for colored surfaces and
+  status/KPI/action labels.
+- Gallery `Height`, `TemplateSize`, and `TemplatePadding` under `GalleryRows`.
 - For every GridLayout: the exact `LayoutGridColumns`, `LayoutGridRows`,
   `LayoutGridColumnMinWidth`, `LayoutGridRowMinHeight` and `Height` formulas, plus every
   explicit child row/column position. The row count and height must reuse the same column
   expression.
-- Numeric branch evidence for every horizontal AutoLayout container and fixed-height
-  vertical section. Record available size versus padding, gaps, and child fixed/minimum
-  sizes; require wrap, stack, deliberate scrolling, or a larger threshold when they do
-  not fit. Protect required inputs, primary actions, and complete mutation receipts.
-  Apply the exact arithmetic, `FillPortions`, nested-width, overflow, and fixed-height
-  rules from `${PLUGIN_ROOT}/references/LayoutGuide.md` and `${PLUGIN_ROOT}/references/QAChecks.md`.
-- Group each visible label with its corresponding input in one field container before
-  the row stacks.
-- Give every required classic or modern TextInput, NumberInput, Radio, DropDown, or
-  ComboBox a persistent human-readable visible label in the same field region and record
-  the exact binding in Data Entry Label Evidence. Apply the control-specific label contract
-  from `${PLUGIN_ROOT}/references/LayoutGuide.md`.
+- `FieldGroups` bindings for every required data-entry control.
 - For galleries with record actions, define the phone row as an action-first composition:
   render the canonical identity's full text, status, and required lifecycle actions by
   stacking them or placing the actions in an immediately visible overflow/detail entry.
@@ -373,11 +375,23 @@ can prevent one.
    each other's files, so anything you leave to their judgement diverges — six screens end
    up with six different wordmarks and an accent colour that changes as the user navigates.
 
-## 7. Write App YAML
+## 7. Compose and Validate PlanModel
+
+Compose one `PlanModel` in working memory using `${PLUGIN_ROOT}/references/PlanModel.md`. Do not write
+the model as a file.
+
+Validate it fail-closed before the first artifact write, including CREATE-mode
+`App.pa.yaml`. Check coverage, action/test coherence, unique dispatch files and prefixes,
+complete builder context, app and editor changes, and required control discovery. If any
+check fails, repair the model in memory and re-validate. Do not write partial artifacts
+from an invalid model.
+
+## 8. Write App YAML
 
 ### CREATE only
 
-Write `[working directory]/App.pa.yaml`.
+Compute the complete `[working directory]/App.pa.yaml` update before editing, then edit the file once.
+After the first compile, make additional edits only to repair reported diagnostics.
 
 - Keep mock collections to roughly 5-8 short rows.
 - Set `StartScreen: =Screen1`.
@@ -407,9 +421,15 @@ Put requested screen or component-definition ordering in `## Editor State Change
 the exact final `ScreensOrder` and `ComponentDefinitionsOrder` lists. Write `None` when
 the current Studio order should remain unchanged.
 
-## 8. Write Progressive Plan Artifacts
+## 9. Write Plan Artifacts Once
 
-Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
+Project the validated `PlanModel` into Markdown using the mode-specific plan-index
+reference, `${PLUGIN_ROOT}/references/SharedPlanArtifact.md`, and only the screen-brief references
+required by the dispatch actions. Compose every artifact in working memory before the
+first plan-file write. Write each artifact once. Return the handoff from working memory.
+Never reread artifacts just written. Readback is allowed only after a reported write failure or truncation.
+
+The orchestrator still reads artifacts at the Planned Build Handoff boundary.
 
 ### `[working directory]/canvas-app-plan.md`
 
@@ -504,7 +524,10 @@ as prose and once as YAML — doubles latency and token cost for no added correc
 It is acceptable for two screen briefs to repeat a control definition. Runtime context
 is more important than eliminating storage duplication.
 
-## 9. Return the Handoff
+## 10. Return the Handoff
+
+Do not reread the artifacts to build this response. Use the composed working-memory
+copies.
 
 Return:
 
@@ -530,6 +553,10 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
   top-level MCP connection.
 - Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
+- Validate `PlanModel` before the first artifact write. Do not write from an invalid model.
+- Write each plan artifact once. Do not reread artifacts after a successful write.
+- Return the handoff from working memory. Readback is allowed only after a reported write
+  failure or truncation.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.
 - Never derive or normalize control creation keywords from `list_controls`; copy them

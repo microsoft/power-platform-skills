@@ -1,22 +1,83 @@
 # Create Workflow
 
-Use this workflow only when `[working directory]` has no meaningful screen content.
+Use this workflow only when the user's intent establishes a new app experience, such as a
+request to create, design, or build an app. A blank scaffold supports this route, but the
+absence of meaningful leaf controls does not select CreateWorkflow by itself. A targeted
+mutation against an existing blank screen belongs to EditWorkflow.
 
-## 1. Read Guidance
+Before reading any `/references` file named below, reuse it when its complete contents
+were successfully returned earlier in this same context. Do not reread it merely because
+a new turn started. Reread only after a failed, partial, truncated, or insufficient prior
+result. This rule does not apply to `[working directory]`, whose YAML is synchronized and mutable each
+turn. Top-level, planner, and builder contexts are separate; one context cannot assume
+that another context loaded a reference.
 
-Read:
+## 1. Assess Complexity
+
+Treat the request as **Simple CREATE** only when all are true:
+
+- It targets one screen and reuses `[working directory]/Screen1.pa.yaml`.
+- It adds at most one interactive leaf control and only a small number of static
+  supporting controls.
+- It uses no connector, API, data source, collection, gallery, or form.
+- It uses no cross-screen navigation, GridLayout, Canvas Component, or Code Component.
+- It performs no record mutation.
+- Its only behavior is a local variable update or notification.
+- Every required control type can be confirmed with `describe_control` before editing.
+
+If any condition is false or uncertain, use **Planned CREATE**.
+
+## 2. Simple Create
+
+Simple CREATE uses the same structural invariants as a bounded structural edit, but starts
+from a blank scaffold. For example, "Create an app with a button" uses Simple CREATE when
+all complexity conditions above hold and retains responsive-root behavior.
+
+1. Load `${PLUGIN_ROOT}/references/YamlSyntax.md`, `${PLUGIN_ROOT}/references/ControlGuide.md`,
+   `${PLUGIN_ROOT}/references/LayoutGuide.md`, and `${PLUGIN_ROOT}/references/LayoutPolicies.md` only when their
+   complete contents are not already available in this context. Load
+   `${PLUGIN_ROOT}/references/PowerFxGuide.md` only when the request includes behavior and it is not
+   already available here.
+2. Determine the exact controls, properties, formulas, layout, and RGBA values.
+3. Present the single-screen plan using the format in **Present the plan** below and wait
+   for approval unless the request explicitly pre-approves a reasonable plan.
+4. Call `describe_control` for every required control type.
+5. Apply `ResponsiveRoot` and `NestedVisibleChildren`. The landing screen's sole top-level visible child is one AutoLayout root with `Width: =Parent.Width`,
+   `Height: =Parent.Height`, `LayoutMinWidth: =0`, `LayoutMinHeight: =0`,
+   `LayoutDirection: =LayoutDirection.Vertical`,
+   `LayoutAlignItems: =LayoutAlignItems.Stretch`, and
+   `LayoutOverflowY: =LayoutOverflow.Scroll`. Nest every visible control inside that
+   root. Prefer modern controls. Interactive controls meet `TouchTarget44`.
+6. Compute the complete changes to `[working directory]/App.pa.yaml` and `[working directory]/Screen1.pa.yaml` before
+   editing. Edit each file at most once when it needs a change.
+7. Reuse `${PLUGIN_ROOT}/references/ValidationWorkflow.md` when it was fully read earlier in this
+   context; otherwise read it. Follow it, including `compile_canvas` and diagnostic
+   repair.
+8. Stop after the final summary. Do not invoke `canvas-app-planner` or
+   `canvas-screen-builder`. Do not create `[working directory]/canvas-app-plan.md`,
+   `[working directory]/canvas-app-shared.md`, screen-plan files, or `[working directory]/canvas-app-acceptance.md`.
+
+## 3. Planned Create
+
+### Read guidance
+
+Load each reference only when its complete contents are not already available in this
+context, and read it at most once otherwise:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
 - `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
+- `${PLUGIN_ROOT}/references/LayoutPolicies.md` — named layout contracts
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 
-## 2. Design the App
+### Design the app
 
 Determine:
 
-- Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
+- Requested capability families from `${PLUGIN_ROOT}/references/BehaviorCore.md`, with
+  `${PLUGIN_ROOT}/references/MutationBehavior.md` and `${PLUGIN_ROOT}/references/DataBehavior.md` loaded only when
+  their capability families are present
 - Every user action, precondition, source-of-truth transition, and visible postcondition
 - Stable IDs, mutable fields, status values, relationships, and persistence semantics
 - Screen count, purpose, and navigation
@@ -25,13 +86,14 @@ Determine:
 - Aesthetic direction with exact RGBA values
 - Target device and users
 
-Use AutoLayout for phone, tablet, multi-device, or unknown targets. ManualLayout is
-acceptable for desktop-only, fixed dashboards.
+Use AutoLayout for phone, tablet, multi-device, or unknown targets. Apply
+`ResponsiveRoot` from `${PLUGIN_ROOT}/references/LayoutPolicies.md`. ManualLayout is acceptable for
+desktop-only, fixed dashboards.
 
 The landing screen must reuse `[working directory]/Screen1.pa.yaml`; every additional screen gets a new
 file.
 
-## 3. Present the Plan
+### Present the plan
 
 Use this format:
 
@@ -67,13 +129,21 @@ Otherwise, wait for user approval. Revise and re-present if requested.
 ## 4. Invoke the Planner
 
 
-Before delegation, use the top-level skill's MCP connection to call `list_controls`,
-`list_apis`, and `list_data_sources`; call `describe_control` for every control type in
-the approved plan; and call `describe_api` and `get_data_source_schema` only for APIs and
-data sources the plan uses. For Canvas or Code Components, make their `describe_control`
-calls last so the packet contains the freshest Studio snapshot. Preserve the exact
-results as the discovery packet. Do not delegate these calls: task agents do not
-reliably inherit the configured MCP connection.
+Before delegation, use the top-level skill's MCP connection to gather only the discovery
+the approved plan requires:
+
+- Call `list_controls` only when a required control's discovery name is unknown.
+- Call `list_apis` only when the plan uses an API or connector.
+- Call `list_data_sources` only when the plan uses an external data source.
+- Call `describe_control` for every control type in the approved plan.
+- Call `describe_api` and `get_data_source_schema` only for APIs and data sources the
+  plan uses.
+
+Record an explicit `not required` entry in the discovery packet for every skipped
+inventory call. For Canvas or Code Components, make their `describe_control` calls last
+so the packet contains the freshest Studio snapshot. Preserve the exact results as the
+discovery packet. Do not delegate these calls: task agents do not reliably inherit the
+configured MCP connection.
 
 
 Invoke the `canvas-app-planner` agent with `Task` and:

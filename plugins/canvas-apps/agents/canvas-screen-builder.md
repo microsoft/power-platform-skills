@@ -18,7 +18,7 @@ tools:
 You own exactly one screen file.
 
 
-Read the supplied plugin root's `references/QAChecks.md`. Stop with
+Read the supplied plugin root's `references/QAChecksCompact.md`. Stop with
 `Status: Provenance Blocked` unless the QA guide defines
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the target
 file or working directory.
@@ -46,8 +46,12 @@ Read:
 1. The shared plan
 2. The assigned screen brief
 3. For `Modify`, the exact target `.pa.yaml`
-4. `${PLUGIN_ROOT}/references/BehaviorGuide.md` when the brief contains Required Actions
-5. `${PLUGIN_ROOT}/references/LayoutGuide.md`
+4. `${PLUGIN_ROOT}/references/BehaviorCore.md` when the brief contains Required Actions
+5. `${PLUGIN_ROOT}/references/MutationBehavior.md` when the brief contains record mutations
+6. `${PLUGIN_ROOT}/references/DataBehavior.md` when the brief contains query, filter, reorder, report,
+   comparison, visualization, ranking, or data-limit behavior
+7. `${PLUGIN_ROOT}/references/LayoutGuide.md`
+8. `${PLUGIN_ROOT}/references/LayoutPolicies.md`
 
 Do not read `[working directory]/canvas-app-plan.md`, other screen briefs, or other screen YAML files.
 Do not call discovery tools. The assigned documents contain all required context.
@@ -149,7 +153,7 @@ Do not fix unrelated pre-existing issues.
   Read inputs from live control state, use one literal guard per direction, capture the
   canonical old value before mutation, and keep invalid states visible and recoverable.
   Implement the exact selector, empty-state, input, reset, arithmetic, and same-record
-  sequence contracts from the brief and `${PLUGIN_ROOT}/references/BehaviorGuide.md`.
+  sequence contracts from the brief and `${PLUGIN_ROOT}/references/MutationBehavior.md`.
 - For every gallery row, calculate the template height rather than eyeballing it. A direct
   row child's `Parent.Width` is gallery/template-scoped and can differ from the outer
   container width used by the Gallery's `TemplateSize`. Use one deliberate breakpoint
@@ -161,12 +165,14 @@ Do not fix unrelated pre-existing issues.
   `.pa.yaml`, so required field/action groups must wrap, stack, deliberately scroll, or
   fit safely even when the wide/default branch remains active. Self-reported layout
   evidence cannot prove host viewport sensitivity.
-- Implement the brief's numeric budgets for every horizontal AutoLayout branch and
-  fixed-height vertical section. When content does not fit, wrap, stack, deliberately
-  scroll, simplify, or raise the threshold. Protect required inputs, primary actions, and
-  complete mutation receipts. Apply the exact sizing, `FillPortions`, nested-width,
-  overflow, and fixed-height rules from `${PLUGIN_ROOT}/references/LayoutGuide.md` and
-  `${PLUGIN_ROOT}/references/QAChecks.md`.
+- Apply named policies from `${PLUGIN_ROOT}/references/LayoutPolicies.md` plus only the
+  instance-specific measurements in the brief. When content does not fit, wrap, stack,
+  deliberately scroll, simplify, or raise the threshold. Protect required inputs, primary
+  actions, and complete mutation receipts. Apply the exact sizing, `FillPortions`,
+  nested-width, overflow, and fixed-height rules from `${PLUGIN_ROOT}/references/LayoutGuide.md` and
+  the compact contract in `${PLUGIN_ROOT}/references/QAChecksCompact.md`. Read
+  `${PLUGIN_ROOT}/references/QAChecks.md` only when a specific applicable check needs detailed repair
+  guidance.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
@@ -285,16 +291,20 @@ breakpoint sizing on descendants.
 
 ## 3. Self-QA
 
-1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a long document;
-   re-reading it between fixes is the largest avoidable cost in this role.
+1. Read `${PLUGIN_ROOT}/references/QAChecksCompact.md` once and keep it in context. It defines all 44
+   checks and their applicability.
 2. Re-read the target file.
 3. Apply **every** check in order and fix issues inline. Checks are not optional and not
    sampled: a check you skipped is a defect you shipped, and most of them have no compile
    diagnostic behind them, so nothing downstream will catch it.
 4. For Modify, scope checks to changed or added content.
-5. Record complete check coverage and list only repairs and non-applicable checks, using
-   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting". Do not emit 44 unsupported `PASS` claims.
-6. For each Required Action, record a compact transition trace:
+5. When an applicable check finds a defect or the compact rule is insufficient to decide
+   or repair it, read `${PLUGIN_ROOT}/references/QAChecks.md` for that check's detailed guidance. Do not
+   load the full guide preemptively and do not restart coverage after a repair.
+6. Record complete check coverage and list only repairs and non-applicable checks, using
+   `${PLUGIN_ROOT}/references/QAChecksCompact.md` § "Reporting". Do not emit 44 unsupported `PASS`
+   claims.
+7. For each Required Action, record a compact transition trace:
    `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
 observer -> evidence`. Mark `PASS` only when every link is present in the generated
    formulas. For a shared-operation flow, include the selector event and distinct guarded

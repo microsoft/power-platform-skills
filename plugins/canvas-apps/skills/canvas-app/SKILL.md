@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
+2. Read `${PLUGIN_ROOT}/references/QAChecksCompact.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If the check fails, stop with the observed path; do
    not mix prompt generations.
 3. Reuse the current directory when it already contains `App.pa.yaml` and every existing
@@ -42,18 +42,60 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 Always use absolute paths for app files.
 
 
+## Reference Reuse
+
+- Files under `/references` are immutable for the lifetime of the current SDK
+  conversation.
+- Reuse the complete contents of a reference that `view` successfully and fully returned
+  in an earlier turn of this conversation. Do not call `view` again merely because a new
+  turn started.
+- Reread a reference only when the earlier call failed, returned a partial range, was
+  truncated, or did not include the section required for the current task.
+- This reuse contract never applies to `[working directory]`. App YAML is synchronized before every turn
+  and can be changed by edits, so read the current app content required by the active
+  workflow.
+- Top-level, planner, and builder contexts are separate. A reference loaded in one context
+  is not available in another context unless that context successfully reads it itself.
+
+
 ## Route the Request
 
-Inspect the synced `.pa.yaml` files before choosing a workflow. A blank app normally contains
-`App.pa.yaml`, `Screen1.pa.yaml`, and `_EditorState.pa.yaml`.
+Inspect the user intent and synced `.pa.yaml` files before choosing a workflow. A blank
+scaffold normally contains `App.pa.yaml`, `Screen1.pa.yaml`, and
+`_EditorState.pa.yaml`.
 
-Treat the app as empty when it has no screens with meaningful leaf controls. Containers
-without leaf controls do not make the app non-empty.
+Classify the requested target with the conceptual `AppStartingState`. Its values are
+mutually exclusive; do not emit the classification as JSON:
 
-- **Empty app:** read `${PLUGIN_ROOT}/references/CreateWorkflow.md` and follow it.
-- **Existing app:** read `${PLUGIN_ROOT}/references/EditWorkflow.md` and follow it.
+- `MissingTargetScreen`: The requested target screen does not exist.
+- `BlankScreen`: The target screen exists but has no meaningful visible leaf controls.
+  Containers without meaningful visible leaf controls do not change this state.
+- `PopulatedScreen`: The target screen already has meaningful visible leaf controls.
+
+Route by both user intent and `AppStartingState`:
+
+- When the request's intent establishes a new app experience, for example, "create an
+  app", "design an app", or "build an app", read `${PLUGIN_ROOT}/references/CreateWorkflow.md` and
+  follow it. A blank scaffold remains a create request and retains responsive-root
+  behavior.
+- When the request is a targeted mutation of an existing screen, for example, "add a
+  button" or "add a label" to existing `Screen1`, read
+  `${PLUGIN_ROOT}/references/EditWorkflow.md` and follow it for both `BlankScreen` and
+  `PopulatedScreen`.
+- `MissingTargetScreen` never qualifies for Simple Edit. Route an app-creation request to
+  CreateWorkflow. Route an addition to an existing app that creates the missing screen
+  to EditWorkflow structural routing.
 
 Do not load both workflow documents.
+
+Simple CREATE, Simple EDIT, Bounded Structural Edit, and Bounded Behavioral Edit complete
+in this top-level agent.
+After the final successful `compile_canvas`, return the summary immediately. Do not invoke
+`canvas-app-planner` or `canvas-screen-builder`, and do not create
+`[working directory]/canvas-app-plan.md`, `[working directory]/canvas-app-shared.md`, screen-plan files, or
+`[working directory]/canvas-app-acceptance.md`.
+
+Planned CREATE and Planned Edit still return to **Planned Build Handoff**.
 
 ## Planned Build Handoff
 
@@ -306,8 +348,10 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - Verify numeric layout evidence proves required record fields, actions, inputs, receipts,
   Gallery rows, and fixed-height or horizontal branches fit their reachable desktop and
   phone layouts. Static budgets do not replace post-export runtime proof for list rows and
-  row actions. Apply the exact containment, sizing, breakpoint, and scrolling rules from
-  `${PLUGIN_ROOT}/references/QAChecks.md` and `${PLUGIN_ROOT}/references/ValidationWorkflow.md`.
+  row actions. Apply the compact coverage contract from
+  `${PLUGIN_ROOT}/references/QAChecksCompact.md` and the exact validation rules from
+  `${PLUGIN_ROOT}/references/ValidationWorkflow.md`. Read `${PLUGIN_ROOT}/references/QAChecks.md` only for a specific
+  ambiguous or failed check.
 - Require persistent human-readable visible labels for accepted data-entry controls,
   including controls on state-driven surfaces, and record the corresponding Data Entry
   Label Evidence from `${PLUGIN_ROOT}/references/ValidationWorkflow.md`.
@@ -385,9 +429,9 @@ discards prior fixes and does not converge.
    and again as soon as the first builder returns. Never defer the first compile until
    every file is written.
 11. Compile after each builder wave.
-12. Do not report completion until the workspace compiles clean, every Action Contract has
-   a passing evidence row in `[working directory]/canvas-app-acceptance.md`, and no app YAML mutation
-   occurred after the final successful compile.
+12. Do not report completion until the workspace compiles clean and no app YAML mutation
+   occurred after the final successful compile. Planned workflows also require a passing
+   evidence row in `[working directory]/canvas-app-acceptance.md` for every Action Contract.
 13. Require only prompt- or approved-plan-derived actions. Treat role-scoped management of
    primary records as a lifecycle requirement, but do not add universal CRUD to every
    entity.
