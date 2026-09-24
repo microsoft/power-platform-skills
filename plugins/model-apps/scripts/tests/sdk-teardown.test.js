@@ -725,11 +725,14 @@ test('planTeardown adds a resetDefaultViews step only for entities that have a 1
 // and with no real solution to ask none is.
 test('teardown deletes only the dashboards the app\'s solution holds, never another app\'s namesake', async () => {
   const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [], dashboards: [{ name: 'Operations', tiles: [] }] };
-  const run = async (ids, { inSolution, solutionExists = true, failRead = false, sln, noSolution = false } = {}) => {
+  const run = async (ids, { inSolution, solutionExists = true, failRead = false, failLookup = false, sln, noSolution = false } = {}) => {
     const deleted = [];
     const events = [];
     const sdk = {
-      resolveArtifact: async (kind) => (kind === 'dashboard' ? ids.map((id) => ({ id, name: 'Operations' })) : kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : []),
+      resolveArtifact: async (kind) => {
+        if (failLookup && kind === 'dashboard') throw new Error(failLookup);
+        return kind === 'dashboard' ? ids.map((id) => ({ id, name: 'Operations' })) : kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : [];
+      },
       deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
       deleteAppCascade: async () => {},
       deleteSolution: async (id) => { deleted.push(`solution ${id}`); },
@@ -763,6 +766,11 @@ test('teardown deletes only the dashboards the app\'s solution holds, never anot
     assert.strictEqual(unreadable.solutionDeleted, false, `${failRead}: the solution survives for the re-run`);
     assert.ok(unreadable.events.some((e) => e.phase === 'solution' && e.status === 'skip' && e.skip === 'kept' && /kept — 1 earlier step\(s\) failed/.test(e.label)), JSON.stringify(unreadable.events.filter((e) => e.phase === 'solution')));
   }
+  // …and so does a failed NAME lookup, which a "not found" in its message made look like an absent dashboard.
+  const lookup = await run(['d-ours'], { inSolution: ['d-ours'], failLookup: 'HTTP 404 Not Found' });
+  assert.deepStrictEqual(lookup.deleted, [], 'a failed lookup deletes nothing');
+  assert.ok(lookup.r.errors.some((e) => /^dashboard "Operations"/.test(e.step) && e.message.includes("could not look up dashboards named 'Operations'")), JSON.stringify(lookup.r.errors));
+  assert.strictEqual(lookup.solutionDeleted, false, 'and the solution survives for the re-run');
   assert.strictEqual((await run(['d-ours'], { inSolution: ['d-ours'] })).solutionDeleted, true, 'a readable solution is still deleted once every step succeeds');
   // The named solution is gone (e.g. a re-run after a completed teardown): a lone namesake can only
   // be somebody else's now, so it is kept — the name posture would have deleted it.

@@ -344,7 +344,17 @@ const KIND_HANDLERS = {
   },
   dashboard: {
     async resolve(sdk, target) {
-      const items = await findDashboardsByName(sdk, target.name);
+      // The name lookup fails closed like the membership read below. runTeardown reads an error that says
+      // "not found" — a failed paginated read, a proxy's 404 — as an empty resolution, so the dashboard was
+      // reported absent and the solution, the only thing a re-run can ask about ownership, then deleted.
+      let items;
+      try {
+        items = await findDashboardsByName(sdk, target.name);
+      } catch (err) {
+        const e = new Error(`could not look up dashboards named '${target.name}' (${errMsg(err)}) — none is deleted; re-run the teardown`);
+        e.failClosed = true;
+        throw e;
+      }
       if (!items.length) return [];
       // Found by NAME, and Dataverse neither keeps names unique nor compares them exactly (it ignores
       // case, most accents and trailing spaces), so a match may be another app's dashboard — deleting
