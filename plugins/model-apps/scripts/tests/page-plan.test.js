@@ -39,7 +39,7 @@ test('projects every required plan section, in schema order', () => {
   const required = [
     '# Genpage Plan', '## User Requirements', '## Working Directory', '## Plugin Root',
     '## Environment', '## Pages', '## Entity Creation Required', '## Existing Entities',
-    '## Connector Bindings', '## Design Preferences', '## Relevant Samples',
+    '## Connector Bindings', '## Custom API Bindings', '## Design Preferences', '## Relevant Samples',
     '## Per-Page Specifications',
   ];
   let cursor = -1;
@@ -78,6 +78,12 @@ test('Connector Bindings uses the exact no-bindings sentinel (app-builder author
   assert.match(buildPagePlan(spec(), { workingDir: '/wd' }), /## Connector Bindings\nNo connector bindings\./);
 });
 
+test('Custom API Bindings uses the exact no-bindings sentinel (app-builder authors no actions)', () => {
+  // The Custom API deploy phase must distinguish "none" from "planner forgot the section"; app-builder
+  // never authors actions, so it emits the explicit sentinel required by the shared plan schema.
+  assert.match(buildPagePlan(spec(), { workingDir: '/wd' }), /## Custom API Bindings\nNo custom API bindings\./);
+});
+
 test('every page carries every required per-page field', () => {
   const md = buildPagePlan(spec(), { workingDir: '/wd' });
   const blocks = md.split(/^### /m).slice(1);
@@ -110,6 +116,55 @@ test('file name is derived from the stable key, but IDENTITY is the key (not the
   const md = buildPagePlan({ app: { name: 'A' }, pages: [pinned] }, { workingDir: '/wd' });
   assert.match(md, /- \*\*Key:\*\* detail/, 'identity is published as the key');
   assert.match(md, /\| Detail \| detail \| pages\/9f2c\/page\.tsx \|/, 'Pages row carries Key and File separately');
+});
+
+test('page targets reject escapes and case-insensitive collisions before projection', () => {
+  assert.throws(
+    () => buildPagePlan({ app: { name: 'A' }, pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: '../outside.tsx' } }] }, { workingDir: '/wd' }),
+    /unsafe page file.*traversal|traversal.*unsafe page file/i,
+  );
+  assert.throws(
+    () => buildPagePlan({
+      app: { name: 'A' },
+      pages: [
+        { key: 'one', name: 'One', source: { kind: 'tsx', codeFile: 'Page.tsx' } },
+        { key: 'two', name: 'Two', source: { kind: 'tsx', codeFile: 'page.tsx' } },
+      ],
+    }, { workingDir: '/wd' }),
+    /case-insensitive.*collision|collision.*case-insensitive/i,
+  );
+  // A NEW page whose file is an implemented page's, ignoring case, would be written over it.
+  assert.throws(
+    () => buildPagePlan({
+      app: { name: 'A' },
+      pages: [
+        { key: 'home', name: 'Home', source: { kind: 'intent', purpose: 'Landing page' } },
+        { key: 'built', name: 'Built', source: { kind: 'tsx', codeFile: 'Home.tsx' } },
+      ],
+    }, { workingDir: '/wd' }),
+    /collision[\s\S]*"Home\.tsx" and "home\.tsx"/i,
+  );
+});
+
+// An implemented page is in the plan for the navigation graph only; its codeFile passed the spec
+// gate, which accepts the Windows spelling. Refusing it here blocked the whole /app-builder page plan.
+test('an implemented page keeps a path the spec gate accepted, Windows separators included', () => {
+  const md = buildPagePlan({
+    app: { name: 'A' },
+    pages: [
+      { key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'pages\\home.tsx' } },
+      { key: 'report', name: 'Report', source: { kind: 'tsx', codeFile: 'pages/../pages/report.tsx' } },
+      { key: 'next', name: 'Next', source: { kind: 'intent', purpose: 'The next page' } },
+    ],
+  }, { workingDir: '/wd' });
+  // Built pages are shown in the one spelling the shared page-file rule accepts, so the plan passes
+  // the schema validator that polices it; no worker writes them, so the spelling moves nothing.
+  assert.match(md, /\| Home \| home \| pages\/home\.tsx \|/);
+  assert.match(md, /\| Report \| report \| pages\/report\.tsx \|/);
+  assert.match(md, /- \*\*File:\*\* pages\/home\.tsx/);
+  assert.match(md, /\| Next \| next \| next\.tsx \|/);
+  const { validateGenpagePlanSchema } = require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js');
+  assert.deepEqual(validateGenpagePlanSchema(md), []);
 });
 
 test('the approved design contract reaches the worker', () => {

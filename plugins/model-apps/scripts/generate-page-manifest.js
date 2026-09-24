@@ -13,8 +13,11 @@
 //                    here.
 //
 // Run by the /genpage orchestrator in Phase 0.5 (after working-dir creation).
-// Idempotent by default — skips files that already exist. Pass --force to
-// overwrite.
+// Keeps existing files by default, but an existing package.json must already list
+// every package the requested features need — otherwise the run fails (exit 2) and
+// names them, rather than report success over a manifest `npm install` cannot use.
+// A package present at a different version is kept and reported as `versionDrift`.
+// Pass --force to overwrite.
 //
 // Usage:
 //   node generate-page-manifest.js <working-dir> <page-slug> [--features <list>] [--force]
@@ -31,7 +34,7 @@
 // Exit codes:
 //   0 success
 //   1 invalid arguments
-//   2 I/O error
+//   2 I/O error, or an existing package.json that lacks a required package or cannot be verified
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -98,6 +101,69 @@ function buildPackageJson(slug, features) {
     // No scripts — the runtime owns build and deploy.
     // `pac model genpage upload` reads <page>.tsx directly.
   };
+}
+
+// What an existing package.json lacks for the requested page, split by severity. A package ABSENT from
+// both dependency sections breaks `npm install` for the page's imports, so the command must not report
+// success. A package present at a DIFFERENT version is left alone: pinning or bumping a version is a
+// legitimate edit, and failing on it would make every rerun fail unless `--force` discarded that edit.
+// It is still reported (`drift`), so a pin left behind by an older plugin release is visible.
+function comparePackageDependencies(pkg, expectedDependencies, expectedDevDependencies) {
+  const section = (key) => (pkg && pkg[key] && typeof pkg[key] === 'object' && !Array.isArray(pkg[key]) ? pkg[key] : {});
+  // Either section installs the package, so either satisfies it.
+  const installed = { ...section('devDependencies'), ...section('dependencies') };
+  const missing = [];
+  const drift = [];
+  const check = (group, expected) => {
+    for (const [name, version] of Object.entries(expected)) {
+      if (!Object.prototype.hasOwnProperty.call(installed, name)) missing.push(`${group}.${name}=${version}`);
+      else if (installed[name] !== version) drift.push(`${name} ${installed[name]} (generated pages expect ${version})`);
+    }
+  };
+  check('dependencies', expectedDependencies);
+  check('devDependencies', expectedDevDependencies);
+  return { missing, drift };
+}
+
+function validateExistingPackageJson(filePath, expectedPkg) {
+  let st = null;
+  try {
+    st = fs.lstatSync(filePath);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    const e = new Error(`existing package.json could not be inspected (${err.code || err.message})`);
+    e.code = 'STALE_MANIFEST';
+    throw e;
+  }
+  if (!st.isFile()) {
+    // Not read through, and `--force` is no way out either: writeIfAllowed refuses a non-regular leaf.
+    const kind = st.isSymbolicLink() ? 'symbolic link' : st.isDirectory() ? 'directory' : 'special file';
+    const e = new Error(`existing package.json is a ${kind}, so its dependencies cannot be verified and it is never written through; replace it with a regular file and rerun`);
+    e.code = 'STALE_MANIFEST';
+    throw e;
+  }
+
+  let existing;
+  try {
+    existing = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    const e = new Error(`existing package.json could not be parsed, so its dependencies cannot be verified (${err.message}); fix it or rerun with --force`);
+    e.code = 'STALE_MANIFEST';
+    throw e;
+  }
+
+  const { missing, drift } = comparePackageDependencies(existing, expectedPkg.dependencies, expectedPkg.devDependencies);
+  if (missing.length > 0) {
+    // Reruns without --force preserve user edits, so reporting success here would leave VS Code and
+    // `npm install` with a package that cannot satisfy the feature imports the command just accepted.
+    const e = new Error(
+      `existing package.json is missing requested generated-page dependencies: ${missing.join(', ')}. ` +
+      'Rerun with --force to regenerate it, or merge these dependencies by hand and rerun.'
+    );
+    e.code = 'STALE_MANIFEST';
+    throw e;
+  }
+  return { drift };
 }
 
 // Static ambient declarations for the genux runtime. Same content for every
@@ -409,7 +475,9 @@ function main() {
   try {
     const pkg = buildPackageJson(slug, args.features);
     const pkgPath = path.join(workingDir, 'package.json');
+    const existing = args.force ? null : validateExistingPackageJson(pkgPath, pkg);
     pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force, approvedRoot);
+    if (existing && existing.drift.length && pkgResult && pkgResult.wrote === false) pkgResult.versionDrift = existing.drift;
 
     const dtsPath = path.join(workingDir, 'genpage.d.ts');
     dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force, approvedRoot);
@@ -436,6 +504,8 @@ module.exports = {
   parseArgs,
   buildPackageJson,
   buildAmbientDeclarations,
+  comparePackageDependencies,
+  validateExistingPackageJson,
   // Exported for the output-confinement tests: `--force` must overwrite the file this tool owns,
   // never whatever a symlink at that name points at.
   writeIfAllowed,

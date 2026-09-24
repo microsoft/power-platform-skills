@@ -280,7 +280,24 @@ cannot be replaced by an inline fallback that invents its approved contract.
   body it returned, every prior discovery (connector and Custom API contracts,
   entities), and every answer already gathered. On **approval**, re-invoke the
   planner with that full state plus the approval outcome so it writes the approved
-  `<working-dir>/genpage-edit-plan.md` — not a plan it re-derives from scratch. On
+  `<working-dir>/genpage-edit-plan.md` — not a plan it re-derives from scratch.
+  Before that approval writeback dispatch, quarantine any prior edit plan:
+
+  ```powershell
+  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-edit-plan.md"
+  ```
+
+  Save the edit-plan body the planner returned for approval to a sidecar such as
+  `<working-dir>/.approved-genpage-edit-plan.md`, exactly as returned, then after the
+  planner returns, verify the file it wrote targets the page that plan named:
+
+  ```powershell
+  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan "<working-dir>/genpage-edit-plan.md" --approved "@<working-dir>/.approved-genpage-edit-plan.md"
+  ```
+
+  Continue only when the JSON result has `"ok":true`; if the written edit plan is for
+  a different page, halt because Phase 5 would overwrite a page the user did not
+  approve editing. On
   **changes requested**, re-invoke it with the same full state plus the requested
   revisions and present the revised plan again. Forwarding only the outcome lets it
   reconstruct a different plan or re-ask answered questions (same rule as the create

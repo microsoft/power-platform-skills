@@ -30,19 +30,35 @@ Comprehensive rules for generating generative page code. Read this file during c
 
 ## Supported Libraries
 
-Only these libraries are available. Do NOT use any other library.
+Only the generated `package.json` dependencies below are available. Do NOT use
+any other library. `scripts/lib/supported-dependencies.js` is the source of
+truth for names, versions, and feature gates; this example is validated against
+that module by `scripts/tests/supported-dependencies-docs.test.js`.
 
+```json
+{
+  "dependencies": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "2.0.326",
+    "d3": "^7.8.5",
+    "@fluentui/react-datepicker-compat": "^0.4.50",
+    "@fluentui/react-timepicker-compat": "^0.2.40"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/react": "^17.0.80",
+    "@types/react-dom": "^17.0.25",
+    "@types/d3": "^7.4.3"
+  }
+}
 ```
-"react": "^17.0.2"
-"uuid": "^9.0.1"
-"@fluentui/react-icons": "^2.0.292"
-"@fluentui/react-calendar-compat": "^0.2.2"
-"@fluentui/react-components": "^9.46.4"
-"@fluentui/react-datepicker-compat": "^0.5.0"
-"@fluentui/react-timepicker-compat": "^0.3.0"
-"@fluentui/react-theme": "^9.1.24"
-"d3": "^7.9.0"
-```
+
+Feature-gated packages are installed only when the generator receives the
+matching flag: `charts` adds `d3` and `@types/d3`, `datepicker` adds
+`@fluentui/react-datepicker-compat`, and `timepicker` adds
+`@fluentui/react-timepicker-compat`.
 
 **CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` and TimePicker from `@fluentui/react-timepicker-compat` (NOT from `@fluentui/react-components`)
 
@@ -605,7 +621,7 @@ required patterns and the binding contract.
 
 ### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
 
-When the plan's `## Custom API Bindings` is non-empty, the page may invoke Dataverse
+When the plan's `## Custom API Bindings` contains a binding table, the page may invoke Dataverse
 **Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
 API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
 (read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the

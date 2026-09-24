@@ -202,3 +202,32 @@ test('rows with no identifying field at all are dropped', () => {
   const raw = JSON.stringify([{ 'Connection Name': '', 'Connection Id': '' }, { 'Connection Name': 'Real', 'Connection Id': SP_CONN }]);
   assert.deepEqual(parsePacConnectionList(raw).map((r) => r.displayName), ['Real']);
 });
+
+test('display-name-only JSON rows fail instead of becoming selectable connections', () => {
+  assert.throws(
+    () => parsePacConnectionList(JSON.stringify([{ Name: 'Looks Real But Has No IDs' }])),
+    /no usable connection rows/i,
+  );
+});
+
+// Beside real rows, an unidentified one is dropped rather than offered. Older PAC builds wrap a long
+// friendly name onto a second table line, and that continuation line parses as a name with no ids —
+// it used to be listed as a connection of its own that a maker could pick and never bind.
+test('a row without both ids is dropped beside usable rows, never offered as a phantom connection', () => {
+  const rows = parsePacConnectionList(JSON.stringify([
+    { Name: 'Contoso SharePoint (wrapped name continues here)' },
+    { Name: 'Contoso SharePoint', Id: SP_CONN },
+  ]));
+  assert.deepEqual(rows, [{ connectorId: SP_API, connectionId: SP_CONN, displayName: 'Contoso SharePoint' }]);
+  //   Connection Name        Connector Id                                                Connection Id
+  //   ---------------------  ----------------------------------------------------------  ------------------------------
+  //   Contoso SharePoint     /providers/Microsoft.PowerApps/apis/shared_sharepointonline  <SP_CONN>
+  //   (wrapped name tail)
+  const table = [
+    'Connection Name        Connector Id                                                Connection Id',
+    '---------------------  ----------------------------------------------------------  ------------------------------',
+    `Contoso SharePoint     ${SP_API.padEnd(58)}  ${SP_CONN}`,
+    '(wrapped name tail)',
+  ].join('\n');
+  assert.deepEqual(parsePacConnectionList(table).map((r) => r.connectionId), [SP_CONN]);
+});

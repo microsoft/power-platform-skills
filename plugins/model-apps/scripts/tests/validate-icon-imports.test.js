@@ -200,6 +200,117 @@ test('file with no @fluentui/react-icons imports passes (exit 0)', () => {
   assert.equal(status, 0);
 });
 
+test('namespace icon imports are blocked because member access cannot be verified safely (exit 2)', () => {
+  const content = `import * as Icons from '@fluentui/react-icons';\n${GENPAGE_HEADER}\nconst x = <Icons.TotallyMadeUpIconRegular />;\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /namespace/);
+  assert.match(stderr, /@fluentui\/react-icons/);
+});
+
+test('default icon imports are blocked because the verified list contains named exports only (exit 2)', () => {
+  const content = `import Icons from '@fluentui/react-icons';\n${GENPAGE_HEADER}\nconst x = <Icons.AddRegular />;\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /default/);
+  assert.match(stderr, /@fluentui\/react-icons/);
+});
+
+test('CommonJS icon imports are blocked because they bypass named import validation (exit 2)', () => {
+  const content = `const Icons = require('@fluentui/react-icons');\n${GENPAGE_HEADER}\nconst x = <Icons.AddRegular />;\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /CommonJS/);
+  assert.match(stderr, /@fluentui\/react-icons/);
+});
+
+// Member access through an inline require or a dynamic import reaches an icon without any import
+// declaration at all, so these are matched wherever they appear.
+test('inline require and dynamic import() of the icon module are blocked too (exit 2)', () => {
+  for (const [kind, line] of [
+    ['CommonJS', "const x = React.createElement(require('@fluentui/react-icons').TotallyMadeUpIconRegular);"],
+    ['dynamic import', "const Icons = await import(\"@fluentui/react-icons\");\nconst y = <Icons.TotallyMadeUpIconRegular />;"],
+    ['dynamic import', 'const Icons = await import(`@fluentui/react-icons`);'],
+    ['CommonJS', 'const Icons = require(`@fluentui/react-icons`);'],
+  ]) {
+    const content = `${GENPAGE_HEADER}\n${line}\n`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 2, kind);
+    assert.match(stderr, new RegExp(kind), kind);
+  }
+  // CONTROL: other modules may still be required or imported dynamically.
+  const content = `${GENPAGE_HEADER}\nconst lib = await import('./helpers');\nconst other = require('some-lib');\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 0);
+});
+
+// Only a keyword in code is an import: one quoted in help text, a template or a comment is data.
+test('an icon import merely quoted in a string, template or comment does not block the write (exit 0)', () => {
+  for (const line of [
+    'const help = "Never write require(\'@fluentui/react-icons\') in a page";',
+    'const tip = `Use named imports, not import("@fluentui/react-icons")`;',
+    '/* import * as Icons from "@fluentui/react-icons"; */',
+    'const snippet = `\nimport * as Icons from "@fluentui/react-icons";\n`;',
+  ]) {
+    const content = `${GENPAGE_HEADER}\n${line}\n`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 0, `${line}\n${stderr}`);
+  }
+  // CONTROL: the same call as code inside a template's ${…} is executable, and still blocked.
+  const content = `${GENPAGE_HEADER}\nconst x = \`\${require('@fluentui/react-icons').FakeRegular}\`;\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 2);
+});
+
+// A comment BETWEEN an import's tokens is still an import. The patterns run on a copy with comments
+// blanked to spaces, so they match across one, and a `//` inside a string is not taken for one.
+test('a comment inside an unsupported icon import does not get it past the hook (exit 2)', () => {
+  for (const [kind, line] of [
+    ['namespace', 'import * as /* every icon */ Icons from "@fluentui/react-icons";'],
+    ['default', 'import Icons // all of them\n  from "@fluentui/react-icons";'],
+    ['CommonJS', 'const Icons = require(/* icons */ "@fluentui/react-icons");'],
+    // A comment inside `${…}` is a comment too: the lexer reports it like any other.
+    ['dynamic import', 'const s = `${(await import(/* lazy */ "@fluentui/react-icons")).X}`;'],
+  ]) {
+    const content = `${line}\n${GENPAGE_HEADER}`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 2, `${kind}: ${line}`);
+    assert.match(stderr, new RegExp(kind), kind);
+  }
+  // CONTROL: a URL in a string is not a comment, and an ordinary page still passes.
+  const content = `${GENPAGE_HEADER}\nconst docs = "https://contoso.example/icons";\n`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 0);
+});
+
+// Defence in depth: should the lexer ever throw, the hook falls back to comment-stripped matching and
+// still blocks — it must not fail open. A `-r` preload swaps in a lexer that throws.
+test('if the lexer throws, the hook falls back and still blocks an unsupported import (exit 2)', () => {
+  const lexer = require.resolve('../lib/source-literals.js');
+  const stub = path.join(tmp, 'throwing-lexer.js');
+  fs.writeFileSync(stub, [
+    `const lexer = ${JSON.stringify(lexer)};`,
+    'require(lexer);',
+    "require.cache[lexer].exports = { ...require.cache[lexer].exports, blankNonCodePreservingTemplateExpressions() { throw new Error('lexer failure'); } };",
+  ].join('\n'));
+  const runWithBrokenLexer = (content) => {
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    return spawnSync(process.execPath, ['-r', stub, HOOK], { input: JSON.stringify(payloadFor(fp, content)), encoding: 'utf8' });
+  };
+  const blocked = runWithBrokenLexer(`import * as Icons from '@fluentui/react-icons';\n${GENPAGE_HEADER}`);
+  assert.equal(blocked.status, 2, blocked.stderr);
+  assert.match(blocked.stderr, /namespace/);
+  // CONTROL: the fallback still ignores a commented-out import rather than blocking everything.
+  const commented = runWithBrokenLexer(`/* import * as Icons from '@fluentui/react-icons'; */\n${GENPAGE_HEADER}`);
+  assert.equal(commented.status, 0, commented.stderr);
+});
+
 test('commented-out import (line comment) is not treated as a real import (exit 0)', () => {
   const content = `// import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
   const fp = writeTemp(tmp, 'page.tsx', content);
@@ -224,4 +335,21 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the validator (exit 0 despite bad icon
 test('unparseable stdin does not block (exit 0)', () => {
   const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
   assert.equal(res.status, 0);
+});
+
+// Corpus: every committed sample the page builder is pointed at must pass this hook. A sample is a
+// pattern agents copy, so one importing an icon the hook rejects (a sized variant such as
+// `CheckmarkCircle20Filled` once shipped) teaches the exact write the hook then blocks. A plain
+// directory listing, not `git ls-files`: nothing transient is ever written to samples/, and the test
+// must not skip itself outside a git checkout.
+test('every committed sample page passes the icon hook', () => {
+  const samples = path.join(__dirname, '..', '..', 'samples');
+  const files = fs.readdirSync(samples).filter((f) => f.endsWith('.tsx'));
+  assert.ok(files.length > 0, 'the corpus is not empty');
+  for (const name of files) {
+    const fp = path.join(samples, name);
+    const content = fs.readFileSync(fp, 'utf8');
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 0, `samples/${name} is blocked by the hook:\n${stderr}`);
+  }
 });

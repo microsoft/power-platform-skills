@@ -38,7 +38,9 @@ same relative position so downstream parsers can find them predictably:
 - App: [app name] ([app-id]) OR "create new: [name]"
 - Mode: app-builder    ← **only** when the plan was projected from an App Spec by
   `scripts/write-page-plan.js`; omitted for a planner-authored (standalone `/genpage`) plan
-- Languages: [detected languages with LCIDs, or "English (1033) only"]
+- Languages: [each detected language with its LCID and code, marked `— RTL` when the RTL column of
+  `pac model list-languages` says Yes — e.g. "English (1033, en-US); Arabic (Saudi Arabia) (1025,
+  ar-SA) — RTL" — or "English (1033) only". The page builder takes text direction from that mark.]
 - Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
 - Publisher Prefix: [prefix tied to the solution's publisher — ALWAYS present, default fallback is "new"]
 

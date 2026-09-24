@@ -163,8 +163,8 @@ test('a downloaded conversation transcript survives an update by file', async ()
     '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt-file', pf, '--agent-message', 'Re-upload after edit'], cli);
 
   assert.strictEqual(r.ok, true);
-  // \r\n is normalized by neither side: only a SINGLE trailing newline is stripped, so every
-  // interior line break — which is what makes a transcript a transcript — is preserved.
+  // \r\n is normalized by neither side, and nothing is trimmed — not even a trailing newline — so every
+  // line break, which is what makes a transcript a transcript, is preserved.
   assert.strictEqual(cli.calls[0].prompt, TRANSCRIPT, 'the transcript must not be flattened');
   assert.strictEqual(cli.calls[0].pageId, '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d');
   assert.strictEqual(r.payload.updated, true, 'an upload carrying --page-id is an update');
@@ -220,7 +220,7 @@ test('a U+FEFF inside the prompt body is preserved', async () => {
   assert.strictEqual(cli.calls[0].prompt, body, 'only a LEADING BOM is an encoding marker');
 });
 
-// Adversarial review (astra HIGH 3 / grok MEDIUM 4). The wrapper OMITS `--add-to-sitemap` on an
+// The wrapper OMITS `--add-to-sitemap` on an
 // update as a backstop, but omission is not an answer to an explicit contradictory request: the
 // caller believes a placement happened and it never did. The docs claimed "refused"; now it is.
 test('--add-to-sitemap combined with --page-id is refused, not silently dropped', async () => {
@@ -232,7 +232,7 @@ test('--add-to-sitemap combined with --page-id is refused, not silently dropped'
   assert.strictEqual(cli.calls.length, 0, 'nothing may be uploaded on a contradictory request');
 });
 
-// grok MEDIUM 5 — `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
+// `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
 // when no prompt was supplied, but a caller who passed --prompt-file asked for THAT text, and
 // deploying a generated placeholder instead is exactly the provenance break this path exists to
 // prevent. A blank, newline-only or BOM-only file is the realistic way it happens.
@@ -257,7 +257,7 @@ test('a prompt file that resolves to empty is refused rather than silently defau
   assert.strictEqual(cli.calls[0].prompt, 'A real approved prompt');
 });
 
-// astra HIGH 3b — the worse half. A CREATE that asked for placement, crashed mid-flight and was
+// The worse half of the sitemap problem. A CREATE that asked for placement, crashed mid-flight and was
 // recovered as an UPDATE leaves the page deployed but absent from the app's navigation, and the old
 // code returned plain success. An unreachable page is an incomplete deployment, not a success.
 test('a page deployed but left out of the sitemap is reported as incomplete, with its id', async () => {
@@ -369,9 +369,9 @@ test('the standalone flags are emitted, and --add-to-sitemap only on a create', 
   assert.strictEqual(update[update.indexOf('--data-sources') + 1], 'account,contact');
 });
 
-// astra MEDIUM 8 — the option tests above call the LIBRARY directly and mostly check flag presence.
-// Astra mutated `main()` to drop forwarding of model/connectors/actions/addToSitemap, and replaced
-// the library's model and file arguments with "WRONG", and every committed test stayed green. So the
+// The option tests above call the LIBRARY directly and mostly check flag presence. A mutation run
+// that made `main()` drop forwarding of model/connectors/actions/addToSitemap, and replaced
+// the library's model and file arguments with "WRONG", left every committed test green. So the
 // wiring from CLI flag → wrapper → actual pac invocation was unprotected.
 //
 // This drives the REAL wrapper through `main()` and asserts exact flag/value pairs on the captured
@@ -744,7 +744,7 @@ test('the current bindings are found even when --page-id casing differs from pac
   assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket'], 'the bindings must still be preserved');
 });
 
-// --- Review follow-ups on the unbind guard --------------------------------------------------------
+// --- The unbind guard: flag values that must NOT authorise clearing --------------------------------
 
 // `parseArgs` yields the STRING "false" for `--clear-data-sources=false`, which is truthy. Testing
 // the raw flag read an explicit refusal to clear as permission to clear — unbinding the page the
@@ -844,7 +844,7 @@ test('a cleanup failure does not fail an update whose bindings were read', async
   assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket']);
 });
 
-// --- PR review: --prompt-file must deliver the file byte-for-byte -------------------------------
+// --- --prompt-file must deliver the file byte-for-byte --------------------------------------------
 // A trailing newline used to be stripped here while the direct /app-builder wrapper path preserved
 // it, so the SAME text deployed differently depending on which path carried it. This transport
 // exists precisely so an arbitrary prompt survives verbatim.

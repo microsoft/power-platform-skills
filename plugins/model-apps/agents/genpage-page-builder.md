@@ -177,10 +177,13 @@ Custom-API-backed and also read:
 ${PLUGIN_ROOT}/references/custom-api.md
 ```
 
-If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
-empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
-do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
-`listBoundActions` code.
+If the `## Custom API Bindings` section is exactly `No custom API bindings.`, the page has
+**no Custom APIs** — do not read custom-api.md and do not emit any `executeAction` /
+`executeFunction` / `listBoundActions` code. That sentinel is the only way a plan says
+"none". If the section is empty, missing entirely, or neither the sentinel nor a binding
+table, **stop and report it instead of writing the page**: the orchestrator halts on such a
+plan before dispatch, so reaching you means the plan is broken, and treating it as "no
+Custom APIs" would silently drop an approved binding.
 
 Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
 asks to measure, track, monitor, or diagnose something do you instrument the page and
@@ -304,6 +307,8 @@ export default GeneratedComponent;
   - TimePicker from `@fluentui/react-timepicker-compat`
 - **Single-file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
+  (see `references/supported-dependencies.md`; `scripts/lib/supported-dependencies.js`
+  is the source of truth for the generated package names, versions, and feature gates)
 - **makeStyles with tokens** — no inline styles for static values
   ```typescript
   const useStyles = makeStyles({

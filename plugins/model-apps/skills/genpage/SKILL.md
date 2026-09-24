@@ -100,8 +100,13 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 - Add `--features charts,datepicker,timepicker` (comma-separated) only when
   the requirements clearly call for them; otherwise omit and keep the
   manifest lean.
-- The script is **idempotent** — it skips files that already exist. Pass
-  `--force` to overwrite (used in regeneration flows when versions drift).
+- The script keeps an existing `package.json` (no `--force`) only when it
+  already lists every package the requested features need. When one is
+  missing it exits 2 naming the packages: tell the user, who can merge them
+  or rerun with `--force`. A package present at a version the user changed
+  is kept and listed as `versionDrift` in the JSON summary — mention it, since
+  local type-checking then differs from the versions pages are written for.
+  Pass `--force` to overwrite (used in regeneration flows when versions drift).
 - Output is a JSON summary on stdout; pipe to stderr for visibility but do
   not block the workflow if the script returns non-zero — the manifest is a
   dev-ergonomics aid, not part of the deployed artifact.
@@ -239,6 +244,20 @@ missing and stop, so the run can be re-driven with the decision supplied.
    section headings are a machine-readable contract that every downstream phase
    parses by name.
 
+   Before that approval writeback dispatch, quarantine any previous authoritative
+   plan so a stale file cannot satisfy the post-dispatch existence check:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-plan.md"
+   ```
+
+   Also save the plan body the planner returned for approval — the one presented
+   with `EnterPlanMode`, or approved by default when unattended — to a sidecar such
+   as `<working-dir>/.approved-genpage-plan.md` (not `genpage-plan.md`), exactly as
+   returned. The planner writes a different document from it (the schema file, with
+   suffix-only names), so the verifier compares what both name as targets: the pages
+   to build.
+
    If `genpage-planner` reports that the file tools needed to write the approved
    `genpage-plan.md` are unavailable, do not retry it and do not write the plan
    inline. **Halt** with the approved plan body and failure recorded. Planner
@@ -248,10 +267,21 @@ missing and stop, so the run can be re-driven with the decision supplied.
    Phase 2 reads that file as its first action.
 
    **If it is missing, do not proceed and do not write it yourself.** Re-invoke
-   the planner once more with the approval outcome and the plan body. If it is
-   still missing, stop and tell the user what was approved and what failed to be
-   written — a hand-written substitute is a plan with no provenance, and every
-   later phase will treat it as approved.
+   the planner once more with the approval outcome and the plan body after running
+   the `prepare` command above again. If it is still missing, stop and tell the
+   user what was approved and what failed to be written — a hand-written substitute
+   is a plan with no provenance, and every later phase will treat it as approved.
+
+   If it exists, verify its provenance before Phase 2:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan "<working-dir>/genpage-plan.md" --approved "@<working-dir>/.approved-genpage-plan.md"
+   ```
+
+   Continue only when the JSON result has `"ok":true`, and record its `writtenHash`
+   in `workflow-log.md`. If the written plan targets other pages than the approved
+   plan named — an extra, missing or renamed page file — halt: downstream phases
+   would build pages the user did not approve.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
@@ -577,10 +607,11 @@ create or pass `actions.json`, and never add `--actions` on upload — **regardl
 plan's `## Custom API Bindings` section says**. (Backstop: `list-custom-apis.js` also fails
 closed with exit 3 if invoked while OFF.)
 
-**If it prints `enabled`:** read the plan's `## Custom API Bindings` section and treat it as
-bindings **only when it contains an actual binding table** (a `| Name | Kind | …` header with
-at least one data row). If the section is `No custom API bindings.`, empty, missing, or
-malformed, treat the page as having no Custom APIs and skip this phase.
+**If it prints `enabled`:** read the plan's `## Custom API Bindings` section. The section is
+mandatory: continue with no actions only when its body is exactly `No custom API bindings.`.
+Treat it as bindings only when it contains an actual binding table (a `| Name | Kind | …`
+header with at least one data row). If the section is missing, empty, or malformed, **halt**
+before page generation; do not interpret a planner/schema failure as "no Custom APIs".
 
 When there are real bindings, the `genpage-customapi-builder` agent already wrote
 `<working-dir>/actions.json` during planning — verify it exists and matches the plan table. If
@@ -620,9 +651,19 @@ Read `genpage-plan.md` and extract the pages table.
 Before invoking any builders, verify:
 - At least one page exists in the `## Pages` table
 - Every page has a `### [Page Name]` subsection in `## Per-Page Specifications`
-- **All filenames in the `## Pages` table are unique.** If any are duplicated,
-  rewrite the plan appending `-1`, `-2`, etc. before dispatch. Duplicate filenames
-  cause silent last-writer-wins data loss under parallel execution.
+- **All filenames in the `## Pages` table are safe and unique.** Run the deterministic gate —
+  it applies the same rule as the plan validator and `/app-builder`:
+
+  ```powershell
+  node "${PLUGIN_ROOT}/scripts/check-page-files.js" --plan "<working-dir>/genpage-plan.md"
+  ```
+
+  Continue only on `"ok":true`. It refuses absolute paths (drive-qualified ones included), `..`
+  traversal, backslash separator aliases, a parent that resolves through a link or junction to
+  outside the working directory, and case-insensitive collisions such as `Page.tsx` plus
+  `page.tsx`. On any problem, halt and re-plan instead of rewriting filenames here: a renamed
+  file is a page the user did not approve, and the provenance check compares page files.
+  Duplicate filenames cause silent last-writer-wins data loss under parallel execution.
 
 See `${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
@@ -642,8 +683,9 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 3b. Only when the plan's `## Custom API Bindings` section contains an **actual
    binding table** (a `| Name | Kind | …` header with at least one data row),
    also read `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
-   `No custom API bindings.` sentinel, or an empty/missing/malformed section, as
-   having no Custom APIs (same contract as Phase 4.6 and genpage-page-builder).
+   `No custom API bindings.` sentinel as no Custom APIs. If the section is
+   missing, empty, or malformed, halt before inline generation (same contract as
+   Phase 4.6); do not downgrade a planner/schema failure to "no Custom APIs."
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
@@ -663,7 +705,17 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    that shorthand only at runtime; the regex catches unquoted, quoted, and
    whitespace-separated property syntax. Replace every match with the four
    explicit border-side widths before deployment.
-10. Proceed to Phase 6
+10. Run the completeness gate on the page you wrote — the same one 5c runs on a
+    worker's page, and this is also the page a 5c fallback produces:
+
+    ```powershell
+    node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file "<working-dir>/<filename>.tsx"
+    ```
+
+    On `"ok":false`, rewrite the page once from the same plan inputs and run the
+    gate again; if it still fails, halt with the reported problems rather than
+    deploy an incomplete page.
+11. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -718,12 +770,25 @@ For each page, pass a prompt that includes:
 
 Wait for all page-builder tasks to complete before proceeding.
 
-After the parallel workers return, confirm every target file exists. If a worker
-reported missing declared file/process tools or produced no file, do not
-re-dispatch that worker. Run the Phase 5b page-builder workflow inline for only
-the failed page, preserving the same plan and dispatch inputs. Then Grep every
-generated page with `['"]?borderWidth['"]?\s*:` and replace the unsupported
-Griffel shorthand before Phase 6.
+After the parallel workers return, validate every target file with the deterministic
+completeness gate:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file "<working-dir>/<filename>.tsx"
+```
+
+The script reuses the source-literals checks for a complete default export (a file
+cut off inside its own export line fails), unbalanced brackets, and a file that
+stops mid-statement (inside JSX, a string or a comment, or after an operator), and also rejects a markdown code fence around the code and
+elided code — a `FIXME` comment, a `TODO` that opens a comment or takes a colon,
+a comment opening with `...`, "omitted for brevity", or a bare `...` line. The
+same words in strings or JSX text ("Loading…"), or as prose in a comment ("the
+todo list"), are UI copy and pass. If a worker reported missing declared file/process tools, produced no file,
+or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
+Run the Phase 5b page-builder workflow inline for only the failed page, preserving
+the same plan and dispatch inputs. This is the same inline fallback path for missing
+and invalid worker output. Then Grep every generated page with
+`['"]?borderWidth['"]?\s*:` and replace the unsupported Griffel shorthand before Phase 6.
 
 ### Phase 6: Deploy
 

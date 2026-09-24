@@ -235,6 +235,15 @@ test('no TODO: pass when spreads exist (...props is fine)', () => {
   assert.equal(result.status, 'pass');
 });
 
+// The eval and the runtime worker-output gate share one rule (findElisionMarker): elision counts only
+// in a comment or a bare line, so the same words as UI copy never fail a page.
+test('no TODO: UI copy with an ellipsis or the word TODO passes; an elision comment fails', () => {
+  const check = ASSERTIONS.get('Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies');
+  const copy = `const s = ['TODO', 'DONE'];\nconst el = <Spinner label="Loading…">Search documents...</Spinner>;`;
+  assert.equal(check({ files: [f('a.tsx', copy)], eval: evalStub() }).status, 'pass');
+  assert.equal(check({ files: [f('a.tsx', `${copy}\n// ... rest of the component`)], eval: evalStub() }).status, 'fail');
+});
+
 // ---------- assertion: DataGrid needs createTableColumn + sizing ----------
 
 test('DataGrid: skip when no DataGrid usage', () => {

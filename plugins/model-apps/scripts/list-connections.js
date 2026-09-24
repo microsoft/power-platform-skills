@@ -57,15 +57,28 @@ function extractConnectorId(connectionId) {
   return match ? match[1] : '';
 }
 
+function usableConnection(row) {
+  return Boolean(row.connectorId && row.connectionId);
+}
+
+function usableConnectionRows(rows, source) {
+  const usable = rows.filter(usableConnection);
+  if (rows.length && !usable.length) {
+    throw new Error(`pac connection list ${source} contained ${rows.length} row(s), but no usable connection rows with both connection and connector identifiers`);
+  }
+  return usable;
+}
+
 function parseJsonConnections(raw) {
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    const rows = Array.isArray(parsed) ? parsed : parsed?.value;
-    if (!Array.isArray(rows)) return null;
-    return rows.map(mapConnectionRow).filter((row) => row.connectorId || row.connectionId || row.displayName);
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
+  const rows = Array.isArray(parsed) ? parsed : parsed?.value;
+  if (!Array.isArray(rows)) return null;
+  return usableConnectionRows(rows.map(mapConnectionRow), 'JSON');
 }
 
 function parseFixedWidthTable(raw) {
@@ -83,7 +96,7 @@ function parseFixedWidthTable(raw) {
     end: matches[index + 1]?.index,
   }));
 
-  return lines
+  return usableConnectionRows(lines
     .slice(separatorIndex + 1)
     .filter((line) => line.trim() && !/^-+$/.test(line.trim()))
     .map((line) => {
@@ -92,8 +105,7 @@ function parseFixedWidthTable(raw) {
         row[range.name] = line.slice(range.start, range.end).trim();
       }
       return mapConnectionRow(row);
-    })
-    .filter((row) => row.connectorId || row.connectionId || row.displayName);
+    }), 'fixed-width table');
 }
 
 function parseWhitespaceTable(raw) {
@@ -107,7 +119,7 @@ function parseWhitespaceTable(raw) {
   // with no dashed separator. Names may contain spaces, so splitting each row on
   // whitespace loses the boundary. The connector API path is the stable delimiter.
   if (normalizedHeaders.join(',') === 'id,name,apiid,status') {
-    return lines
+    return usableConnectionRows(lines
       .slice(headerIndex + 1)
       .map((line) => line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)\s*$/i))
       .filter(Boolean)
@@ -116,9 +128,9 @@ function parseWhitespaceTable(raw) {
         Name: match[2],
         'API Id': match[3],
         Status: match[4],
-      }));
+      })), 'Id/Name/API Id table');
   }
-  return lines
+  return usableConnectionRows(lines
     .slice(headerIndex + 1)
     .filter((line) => !/^-+$/.test(line.trim()))
     .map((line) => {
@@ -128,8 +140,7 @@ function parseWhitespaceTable(raw) {
         row[header] = values[index] || '';
       });
       return mapConnectionRow(row);
-    })
-    .filter((row) => row.connectorId || row.connectionId || row.displayName);
+    }), 'whitespace table');
 }
 
 function parsePacConnectionList(raw) {

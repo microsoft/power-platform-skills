@@ -30,8 +30,11 @@ const language = React.useMemo(() => {
   const uiLanguageId = (typeof Xrm !== "undefined" &&
     Xrm.Utility?.getGlobalContext()?.userSettings?.languageId) || 1033;
   const langMap: Record<number, { code: string; name: string; isRtl: boolean }> = {
-    // Populate entries from pac model list-languages output, mapped to LCID info.
-    // Example: 1033: { code: "en-US", name: "English", isRtl: false },
+    // One entry per language `pac model list-languages` reports, copied from its columns:
+    //   LCID Language                Code  RTL
+    //   1033 English (United States) en-US No
+    // becomes 1033: { code: "en-US", name: "English (United States)", isRtl: false }.
+    // `isRtl` comes from the RTL column (see RTL Layout Support) — never from memory.
   };
   return langMap[uiLanguageId] || { code: "en-US", name: "English", isRtl: false };
 }, []);
@@ -67,7 +70,28 @@ Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
 
 ### RTL Layout Support
 
-Detect RTL from the language LCID. Arabic (1025, 2049, 3073, 4097, 5121) and Hebrew (1037) are RTL.
+Take each language's direction from the **RTL** column of `pac model list-languages` (carried into the
+plan's `## Environment` → `Languages` line as a `— RTL` mark) — never from a hand-written list of LCIDs. The platform derives that column
+from culture data, and a list always misses some: Windows culture data marks more than 40 right-to-left
+cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
+Kurdish, Hebrew and Yiddish among them — and a language a list forgot renders left-to-right.
+
+If a PAC build prints no RTL column, compute the flag from the language's **Code** instead. Direction is a
+property of the script a language is written in, and `Intl.Locale#maximize()` fills in the likely script
+from CLDR (`fa` → `fa-Arab-IR`, `ur-PK` → `ur-Arab-PK`, `dv-MV` → `dv-Thaa-MV`):
+
+```typescript
+// ISO 15924 scripts written right-to-left.
+const RTL_SCRIPTS = new Set(["Arab", "Hebr", "Syrc", "Thaa", "Nkoo", "Adlm", "Rohg", "Mand", "Samr"]);
+const isRtlLocale = (code: string): boolean => {
+  try {
+    // `Intl.Locale` is typed only from the ES2020 lib, so the cast keeps an older `lib` setting compiling.
+    return RTL_SCRIPTS.has(new (Intl as any).Locale(code).maximize().script ?? "");
+  } catch {
+    return false; // not a valid BCP-47 tag
+  }
+};
+```
 
 - Wrap the root element with the `dir` attribute: `<div dir={language.isRtl ? "rtl" : "ltr"}>`.
 - Use **logical CSS properties** instead of physical ones:

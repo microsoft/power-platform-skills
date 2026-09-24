@@ -16,6 +16,9 @@
 //
 // PURE: no I/O, no network. The CLI wrapper (scripts/write-page-plan.js) owns writing the file.
 
+const path = require('node:path');
+const { pageFileProblems } = require('./page-file-targets.js');
+
 // Per-page fields required by references/plan-schema.md -> `## Per-Page Specifications`.
 // Kept as a constant so the tests (and any future validator) assert against one list.
 const REQUIRED_PAGE_FIELDS = [
@@ -95,6 +98,41 @@ function pageFile(p) {
   return existing || `${pageKey(p)}.tsx`;
 }
 
+// Where the plan says a page lives. An intent page is written at pageFile(p). An implemented page is
+// listed for the navigation graph only (no worker writes it), and its codeFile is shown in the one
+// spelling the page-file rule accepts: `pages\home.tsx` and `pages/../pages/report.tsx` — which the
+// spec gate accepts — become `pages/home.tsx` and `pages/report.tsx`, so the plan still passes the
+// schema validator that polices this same rule.
+function normalizePageFile(f) {
+  return path.posix.normalize(String(f).trim().replace(/\\/g, '/'));
+}
+function planFile(p) {
+  const implemented = p.source && p.source.kind === 'tsx' && p.source.codeFile;
+  return implemented ? normalizePageFile(implemented) : pageFile(p);
+}
+
+// The rule is lib/page-file-targets.js, shared with /genpage's pre-dispatch gate and the plan
+// validator. No working directory is passed: this module is PURE, so only the lexical and collision
+// checks run here — the realpath check is I/O and belongs to check-page-files.js, which the genpage
+// flow runs before it dispatches workers. Collisions are named apart because they involve two pages.
+//
+// Only a page a worker will WRITE (an intent page) is held to the rule. An implemented page is in the
+// plan for the navigation graph only, and its codeFile already passed the spec gate's own confinement
+// check (codeFileConfined, app-spec.js), which accepts the Windows spelling `pages\home.tsx` — refusing
+// that here blocked /app-builder for a spec the gate had accepted. Implemented files still take part
+// in collision detection, normalized and listed first, so a new page is never written over one.
+function validatePageTargets(pages) {
+  const targets = pages.map((p) => {
+    const implemented = Boolean(p.source && p.source.kind === 'tsx' && p.source.codeFile);
+    return { key: pageKey(p), file: planFile(p), implemented };
+  }).sort((a, b) => Number(b.implemented) - Number(a.implemented));
+  const [problem] = pageFileProblems(targets.map((t) => t.file));
+  if (!problem) return;
+  if (problem.code === 'collision') throw new Error(`buildPagePlan: case-insensitive page file collision — ${problem.message}`);
+  const owner = targets.find((t) => String(t.file).trim() === problem.file);
+  throw new Error(`buildPagePlan: unsafe page file for "${owner ? owner.key : problem.file}" — ${problem.message}`);
+}
+
 /** Entities a page reads, as the plan's comma-separated logical names (or the literal "mock data").
  *  Logical names flow into `--data-sources` on the generate-types command line, so they are held to
  *  the identifier contract rather than merely escaped. */
@@ -163,6 +201,7 @@ function buildPagePlan(spec, opts = {}) {
   const s = spec || {};
   const pages = (s.pages || []).filter(Boolean);
   if (!pages.length) throw new Error('buildPagePlan: the App Spec declares no pages[]');
+  validatePageTargets(pages);
 
   const workingDir = opts.workingDir || '.';
   const pluginRoot = opts.pluginRoot || '${PLUGIN_ROOT}';
@@ -194,7 +233,7 @@ function buildPagePlan(spec, opts = {}) {
   out.push('| Page | Key | File | Purpose | Entities |');
   out.push('|------|-----|------|---------|----------|');
   for (const p of pages) {
-    out.push(`| ${mdText(p.name, pageKey(p))} | ${pageKey(p)} | ${mdText(pageFile(p))} | ${mdText(p.purpose, 'Generative page')} | ${mdText(pageEntities(p))} |`);
+    out.push(`| ${mdText(p.name, pageKey(p))} | ${pageKey(p)} | ${mdText(planFile(p))} | ${mdText(p.purpose, 'Generative page')} | ${mdText(pageEntities(p))} |`);
   }
   out.push('');
 
@@ -215,6 +254,11 @@ function buildPagePlan(spec, opts = {}) {
   // guarantees no connector code is generated here.
   out.push('## Connector Bindings');
   out.push('No connector bindings.', '');
+
+  // /app-builder does not author Custom API calls either. The section is still mandatory: an absent
+  // section means the planner forgot part of the contract, while this exact sentinel means "none".
+  out.push('## Custom API Bindings');
+  out.push('No custom API bindings.', '');
 
   out.push('## Design Preferences');
   out.push(`- Styling: ${design.styling}`);
@@ -242,7 +286,7 @@ function buildPagePlan(spec, opts = {}) {
     const nav = navTargets(p);
     out.push(`### ${mdText(p.name, pageKey(p))}`);
     out.push(`- **Key:** ${pageKey(p)}`);
-    out.push(`- **File:** ${mdText(pageFile(p))}`);
+    out.push(`- **File:** ${mdText(planFile(p))}`);
     out.push(`- **Purpose:** ${mdText(p.purpose, 'Generative page')}`);
     out.push(`- **Entities:** ${mdText(pageEntities(p))}`);
     out.push(`- **Needs caching:** ${needsCaching(p)}`);

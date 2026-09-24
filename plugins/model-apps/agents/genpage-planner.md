@@ -170,7 +170,16 @@ pac model list-languages
 
 Note the output. If multiple languages are configured (or any non-English language),
 localization will be included in the generated code. Include the detected languages
-when reporting the environment to the user.
+when reporting the environment to the user. Record each language's **LCID, Code and RTL**
+columns exactly as PAC prints them, for example:
+
+```
+LCID Language                Code  RTL
+1025 Arabic (Saudi Arabia)   ar-SA Yes
+```
+
+The page builder takes text direction from that RTL value, never from a list of LCIDs it
+remembers (`references/localization.md` → *RTL Layout Support*).
 
 ### Continue Requirements Gathering
 
@@ -492,7 +501,8 @@ plan mode does not reach the user from a subagent.
 - [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
-- [list detected languages, or "English only — no localization needed"]
+- [each detected language as `<LCID> <Code> — RTL: Yes|No` from `pac model list-languages`
+  (e.g. `1025 ar-SA — RTL: Yes`), or "English only — no localization needed"]
 
 ### Design
 - [styling preferences, features, accessibility notes from requirements]

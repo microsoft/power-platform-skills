@@ -181,6 +181,49 @@ downloads that round-trip Choice columns.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
   that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
   first.
+- **`/genpage` runs only the plan you approved** ([#585]). A plan left over from an earlier run is
+  quarantined before the planner writes, and the new file must build exactly the pages the approved
+  plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
+- **A truncated page is caught before deploy** ([#585]). Every page — each parallel worker's, and one
+  written inline — is checked for a complete default export, balanced brackets and elided code
+  (`// TODO`, `// ...`, "omitted for brevity"). A write cut off where every bracket still balances
+  fails too: inside its own export line (`export default function Page(props)` with no body),
+  inside JSX, a string or a comment, or right after an operator — in `/app-builder`'s page promotion
+  as well. A failing worker page is rebuilt inline, and an inline page that still fails halts.
+  "Loading…" in a label is UI copy, not elision.
+- **A missing `## Custom API Bindings` section halts instead of meaning "none"** ([#585]). Only the
+  exact `No custom API bindings.` sentinel says a page has none, so a broken plan can no longer drop
+  an approved binding.
+- **Solution packaging checks every connection reference before changing anything** ([#585]). A
+  missing reference used to fail after the app and pages had already been added to the solution.
+- **Connections without both ids are no longer offered for binding** ([#585]). A listing where no row
+  has a connection and a connector id is an error, not "no connections".
+- **Right-to-left layout follows PAC's RTL column** ([#585]), not a list of six Arabic and Hebrew
+  LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
+- **Re-running the manifest generator with a new feature no longer reports success over a stale
+  `package.json`** ([#585]). A missing package fails with the fix; a version you changed is kept and
+  reported as `versionDrift`.
+- **The code-generation rules list exactly the packages the page installs** ([#585]), and a test
+  fails when they drift from the dependency map. Three libraries the rules offered but the package
+  never installed are gone from the list.
+- **Icons are verified however they are imported** ([#585]). A namespace, default, `require` or
+  dynamic `import()` of `@fluentui/react-icons` is blocked — in any quote style — since only named
+  imports can be checked.
+  A shipped sample that used two unverified sized icons is fixed, and every sample must now pass.
+- **Navigation checks read code, not prose** ([#588]). A `navigateTo` in help text no longer counts
+  as a link, and one inside a template's `${…}` is no longer invisible to the portability check. An
+  emoji in a comment or a template, or a regex holding `/*`, `//` or a backtick
+  (`u.replace(/\/*$/, "")`), no longer hides every call after it — which had left a placeholder link
+  unresolved in the deployed page while verification passed.
+- **A complete page is no longer rejected as truncated** ([#585]). `/app-builder`'s page promotion
+  read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
+  a comment right before JSX or a regex, and a `/` after a property named like a keyword
+  (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`. The same checks back
+  `/genpage`'s new gate.
+- **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
+  `..`, backslash aliases, a folder that links outside the working directory, and names that collide
+  ignoring case (`Page.tsx` / `page.tsx`) halt the build; the same rule covers the pages `/app-builder`
+  generates, and the evals.
 
 ### Changed
 
@@ -207,7 +250,9 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 

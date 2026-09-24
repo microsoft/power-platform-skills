@@ -30,6 +30,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { blankNonCodePreservingTemplateExpressions, commentRanges } = require('../scripts/lib/source-literals.js');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const VERIFIED_ICONS_PATH = path.join(PLUGIN_ROOT, 'references', 'verified-icons.txt');
@@ -142,9 +143,7 @@ function extractIconImports(content) {
   // and (b) a `}` inside a `//` comment prematurely ends the `[^}]+` capture and
   // the whole import fails to match — both fail OPEN (a bad icon slips through).
   // The `(?<!:)` lookbehind on the line-comment strip preserves `https://` URLs.
-  const code = content
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(?<!:)\/\/[^\n]*/g, '');
+  const code = stripCommentsForImports(content);
   const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
     "^[ \\t]*import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
@@ -161,6 +160,85 @@ function extractIconImports(content) {
     }
   }
   return names;
+}
+
+function stripCommentsForImports(content) {
+  return content
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(?<!:)\/\/[^\n]*/g, '');
+}
+
+// `content` with each comment the lexer finds turned into spaces, newlines kept, so every offset is
+// unchanged. Unlike stripCommentsForImports, a `//` inside a string or JSX text is left alone.
+function blankComments(content) {
+  const out = content.split('');
+  for (const { start, end } of commentRanges(content)) {
+    for (let k = start; k < end; k += 1) if (out[k] !== '\n') out[k] = ' ';
+  }
+  return out.join('');
+}
+
+/**
+ * Detect @fluentui/react-icons import shapes this hook cannot verify safely.
+ *
+ * Raw forms that bypass named-specifier validation:
+ *   import * as Icons from "@fluentui/react-icons";
+ *   import Icons from "@fluentui/react-icons";
+ *   const Icons = require("@fluentui/react-icons");
+ *
+ * Rejecting them is intentionally safer than parsing every namespace member access in TSX:
+ * the verified-icons.txt source of truth lists named exports, and named imports make the exact
+ * export names visible at the import boundary where this dependency-free hook can validate them.
+ */
+function extractUnsupportedIconImports(content) {
+  const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const unsupported = [];
+  // The require and dynamic-import forms are matched ANYWHERE in the code, not only as a declaration:
+  //   React.createElement(require("@fluentui/react-icons").TotallyMadeUpIconRegular)
+  //   const Icons = await import("@fluentui/react-icons");
+  // both reach an icon by member access, which no named-specifier check ever sees.
+  const patterns = [
+    { kind: 'namespace import', keyword: 'import', re: new RegExp("^[ \\t]*import\\s+\\*\\s+as\\s+[A-Za-z_$][\\w$]*\\s+from\\s*['\"]" + escapedModule + "['\"]", 'gm') },
+    { kind: 'default import', keyword: 'import', re: new RegExp("^[ \\t]*import\\s+[A-Za-z_$][\\w$]*(?:\\s*,\\s*\\{[^}]*\\})?\\s+from\\s*['\"]" + escapedModule + "['\"]", 'gm') },
+    { kind: 'CommonJS require', keyword: 'require', re: new RegExp("\\brequire\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*\\)", 'g') },
+    { kind: 'dynamic import()', keyword: 'import', re: new RegExp("\\bimport\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*\\)", 'g') },
+  ];
+  // Only a keyword in CODE is an import. The plugin's TSX lexer blanks comments, strings, template
+  // text and JSX text but keeps code inside `${…}`, so an import merely quoted in a help string, a
+  // template or a comment does not block a write. The patterns run on a copy with every comment
+  // turned into spaces of the same length: a comment BETWEEN an import's tokens —
+  //   import * as /* every icon */ Icons from "@fluentui/react-icons";
+  //   import Icons // all of them
+  //     from "@fluentui/react-icons";
+  // — must not break the match, and the offsets must still line up with the code mask. Should the
+  // lexer ever throw, fall back to the older comment-stripped match: a write wrongly blocked is
+  // better than an unverified icon let through.
+  let codeMask = null;
+  let haystack = null;
+  try {
+    codeMask = blankNonCodePreservingTemplateExpressions(content);
+    haystack = blankComments(content);
+  } catch { codeMask = null; }
+  if (!codeMask) haystack = stripCommentsForImports(content);
+  for (const { kind, keyword, re } of patterns) {
+    for (const m of haystack.matchAll(re)) {
+      const at = haystack.indexOf(keyword, m.index);
+      if (!codeMask || codeMask.startsWith(keyword, at)) { unsupported.push(kind); break; }
+    }
+  }
+  return unsupported;
+}
+
+function buildUnsupportedImportMessage(relPath, unsupported) {
+  const unique = [...new Set(unsupported)];
+  return [
+    `[model-apps] The write was blocked: ${ICON_MODULE} must use named imports so each icon export can be checked against references/verified-icons.txt.`,
+    '',
+    `For the agent: BLOCKED — unsupported ${ICON_MODULE} import form(s) in ${relPath}:`,
+    ...unique.map((kind) => `  - ${kind}`),
+    '',
+    'Rewrite the import as named unsized exports, for example `import { AddRegular } from "@fluentui/react-icons";`, then verify every imported name exists verbatim in references/verified-icons.txt.',
+  ].join('\n');
 }
 
 function buildBlockMessage(relPath, invalid) {
@@ -217,6 +295,13 @@ process.stdin.on('end', () => {
   // Only validate genpage-generated pages (see SCOPING note above).
   if (!isGenpageFile(content, absPath)) process.exit(0);
 
+  const relPath = path.relative(cwd, absPath) || absPath;
+  const unsupported = extractUnsupportedIconImports(content);
+  if (unsupported.length > 0) {
+    process.stderr.write(buildUnsupportedImportMessage(relPath, unsupported) + '\n');
+    process.exit(2);
+  }
+
   const imported = extractIconImports(content);
   if (imported.length === 0) process.exit(0);
 
@@ -233,7 +318,6 @@ process.stdin.on('end', () => {
   }
   if (invalid.length === 0) process.exit(0);
 
-  const relPath = path.relative(cwd, absPath) || absPath;
   process.stderr.write(buildBlockMessage(relPath, invalid) + '\n');
   process.exit(2);
 });

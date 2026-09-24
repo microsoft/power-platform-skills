@@ -20,7 +20,7 @@ back.
 | Matcher | Hook | Behaviour |
 | --- | --- | --- |
 | `Skill\|skill` | `run-skill-posttool-validation.js` | Runs the invoked skill's own `scripts/validate*.js`, if it has one. |
-| `Write\|Edit\|MultiEdit` | `validate-icon-imports.js` | On every code write, validates `@fluentui/react-icons` imports against `references/verified-icons.txt`. |
+| `Write\|Edit\|MultiEdit` | `validate-icon-imports.js` | On every code write, validates `@fluentui/react-icons` imports against `references/verified-icons.txt`. Only named imports can be checked, so a namespace (`import * as`), default, `require(...)` or dynamic `import(...)` of the icon module is blocked too — where it is code; quoted in a string, a template or a comment it is not. Every committed `samples/*.tsx` must pass it (a test enforces this). |
 
 ## UserPromptSubmit
 

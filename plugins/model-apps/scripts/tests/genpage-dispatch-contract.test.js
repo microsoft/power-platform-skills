@@ -157,6 +157,69 @@ test('genpage orchestrator defines inline recovery for a worker missing declared
   );
 });
 
+test('genpage orchestrator gates planner output with deterministic plan provenance checks', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+
+  assert.match(skill, /genpage-plan-provenance\.js[\s\S]{0,500}prepare/i, 'create flow must quarantine stale genpage-plan.md before planner writeback');
+  assert.match(skill, /genpage-plan-provenance\.js[\s\S]{0,500}verify/i, 'create flow must hash-check the written plan against the approved body');
+  assert.match(skill, /approved\s+plan\s+body/i, 'create flow must verify against the approved plan body, not mere file existence');
+  assert.match(editFlow, /genpage-plan-provenance\.js[\s\S]{0,500}prepare/i, 'edit flow must quarantine stale genpage-edit-plan.md before planner writeback');
+  assert.match(editFlow, /genpage-plan-provenance\.js[\s\S]{0,500}verify/i, 'edit flow must hash-check the written edit plan against the approved body');
+});
+
+test('genpage orchestrator validates worker output completeness before accepting parallel results', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+
+  assert.match(skill, /genpage-worker-output\.js/, 'multi-page flow must call the deterministic worker-output validator');
+  assert.match(skill, /unbalanced|default export|markdown code fence/i, 'skill text must name the completeness checks that trigger inline fallback');
+  assert.match(skill, /inline fallback|Phase 5b page-builder workflow inline/i, 'invalid worker output must use the same inline fallback path as missing output');
+});
+
+// #585 item 2: every page that can ship passes the gate — a worker's (5c), and one the orchestrator
+// writes itself (5b), which is also what the 5c fallback runs.
+test('the completeness gate also runs on pages written inline, including the fallback', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  assert.match(fastPath, /genpage-worker-output\.js/, 'the single-page path runs the gate');
+  assert.match(fastPath, /rewrite the page once[\s\S]{0,120}halt/i, 'a page that keeps failing halts instead of deploying');
+  assert.match(fastPath, /5c fallback/, 'the fallback is the same path, so it is covered');
+});
+
+// #588 item 4: page filenames are checked by the deterministic gate BEFORE any worker is dispatched —
+// a link or junction escape cannot be spotted by reading the plan.
+test('genpage orchestrator runs the page-file gate before dispatching page workers', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const gate = skill.indexOf('check-page-files.js');
+  assert.ok(gate > -1, 'the skill must run scripts/check-page-files.js');
+  const dispatch = skill.indexOf('genpage-worker-output.js');
+  assert.ok(dispatch > gate, 'the filename gate must come before workers run and their output is checked');
+  assert.match(skill.slice(gate, gate + 900), /halt and\s+re-plan/i, 'a refused filename halts; it is never rewritten after approval');
+});
+
+test('single-page inline generation treats missing or malformed Custom API Bindings as a halt', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+
+  assert.match(fastPath, /No custom API bindings\./, 'the exact sentinel must remain the only no-actions value');
+  assert.match(fastPath, /missing[\s\S]{0,120}malformed[\s\S]{0,160}halt|halt[\s\S]{0,160}missing[\s\S]{0,120}malformed/i, 'single-page generation must halt on missing or malformed Custom API sections');
+  assert.doesNotMatch(fastPath, /empty\/missing\/malformed section, as\s+having no Custom APIs/i, 'single-page generation must not downgrade malformed Custom API sections to none');
+});
+
+// #585 item 3, the other two readers: the orchestrator's Custom API phase and the page-builder worker.
+// Only the exact sentinel means "none" — a missing, empty or malformed section is a broken plan.
+test('the Custom API phase and the page builder never read a missing or malformed section as none', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const phase = skill.slice(skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
+  assert.ok(phase.length > 0, 'the Custom API phase is where it was');
+  assert.match(phase.slice(0, 700), /only when its body is exactly `No custom API bindings\.`/);
+  assert.match(phase.slice(0, 700), /missing, empty, or malformed, \*\*halt\*\*/);
+  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  assert.match(builder, /That sentinel is the only way a plan says\s+"none"/);
+  assert.match(builder, /\*\*stop and report it instead of writing the page\*\*/);
+  assert.doesNotMatch(builder, /is missing entirely, or contains no binding row, the page has \*\*no Custom APIs\*\*/);
+});
+
 test('page generation rejects Griffel borderWidth shorthand before deploy', () => {
   const rules = fs.readFileSync(path.join(PLUGIN, 'references', 'rules.md'), 'utf8');
   const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
