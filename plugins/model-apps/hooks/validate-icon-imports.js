@@ -142,8 +142,20 @@ function extractIconImports(content) {
   // starting with `//…` so it fails the identifier test and is silently skipped,
   // and (b) a `}` inside a `//` comment prematurely ends the `[^}]+` capture and
   // the whole import fails to match — both fail OPEN (a bad icon slips through).
-  // The `(?<!:)` lookbehind on the line-comment strip preserves `https://` URLs.
-  const code = stripCommentsForImports(content);
+  //
+  // And only an `import` in CODE counts, as in extractUnsupportedIconImports: an import line quoted in a
+  // help template or a string is data, and blocking a write over it broke that contract. So the match runs
+  // on a copy with every comment the lexer finds blanked to spaces — offsets kept, so the code mask lines up
+  // (and a `//` inside a string is no comment) — and a match whose `import` is not code is skipped. Should
+  // the lexer throw, the older comment-stripped match runs instead, which treats every such line as real.
+  let codeMask = null;
+  let code = null;
+  try {
+    codeMask = blankNonCodePreservingTemplateExpressions(content);
+    code = blankComments(content);
+  } catch { codeMask = null; }
+  // The `(?<!:)` lookbehind on the fallback's line-comment strip preserves `https://` URLs.
+  if (!codeMask) code = stripCommentsForImports(content);
   const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
     "^[ \\t]*import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
@@ -151,6 +163,7 @@ function extractIconImports(content) {
   );
   let m;
   while ((m = re.exec(code)) !== null) {
+    if (codeMask && !codeMask.startsWith('import', code.indexOf('import', m.index))) continue;
     for (const raw of m[1].split(',')) {
       const spec = raw.trim();
       if (!spec) continue;

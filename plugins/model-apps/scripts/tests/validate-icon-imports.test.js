@@ -255,6 +255,8 @@ test('an icon import merely quoted in a string, template or comment does not blo
     'const tip = `Use named imports, not import("@fluentui/react-icons")`;',
     '/* import * as Icons from "@fluentui/react-icons"; */',
     'const snippet = `\nimport * as Icons from "@fluentui/react-icons";\n`;',
+    // …a NAMED import line quoted in a help template too: its icon name is data, not an import to verify.
+    'const help = `\nimport { TotallyMadeUpIconRegular } from "@fluentui/react-icons";\n`;',
   ]) {
     const content = `${GENPAGE_HEADER}\n${line}\n`;
     const fp = writeTemp(tmp, 'page.tsx', content);
@@ -309,6 +311,9 @@ test('if the lexer throws, the hook falls back and still blocks an unsupported i
   // CONTROL: the fallback still ignores a commented-out import rather than blocking everything.
   const commented = runWithBrokenLexer(`/* import * as Icons from '@fluentui/react-icons'; */\n${GENPAGE_HEADER}`);
   assert.equal(commented.status, 0, commented.stderr);
+  // …and still verifies a real NAMED import: an unverified icon is blocked without the lexer too.
+  const named = runWithBrokenLexer(`import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`);
+  assert.equal(named.status, 2, named.stderr);
 });
 
 test('commented-out import (line comment) is not treated as a real import (exit 0)', () => {
