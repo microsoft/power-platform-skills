@@ -1312,6 +1312,63 @@ test('verify tolerates deployed sections and fields the spec never declared', as
   const chk = await topoCheck(xml);
   assert.strictEqual(chk.present, true, `extras must not fail the authored subset; got ${chk && chk.detail}`);
 });
+
+// An authored section may share the name the engine gives its timeline host. Verify matches containers
+// the way the BUILD does, and the build never lets an authored section take an engine host by name —
+// so neither may verify, or it grades the author's fields against the timeline section.
+test('verify never matches an authored section to an engine host that shares its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>`
+    + `<section name="section_notes"><rows><row><cell><control id="notescontrol" classid="{06375649-c143-495e-a496-c962e5b4488e}" /></cell></row></rows></section>`
+    + `<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(chk.present, true, `the authored section is the one holding its field; got ${chk && chk.detail}`);
+});
+
+// Engine-owned is a STRUCTURE (only unbound controls), which cannot say who laid a section out: an
+// authored section declared with no fields that a maker filled with a web resource looks the same. Its
+// authored name is the evidence it is the author's, so verify finds it by that name — as the build does —
+// instead of reporting it absent.
+test('verify finds an authored section a maker filled with a control by its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections>`
+    + `<section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section>`
+    + `<section name="sec_related"><rows><row><cell><control id="WebResource_banner" classid="{9FDF5F91-88B1-47f4-AD53-C11EFC01A01D}" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `<column width="40%"><sections><section name="sec_right"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section></sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[0].sections.push({ name: 'sec_related', label: 'Related', fields: [] }); });
+  assert.strictEqual(chk.present, true, `the maker's control does not hide the authored section; got ${chk && chk.detail}`);
+});
+
+// Verify matches containers exactly as the build does, and the build no longer lets a label or
+// position match take a section ANOTHER authored section owns by name (it moves that section to where
+// its own want places it). Here the section NAMED sec_wide sits in tab_one holding sec_main's field,
+// and an unnamed one in tab_two holds sec_wide's: every field is in the right tab, but a form script
+// that addresses sec_wide by name reaches tab_one. Matching sec_main to it by label passed that form.
+test('verify: the label pass skips a section another authored section owns by name', async () => {
+  const section = (name, label, field) => `<section${name ? ` name="${name}"` : ''}><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<rows><row><cell><control datafieldname="${field}" /></cell></row></rows></section>`;
+  const tab = (name, label, sections) => `<tab name="${name}"><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<columns><column width="100%"><sections>${sections}</sections></column></columns></tab>`;
+  const twoTabs = (spec) => {
+    spec.forms[0].tabs = [
+      { name: 'tab_one', label: 'One', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] }] },
+      { name: 'tab_two', label: 'Two', columns: [{ width: '100%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_notes'] }] }] },
+    ];
+  };
+  const misnamed = `<form><tabs>${tab('tab_one', 'One', section('sec_wide', 'Main', 'new_name'))}${tab('tab_two', 'Two', section(null, 'Wide', 'new_notes'))}</tabs></form>`;
+  const chk = await topoCheck(misnamed, twoTabs);
+  assert.strictEqual(chk.present, false, 'a form whose sec_wide is in the wrong tab must not verify');
+  assert.match(chk.detail, /section 'sec_main' is absent from tab 'tab_one'/);
+  // Control: the shape the build produces for that spec verifies.
+  const built = `<form><tabs>${tab('tab_one', 'One', section('sec_main', 'Main', 'new_name'))}${tab('tab_two', 'Two', section('sec_wide', 'Wide', 'new_notes'))}</tabs></form>`;
+  const ok = await topoCheck(built, twoTabs);
+  assert.strictEqual(ok.present, true, `got ${ok.detail}`);
+});
 // --- #N3: the verifier must match containers the way the BUILD does ------------------------------
 // LIVE-REPRODUCED: reshaping an auto-built form to an explicit layout succeeds — the build reuses
 // the existing containers and deliberately does NOT rename them, because form scripts and business
@@ -1673,30 +1730,4 @@ test('verify PASSES when the field really is in the requested tab', async () => 
       { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
   });
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
-});
-
-// Verify matches containers exactly as the build does, and the build no longer lets a label or
-// position match take a section ANOTHER authored section owns by name (it moves that section to where
-// its own want places it). Here the section NAMED sec_wide sits in tab_one holding sec_main's field,
-// and an unnamed one in tab_two holds sec_wide's: every field is in the right tab, but a form script
-// that addresses sec_wide by name reaches tab_one. Matching sec_main to it by label passed that form.
-test('verify: the label pass skips a section another authored section owns by name', async () => {
-  const section = (name, label, field) => `<section${name ? ` name="${name}"` : ''}><labels><label description="${label}" languagecode="1033"/></labels>`
-    + `<rows><row><cell><control datafieldname="${field}" /></cell></row></rows></section>`;
-  const tab = (name, label, sections) => `<tab name="${name}"><labels><label description="${label}" languagecode="1033"/></labels>`
-    + `<columns><column width="100%"><sections>${sections}</sections></column></columns></tab>`;
-  const twoTabs = (spec) => {
-    spec.forms[0].tabs = [
-      { name: 'tab_one', label: 'One', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] }] },
-      { name: 'tab_two', label: 'Two', columns: [{ width: '100%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_notes'] }] }] },
-    ];
-  };
-  const misnamed = `<form><tabs>${tab('tab_one', 'One', section('sec_wide', 'Main', 'new_name'))}${tab('tab_two', 'Two', section(null, 'Wide', 'new_notes'))}</tabs></form>`;
-  const chk = await topoCheck(misnamed, twoTabs);
-  assert.strictEqual(chk.present, false, 'a form whose sec_wide is in the wrong tab must not verify');
-  assert.match(chk.detail, /section 'sec_main' is absent from tab 'tab_one'/);
-  // Control: the shape the build produces for that spec verifies.
-  const built = `<form><tabs>${tab('tab_one', 'One', section('sec_main', 'Main', 'new_name'))}${tab('tab_two', 'Two', section('sec_wide', 'Wide', 'new_notes'))}</tabs></form>`;
-  const ok = await topoCheck(built, twoTabs);
-  assert.strictEqual(ok.present, true, `got ${ok.detail}`);
 });

@@ -746,6 +746,12 @@ name**, so it can be moved to its own place instead of being taken over by a nei
 label. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
 matched only by `name`: a label or a position is not evidence about what a container *is*, and
 matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
+Their name is the engine's own, so a section **you** declare never takes one even by name: a section
+of yours called `section_notes` gets a section of its own rather than the timeline host of that name.
+A host is known by that name *and* by holding only controls without a field; a section of yours that a
+maker filled with a web resource or sub-grid keeps its own name, and is still found by it. (One you
+name `section_notes` or `section_grid_…` and give no fields is indistinguishable from a host — give it
+another name.)
 
 ⚠ **Moving a section.** A section with an explicit `name` is found wherever it is on the deployed
 form and moved to the tab and form-column the layout places it in — the same section, so its fields,

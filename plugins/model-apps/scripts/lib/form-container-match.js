@@ -12,14 +12,17 @@
 // Find the deployed container matching `want`, preferring an exact name, then a label, then the
 // positional slot. `claimed` (a Set of already-taken indices) keeps two authored containers from
 // resolving to the same deployed one; `skip` hides containers the LABEL and POSITION passes must
-// not claim. Returns `{ index, item }` or null.
+// not claim; `nameSkip` hides containers from the NAME pass as well — an authored section passes
+// `isEngineOwnedSection` there, since it may legally share a name with the engine's own host.
+// Returns `{ index, item }` or null.
 function matchContainer(list, want, wantIndex, opts) {
   const items = list || [];
   const claimed = (opts && opts.claimed) || null;
   const skip = (opts && opts.skip) || (() => false);
+  const nameSkip = (opts && opts.nameSkip) || (() => false);
   const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
   const free = (i) => !claimed || !claimed.has(i);
-  let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
+  let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name) && !nameSkip(x));
   if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
   if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
   return idx < 0 ? null : { index: idx, item: items[idx] };
@@ -44,6 +47,32 @@ function isEngineOwnedSection(s) {
   return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
 }
 
+// The names the COMPILER gives the sections it adds itself: `section_notes` (notesSectionIntent) and
+// `section_grid_<relationship>` (subgridSectionIntent), both in artifact-intent.js.
+const ENGINE_SECTION_NAME = /^(?:section_notes|section_grid_.*)$/i;
+
+// An engine HOST: an engine-owned section that still carries the name the compiler gave it. This — not
+// isEngineOwnedSection alone — is what an AUTHORED want's NAME pass skips. The structure says a section
+// holds only unbound controls; it cannot say who laid the section out. An authored section declared with
+// no fields that a maker then filled with a web resource, an iframe or a sub-grid is structurally the
+// same, and its name is the one positive evidence that it is the author's: skipping it created an empty
+// duplicate beside it, and when the spec moved it, left the maker's control behind in the old tab. The
+// label and position passes still skip every engine-owned section — those carry no such evidence.
+//
+// Limit: an authored section that takes an engine name AND holds no bound field cannot be told from the
+// host, so it is treated as one. An authored section with fields never is.
+function isEngineHostSection(s) {
+  return isEngineOwnedSection(s) && ENGINE_SECTION_NAME.test(String((s && s.name) || ''));
+}
+
+// Does the section hold a control that binds no field — the notes timeline, a sub-grid, a web resource?
+// An ENGINE want's host is recognised by that. The compiler's notes want shares its name with any
+// authored `section_notes`, and taking the author's field section for its host meant an existing form
+// never got its timeline: every build "found" the host there.
+function holdsUnboundControl(s) {
+  return ((s && s.rows) || []).some((r) => ((r && r.cells) || []).some((c) => c && c.control && !c.control.fieldName));
+}
+
 // A deployed section an authored section claims BY NAME: the LABEL and POSITION passes must not hand
 // it to a different want. Its own want finds it through the name pass, which `skip` does not apply to
 // — and the build MOVES a named section to the tab and form-column the spec places it in — so a label
@@ -58,4 +87,4 @@ function claimedByAuthoredName(authoredNames) {
   };
 }
 
-module.exports = { matchContainer, isEngineOwnedSection, claimedByAuthoredName };
+module.exports = { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsUnboundControl, claimedByAuthoredName };

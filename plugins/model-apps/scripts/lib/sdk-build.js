@@ -76,7 +76,7 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection, claimedByAuthoredName } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsUnboundControl, claimedByAuthoredName } = require('./form-container-match.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1875,6 +1875,12 @@ async function runSdkBuild(spec, opts = {}) {
     // object a section legitimately named `__proto__` would mutate the prototype instead of becoming
     // an own enumerable property, so it would be invisible to `Object.values` — and the
     // vacated-section sweep would then treat a section the layout explicitly claimed as unclaimed.
+    //
+    // Only AUTHORED wants are recorded: the map routes the author's fields. The compiler's notes section
+    // is also named `section_notes`, and an authored section may be too — recording the engine's want
+    // after the author's replaced the author's target, and the field pass then poured the author's fields
+    // into the timeline and the sweep removed the emptied authored section. An engine section routes no
+    // field, and the sweep never removes a section that still holds its control.
     const sectionTargets = Object.create(null);
     const wantTabs = def.tabs || [];
     // The section names the AUTHOR declared, computed by the compiler from the spec with the same
@@ -1886,7 +1892,8 @@ async function runSdkBuild(spec, opts = {}) {
     // falls back to — the vacated-section sweep also treats recorded pointers as claims, and a stale
     // one would spare a section it should reclaim. Nothing recorded can sit at or after the INSERTION
     // point: the target column's own matches all precede it, and every other column's matches live in
-    // that column (a name hit in another column is moved, never recorded in place).
+    // that column (an authored name hit in another column is moved, never recorded in place; an engine
+    // want, which is never moved, is never recorded at all).
     const shiftRecordedSectionPointers = (fromPointer) => {
       const split = (p) => { const m = /^(.*\/sections)\/(\d+)$/.exec(p || ''); return m ? { list: m[1], index: Number(m[2]) } : null; };
       const from = split(fromPointer);
@@ -1953,10 +1960,22 @@ async function runSdkBuild(spec, opts = {}) {
           // positional one inside this column. A name hit INSIDE this column is preferred, so a pair of
           // same-named sections left by an older build resolves to the one already in place.
           const liveList = ((liveSections || {}).sections) || [];
-          const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase();
+          // An AUTHORED want never takes an engine HOST (the notes timeline, a sub-grid host, still under
+          // the name the compiler gave it) by name, here or anywhere below. An authored section may legally
+          // carry the name the engine gives its host — `section_notes` is a natural name for a section
+          // holding a notes field — and taking the host MOVED it into the author's column and poured
+          // authored fields into it. Such a host is simply not a candidate: the want is matched or created
+          // like any other authored section. A section a maker filled with a control but that carries an
+          // AUTHORED name stays a candidate: the name is the evidence it is the author's (see
+          // isEngineHostSection). An ENGINE want, in turn, takes only a section holding an engine control:
+          // its name is shared with any authored `section_notes`, and taking the author's field section for
+          // its host meant an existing form never got its timeline (see holdsUnboundControl).
+          const authoredWant = !isEngineOwnedSection(wantSection);
+          const candidate = (s) => (authoredWant ? !isEngineHostSection(s) : holdsUnboundControl(s));
+          const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase() && candidate(s);
           const inColumn = wantSection.name ? liveList.findIndex((s, i) => !claimedHere.has(i) && sameName(s)) : -1;
           let global = inColumn >= 0 ? { pointer: columnPointer + '/sections/' + inColumn, section: liveList[inColumn] }
-            : (wantSection.name ? findSectionLocation(form, wantSection.name) : null);
+            : (wantSection.name ? findSectionLocation(form, wantSection.name, candidate) : null);
           // A named section the spec places in THIS column but that lives elsewhere is MOVED here: the
           // same node, so its id, name, rows and any maker-set properties travel with it. It used to be
           // reused in place — its attributes patched, its location left alone — so the build reported
@@ -1988,15 +2007,19 @@ async function runSdkBuild(spec, opts = {}) {
             const moved = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
             global = { pointer: columnPointer + '/sections/' + index, section: moved[index] || global.section };
           }
-          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si,
-            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredSectionNames)(s) });
+          // An ENGINE want has no label or position to go on: its evidence is its name and its own control,
+          // both weighed above. Running it through the label and position passes let the notes section, when
+          // no host qualified, take whatever maker section sat at its index — relabelled "Notes", re-flowed
+          // to one column, and still no timeline.
+          const local = (global || !authoredWant) ? null : matchContainer((liveSections || {}).sections, wantSection, si,
+            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
           if (!global && !local) {
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
             form = await provision.getArtifact('form', formId) || {};
             const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
             const addedIdx = addedList.length - 1;
             claimedHere.add(addedIdx);
-            sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
+            if (authoredWant) sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
             continue;
           }
           if (local) claimedHere.add(local.index);
@@ -2009,7 +2032,7 @@ async function runSdkBuild(spec, opts = {}) {
           }
           const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
           const live = global ? global.section : local.item;
-          sectionTargets[wantSection.name] = { pointer, name: live.name };
+          if (authoredWant) sectionTargets[wantSection.name] = { pointer, name: live.name };
           // `columns` is the key that matters most: it is what makes a section render as two
           // columns rather than one, and it was previously unreachable on an existing form.
           const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);

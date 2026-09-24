@@ -5,9 +5,10 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { matchContainer, isEngineOwnedSection, claimedByAuthoredName } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
+const { authoredSectionNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
@@ -334,8 +335,11 @@ async function verifySpec(spec, read, opts = {}) {
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
+            // Every want here is authored (the spec's own sections), and an authored section never
+            // matches an engine HOST by name — the same rule the build's topology pass follows. A section
+            // a maker filled with a control but that carries the authored name is still found by it.
             const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
-              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredNames)(s) });
+              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || claimedByAuthoredName(authoredNames)(s), nameSkip: isEngineHostSection });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;

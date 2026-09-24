@@ -847,7 +847,9 @@ function findFieldCellLocation(formJson, logical) {
 // The search is form-wide rather than scoped to the expected tab on purpose: section names are
 // unique per form in Dataverse, and a section a maker dragged to another tab is still THAT section.
 // Scoping the lookup to the tab the spec now names would miss it and create a duplicate beside it.
-function findSectionLocation(formJson, sectionName) {
+// `accept`, when given, filters the candidates: an authored section must never resolve to an
+// engine-owned host that happens to share its name (sdk-build.js, the form topology pass).
+function findSectionLocation(formJson, sectionName, accept) {
   const want = String(sectionName || '').toLowerCase();
   if (!want) return null;
   const tabs = formJson.tabs || [];
@@ -857,6 +859,7 @@ function findSectionLocation(formJson, sectionName) {
       const sections = cols[ci].sections || [];
       for (let si = 0; si < sections.length; si++) {
         if (String(sections[si].name || '').toLowerCase() !== want) continue;
+        if (accept && !accept(sections[si])) continue;
         const pointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
         return { pointer, rowsPointer: pointer + '/rows', tabIndex: ti, columnIndex: ci, sectionIndex: si, section: sections[si] };
       }
