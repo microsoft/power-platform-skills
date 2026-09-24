@@ -282,7 +282,13 @@ function governed(clause, claimIndex) {
   for (const m of clause.slice(0, claimIndex).matchAll(NEGATION)) last = m;
   if (!last) return false;
   const words = clause.slice(last.index + last[0].length, claimIndex).trim().split(/\s+/).filter(Boolean);
-  return words.every((w) => BRIDGE.test(w));
+  if (words.every((w) => BRIDGE.test(w))) return true;
+  // A denial carried through a coordination: "does not bundle or type-check", "does not minify, bundle or
+  // type-check". The claim is the last item of a list the negation heads: `or`/`nor`, then bridge words at
+  // most. A new subject after the `or` ("…, or it type-checks") is no such list.
+  let i = words.length - 1;
+  while (i >= 0 && BRIDGE.test(words[i])) i -= 1;
+  return i > 0 && /^n?or$/i.test(words[i]);
 }
 
 function actorsOf(clause) {
@@ -383,6 +389,8 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile does not bundle and type-checks the page.',
     'Transpile does not require the reader to install anything to type-check the page.',
     'Transpile does not need a flag to type-check the page.',
+    // …but not past a new subject.
+    'Transpile does not bundle anything, or it type-checks the page.',
     // A hedge is not a denial: each says that sometimes it does.
     'Transpile does not always type-check the page.',
     'Transpile does not necessarily type-check the page.',
@@ -455,6 +463,10 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile does **not** type-check the page.',
     'Transpile does *not* type-check the page.',
     'Transpile does _not_ type-check the page.',
+    // A negation carries through a list it heads.
+    'Transpile does not bundle or type-check the page.',
+    'Transpile does not minify, bundle or type-check the page.',
+    'Transpile does not bundle it or type-check it.',
     // The truth about the exit code, a generic checker step, and a "for" purpose served by a checker.
     '`pac model genpage transpile` exits 0 even with type errors.',
     "After transpiling, run the project's type-check script.",
