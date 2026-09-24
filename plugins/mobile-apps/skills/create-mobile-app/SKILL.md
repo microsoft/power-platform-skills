@@ -175,7 +175,9 @@ the block below. Connector-only runs set
 `$DETECTED_PUBLISHER_PREFIX = ""` and make no Dataverse prefix query.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID"
+PUBLISHER_PREFIX_JSON=$(node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" \
+  "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
+echo "$PUBLISHER_PREFIX_JSON"
 ```
 
 Output is one line of JSON, e.g.:
@@ -227,7 +229,7 @@ downstream planning must retain platform-specific behavior for each.
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`.
+**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
 
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
@@ -374,7 +376,7 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 | Tables | Distinct nouns in confirmed brief | `count(unique_nouns) × [0.7, 1.3]` rounded | low — architect may merge or split |
 | Connectors | Connector keywords in the confirmed brief | `len(candidates)` | low — Gate 1 confirms the actual list |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
-| Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
+| Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 2 data-model budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
@@ -432,10 +434,11 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 >
 > For Dataverse-required apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
-> seconds. Connector-only apps skip those metadata milestones. While the
+> seconds of starting metadata work after Gate 1 approval. Connector-only apps
+> skip those metadata milestones. While the
 > architect runs, new milestone IDs from
 > `.tmp/data-model-planning-status.json` are rendered without inventing
-> percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
+> percentages. If Gate 2 has not surfaced after 15 minutes of data-model planning, inspect the last
 > applicable milestone before interrupting."
 
 ### Step 2d — Template-only mode
@@ -493,11 +496,16 @@ call `detect-publisher-prefix.js`.
 
 ### Foreground Dataverse planning snapshot and evidence
 
-Planning stays read-only. Branch on the Gate 1-approved
+Planning stays read-only. The resolver's `--no-cache` mode may read existing
+identity metadata, but must not persist the environment cache, auth settings,
+or telemetry cluster, and must not replay pending telemetry. Normal resolution
+in Step 4 retains those post-approval behaviors.
+
+Branch on the Gate 1-approved
 `<dataverse_planning_mode>`:
 
 - `connector-only` — skip every command in this section. Set `SNAPSHOT_PATH`
-  and `EVIDENCE_PATH` to empty/not supplied, print
+  and `ARCHITECT_EVIDENCE_PATH` to empty/not supplied, print
   `↷ Foreground planning snapshot skipped — the confirmed brief is connector-only.`, and
   continue to planner dispatch. Connector-only planning does not perform
   Dataverse metadata reads; the skill's existing global prerequisites remain
@@ -507,19 +515,29 @@ Planning stays read-only. Branch on the Gate 1-approved
   nested planner or architect rediscover the tenant.
 
 ```bash
-PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID")
-ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
-ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
-test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
-  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
-}
-echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant
 ```
 
-Build `<DATAVERSE_CONCEPTS>` from **every domain noun and workflow family** in
-the approved brief, not a sample. Preserve multiword/header-child families such
-as `medical assessments`, `care activities`, `release events`, `custody
-transfers`, `test results`, and `evidence attachments`. Add known standard or
+The command validates both required fields before returning JSON. On exit `0`,
+use its `environmentUrl` as `$ACTIVE_ENV_URL` and `tenantId` as
+`$ACTIVE_TENANT_ID` in the following commands, replacing the previous values.
+Read these fields directly from the structured command result; do not run
+separate JSON-extraction commands. On a nonzero exit, follow foreground
+recovery below and do not create a snapshot or reuse stale environment values.
+
+Build `<working_dir>/.tmp/dataverse-concepts.json` as a JSON array of typed
+concepts from the confirmed brief and Gate 1-approved architecture. Account for
+approved native capture/storage targets. Discover only app-owned Dataverse
+records or explicitly approved Dataverse projections; exclude connector-owned
+records from Dataverse candidate selection. Each item has `phrase`, `kind`,
+`discoverTable`, and a short `evidence` quote. Use `kind: entity` and
+`discoverTable: true` only for a plausible persistent business record with an
+independent lifecycle; classify people/actors as `role`, fields as `attribute`,
+workflow verbs as `action`, enum values as `status`, and operating limits as
+`constraint`, all with `discoverTable: false`. Preserve multiword/header-child
+families such as `medical assessments`, `care activities`, `release events`,
+`custody transfers`, `test results`, and `evidence attachments`. Do not turn
+every noun into an entity merely to increase recall. Add known standard or
 required-existing logical names to `<EXPLICIT_TABLES>`. Build
 `<PROPOSED_TABLES>` from the detected publisher prefix for every clearly
 proposed custom table so collisions and missing names are explicit; leave a
@@ -532,58 +550,106 @@ Detailed advisory discovery is quality-bounded:
   capacity.
 - A concept credibly covered by an exact table does not receive speculative
   advisory alternatives.
-- Every unresolved concept receives its best advisory candidate first.
-- Only then allocate second/third candidates, with at most 3 per concept and a
-  target ceiling of 40 unique advisory tables.
-- When more than 40 unresolved concepts have distinct best candidates, exceed
-  40 only enough to preserve one candidate per concept. Quality coverage takes
-  priority over the target ceiling.
-- Inventory-only alternatives remain available for the existing one-time
-  bounded exact-name expansion.
+- Every typed entity concept receives its primary candidate and at most one
+  ambiguity candidate. Roles, attributes, actions, statuses, and constraints
+  never trigger table discovery.
+- A lower-ranked proposed-name collision is promoted only when its display
+  phrase strongly matches a multiword entity concept.
+- Strong exact/suffix/contains matches and explicit/collision candidates load
+  full details. Weak advisory candidates load `core` details and cannot
+  authorize Reuse, Extend, or Adapt until bounded expansion upgrades them.
+- Inventory-only alternatives remain available for bounded exact-name
+  expansion, at most once per newly selected logical name.
 
 ```bash
 SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-EVIDENCE_PATH="<working_dir>/.tmp/dataverse-planning-evidence.md"
+CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
+ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
+INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
-node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+run_dataverse_planning_attempt() {
+if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --output "$SNAPSHOT_PATH" \
-  --concepts "<DATAVERSE_CONCEPTS>" \
+  --concepts-file "$CONCEPTS_PATH" \
   --tables "<EXPLICIT_TABLES>" \
-  --proposed-tables "<PROPOSED_TABLES>"
+  --proposed-tables "<PROPOSED_TABLES>" \
+  --progressive-detail \
+  --combined-base-read \
+  --read-concurrency 1 \
+  --inventory-cache "$INVENTORY_CACHE_PATH"; then
+  printf 'NEEDS_RECOVERY: dataverse-snapshot\n' >&2
+  return 2
+fi
 
-node "${PLUGIN_ROOT}/scripts/render-dataverse-planning-evidence.js" \
+if ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
-  --output "$EVIDENCE_PATH"
+  --output "$ARCHITECT_EVIDENCE_PATH" \
+  || ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+    --snapshot "$SNAPSHOT_PATH" --output "$ARCHITECT_EVIDENCE_PATH" --validate-only; then
+  printf 'NEEDS_RECOVERY: dataverse-evidence\n' >&2
+  return 2
+fi
 
 node -e '
   const s=require(process.argv[1]);
   const t=s.timings;
   const d=s.detailLoadSummary;
   console.log(`✓ Dataverse inventory: ${s.inventoryFacts.customizableTables} customizable + ${s.inventoryFacts.exactNameTables} bounded exact-name discoveries (${s.inventoryFacts.requiredExactNameTables} required, ${s.inventoryFacts.proposedCollisionTables} proposed collisions) (${t.inventoryRetrievalMs} ms)`);
-  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed candidates (${d.requiredCandidates || 0} required, ${d.advisoryCandidates || 0} advisory, ${d.exactCoveredConcepts || 0} exact-covered concepts; ${t.candidateSelectionMs} ms)`);
-  console.log(`✓ Detail loading: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
+  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed (${d.primaryCandidates || 0} primary, ${d.ambiguityCandidates || 0} ambiguity, ${d.strongCollisionCandidates || 0} strong collision, ${d.deferredCandidates || 0} deferred; ${t.candidateSelectionMs} ms)`);
+  console.log(`✓ Detail loading: ${d.loadedCandidates} loaded (${d.coreCandidates || 0} core, ${d.fullCandidates || 0} full), ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
   console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
-' "$SNAPSHOT_PATH"
-echo "✓ Planning evidence: $EVIDENCE_PATH"
+' "$SNAPSHOT_PATH" || return 2
+echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
+}
+run_dataverse_planning_attempt
 ```
 
-If environment resolution, token acquisition, inventory, required exact-name
-metadata/detail loading, parsing, or evidence rendering fails, surface the
-exact failure and **do not** treat an unreadable response as an empty inventory:
+`--combined-base-read` loads attributes, three relationship collections, and
+alternate keys through one entity-definition GET per selected table, following
+any nested continuation links before normalization. Typed constraints, choices,
+lookup targets, and computed metadata remain separate full-detail GETs.
+`--read-concurrency 1` is the production default. Concurrency `2` through `8`
+is an explicit operator choice only; metadata writes are never sent
+through this read worker pool. The inventory cache stores inventory-level facts
+only, has a five-minute TTL, fails open on corruption or identity mismatch, and
+is never read by `--reconcile-exact`. After any metadata publish, invalidate it
+with `dataverse-inventory-cache.js --file "$INVENTORY_CACHE_PATH" --invalidate`.
 
-- For every `required` Dataverse plan, stop planning with a visible
-  `BLOCKED: Dataverse planning metadata unavailable for exact target decisions`
-  result. Do not dispatch a snapshot-only architect and do not proceed toward
-  Dataverse mutation. The mutation workflow does not accept an unresolved
-  `Unverified` plan as an executable contract.
-- A concept-selected candidate is advisory unless it is also named by
-  `--tables`. If advisory detail metadata is unsupported, abstract, or
-  inaccessible, keep the snapshot, record it in `detailLoadFailures`, list it
-  in the evidence appendix, and continue. Explicit `--tables` and bounded
-  exact-name expansions remain required and fail closed.
+**Foreground recovery, not agent termination.** A nonzero command result or
+`NEEDS_RECOVERY` returns control to the foreground agent. Keep working on the
+failure; only dependent summaries, architect dispatch, approval, and mutation
+wait for trustworthy evidence. This also applies to environment resolution,
+token acquisition, transport access, broad inventory, exact-name identity
+resolution, parsing, and evidence validation failures in this step.
+
+- Diagnose the actual error, then repair recoverable project-local command,
+  path, or concept-input mistakes. Let the request executor handle its bounded
+  transient retries; do not launch parallel retry loops or repeat an unchanged
+  permanent error. Invalid cached or old-format metadata is regenerated from
+  live reads, never edited into apparent validity.
+- After a targeted repair, rerun `run_dataverse_planning_attempt` (or
+  rerun the block with that invocation if the shell function is unavailable).
+  Allow at most two repair-and-retry attempts per failing stage. Re-resolve the
+  selected environment first if resolution failed.
+- Resume automatically only after the current attempt succeeds and its fresh
+  snapshot and matching evidence validate. File existence is not success:
+  prior artifacts can survive a failed atomic write. Never substitute stale
+  evidence, invent metadata, change the selected account/environment, relax
+  validation, or downgrade a requirement to make the check pass.
+- Ask the user only when recovery needs interactive sign-in, missing privileges,
+  an explicit scope decision, or the bounded repairs are exhausted. Preserve
+  the working context and resume this stage after that blocker is resolved;
+  a recoverable command failure alone is not terminal `BLOCKED`.
+- Individual table-detail failures do not stop planning. Keep the snapshot,
+  record each failure in `detailLoadFailures`, list it in the evidence
+  appendix, and classify the affected exact or advisory table as `Defer` at
+  Gate 2 unless the user chooses a materially different business design.
+- `Defer` is non-executable. Step 8 still requires fresh complete evidence for
+  every approved `Reuse`, `Extend`, `Create`, or `Adapt` operation; unresolved
+  metadata never authorizes a write.
 - `--proposed-tables` performs collision checks only. Missing proposed names
   are not required-table failures and must never be selected for detail loading
   solely because they were proposed.
@@ -596,15 +662,14 @@ milestone ID once with its counts and elapsed time. The first environment or
 snapshot milestone must be visible within 30 seconds. The foreground
 orchestrator owns this rendering; the architect only owns the status artifact.
 
-For `required`, pass `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim to the planner
-prompt and every direct `data-model-architect` fallback/revision. A supplied
-matching snapshot activates the architect's `snapshot-only` path: no Bash
-discovery and no live Dataverse calls inside the agent. For `connector-only`,
-pass the mode explicitly and state that both paths are not supplied; never
-provide placeholder file paths.
-
-Benchmark method and acceptance criteria:
-[`references/dataverse-planning-benchmark.md`](references/dataverse-planning-benchmark.md).
+For `required`, pass `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim to
+the planner prompt and every direct `data-model-architect` fallback/revision.
+The model reads the compact sidecar, not the full snapshot; deterministic tools
+retain the full snapshot for hash binding and validation. A supplied matching
+pair activates the architect's `snapshot-only` path: no Bash discovery and no
+live Dataverse calls inside the agent. For `connector-only`, pass the mode
+explicitly and state that both paths are not supplied; never provide placeholder
+file paths.
 
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
@@ -649,7 +714,7 @@ Prompt:
   Dataverse planning mode: <required | connector-only>
   Dataverse planning failure reason: none
   Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
-  Dataverse planning evidence: <absolute EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Compact Dataverse architect evidence: <absolute ARCHITECT_EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
   Structured schema contract: <absolute
   `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
   NOT SUPPLIED>
@@ -698,8 +763,10 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
   **MUST forward the approved architecture in the direct architect prompt.**
   Include the exact Gate 1-approved native capabilities and connectors. In
-  `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and do
-  not resolve the environment or run Dataverse discovery again. A
+  `required`, pass `Dataverse planning mode: required` and forward
+  `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim. The full snapshot is
+  validator input only; read only the compact evidence. Do not resolve the
+  environment or run Dataverse discovery again. A
   `connector-only` run never dispatches this architect.
 
   **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt:** *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
@@ -708,6 +775,14 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
   `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
   A draft Markdown section without that sidecar is not an executable Gate 2
   result.
+
+  Before presenting Gate 2, run
+  `validate-dataverse-planning-decisions.js --contract <contract> --snapshot <snapshot>`.
+  Apply the native planner's Step 5 decision-validation handling: preserve the
+  exact metadata signal on exit `3`, revise against the same compact evidence
+  on exit `4`, and permit approval only on exit `0`. This check also applies to
+  every direct revision and the fully-inline fallback; architecture approval
+  never substitutes for data-model approval.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
@@ -766,8 +841,9 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even
 leaf agents cannot be spawned), fall further to fully-inline mode. Draft and
 approve native capabilities, connectors, and data platform first. In
-`required`, then draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH`
-with no live OData probe and write/normalize the same structured schema
+`required`, then draft the data model from `ARCHITECT_EVIDENCE_PATH`, using
+`SNAPSHOT_PATH` only through deterministic validation. With no live OData probe,
+write/normalize the same structured schema
 contract required by `agents/data-model-architect.md`. In `connector-only`,
 write an explicit zero-table/no-Dataverse `## Data Model` section and no
 contract or Data Model gate. Then draft the screen graph + specs against
@@ -811,9 +887,39 @@ For all other first lines, use the plugin-wide protocol in
 [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #12 for every `Task` return.
 `DONE` continues after output validation; `DONE_WITH_CONCERNS:` surfaces and
 queues concerns for the memory bank; `NEEDS_CONTEXT:` re-dispatches with missing
-context, capped at 2 retries; `BLOCKED:` reports the blocker. Unknown first
+non-Dataverse context, capped at 2 retries; `BLOCKED:` reports the blocker. Unknown first
 lines are malformed. Recoverable artifact/input failures return to their
 owning phase for repair; they never authorize skipping an applicable gate.
+
+The structured Dataverse signals below use monotonic name tracking or
+deterministic revision instead of the generic retry cap. In `required` only,
+initialize two in-memory sets from the current validated snapshot before
+handling either metadata signal:
+
+- `DETAIL_ATTEMPTED_NAMES` — every logical name already present in
+  `selectedTables` with `detailLevel: full`,
+  `exactNameResolution.unavailableTables`, or `detailLoadFailures`. A
+  `selectedTables` entry with `detailLevel: core` is not fully attempted and
+  remains eligible for one full-detail expansion.
+- `PROPOSED_CHECKED_NAMES` — every logical name in
+  `proposedNameChecks.checked`.
+
+Expansion is monotonic: each network request contains only names not already in
+the applicable set, and no expansion reruns broad inventory discovery. There
+is no fixed expansion-round count. Continue automatically while the planner
+identifies new exact names derived from the approved brief or current evidence.
+Every re-dispatch preserves the approved architecture and `complete` phase;
+metadata recovery does not reopen Gate 1 or change connector ownership.
+
+**Data-model deterministic revision:** when the planner returns
+`NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>`, do not
+route it through the generic `NEEDS_CONTEXT` retry cap. Immediately run the
+existing inline data-model revision path with the same snapshot, compact
+evidence, and approved architecture. Perform no metadata read and ask no user
+question. Reclassify known collisions or attempted unavailable detail as
+`Reuse`, `Extend`, `Adapt`, or `Defer` as the verified evidence permits,
+regenerate and validate the contract, and then present Gate 2. Ask the user
+only if the remaining alternatives change business semantics.
 
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
@@ -821,9 +927,17 @@ returns exactly
 de-duplicate those names. This signal is valid only in `required` mode with a
 validated base snapshot, whether it came from the planner or the direct
 architect fallback; receiving it in `connector-only` mode is `BLOCKED`.
-Perform one bounded foreground expansion. Reuse the existing snapshot
-inventory, issue at most one exact-name metadata query for requested names
-absent from it, and do not run another broad inventory query:
+Compute `NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES`.
+
+- If `NEW_DETAIL_NAMES` is non-empty, perform the exact foreground expansion
+  below for only those names. Reuse the existing snapshot inventory and do not
+  run another broad inventory query.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  explicit fact that every requested name was already attempted. The architect
+  must use the current full evidence, or classify an unavailable/incompatible
+  dependency as `Defer`. It may ask the user only when a genuine business
+  choice remains, such as choosing between a shared existing system of record
+  and a new app-owned table.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -831,11 +945,13 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
   --output "$SNAPSHOT_PATH" \
-  --tables "<exact comma-separated logical names>"
+  --tables "<NEW_DETAIL_NAMES as exact comma-separated logical names>" \
+  --combined-base-read \
+  --read-concurrency 1
 
-node "${PLUGIN_ROOT}/scripts/render-dataverse-planning-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
-  --output "$EVIDENCE_PATH"
+  --output "$ARCHITECT_EVIDENCE_PATH"
 
 node -e '
   const s=require(process.argv[1]);
@@ -850,15 +966,26 @@ node -e '
 ```
 
 Print the expansion's requested/loaded/unavailable names and timings
-immediately, then re-dispatch the same planner or architect once with the same
-snapshot/evidence paths. A second detailed-metadata signal is `BLOCKED`; do not
-loop, broaden concepts, or defer exact validation to mutation.
+immediately, add every attempted name to `DETAIL_ATTEMPTED_NAMES`, then
+re-dispatch the same planner or architect with the same
+snapshot/architect-evidence paths. A later detail signal is handled by the same
+set-difference rule. Never repeat a name, broaden concepts, or defer exact
+validation to mutation.
 
 **Data-model proposed-name expansion:** when the planner or direct architect
 returns exactly
 `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>`, sort and de-duplicate
 those names. This signal is valid only in `required` mode with a validated
-snapshot. Perform one collision-only foreground expansion:
+snapshot. Compute
+`NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES`.
+
+- If `NEW_PROPOSED_NAMES` is non-empty, perform the collision-only foreground
+  expansion below for only those names.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  existing present/missing results. A checked-missing name can support
+  `Create`; a collision must be reconciled as `Reuse`, `Extend`, or `Adapt`.
+  If `Adapt` produces a new final logical name, that new name flows through
+  this same set-difference rule automatically.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -866,18 +993,30 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
   --output "$SNAPSHOT_PATH" \
-  --proposed-tables "<exact comma-separated logical names>"
+  --proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>" \
+  --combined-base-read \
+  --read-concurrency 1
 
-node "${PLUGIN_ROOT}/scripts/render-dataverse-planning-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
-  --output "$EVIDENCE_PATH"
+  --output "$ARCHITECT_EVIDENCE_PATH"
 ```
 
 This expansion checks collisions only; it does not treat absent proposed names
-as required existing tables or load their details. Re-dispatch once. A second
-proposed-name signal is `BLOCKED`. If a collision is found and the architect
-needs compatibility facts, it may then use the separate one-time
-`detailed-dataverse-metadata` expansion for that existing table.
+as required existing tables or load their details. Add every checked name to
+`PROPOSED_CHECKED_NAMES` and re-dispatch. Later proposed-name signals use the
+same set-difference rule. If a collision is found and the architect needs
+compatibility facts, it may request incremental
+`detailed-dataverse-metadata` for that existing table.
+
+**No-progress fallback:** if an agent repeats a metadata signal containing only
+already-attempted names after receiving the explicit no-new-names instruction,
+do not block the create flow for another metadata retry. Run the existing
+inline data-model revision path against the current compact evidence. Preserve
+safe decisions, classify unresolved required-existing or incompatible targets
+as `Defer`, regenerate and validate the contract, and present the result at
+Gate 2. Ask the user only when the remaining choice changes business semantics;
+do not ask merely because metadata is unavailable.
 
 Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
 
@@ -891,7 +1030,7 @@ INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternative
 
 Example: `INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce`
 
-This fires before Gate 1 — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
+This fires during the completion pass before screen planning — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
 
 **Skip this section if `<design_vibe_opt_in>` is `yes`, `done`, `deferred`, or
 `skip`**. The normal create flow uses `deferred`, so `/design-system` owns the
@@ -1002,11 +1141,29 @@ test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
+  --contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --snapshot "$SNAPSHOT_PATH"
 ```
 
-Do not fall back to parsing the Markdown ER diagram when the sidecar is missing
-or malformed; route through the existing planner/direct-architect revision
-path.
+The same validation MUST run before Gate 2 is shown in the planner and inline
+paths. On exit `3`, preserve and branch on the exact stderr first line:
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` uses the incremental
+detail set-difference path, while
+`NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` uses the separate
+incremental collision-check path. Never rewrite one signal as the other or
+repeat a network request for an already-attempted name.
+On exit `4`, preserve
+`NEEDS_REVISION: dataverse-plan-validation` plus its safe error lines and route
+them through the existing planner/direct-architect revision path with the same
+snapshot and compact evidence. This path performs no metadata read and asks no
+user question. If the same conflict survives re-dispatch, use the inline
+data-model revision path; ask the user only when choosing among materially
+different business designs. Exit `2` is reserved for an invalid
+contract/snapshot artifact and is `BLOCKED`. Do not approve Reuse, Extend, or
+Adapt from `core` or missing detail, or Create/Adapt names without
+checked-missing collision evidence. Do not fall back to parsing the Markdown
+ER diagram when a sidecar is missing or malformed.
 
 ### Step 4 — Auth & environment selection
 
@@ -2525,6 +2682,9 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+Planning      : metadata <N ms> | local <N ms> | architect <N ms> | screens <N ms>
+Approval wait : <N ms> (excluded from agent performance)
+Execution     : scaffold <N ms or not recorded> | mutation <N ms or not recorded>
 App Insights  : <enabled for selected customer-owned resource | disabled>
 Dev server    : Metro running on port <port>
 Debug logs    : .powernative/metro-logs/

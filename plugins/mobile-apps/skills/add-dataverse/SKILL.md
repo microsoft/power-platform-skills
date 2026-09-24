@@ -499,17 +499,40 @@ This retains prior checkpoint bindings/tables as integrity-protected history,
 keeps earlier successful tables publication-pending, and maps only the
 journal-proven failed collision table to its revised in-contract alias. It
 fails closed if a completed write would disappear from the revised contract or
-change definition: completed tables/inline columns, extension columns,
-relationships (including cascade behavior), and alternate keys must each map
-to an equivalent revised structured component. It also rejects any unrelated
-out-of-contract publish target. Only after this succeeds may Step 8 overwrite
-the operation manifest.
+change definition: completed tables/inline columns, extension columns, image
+configuration PUTs, relationships (including cascade behavior), and alternate keys must each map
+to an equivalent revised structured component. Completed image PUTs retain their
+full hash-bound definitions only when the revised image requirements remain
+compatible; they stay publication-pending without replaying the update. It also
+rejects any unrelated out-of-contract publish target. Only after this succeeds
+may Step 8 overwrite the operation manifest.
 
 The manifest builder never emits calculated/rollup/formula creation. Reused
 computed dependencies have already crossed the exact derived-metadata barrier;
-unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and continue
-to Step 6. When there were zero writes and no checkpoint, continue without
-deleting anything. Skip the
+unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and invalidate the planning-only inventory cache:
+
+```bash
+node -e "const checkpoint = process.argv[1]; if (checkpoint) require('node:fs').rmSync(checkpoint, { force: true });" \
+  "${PUBLISH_CHECKPOINT:-}"
+if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
+  exit 2
+fi
+```
+
+**Cache-invalidation recovery (both publish paths):** a nonzero exit returns
+control to the foreground agent for local recovery, not success. Diagnose the
+cache path or filesystem permission error and allow at most two targeted retries
+of the invalidation command. Preserve the successful publish result and execution
+journal; do not replay metadata writes or publish to repair a local cache failure.
+Do not reuse the failed cache or continue to service generation, verification,
+sample data, or offline setup until invalidation exits `0`. If local recovery
+cannot complete, report the remaining blocker and resume this cleanup after it is
+resolved; never mark the phase complete just because publication succeeded.
+
+Only after successful invalidation continue to Step 6. When there were zero writes and no checkpoint,
+continue without deleting anything. Skip the
 fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
 was already part of the validated phase order.
 
@@ -1081,6 +1104,20 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 Build the entity list from all tables that were **created or extended** in Steps 4–5. Skip reused-as-is tables — they don't need republishing.
 
 If the publish call returns a non-2xx status, report the error and stop — do not proceed. The user must resolve before the tables are usable.
+
+After a 2xx publish, invalidate the planning-only inventory cache before
+verification so a later planning run cannot reuse pre-publication inventory:
+
+```bash
+if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
+  exit 2
+fi
+```
+
+Apply the same cache-invalidation recovery rule from the validated publish path
+above. Continue to Step 6c only after invalidation exits `0`.
 
 ### Step 6c — Verify tables exist
 
