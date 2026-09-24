@@ -607,10 +607,14 @@ ONLY after effective success (apply+verify).
   The tombstone **lists every teardown in flight** (id, pid, start time), and every teardown that
   finishes removes its own entry, under the lease (retried briefly if another writer holds it): one
   that failed or threw keeps the tombstone. After a clean teardown the snapshot is deleted when the last
-  live entry goes — whatever it has become by then, since a baseline written over the tombstone carries
-  the list — and until then it stays tombstoned, its generation rotated, fencing the deletes still
-  running. An entry whose process is gone, or that is a day old, no longer counts. `--clear-workspace`
-  leaves a workspace whose fence is still held.
+  live entry goes — whatever it has become by then — and until then it stays tombstoned, its generation
+  rotated, fencing the deletes still running. A `--changed-only` build that reads a tombstone listing a
+  teardown still running refuses to build until it finishes (the no-identity fallback included). A
+  running teardown refreshes its entry every minute, and an entry whose process is gone, or that has not
+  been seen for five minutes, no longer counts — so a killed teardown's entry stops blocking within
+  minutes, even under a reused pid. `--clear-workspace` leaves a workspace whose fence is still held. A
+  stale workspace lease is reclaimed by one writer only (an exclusive claim file, and a re-check of the
+  lock).
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

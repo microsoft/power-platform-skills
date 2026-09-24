@@ -139,11 +139,6 @@ function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreE
   env.sampleDataApplied = !!sampleDataApplied;
   for (const d of (prior && Array.isArray(prior.debt) ? prior.debt : [])) snap.addDebt(env, d);
   for (const d of classify.debt) snap.addDebt(env, d);
-  // A baseline written while a teardown is still running (this build read its tombstone) carries the
-  // tombstone's list of teardowns in flight, as it carries its debt — so the last of them to finish still
-  // finds its own entry and deletes the snapshot (apply-snapshot-store.js releaseTombstone), and none of
-  // them finishing first can drop the fence the others still depend on.
-  if (prior && Array.isArray(prior.teardowns) && prior.teardowns.length) env.teardowns = prior.teardowns.map((t) => ({ ...t }));
   // A pre-existing app cannot be certified fresh — record the uncertified-baseline debt so it stays
   // ineligible (a full build re-skipped any diverged additive artifact; we cannot prove deployed==spec).
   if (appPreExisted) snap.addDebt(env, { artifactType: 'app', identity: live.appUniqueName || '', reason: 'uncertified-baseline (app pre-existed; additive edits may not have converged)' });
@@ -192,6 +187,20 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   const annotate = (s) => annotateContentHashes(s, deps.readContent);
   const annotatedSpec = annotate(spec);
   const snapshot = store.readSnapshot(ws);
+  // A teardown still running lists itself on the tombstone it wrote (apply-snapshot-store.js
+  // tombstoneSnapshot), and a build now would recreate what it is deleting — the fenced invalidate below
+  // would let it, the tombstone's generation being the very one this run read. So the run waits for it,
+  // whichever build it would have run (the no-identity fallback included). A tombstone no teardown still
+  // holds (one that failed, or was killed and stopped being seen) does not block: it only makes the
+  // baseline ineligible, through its debt. A teardown starting after this read is caught by the invalidate's
+  // generation fence.
+  const running = store.teardownsInFlight(snapshot);
+  if (running.length) {
+    const who = running.map((t) => `pid ${t.pid}, last seen ${Math.max(0, Math.round((Date.now() - (typeof t.beat === 'number' ? t.beat : t.at)) / 1000))}s ago`).join('; ');
+    const msg = `changed-only: ${running.length} teardown(s) of this workspace are still running (${who}) — re-run the build once they have finished. A teardown that died stops counting ${Math.round(store.TEARDOWN_STALE_MS / 60000)} minutes after it was last seen.`;
+    log(`✗ ${msg}`);
+    return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'a teardown is running' } };
+  }
   const live = await deps.resolveLiveIdentity();
 
   // No trustworthy live identity → we cannot safely gate a fast apply. Degrade to a normal full build and

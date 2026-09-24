@@ -332,6 +332,8 @@ function loadTeardownCli({
         tombstoneSnapshot: (workspaceDir) => { events.push({ type: 'tombstoneSnapshot', workspaceDir }); return { ok: true, generation: 'g-tomb', teardownId: 'td-1' }; },
         deleteSnapshot: (workspaceDir) => events.push({ type: 'deleteSnapshot', workspaceDir }),
         releaseTombstone: (workspaceDir, teardownId, deps) => { events.push({ type: 'releaseTombstone', workspaceDir, teardownId, keep: !!(deps && deps.keep) }); return releaseResult; },
+        beatTeardown: (workspaceDir, teardownId) => { events.push({ type: 'beatTeardown', workspaceDir, teardownId }); return { ok: true }; },
+        TEARDOWN_BEAT_MS: 60000,
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
@@ -369,6 +371,8 @@ function loadTeardownCli({
     process: sandboxProcess,
     Buffer,
     setImmediate,
+    setInterval,
+    clearInterval,
   }, { filename: scriptPath });
   return { main: mod.exports.__mainForTest, events, stderr, sdkTemp, settle: () => new Promise((resolve) => setImmediate(resolve)) };
 }
@@ -654,6 +658,33 @@ test('a failed teardown drops its entry, so a clean re-run in the same process r
     assert.strictEqual(r2.ok, true, JSON.stringify(r2.errors));
     assert.strictEqual(r2.snapshotKept, undefined, 'no other teardown is running');
     assert.strictEqual(snapStore.readSnapshot(ws), null, 'the clean re-run removes the snapshot');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// While it runs, a teardown refreshes its entry, so the entry keeps counting; once it has finished it stops.
+// An entry that is no longer seen stops counting, which is what lets a KILLED teardown's entry go.
+test('a running teardown keeps its entry fresh, and stops once it has finished', async (t) => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const beat = t.mock.method(snapStore, 'beatTeardown');
+    const sdk = presentSdk();
+    let seen = null;
+    const del = sdk.deleteAppCascade;
+    sdk.deleteAppCascade = async (...args) => {
+      const before = snapStore.readSnapshot(ws).teardowns[0].beat;
+      t.mock.timers.tick(snapStore.TEARDOWN_BEAT_MS);
+      seen = [before, snapStore.readSnapshot(ws).teardowns[0].beat];
+      return del(...args);
+    };
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual(seen[0], undefined, 'no beat before the first interval');
+    assert.strictEqual(typeof seen[1], 'number', 'a beat after it');
+    const beats = beat.mock.callCount();
+    t.mock.timers.tick(snapStore.TEARDOWN_BEAT_MS * 3);
+    assert.strictEqual(beat.mock.callCount(), beats, 'a finished teardown beats no more');
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 

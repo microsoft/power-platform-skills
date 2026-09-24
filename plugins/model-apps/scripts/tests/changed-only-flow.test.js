@@ -456,28 +456,55 @@ test('run: a FIRST build that fails leaves a debt-free placeholder, and the next
   } finally { rm(dir); }
 });
 
-// A full build that reads a tombstone — a teardown still running — writes an INELIGIBLE baseline over it,
-// and that baseline carries the tombstone's list of teardowns in flight. Dropping the list let the first of
-// two overlapping teardowns to finish delete the snapshot, and with it the fence the other still relied on.
-test('run: a baseline written over a tombstone carries its teardowns, so only the last to finish removes it', async () => {
+// A tombstone that lists a teardown still running means that teardown is deleting the app right now: a
+// build would recreate what it deletes, and its fenced invalidate would pass — the generation it compares
+// is the tombstone's own. So a changed-only run refuses and builds nothing until the teardown finishes.
+test('run: a changed-only build refuses while a teardown of the workspace is still running', async () => {
   const dir = ws();
   try {
     seedEligible(dir, annotate(baseSpec(), 'v1'));
-    const a = store.tombstoneSnapshot(dir);
-    const b = store.tombstoneSnapshot(dir);
+    const t = store.tombstoneSnapshot(dir);
+    const before = store.readSnapshot(dir);
     const record = [];
-    const logs = [];
-    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), log: (m) => logs.push(m) }) });
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /^changed-only: 1 teardown\(s\) of this workspace are still running \(pid \d+, last seen \d+s ago\) — re-run the build once they have finished\. A teardown that died stops counting 5 minutes after it was last seen\.$/);
+    assert.strictEqual(record.length, 0, 'nothing is built while the teardown deletes');
+    assert.deepStrictEqual(store.readSnapshot(dir), before, 'and the tombstone is untouched');
+    assert.deepStrictEqual(store.releaseTombstone(dir, t.teardownId), { ok: true, deleted: true }, 'the teardown then finishes as usual');
+  } finally { rm(dir); }
+});
+
+// …whichever build it would have run: a run that cannot resolve its live identity falls back to a plain
+// full build, and that one waits for the teardown too — before it even asks for the identity.
+test('run: the no-identity fallback also waits for a teardown still running', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    store.tombstoneSnapshot(dir);
+    const record = [];
+    let asked = 0;
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => { asked += 1; return null; } }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /teardown\(s\) of this workspace are still running/);
+    assert.deepStrictEqual([record.length, asked], [0, 0], 'nothing built, and the identity never asked for');
+  } finally { rm(dir); }
+});
+
+// A tombstone no teardown still holds — one that failed, or a day old — does not block: the build runs, and
+// the tombstone's debt keeps its baseline ineligible, as it always did.
+test('run: a tombstone no teardown still holds only makes the baseline ineligible', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    store.tombstoneSnapshot(dir, { now: () => Date.now() - store.TEARDOWN_STALE_MS - 1000 });
+    assert.deepStrictEqual(store.teardownsInFlight(store.readSnapshot(dir)), [], 'precondition: no teardown is still running');
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
     assert.strictEqual(r.changedOnly.decision, 'full');
     assert.strictEqual(record.length, 1);
-    assert.ok(logs.some((m) => /baseline snapshot recorded INELIGIBLE/.test(m)), `precondition: the baseline was written over the tombstone\n${logs.join('\n')}`);
     const disk = store.readSnapshot(dir);
-    assert.strictEqual(disk.eligible, false, 'the teardown debt keeps it ineligible');
-    assert.deepStrictEqual(disk.teardowns.map((t) => t.id), [a.teardownId, b.teardownId], 'the list of teardowns in flight is carried forward');
-    assert.strictEqual(store.releaseTombstone(dir, a.teardownId).left, true, 'the first teardown to finish leaves the fence');
-    assert.strictEqual(store.claimBaselineSnapshot(dir, FRESH).ok, false, 'so no first build can claim while the other still deletes');
-    assert.deepStrictEqual(store.releaseTombstone(dir, b.teardownId), { ok: true, deleted: true }, 'the last one deletes it');
-    assert.strictEqual(store.readSnapshot(dir), null);
+    assert.ok(disk && disk.eligible === false && snap.isTombstoned(disk), 'the teardown debt keeps the baseline ineligible');
   } finally { rm(dir); }
 });
 

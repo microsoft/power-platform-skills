@@ -92,10 +92,13 @@ function acquireLease(workspaceDir, deps = {}) {
   let r = tryCreate();
   if (r.ok) return r;
   if (r.code !== 'EEXIST') return { ok: false, reason: `lease create failed: ${r.error && r.error.message}` };
-  // Held — decide staleness.
-  let held;
+  // Held — decide staleness. The raw content is kept: a reclaim replaces the lock only while it still holds
+  // exactly what was judged stale here.
+  let held = null;
+  let heldRaw = null;
   let gone = false;
-  try { held = JSON.parse(fs.readFileSync(lp, 'utf8')); } catch (e) { held = null; gone = !!e && e.code === 'ENOENT'; }
+  try { heldRaw = fs.readFileSync(lp, 'utf8'); } catch (e) { gone = !!e && e.code === 'ENOENT'; }
+  if (heldRaw !== null) { try { held = JSON.parse(heldRaw); } catch { held = null; } }
   const heldToken = held && typeof held.at === 'number' ? held : null;
   let age = 0;
   if (heldToken) {
@@ -116,15 +119,31 @@ function acquireLease(workspaceDir, deps = {}) {
   }
   const stale = age > staleMs || (heldToken !== null && !isAlive(heldToken.pid));
   if (!stale) return { ok: false, reason: `lease held by pid ${held && held.pid} (age ${age}ms)`, heldBy: held };
-  // Reclaim: overwrite the stale token, then read it back. Two writers reclaiming one stale lock both
-  // overwrite it, and only the one whose token is still there holds the lease. Not airtight — the other
-  // can read back before the second write lands — but that window is two writes to one small file, on a
-  // lock already minutes stale.
+  // Reclaim EXCLUSIVELY. Only the writer that creates the claim file — the same exclusive create as the
+  // lock itself — may replace the stale lock, and only while the lock still holds exactly what it judged
+  // stale. Overwriting and reading back alone let two reclaimers each read their own token back before the
+  // other's write landed, and both held the lease.
+  const claim = `${lp}.reclaim`;
+  try { fs.writeFileSync(claim, token, { flag: 'wx' }); } catch (e) {
+    if (!(e && e.code === 'EEXIST')) return { ok: false, reason: `stale lease reclaim failed: ${e && e.message}` };
+    // Another writer is reclaiming right now — or crashed doing so. A claim older than the lease's own
+    // staleness window is abandoned: it is removed so the next attempt can reclaim, and this one fails closed.
+    try { if (Date.now() - fs.statSync(claim).mtimeMs > staleMs) fs.rmSync(claim, { force: true }); } catch { /* best-effort */ }
+    return { ok: false, reason: 'lease being reclaimed by another writer' };
+  }
   try {
+    let nowRaw = null;
+    try { nowRaw = fs.readFileSync(lp, 'utf8'); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
+    if (nowRaw !== heldRaw) return { ok: false, reason: 'lease changed while it was being reclaimed' };
     fs.writeFileSync(lp, token);
+    // Read back as well: a writer that ignored the claim protocol still cannot make two holders silently.
     if (fs.readFileSync(lp, 'utf8') !== token) return { ok: false, reason: 'lease reclaimed by another writer just now' };
     return { ok: true, path: lp, token, reclaimed: true };
-  } catch (e) { return { ok: false, reason: `stale lease reclaim failed: ${e.message}` }; }
+  } catch (e) {
+    return { ok: false, reason: `stale lease reclaim failed: ${e.message}` };
+  } finally {
+    try { fs.rmSync(claim, { force: true }); } catch { /* best-effort: an abandoned claim ages out (above) */ }
+  }
 }
 
 // Owner-checked release: remove the lock ONLY if it still holds OUR exact token (a build that reclaimed our
@@ -231,15 +250,44 @@ function invalidateSnapshot(workspaceDir, options = {}) {
 // baseline write needs the same mkdir — so that one case still answers ok without writing.
 const CANNOT_CREATE = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOTDIR', 'EEXIST', 'ENOENT', 'EINVAL', 'ENAMETOOLONG']);
 
-// The teardowns in flight, as a tombstone lists them (see releaseTombstone). An entry is dropped once its
-// process is gone, or once it is older than any teardown runs: a pid can be reused, and an entry that
-// never went would keep the workspace tombstoned for good.
-const TEARDOWN_STALE_MS = 24 * 60 * 60 * 1000;
+// The teardowns in flight, as a tombstone lists them (see releaseTombstone). A running teardown refreshes its
+// entry's `beat` every TEARDOWN_BEAT_MS (beatTeardown), and an entry counts only while its process is alive
+// AND it was seen within TEARDOWN_STALE_MS. A pid alone was not enough: a teardown that was KILLED never
+// drops its entry, its pid can be reused — or come from another machine sharing the workspace — and the
+// entry then kept every --changed-only build refused, and every later clean teardown "left", for a day.
+const TEARDOWN_BEAT_MS = 60 * 1000;
+const TEARDOWN_STALE_MS = 5 * 60 * 1000;
+const lastSeen = (t) => (typeof t.beat === 'number' ? t.beat : t.at);
 function liveTeardowns(disk, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const isAlive = typeof deps.processAlive === 'function' ? deps.processAlive : processAlive;
   const list = disk && Array.isArray(disk.teardowns) ? disk.teardowns : [];
-  return list.filter((t) => t && typeof t.id === 'string' && typeof t.at === 'number' && now() - t.at < TEARDOWN_STALE_MS && isAlive(t.pid));
+  return list.filter((t) => t && typeof t.id === 'string' && typeof t.at === 'number' && now() - lastSeen(t) < TEARDOWN_STALE_MS && isAlive(t.pid));
+}
+// The teardowns a snapshot says are still running — what a changed-only build waits for (changed-only-flow.js).
+function teardownsInFlight(envelope) { return liveTeardowns(envelope); }
+
+// Refresh a running teardown's entry (see liveTeardowns). Best-effort and quiet: one attempt at the lease, and
+// a busy lease or a vanished entry just skips this beat — the next one tries again. It never rotates the
+// generation: a beat moves no fence.
+function beatTeardown(workspaceDir, teardownId, deps = {}) {
+  const now = typeof deps.now === 'function' ? deps.now : Date.now;
+  let lease = null;
+  try {
+    if (!fs.existsSync(snapshotPath(workspaceDir))) return { ok: false, reason: 'no snapshot' };
+    lease = acquireLease(workspaceDir, deps);
+    if (!lease.ok) return { ok: false, reason: lease.reason };
+    const disk = readSnapshot(workspaceDir);
+    const mine = disk && Array.isArray(disk.teardowns) ? disk.teardowns.find((t) => t && t.id === teardownId) : null;
+    if (!mine) return { ok: false, reason: 'no entry for this teardown' };
+    mine.beat = now();
+    writeSnapshotAtomic(workspaceDir, disk);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: `beat failed: ${e.message}` };
+  } finally {
+    if (lease && lease.ok) releaseLease(lease);
+  }
 }
 
 function tombstoneSnapshot(workspaceDir, deps = {}) {
@@ -341,9 +389,8 @@ function deleteSnapshot(workspaceDir) {
 //     rotated, and goes on fencing their deletes. Deleting it when the first of two overlapping teardowns
 //     finished — in either order — let a first changed-only build claim and bless a baseline for an app
 //     the other was still deleting. → { left: true }
-//   · this was the last → the snapshot is deleted, WHATEVER it now is: this tombstone, a baseline a build
-//     wrote over it meanwhile (it carries the list forward, and the teardown debt), or anything else — a
-//     snapshot is never left behind once the app is gone. → { deleted: true }
+//   · this was the last → the snapshot is deleted, WHATEVER it now is: this tombstone, or anything a
+//     writer put in its place — a snapshot is never left behind once the app is gone. → { deleted: true }
 //   · there is no snapshot (or no workspace at all) → nothing to release, and the folder is not recreated
 //     for it. → { gone: true }
 // A lease another writer holds for a moment (a build persisting its snapshot) is retried briefly, for the
@@ -405,6 +452,9 @@ module.exports = {
   removeCreatedDir,
   deleteSnapshot,
   releaseTombstone,
+  teardownsInFlight,
+  beatTeardown,
+  TEARDOWN_BEAT_MS,
   TEARDOWN_STALE_MS,
   RELEASE_ATTEMPTS,
 };

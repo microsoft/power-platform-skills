@@ -448,6 +448,75 @@ test('releaseTombstone retries a briefly held lease, then gives up', () => {
   } finally { rm(d); }
 });
 
+// Two writers finding the same stale lock both overwrote it, and each could read its own token back before
+// the other's write landed — two holders. Only the writer that creates the claim file may reclaim, and only
+// while the lock still holds exactly what it judged stale.
+test('a stale lock is reclaimed by one writer only, and never once it has changed', (t) => {
+  const d = ws();
+  try {
+    const lp = store.leasePath(d);
+    const claim = `${lp}.reclaim`;
+    const stale = JSON.stringify({ pid: 7, at: 0 });
+    const reclaim = () => store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: () => false, staleMs: store.LEASE_STALE_MS });
+    // Another writer is reclaiming right now: this one fails closed and leaves the lock alone.
+    fs.writeFileSync(lp, stale);
+    fs.writeFileSync(claim, 'another writer');
+    const busy = reclaim();
+    assert.deepStrictEqual([busy.ok, busy.reason], [false, 'lease being reclaimed by another writer']);
+    assert.strictEqual(fs.readFileSync(lp, 'utf8'), stale);
+    assert.ok(fs.existsSync(claim), 'a young claim is not removed');
+    // A claim older than the staleness window was abandoned: it is removed, and the next attempt reclaims.
+    const old = new Date(Date.now() - store.LEASE_STALE_MS - 60000);
+    fs.utimesSync(claim, old, old);
+    assert.strictEqual(reclaim().ok, false);
+    assert.ok(!fs.existsSync(claim), 'the abandoned claim is removed');
+    const won = reclaim();
+    assert.deepStrictEqual([won.ok, won.reclaimed], [true, true]);
+    assert.ok(!fs.existsSync(claim), 'and a reclaim leaves no claim behind');
+    store.releaseLease(won);
+    // The lock changed between the judgment and the claim — another writer reclaimed it meanwhile, say: it
+    // is not overwritten.
+    fs.writeFileSync(lp, stale);
+    const realRead = fs.readFileSync;
+    let reads = 0;
+    const readMock = t.mock.method(fs, 'readFileSync', (p, ...rest) => {
+      if (p === lp && ++reads === 2) return JSON.stringify({ pid: 9, at: Date.now() });
+      return realRead(p, ...rest);
+    });
+    const changed = reclaim();
+    readMock.mock.restore();
+    assert.deepStrictEqual([changed.ok, changed.reason], [false, 'lease changed while it was being reclaimed']);
+    assert.strictEqual(fs.readFileSync(lp, 'utf8'), stale, 'the lock is not overwritten');
+    assert.ok(!fs.existsSync(claim));
+  } finally { rm(d); }
+});
+
+// A running teardown refreshes its entry, and an entry counts only while it keeps being seen: a KILLED
+// teardown never drops its entry, and under a reused (live) pid that entry kept every changed-only build
+// refused — and every later clean teardown "left" — for a day.
+test('beatTeardown keeps an entry counted, and an entry no longer seen stops counting even under a live pid', (t) => {
+  const d = ws();
+  try {
+    const old = Date.now() - store.TEARDOWN_STALE_MS - 1000;
+    const killed = store.tombstoneSnapshot(d, { now: () => old, pid: process.pid });
+    assert.deepStrictEqual(store.teardownsInFlight(store.readSnapshot(d)), [], 'not seen for longer than the window: not running, though its pid is alive');
+    const gen = store.readSnapshot(d).generation;
+    assert.deepStrictEqual(store.beatTeardown(d, killed.teardownId), { ok: true });
+    const beaten = store.readSnapshot(d);
+    assert.deepStrictEqual(store.teardownsInFlight(beaten).map((x) => x.id), [killed.teardownId], 'a fresh beat counts again');
+    assert.strictEqual(beaten.generation, gen, 'a beat rotates no fence');
+    // Quiet, one-attempt skips: an unknown entry, a held lease, no snapshot.
+    assert.deepStrictEqual(store.beatTeardown(d, 'td-unknown'), { ok: false, reason: 'no entry for this teardown' });
+    const held = store.acquireLease(d, { now: () => Date.now(), pid: process.pid, processAlive: () => true, staleMs: store.LEASE_STALE_MS });
+    const blocked = store.beatTeardown(d, killed.teardownId);
+    store.releaseLease(held);
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.reason, /^lease held by pid/);
+    fs.rmSync(store.snapshotPath(d));
+    assert.deepStrictEqual(store.beatTeardown(d, killed.teardownId), { ok: false, reason: 'no snapshot' });
+  } finally { rm(d); }
+});
+
 // A lock released between our exclusive create and our look at it is free — but free for everyone, so it is
 // re-taken exclusively. Overwriting it let a writer that created it meanwhile hold the lease as well.
 test('acquireLease re-takes a lock that vanished meanwhile exclusively, never by overwriting it', (t) => {

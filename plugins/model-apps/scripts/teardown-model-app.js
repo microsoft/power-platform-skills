@@ -118,6 +118,7 @@ async function teardownModelApp(spec, opts, deps) {
   // again once the teardown is clean, so a folder that never had a workspace is left without one.
   let createdWorkspaceDir = null;
   let teardownId = null;
+  let heartbeat = null;
   if (opts.apply && opts.workspaceDir) {
     const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
     if (!tomb.ok) {
@@ -127,11 +128,19 @@ async function teardownModelApp(spec, opts, deps) {
     }
     createdWorkspaceDir = tomb.createdDir || null;
     teardownId = tomb.teardownId || null;
+    // While it runs, the teardown keeps its entry fresh (apply-snapshot-store.js liveTeardowns): an entry
+    // counts as running only while it keeps being seen, so one a killed teardown left behind stops counting
+    // within minutes. unref'd, so it never keeps the process alive; cleared the moment the teardown ends.
+    if (teardownId) {
+      heartbeat = setInterval(() => snapStore.beatTeardown(opts.workspaceDir, teardownId), snapStore.TEARDOWN_BEAT_MS);
+      if (typeof heartbeat.unref === 'function') heartbeat.unref();
+    }
   }
   let r;
   try {
     r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
     // clean one, one that finished with errors, and one that threw. An entry left behind read as a
     // teardown still running whenever its pid was alive (reused, slow to exit, or this very process), and
