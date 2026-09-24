@@ -723,7 +723,8 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
 7. Stamp the target, so the gate below can tell the page you write from one an earlier attempt left
-   there:
+   there. Here and below, `<filename>` is the page's `File` value from the plan without its `.tsx`
+   extension (`candidate-tracker.tsx` gives `candidate-tracker`):
 
    ```powershell
    node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"
@@ -757,7 +758,8 @@ duplicated in a subagent context.
 
 **If the plan's Pages table contains 2+ rows**, first stamp every target, so the gate after the
 workers can tell a page a worker wrote from one an earlier attempt left there (continue only on
-`"ok":true`):
+`"ok":true`). Here and below, `<filename>` and `[filename]` are each page's `File` value from the
+plan without its `.tsx` extension (`candidate-tracker.tsx` gives `candidate-tracker`):
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"

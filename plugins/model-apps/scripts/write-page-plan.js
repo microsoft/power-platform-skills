@@ -88,6 +88,24 @@ function main() {
   // written by nobody — but the built pages go along as `built`, in the plan's own spelling: a new page
   // must not reach one through a link or junction (`loop/home.tsx`, with `loop` pointing back here, IS
   // `home.tsx`), and only here is the working directory known to resolve that.
+  // The working directory ITSELF must not be a link — the rule generate-page-manifest.js and the page-file
+  // rule apply to it. Phase 0's `mkdir -p` succeeds silently on a link already at that path, and the plan
+  // is written INTO the directory, so a planted link redirected the plan write whether or not any page was
+  // left for a worker (the page-file rule refuses only the pages it is given). A linked ancestor is still
+  // followed. A directory that is not there yet is created below.
+  let linkedWorkingDir = false;
+  try {
+    linkedWorkingDir = fs.lstatSync(absWorkingDir).isSymbolicLink();
+  } catch (e) {
+    if (!(e && e.code === 'ENOENT')) {
+      emitResult(false, new Error(`cannot inspect the working directory ${absWorkingDir} (${(e && e.code) || e}); fix its permissions or pass another one`));
+      return;
+    }
+  }
+  if (linkedWorkingDir) {
+    emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it is a symbolic link or junction. Pass the directory it points to if that is intended.`));
+    return;
+  }
   const intentFiles = (spec.pages || []).filter((p) => p && (!p.source || p.source.kind === 'intent')).map(pageFile);
   const builtFiles = (spec.pages || []).filter((p) => p && p.source && p.source.kind === 'tsx' && p.source.codeFile).map(planFile);
   const problems = pageFileProblems(intentFiles, { workingDir: absWorkingDir, built: builtFiles });

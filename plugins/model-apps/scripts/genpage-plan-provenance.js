@@ -51,8 +51,11 @@ function sha256(text) {
 // line under `### Current State` and quotes the first ~100 characters of the page's prompt a few lines
 // later (`- **Original prompt:** …`), so a label read anywhere came out of that quote and decided the
 // approved target — the same page halting on every edit, since its first prompt never changes. So a
-// document without the section is read by that File line, then by a label that BEGINS a line (under the
-// same rule), and only then by any `<guid>/page.tsx` path.
+// preview is read by the File line in its Current State block ALONE: a block whose File line is missing
+// or names another file is a broken preview, and reading on found a label or a path quoted from the
+// prompt, which approved another page. Only a document with neither section nor block is read by a File
+// line anywhere, then by a label that BEGINS a line (under the same rule), and then by any
+// `<guid>/page.tsx` path.
 const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const LABELLED_ID = new RegExp(`^\`?\\{?(${GUID})\\}?\`?(?![\\w-])`);
 function labelledPageIds(text, { lineStart = false } = {}) {
@@ -73,13 +76,16 @@ function labelledPageIds(text, { lineStart = false } = {}) {
 // page's own prompt.
 const NAME_GOES_ON = String.raw`[\p{L}\p{N}_\-~+#$@%&=(\[{/\\]`;
 const PAGE_END = `(?!${NAME_GOES_ON}|[.:]+${NAME_GOES_ON})`;
-// The File line reads the same way; a note after the path (` (edit)`) is not part of it.
-const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'imu');
-// The preview's own block. Its File line is read there only: the preview also quotes the page's prompt,
-// and a `- **File:** <other>/page.tsx` bullet in that quote, placed ahead of the block, decided the target.
+// The File line reads the same way; a note after the path (` (edit)`) is not part of it. The page folder may
+// come after a path (`D:\work\edit\<guid>\page.tsx`, `./<guid>/page.tsx`), which a planner writing the
+// plan's absolute path beside it can easily carry over: only the GUID is compared, so it changes nothing.
+const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(?:[^\\r\\n\`]*[\\\\/])?(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'imu');
+// The preview's own block, or null when there is none. Its File line is read there only: the preview also
+// quotes the page's prompt, and a `- **File:** <other>/page.tsx` bullet in that quote, placed ahead of the
+// block, decided the target.
 function currentStateBlock(src) {
   const state = /^###[ \t]+Current State[ \t]*$/im.exec(src);
-  if (!state) return src;
+  if (!state) return null;
   const rest = src.slice(state.index + state[0].length);
   const next = /^#{1,3}[ \t]+\S/m.exec(rest);
   return next ? rest.slice(0, next.index) : rest;
@@ -102,8 +108,10 @@ function planTargets(text) {
     const labels = labelledPageIds(next ? rest.slice(0, next.index) : rest);
     if (labels.length) return labels.every((id) => id && id === labels[0]) ? { kind: 'edit', targets: [labels[0]] } : null;
   } else {
-    const file = FILE_LINE.exec(currentStateBlock(src));
+    const state = currentStateBlock(src);
+    const file = FILE_LINE.exec(state === null ? src : state);
     if (file) return { kind: 'edit', targets: [file[1].toLowerCase()] };
+    if (state !== null) return null;
     const [first] = labelledPageIds(src, { lineStart: true });
     if (first !== undefined) return first ? { kind: 'edit', targets: [first] } : null;
   }

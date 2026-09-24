@@ -121,6 +121,7 @@ test('an overlong or malformed page id is refused, never truncated to a valid-lo
   assert.equal(planTargets(overlong), null, 'a labelled id that runs on names nothing (the path still holds the valid one)');
   assert.equal(planTargets(EDIT_WRITTEN.replace(`**Page ID:** ${PAGE_ID}`, `**Page ID:** ${PAGE_ID}-x`)), null, 'a hyphen continues the token too');
   assert.equal(planTargets(EDIT_PREVIEW.replace(`${PAGE_ID}/page.tsx`, `deadbeef${PAGE_ID}/page.tsx`)), null, 'a folder GUID with a longer token in front');
+  assert.equal(planTargets(`Edit deadbeef${PAGE_ID}/page.tsx\n`), null, '…in the folder fallback too');
   // CONTROLS: the id inside backticks or braces, or followed by punctuation, still ends cleanly.
   for (const shape of [`\`${PAGE_ID}\``, `{${PAGE_ID}}`, `${PAGE_ID}.`]) {
     assert.deepEqual(planTargets(EDIT_WRITTEN.replace(`**Page ID:** ${PAGE_ID}`, `**Page ID:** ${shape}`)), { kind: 'edit', targets: [PAGE_ID] }, shape);
@@ -428,6 +429,25 @@ test('the folder fallback is not diverted to a later path by a mark it does not 
   }
   // CONTROL: a path that does name another file is still skipped for the next one.
   assert.deepEqual(planTargets(written(`D:/work/edit/${PAGE_ID}/page.tsx.bak`)), { kind: 'edit', targets: [other] });
+});
+
+// A preview names its page in its Current State block's File line and nowhere else. A block whose File line is
+// missing or names another file names NOTHING: reading on found a path or a label quoted from the page's prompt,
+// and approved another page.
+test('a preview whose Current State block has no valid File line names nothing', () => {
+  const other = '11111111-2222-3333-4444-555555555555';
+  const preview = (fileLine) => `## Genpage Edit Plan\n\n### Current State\n${fileLine}- **Original prompt:** like ${other}/page.tsx\n- **Page ID:** ${other}\n`;
+  assert.equal(planTargets(preview(`- **File:** ${PAGE_ID}/page.tsx.bak\n`)), null, 'a File line naming another file');
+  assert.equal(planTargets(preview('')), null, 'no File line at all');
+  assert.deepEqual(planTargets(preview(`- **File:** ${PAGE_ID}/page.tsx\n`)), { kind: 'edit', targets: [PAGE_ID] }, 'CONTROL: a valid File line');
+  // …which may carry a path in front of the page folder, as the written plan's absolute path does.
+  for (const at of ['D:\\work\\edit\\', 'D:/work/edit/', './', '`D:\\My Files\\edit\\']) {
+    const tail = at.startsWith('`') ? `${PAGE_ID}\\page.tsx\`` : `${PAGE_ID}/page.tsx`;
+    assert.deepEqual(planTargets(preview(`- **File:** ${at}${tail}\n`)), { kind: 'edit', targets: [PAGE_ID] }, at);
+    assert.equal(planTargets(preview(`- **File:** ${at}${PAGE_ID}/page.tsx.bak\n`)), null, `${at}: still only page.tsx`);
+    assert.equal(planTargets(preview(`- **File:** ${at}deadbeef${PAGE_ID}/page.tsx\n`)), null, `${at}: still a whole id`);
+  }
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3')), approvedPlan: preview('') }).ok, false, 'and verify halts');
 });
 
 // The preview's File line is read from its own `### Current State` block: a `- **File:**` bullet quoted from the

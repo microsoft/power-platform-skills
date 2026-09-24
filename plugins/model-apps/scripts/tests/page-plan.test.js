@@ -381,6 +381,60 @@ test('CLI does not refuse a built page in a spelling the spec gate accepts', () 
   }
 });
 
+// The plan is written INTO the working directory, so one that is itself a link or junction is refused even
+// when every page is already built, and the page-file rule has no page to refuse.
+test('CLI refuses a working directory that is itself a link, even with no page left to write', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-linkedwd-'));
+  try {
+    const real = path.join(base, 'real');
+    fs.mkdirSync(real);
+    const link = path.join(base, 'link');
+    fs.symlinkSync(real, link, 'junction');
+    const s = spec();
+    s.pages.forEach((p, i) => { p.source = { kind: 'tsx', codeFile: `built-${i}.tsx` }; });
+    const specPath = path.join(base, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(s), 'utf8');
+    const cli = path.join(__dirname, '..', 'write-page-plan.js');
+    const res = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', link], { encoding: 'utf8' });
+    assert.notEqual(res.status, 0, res.stdout);
+    assert.match(res.stdout + res.stderr, /refusing to write the page plan into .* symbolic link or junction/);
+    assert.equal(fs.existsSync(path.join(real, 'app-builder-page-plan.md')), false, 'nothing is written through the link');
+    // CONTROL: the directory it points to is accepted.
+    const ok = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', real], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// A working directory that cannot even be inspected is refused with a reason, not a stack trace.
+test('CLI refuses a working directory it cannot inspect, and writes no plan', (t) => {
+  const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-lstat-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const specPath = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+  const cliPath = path.join(__dirname, '..', 'write-page-plan.js');
+  const { main } = require(cliPath);
+  const saved = { argv: process.argv, exit: process.exit, err: process.stderr.write, lstat: fs.lstatSync };
+  let stderr = '';
+  try {
+    process.argv = [process.execPath, cliPath, '--spec', '@' + specPath, '--working-dir', dir];
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    process.exit = (code) => { throw new Error(`process.exit(${code})`); };
+    fs.lstatSync = (p, ...rest) => {
+      if (path.resolve(String(p)) === path.resolve(dir)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return saved.lstat.call(fs, p, ...rest);
+    };
+    assert.throws(() => main(), /process\.exit\(1\)/);
+  } finally {
+    Object.assign(process, { argv: saved.argv, exit: saved.exit });
+    process.stderr.write = saved.err;
+    fs.lstatSync = saved.lstat;
+  }
+  assert.match(stderr, /cannot inspect the working directory .* \(EACCES\)/);
+  assert.equal(fs.existsSync(path.join(dir, 'app-builder-page-plan.md')), false, 'no plan is written');
+});
+
 test('CLI refuses to write a plan when a referenced sample is absent', (t) => {
   const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

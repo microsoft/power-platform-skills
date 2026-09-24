@@ -406,4 +406,7 @@ test('genpage stamps every page target before it is written, in both paths', () 
   assert.match(multi, stamp, 'the multi-page path stamps every target');
   assert.ok(multi.search(stamp) < multi.search(/Fire all invocations in a single message/), 'before it dispatches the workers');
   assert.match(multi, /exactly as its dispatch stamp\s+recorded it/, 'and the gate names what an unchanged page means');
+  // The plan's File values already end in `.tsx`, and every command appends it: `<filename>` is the stem.
+  assert.match(fastPath, /`<filename>` is the page's `File` value from the plan without its `\.tsx`\s+extension/, 'the single-page path says what <filename> is');
+  assert.match(multi, /`<filename>` and `\[filename\]` are each page's `File` value from the\s+plan without its `\.tsx` extension/, 'and so does the multi-page path');
 });
