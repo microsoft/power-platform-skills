@@ -224,6 +224,13 @@ parent grow. Avoid parent `Height` formulas that read descendant `.Height` value
 those descendants also size from the parent; use collection counts and constants
 directly.
 
+For text-bearing buttons, badges, status pills, and labels, budget the longest reachable
+literal or formatted value, not the shortest seed. A 44px-high control is only a
+single-line target. If a multiword value can wrap, include every wrapped line plus vertical
+padding in both the control height and its parent/row budget. Otherwise set `Wrap: =false`
+and provide enough width for the longest value. `LayoutWrap` on the parent moves controls;
+it does not increase a child's fixed height.
+
 Give list-driven galleries a conservative viewport-bounded height and let the Gallery
 scroll when its source has more rows. Always set explicit positive `TemplateSize`, numeric
 `TemplatePadding`, `Items`, and concrete row controls. Do not derive the Gallery's own
@@ -302,6 +309,12 @@ For a responsive screen, that root must contain every visible section. The scree
 top-level `Children:` list contains the root and nothing else; a header or panel aligned
 as the root's sibling is outside AutoLayout and can overlap or cover the rest of the
 screen while still compiling cleanly.
+
+Record this as a `## Viewport Containment Contracts` row. Do not mark
+`QACHK-ROOT-CONTAINMENT` N/A for a responsive or unknown-device screen. A conditional
+receipt, alert, confirmation, or editor remains inside the root and uses a state-driven
+`Visible` predicate; hiding only its children leaves the fixed parent in the layout and
+can preserve blank space or clipping.
 
 A **direct** child of a scroll container must use `FillPortions: =0`, or it is pinned to
 the viewport height and the content is clipped rather than scrolled. Give stacked sections
