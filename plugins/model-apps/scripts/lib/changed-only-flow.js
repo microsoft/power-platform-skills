@@ -218,21 +218,26 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // build ran alongside this one, so what this build made may already be partly deleted, and the run fails
   // rather than report a success nothing can vouch for.
   //
-  // With no snapshot at all there is no generation to compare: a teardown that begins AND finishes during the
-  // build writes its tombstone and deletes it on release, so "none" before and "none" after hid it. So the run
-  // first claims a placeholder, which gives it a generation of its own (claimBaselineSnapshot: ineligible,
-  // debt-free, "no baseline yet"), and drops it again afterwards if it is still that placeholder, so this path
-  // still leaves no snapshot behind.
+  // The generation compared afterwards must be THIS run's own, one no other run can hold. The one it read is not:
+  // with no snapshot, a teardown that begins AND finishes during the build writes its tombstone and deletes it on
+  // release, so "none" before and "none" after hid it; and a second no-identity build that read the same
+  // generation, built and finished inside this one, left it unchanged, so neither saw the other. So, like the
+  // fenced branches, the run takes a generation of its own before it builds. On a workspace with no snapshot it
+  // claims a placeholder (claimBaselineSnapshot: ineligible, debt-free, "no baseline yet") and drops it again
+  // afterwards if it is still that placeholder, so this path leaves no snapshot behind. On one with a snapshot it
+  // invalidates it, fenced to the generation it read, as a full build does: a baseline the build is about to
+  // outdate is never left eligible.
   if (!live) {
     const genOf = (s) => (s && s.generation) || null;
-    let before = genOf(store.readSnapshot(ws));
-    if (before !== genOf(snapshot)) {
+    const seen = genOf(store.readSnapshot(ws));
+    if (seen !== genOf(snapshot)) {
       const msg = 'changed-only: the workspace changed while the live identity was being resolved (a teardown or another build started) — re-run the build once it has finished';
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace changed during identity discovery' } };
     }
     let claimed = null;
-    if (before === null) {
+    let before;
+    if (seen === null) {
       const claim = store.claimBaselineSnapshot(ws, {});
       if (!claim.ok) {
         const msg = `changed-only: could not claim the workspace before the build (${claim.reason}) — aborting before any change`;
@@ -241,6 +246,14 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       }
       claimed = claim.generation;
       before = claimed;
+    } else {
+      const inv = store.invalidateSnapshot(ws, { expectedGeneration: seen });
+      if (!inv.ok) {
+        const msg = `changed-only: could not invalidate the snapshot before the build (${inv.reason}) — aborting before any change`;
+        log(`✗ ${msg}`);
+        return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace could not be claimed' } };
+      }
+      before = inv.generation;
     }
     log('▸ changed-only: could not resolve live identity (WhoAmI/app discovery) — running a normal full build');
     const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);

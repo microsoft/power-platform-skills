@@ -582,6 +582,57 @@ test('run: the no-identity fallback on a workspace with no snapshot sees a teard
   } finally { rm(busy); }
 });
 
+// Two no-identity builds that read the same generation, one inside the other, each saw it unchanged at the end and
+// both reported success. Each now takes a generation of its own before it builds, so the first sees the second's.
+test('run: overlapping no-identity builds do not both pass', async () => {
+  for (const [what, seed] of [
+    ['on a workspace with no snapshot', () => {}],
+    ['on a workspace with an eligible snapshot', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1'))],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      let inner = null;
+      const innerDeps = baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => null });
+      const build = async () => {
+        inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+        return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+      };
+      const outer = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+      assert.ok(inner, `${what}: the second build ran inside the first`);
+      assert.strictEqual(outer.ok, false, `${what}: the first build saw the second`);
+      assert.match(outer.errors[outer.errors.length - 1], /the workspace changed while this build ran/, what);
+    } finally { rm(dir); }
+  }
+});
+
+// A no-identity build outdates the baseline it read, as any full build does, so the baseline is invalidated first —
+// fenced to the generation read — and never left eligible behind the build.
+test('run: the no-identity fallback invalidates an existing baseline before it builds', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const seen = store.readSnapshot(dir).generation;
+    let during = null;
+    const build = async () => { during = store.readSnapshot(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(during && during.eligible === false && during.generation !== seen, 'invalidated, with a rotated generation, before the build ran');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false, 'and still ineligible afterwards');
+  } finally { rm(dir); }
+  // An invalidate that cannot be made (the lease is held) stops the run before it builds anything.
+  const busy = ws();
+  try {
+    seedEligible(busy, annotate(baseSpec(), 'v1'));
+    fs.writeFileSync(store.leasePath(busy), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: busy, apply: true }, deps: baseDeps(busy, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /could not invalidate the snapshot before the build/);
+    assert.strictEqual(record.length, 0);
+  } finally { rm(busy); }
+});
+
 test('dropBaselineClaim removes only the placeholder it was given', () => {
   const dir = ws();
   try {
