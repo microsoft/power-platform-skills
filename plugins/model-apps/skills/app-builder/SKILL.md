@@ -290,7 +290,8 @@ After plan-mode approval (before the full build):
    the localization pattern. The command fails (before writing) if the plan would name a sample that
    doesn't exist, or if a page a worker will write is not a safe target in the working directory — a
    link at its path, a folder that links outside the directory, or a page already there under another
-   spelling. Stop and fix what it names; do not dispatch any worker.
+   spelling — or if a link, a hard link or a folder is already at the plan's own path. Stop and fix
+   what it names; do not dispatch any worker.
 
 4. **Generate** — for each page from step 3 with `intent: true`, dispatch the **headless**
    `genpage-page-builder` worker via `Task`. Use its documented input contract verbatim — a missing

@@ -677,7 +677,9 @@ Before invoking any builders, verify:
   node "${PLUGIN_ROOT}/scripts/check-page-files.js" --plan "<working-dir>/genpage-plan.md"
   ```
 
-  Continue only on `"ok":true`. It refuses absolute paths (drive-qualified ones included), `..`
+  Continue only on `"ok":true`. It reads the plan's one `## Pages` table: a plan with a second
+  `## Pages` heading is refused, not read by its first — a Pages table quoted in the requirements,
+  fenced or not, counts. It refuses absolute paths (drive-qualified ones included), `..`
   traversal, backslash separator aliases, a name Windows cannot store (a device name such as
   `CON.tsx`, a reserved character such as `:`, or a trailing dot or space), a name that is not a
   `.tsx` page file (such as `package.json` or `RuntimeTypes.ts`), a page path that is itself a link,

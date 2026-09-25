@@ -23,7 +23,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { pageFilesFromPlan } = require('./lib/page-file-targets.js');
+const { pagesSections } = require('./lib/page-file-targets.js');
 
 function sha256(text) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
@@ -96,7 +96,15 @@ function planTargets(text) {
   // `- **File:**` lines could hold a `<guid>/page.tsx` path and be misread as an edit target. Each file
   // is compared in the page-file rule's own spelling, `.` segments dropped: `./overview.tsx` in the
   // preview and `overview.tsx` in the written plan name the same page.
-  const files = pageFilesFromPlan(src, { heading: /^#{2,3}\s+Pages\b/ });
+  // The written plan's `## Pages` is looked for first, under the page-file gate's own heading, and only when
+  // there is none the preview's looser `### Pages (N total)`: the looser one also matches the per-page
+  // `### Pages …` specification of a page whose name begins with "Pages", a second section in a written plan.
+  // More than one names nothing — a Pages table quoted in the requirements used to stand in for the real one
+  // (lib/page-file-targets.js pagesSections) — and an edit plan never has one, so it is no edit either.
+  const exact = pagesSections(src);
+  const sections = exact.length ? exact : pagesSections(src, { heading: /^#{2,3}\s+Pages\b/ });
+  if (sections.length > 1) return null;
+  const files = sections[0];
   if (files && files.length) return { kind: 'create', targets: files.map((f) => path.posix.normalize(f.trim())).sort() };
   // The edit target is the page's GUID: the written plan's `- **Page ID:** <guid>`, or else the GUID
   // folder directly before `page.tsx`, which both the preview's `- **File:** <guid>/page.tsx` and the

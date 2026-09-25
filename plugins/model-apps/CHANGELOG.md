@@ -230,7 +230,10 @@ downloads that round-trip Choice columns.
   or not a regular file, a folder that links outside the working directory or cannot be read, and
   names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
   already there) halt the build, as does a new page that is an already-built one reached through a link
-  or junction, or a working directory that is a link or not a folder at all. The same rule covers the
+  or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
+  table — one quoted in the requirements, fenced or not — halts too, instead of only the first being
+  checked, and `/app-builder` writes its page plan only as a plain file directly in the working
+  directory, never through a link, hard link or folder at its path. The same rule covers the
   pages `/app-builder` generates — which now
   runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
   cannot be read fails its check instead of crashing it.

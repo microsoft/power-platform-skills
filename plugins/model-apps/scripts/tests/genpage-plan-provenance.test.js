@@ -104,6 +104,24 @@ test('verifyPlanProvenance halts when the written plan targets other pages than 
   assert.equal(otherPage.ok, false, 'an edit plan for another page');
 });
 
+// A Pages table quoted in the requirements used to be read in place of the real one — here one naming exactly
+// the approved pages, while the real table adds a page nobody approved. Two Pages sections name nothing, so
+// the written plan no longer matches.
+test('verifyPlanProvenance halts when the written plan has a second Pages table, a quoted one included', () => {
+  const quoted = ['```', '## Pages', '| Page | File | Purpose | Entities |', '|---|---|---|---|',
+    '| Details | details.tsx | x | project |', '| Overview | overview.tsx | y | project |', '```'].join('\r\n');
+  const written = WRITTEN
+    .replace('Projects overview and details.', `Projects overview and details, like this:\r\n${quoted}`)
+    .replace('| Overview | overview.tsx | Summary cards | project |', '| Overview | overview.tsx | Summary cards | project |\r\n| Admin | admin.tsx | Settings | project |');
+  assert.equal(planTargets(written), null);
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(written), approvedPlan: PREVIEW }).ok, false);
+  // CONTROL: a page whose name begins with "Pages" has a `### Pages …` specification, which is no second
+  // Pages section of a written plan.
+  const named = WRITTEN.replace('| Overview | overview.tsx |', '| Pages Admin | overview.tsx |').replace('### Overview', '### Pages Admin');
+  assert.deepEqual(planTargets(named), { kind: 'create', targets: ['details.tsx', 'overview.tsx'] });
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(named), approvedPlan: PREVIEW }).ok, true);
+});
+
 test('verifyPlanProvenance halts when the planner wrote nothing, or the approval names no pages', () => {
   const missing = verifyPlanProvenance({ planPath: tmpPlan(), approvedPlan: PREVIEW });
   assert.equal(missing.ok, false);

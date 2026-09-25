@@ -623,7 +623,7 @@ scripts/
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
-  check-page-files.js          ← /genpage: pre-dispatch gate — the plan's page file names are safe write targets (lib/page-file-targets.js)
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/

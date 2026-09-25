@@ -14,11 +14,11 @@
 // Output (one JSON line) and exit code:
 //   0  {"ok":true,"workingDir":…,"files":[…],"problems":[]}
 //   3  {"ok":false,…,"problems":[{"file","code","message"}]}   — halt and re-plan
-//   1  usage error, or the plan has no readable ## Pages table
+//   1  usage error, or the plan has no readable ## Pages table, or more than one
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { pageFileProblems, pageFilesFromPlan } = require('./lib/page-file-targets.js');
+const { pageFileProblems, pagesSections } = require('./lib/page-file-targets.js');
 
 function checkPageFiles({ planPath, workingDir }) {
   if (!planPath) return { exit: 1, result: { ok: false, error: '--plan is required' } };
@@ -29,7 +29,13 @@ function checkPageFiles({ planPath, workingDir }) {
   } catch (e) {
     return { exit: 1, result: { ok: false, error: `--plan could not be read: ${e.message}` } };
   }
-  const files = pageFilesFromPlan(plan);
+  const sections = pagesSections(plan);
+  // Refused, not read by the first: a Pages table quoted in the requirements (fenced or not) decided the
+  // files checked here while the workers wrote the real table's (lib/page-file-targets.js).
+  if (sections.length > 1) {
+    return { exit: 1, result: { ok: false, error: `${abs} has ${sections.length} ## Pages headings, so which table the pages come from is ambiguous (a Pages table quoted in the requirements counts too) — re-plan with exactly one` } };
+  }
+  const files = sections.length ? sections[0] : null;
   if (!files) return { exit: 1, result: { ok: false, error: `${abs} has no ## Pages table with a File column` } };
   if (!files.length) return { exit: 1, result: { ok: false, error: `${abs} lists no pages` } };
   const root = path.resolve(workingDir || path.dirname(abs));

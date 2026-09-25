@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { pageFileProblems, pageFilesFromPlan } = require('../lib/page-file-targets.js');
+const { pageFileProblems, pageFilesFromPlan, pagesSections } = require('../lib/page-file-targets.js');
 const { checkPageFiles } = require('../check-page-files.js');
 
 const SCRIPT = path.join(__dirname, '..', 'check-page-files.js');
@@ -225,6 +225,41 @@ test('the File column is read from the plan\'s Pages table, and a plan without o
   assert.deepEqual(pageFilesFromPlan(plan), ['overview.tsx', 'details.tsx']);
   assert.equal(pageFilesFromPlan('## Environment\n- URL: x\n'), null);
   assert.equal(pageFilesFromPlan('## Pages\n| Page | Purpose |\n|---|---|\n| A | b |\n'), null, 'no File column');
+});
+
+// The plan's `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`: a Pages table quoted
+// there decided the files the gate checked, while the workers wrote the real table's. A second Pages section
+// is refused — a fenced one too, since a fence left open would swallow the real section.
+test('a plan with more than one Pages section is refused, not read by its first', () => {
+  const real = ['## Pages', '| Page | File | Purpose | Entities |', '|---|---|---|---|', '| A | approved.tsx | x | account |'];
+  const quoted = ['## Pages', '| Page | File | Purpose | Entities |', '|---|---|---|---|', '| X | outside.tsx | y | account |'];
+  const plan = (...requirements) => ['# Genpage Plan', '## User Requirements', 'Build one page.', ...requirements,
+    '## Working Directory', 'D:/work', ...real, '## Entity Creation Required', 'No entity creation required.'].join('\n');
+  for (const [what, block] of [
+    ['fenced', ['```markdown', ...quoted, '```']],
+    ['fenced, with the fence left open', ['```', ...quoted]],
+    ['not fenced', quoted],
+    ['with no table under it', ['## Pages', 'The pages are listed below.']],
+  ]) {
+    assert.equal(pagesSections(plan(...block)).length, 2, what);
+    assert.equal(pageFilesFromPlan(plan(...block)), null, what);
+  }
+  // CONTROLS: a quoted or indented example is no section, and a plan with one Pages table is read.
+  assert.deepEqual(pageFilesFromPlan(plan(...quoted.map((l) => `> ${l}`))), ['approved.tsx']);
+  assert.deepEqual(pageFilesFromPlan(plan(...quoted.map((l) => `    ${l}`))), ['approved.tsx']);
+  assert.deepEqual(pageFilesFromPlan(plan()), ['approved.tsx']);
+  // The gate says why, and checks no file of either table.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-two-'));
+  try {
+    const p = path.join(dir, 'genpage-plan.md');
+    fs.writeFileSync(p, plan('```', ...quoted, '```'));
+    const res = checkPageFiles({ planPath: p });
+    assert.equal(res.exit, 1);
+    assert.match(res.result.error, /has 2 ## Pages headings, so which table the pages come from is ambiguous/);
+    assert.equal(res.result.files, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('check-page-files.js gates dispatch: exit 0 when safe, 3 with the problems when not, 1 when unreadable', () => {

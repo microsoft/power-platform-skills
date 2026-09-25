@@ -275,29 +275,50 @@ function pageFileProblems(files, opts = {}) {
  *   |------|------|---------|----------|
  *   | Overview | overview.tsx | Summary cards | account |
  * and the preview the planner hands back for approval has the same table under `### Pages (N total)`,
- * which `opts.heading` selects. The table ends at the next heading of any level. An escaped pipe
- * (`\|`) inside a cell is not a column boundary. Returns null when there is no Pages table with a File
- * column — a malformed plan, which the caller must refuse, not read as "no pages".
+ * which `opts.heading` selects. Returns null when the plan has no Pages section, or more than one (see
+ * pagesSections), or when its table has no File column — a malformed plan, which the caller must refuse,
+ * not read as "no pages".
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
  * @returns {string[]|null}
  */
 function pageFilesFromPlan(plan, opts = {}) {
-  const heading = opts.heading || /^##\s+Pages\s*$/;
-  const lines = String(plan || '').replace(/\r\n?/g, '\n').split('\n');
-  const start = lines.findIndex((l) => heading.test(l));
-  if (start === -1) return null;
-  const rows = [];
-  for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(lines[i]); i += 1) {
-    if (lines[i].trim().startsWith('|')) rows.push(lines[i]);
-  }
-  const cells = (row) => row.replace(/\\\|/g, '\u0000').trim().replace(/^\|/, '').replace(/\|$/, '')
-    .split('|').map((c) => c.replace(/\u0000/g, '|').trim());
-  if (rows.length < 2) return null;
-  const header = cells(rows[0]).map((h) => h.toLowerCase());
-  const col = header.indexOf('file');
-  if (col === -1 || !/^[\s|:-]+$/.test(rows[1])) return null;
-  return rows.slice(2).map((row) => cells(row)[col] || '');
+  const sections = pagesSections(plan, opts);
+  return sections.length === 1 ? sections[0] : null;
 }
 
-module.exports = { pageFileProblems, pageFilesFromPlan };
+/**
+ * Every Pages section of a plan, in order: a line `opts.heading` matches, up to the next heading of any
+ * level. Each entry is that section's File column, or null when it holds no table with one. An escaped
+ * pipe (`\|`) inside a cell is not a column boundary.
+ *
+ * Several are AMBIGUOUS, and pageFilesFromPlan refuses them rather than read the first: the plan's
+ * `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`, so a Pages table quoted there
+ * decided the files the gate checked while the workers wrote the real table's. A heading inside a code
+ * fence counts like any other. Skipping fenced lines would let a fence left open swallow the real section
+ * and the example stand in for it, and the plan's reader is an AI, not a Markdown parser. A heading that
+ * does not begin its line — quoted (`> ## Pages`) or indented — is no section, and cannot hide the real
+ * one: a quote ends at the first line without its marker.
+ * @param {string} plan
+ * @param {{ heading?: RegExp }} [opts]
+ * @returns {Array<string[]|null>}
+ */
+function pagesSections(plan, opts = {}) {
+  const heading = opts.heading || /^##\s+Pages\s*$/;
+  const lines = String(plan || '').replace(/\r\n?/g, '\n').split('\n');
+  const cells = (row) => row.replace(/\\\|/g, '\u0000').trim().replace(/^\|/, '').replace(/\|$/, '')
+    .split('|').map((c) => c.replace(/\u0000/g, '|').trim());
+  const sections = [];
+  lines.forEach((line, start) => {
+    if (!heading.test(line)) return;
+    const rows = [];
+    for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(lines[i]); i += 1) {
+      if (lines[i].trim().startsWith('|')) rows.push(lines[i]);
+    }
+    const col = rows.length >= 2 && /^[\s|:-]+$/.test(rows[1]) ? cells(rows[0]).map((h) => h.toLowerCase()).indexOf('file') : -1;
+    sections.push(col === -1 ? null : rows.slice(2).map((row) => cells(row)[col] || ''));
+  });
+  return sections;
+}
+
+module.exports = { pageFileProblems, pageFilesFromPlan, pagesSections };

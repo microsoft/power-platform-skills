@@ -15,7 +15,8 @@
 // `genpage-plan.md` is the filename standalone `/genpage` treats as its authoritative state. Writing
 // there would let a later `/genpage` run silently consume an app-builder plan, whose dialect differs
 // (`Mode: app-builder` + stable keys vs. no Mode + filename stems), producing wrong PAGEREF tokens.
-// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ.
+// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ. `--out`
+// may rename it, but only to a file directly in the working directory (see the checks before the write).
 //
 // Output: { "ok": true, "planPath": "...", "pages": [{ "key", "file", "dataMode" }, ...] }
 // The `pages[]` echo is what Phase 1.5 iterates to dispatch one worker per page, so the CLI is the
@@ -33,7 +34,7 @@ function main() {
   const { positional, flags } = parseArgs(argv);
   const USAGE =
     'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
-    + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <path>]';
+    + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <file in the working dir>]';
   // Every flag here carries a value, so all of them go in needValue; a bare one would otherwise
   // reach path.resolve/readFile as a boolean.
   const flagError = validateFlags(argv, {
@@ -111,6 +112,29 @@ function main() {
   }
   if (linkedWorkingDir) {
     emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it is a symbolic link or junction. Pass the directory it points to if that is intended.`));
+    return;
+  }
+  // The plan file itself. A link at its path — or a hard link, whose other names the write rewrites too —
+  // put the plan wherever it points, outside the working directory included, and `--out` could name any
+  // path at all. So the plan is written only as a plain file directly in the working directory, whose own
+  // checks are above. Nothing else is ever at that path, so refusing costs a legitimate run nothing, and a
+  // plain plan left by an earlier run is still rewritten; a folder there gets a reason, not EISDIR.
+  const planName = path.relative(absWorkingDir, planPath);
+  if (!planName || planName === '..' || /[\\/]/.test(planName)) {
+    emitResult(false, new Error(`refusing to write the page plan to ${planPath}: --out must name a file directly in the working directory ${absWorkingDir}`));
+    return;
+  }
+  let planEntry = null;
+  try {
+    planEntry = fs.lstatSync(planPath);
+  } catch (e) {
+    if (!(e && e.code === 'ENOENT')) {
+      emitResult(false, new Error(`cannot inspect ${planPath} (${(e && e.code) || e}); fix its permissions or remove it`));
+      return;
+    }
+  }
+  if (planEntry && (!planEntry.isFile() || planEntry.nlink > 1)) {
+    emitResult(false, new Error(`refusing to write the page plan to ${planPath}: it is not a plain file (a link, junction, hard link or folder). Remove it and re-run.`));
     return;
   }
   const intentFiles = (spec.pages || []).filter((p) => p && (!p.source || p.source.kind === 'intent')).map(pageFile);

@@ -428,6 +428,92 @@ test('CLI refuses a working directory that exists and is not a directory', () =>
   }
 });
 
+// The plan file is checked like the working directory: a link or hard link at its path put the plan wherever
+// it points, and --out could name any path at all. The plan goes only into the working directory, as a plain file.
+test('CLI refuses to write the plan through a link, a hard link or a folder, or outside the working directory', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-leaf-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const wd = path.join(base, 'wd');
+  const outside = path.join(base, 'outside');
+  fs.mkdirSync(wd);
+  fs.mkdirSync(outside);
+  const specPath = path.join(base, 'app-spec.json');
+  fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+  const cli = path.join(__dirname, '..', 'write-page-plan.js');
+  const run = (...extra) => spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', wd, ...extra], { encoding: 'utf8' });
+  const planPath = path.join(wd, 'app-builder-page-plan.md');
+  // A HARD link needs no privilege on Windows.
+  const precious = path.join(outside, 'precious.md');
+  fs.writeFileSync(precious, 'keep me');
+  fs.linkSync(precious, planPath);
+  let res = run();
+  assert.notEqual(res.status, 0, res.stdout);
+  assert.match(res.stdout + res.stderr, /refusing to write the page plan to .* not a plain file/);
+  assert.equal(fs.readFileSync(precious, 'utf8'), 'keep me', 'the other name is untouched');
+  fs.unlinkSync(planPath);
+  // A folder at the plan path gets a reason, not EISDIR.
+  fs.mkdirSync(planPath);
+  res = run();
+  assert.notEqual(res.status, 0, res.stdout);
+  assert.match(res.stdout + res.stderr, /not a plain file/);
+  assert.doesNotMatch(res.stdout + res.stderr, /EISDIR|\n\s+at /, 'a reason, not a stack trace');
+  fs.rmdirSync(planPath);
+  // A symbolic link, where one can be made (a file link needs a privilege on Windows).
+  let linked = true;
+  try { fs.symlinkSync(path.join(outside, 'target.md'), planPath, 'file'); } catch { linked = false; }
+  if (linked) {
+    res = run();
+    assert.notEqual(res.status, 0, res.stdout);
+    assert.match(res.stdout + res.stderr, /not a plain file/);
+    assert.deepEqual(fs.readdirSync(outside), ['precious.md'], 'nothing is written through the dangling link');
+    fs.unlinkSync(planPath);
+  }
+  // --out naming a file outside the working directory, or in a folder under it, is refused.
+  for (const out of [path.join(outside, 'plan.md'), path.join(wd, 'sub', 'plan.md'), wd, base]) {
+    res = run('--out', out);
+    assert.notEqual(res.status, 0, out);
+    assert.match(res.stdout + res.stderr, /--out must name a file directly in the working directory/, out);
+  }
+  assert.deepEqual(fs.readdirSync(outside), ['precious.md']);
+  assert.equal(fs.existsSync(path.join(wd, 'sub')), false);
+  // CONTROLS: a plain plan left by an earlier run is rewritten, and --out may rename the plan in place.
+  fs.writeFileSync(planPath, 'stale');
+  res = run();
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.notEqual(fs.readFileSync(planPath, 'utf8'), 'stale');
+  res = run('--out', path.join(wd, 'other-plan.md'));
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.ok(fs.existsSync(path.join(wd, 'other-plan.md')));
+});
+
+test('CLI refuses a plan path it cannot inspect, and writes no plan', (t) => {
+  const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-leafstat-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const specPath = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+  const planPath = path.join(dir, 'app-builder-page-plan.md');
+  const cliPath = path.join(__dirname, '..', 'write-page-plan.js');
+  const { main } = require(cliPath);
+  const saved = { argv: process.argv, exit: process.exit, err: process.stderr.write, lstat: fs.lstatSync };
+  let stderr = '';
+  try {
+    process.argv = [process.execPath, cliPath, '--spec', '@' + specPath, '--working-dir', dir];
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    process.exit = (code) => { throw new Error(`process.exit(${code})`); };
+    fs.lstatSync = (p, ...rest) => {
+      if (path.resolve(String(p)) === path.resolve(planPath)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return saved.lstat.call(fs, p, ...rest);
+    };
+    assert.throws(() => main(), /process\.exit\(1\)/);
+  } finally {
+    Object.assign(process, { argv: saved.argv, exit: saved.exit });
+    process.stderr.write = saved.err;
+    fs.lstatSync = saved.lstat;
+  }
+  assert.match(stderr, /cannot inspect .*app-builder-page-plan\.md \(EACCES\)/);
+  assert.equal(fs.existsSync(planPath), false, 'no plan is written');
+});
+
 test('CLI refuses a working directory it cannot inspect, and writes no plan', (t) => {
   const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-lstat-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
