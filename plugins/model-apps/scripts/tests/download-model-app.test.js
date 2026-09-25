@@ -1425,14 +1425,15 @@ test('recoverAppSolution never picks between several unmanaged solutions, whatev
     assert.deepStrictEqual(await recoverAppSolution(twoSolutionSdk(order, () => 'contoso'), 'app-1'),
       { ambiguous: ['ContosoApp', 'ContosoRelease'], publisherPrefix: 'contoso' }, 'every candidate agrees on its publisher, so that prefix is still authoritative');
     assert.deepStrictEqual(await recoverAppSolution(twoSolutionSdk(order, (u) => (u === 'ContosoApp' ? new Error('boom') : 'contoso')), 'app-1'),
-      { ambiguous: ['ContosoApp', 'ContosoRelease'] }, 'a failed read never counts as agreement');
+      { ambiguous: ['ContosoApp', 'ContosoRelease'], publisherUnreadable: 'boom' }, 'a failed read never counts as agreement, and is named');
   }
 });
 
 // A mock SDK for runDownload over an app in the two solutions above. Solution `a` (ContosoRelease) holds a
-// business rule; `members` overrides the membership read (e.g. to make it fail).
-function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contoso', manyToMany = [] } = {}) {
-  const base = twoSolutionSdk(['a', 'b'], prefixOf);
+// business rule; `members` overrides the membership read (e.g. to make it fail); `order: ['b']` puts the app
+// in the one solution ContosoApp.
+function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contoso', manyToMany = [], order = ['a', 'b'] } = {}) {
+  const base = twoSolutionSdk(order, prefixOf);
   const RULE = '5111e0f2-0000-4000-8000-0000000000d9';
   return {
     fetchArtifact: async () => ({ name: 'Ambig', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
@@ -1528,6 +1529,37 @@ test('runDownload does not guess a publisher prefix when the candidate solutions
   assert.ok(!agreeing.written.some((w) => /do not share one customization prefix/.test(w)));
 });
 
+// One solution, but its publisher could not be read: the prefix is unknown, as with disagreeing candidates.
+// The failed read used to read as "no prefix", so the app-name guess was used — and when the real publisher is
+// another, every relationship under its prefix was renamed to the generated name, and a same-environment
+// rebuild created each a second time.
+test('runDownload does not guess a publisher prefix when the one solution\'s publisher cannot be read', async () => {
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000f2';
+  // The app name carries 'contoso'; the relationship carries its publisher's real prefix, 'fabrikam'.
+  const APP_UNIQUE = 'contoso_pubread';
+  const manyToMany = [{ SchemaName: 'fabrikam_ItemItemLink', Entity1LogicalName: 'contoso_item', Entity2LogicalName: 'contoso_item', IsCustomRelationship: true }];
+  const nn = (res) => (res.spec.relationships || []).filter((r) => r.type === 'ManyToMany').map((r) => r.schemaName);
+  const unread = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { order: ['b'], prefixOf: () => new Error('HTTP 503 Service Unavailable'), manyToMany }), APP_ID, APP_UNIQUE);
+  assert.ok(unread.res.ok, JSON.stringify(unread.res));
+  assert.strictEqual(unread.res.solutionCandidates, undefined);
+  assert.strictEqual(unread.res.spec.solution.uniqueName, 'ContosoApp', 'the solution itself was read');
+  assert.strictEqual(unread.res.spec.solution.publisherPrefix, 'new', 'not the app-name guess');
+  assert.ok(unread.written.some((w) => /the publisher of solution 'ContosoApp' could not be read \(HTTP 503/.test(w) && /solution\.publisherPrefix/.test(w)), unread.written.join(''));
+  assert.deepStrictEqual(nn(unread.res), ['fabrikam_ItemItemLink'], 'the deployed name is kept, not renamed under the guess');
+  // CONTROL: a publisher that is read gives its prefix, under which the deployed name is kept as well.
+  const read = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { order: ['b'], prefixOf: () => 'fabrikam', manyToMany }), APP_ID, APP_UNIQUE);
+  assert.strictEqual(read.res.spec.solution.uniqueName, 'ContosoApp');
+  assert.strictEqual(read.res.spec.solution.publisherPrefix, 'fabrikam');
+  assert.deepStrictEqual(nn(read.res), ['fabrikam_ItemItemLink']);
+  assert.ok(!read.written.some((w) => /could not be read|solution\.publisherPrefix/.test(w)), read.written.join(''));
+  // With several candidates, one of whose publishers could not be read, the warning says that — not that the
+  // publishers disagree, which nobody knows.
+  const several = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { prefixOf: (u) => (u === 'ContosoApp' ? new Error('HTTP 503') : 'fabrikam'), manyToMany }), APP_ID, APP_UNIQUE);
+  assert.strictEqual(several.res.spec.solution.publisherPrefix, 'new');
+  assert.ok(several.written.some((w) => /the publishers of those solutions could not all be read \(HTTP 503\)/.test(w)), several.written.join(''));
+  assert.ok(!several.written.some((w) => /do not share one customization prefix/.test(w)), several.written.join(''));
+});
+
 test('runDownload reports an unreadable solution membership as unknown, not as "no solution"', async () => {
   const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000e1';
   const APP_UNIQUE = 'contoso_unread';
@@ -1595,7 +1627,7 @@ test('recoverAppSolution recovers the publisher prefix from the SOLUTION, not th
   assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', description: 'Customer management assets.', publisherPrefix: 'contoso' });
 });
 
-test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be recovered', async () => {
+test('recoverAppSolution reports no prefix when none can be used, and names a publisher read that failed', async () => {
   const base = {
     queryRecords: async (set) => {
       if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
@@ -1605,8 +1637,8 @@ test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be r
   };
   // (a) an older vendored bundle with no getSolution at all
   assert.deepStrictEqual(await recoverAppSolution(base, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
-  // (b) getSolution throws
-  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => { throw new Error('boom'); } }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+  // (b) getSolution throws: that is no answer about the publisher, so it is named — the caller must not guess
+  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => { throw new Error('boom'); } }, 'app-1'), { uniqueName: 'ContosoCustomerManagement', publisherUnreadable: 'boom' });
   // (c) a first-party publisher with no customization prefix -> not usable, so not reported
   assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => ({ publisherPrefix: '' }) }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
 });

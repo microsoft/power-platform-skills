@@ -242,9 +242,9 @@ downloads that round-trip Choice columns.
   `Default` and names the candidates in `solutionCandidates` — never whichever row the server happened
   to return first, which teardown would then delete. Its business rules and option sets are still
   reported across all of them, and a membership that cannot be read is reported as unknown. When the
-  candidates' publishers do not share one prefix, or none can be read, the spec's publisher prefix is not
-  guessed from the app name: it stays the unverified `new`, relationships keep their deployed names, and
-  the download says to set it.
+  candidates' publishers do not share one prefix, or the solutions or a publisher cannot be read — the
+  one solution's included — the spec's publisher prefix is not guessed from the app name: it stays the
+  unverified `new`, relationships keep their deployed names, and the download says to set it.
 - **The teardown summary no longer calls every skip "not found".** Steps kept on purpose and steps
   never attempted after a failed app delete are counted as what they are.
 - **A failure after the app is already deleted no longer strands the rest of the teardown.** The SDK

@@ -1804,9 +1804,9 @@ function droppedSubareaCount(app, spec) {
 // the SDK refuses to combine with `top`: `$top` is a hard cap that suppresses `@odata.nextLink`).
 // Never throws. Returns one of:
 //   null                                               — no real (unmanaged, non-system) solution
-//   { uniqueName, description?, publisherPrefix? }     — exactly one: the app's solution
-//   { ambiguous: [uniqueName, ...], publisherPrefix? } — several (#587 item 9)
-//   { unreadable: reason }                             — the membership could not be read
+//   { uniqueName, description?, publisherPrefix?, publisherUnreadable? }  — exactly one: the app's solution
+//   { ambiguous: [uniqueName, ...], publisherPrefix?, publisherUnreadable? } — several (#587 item 9)
+//   { unreadable: reason }                                                 — the membership could not be read
 //
 // SEVERAL is never resolved to one. Dataverse has no "owning" solution — a component is simply a
 // member of each — and the pick is not cosmetic: a rebuild adds components to the spec's solution and
@@ -1824,7 +1824,11 @@ function droppedSubareaCount(app, spec) {
 // the literal `'new'` (ADO 6603390). With several candidates it is reported only when EVERY
 // candidate's prefix was read and they agree: the prefix shapes the relationship schema names the
 // download emits, so a wrong one makes a same-environment rebuild create duplicates — a failed read
-// never counts as agreement. Absent a prefix the caller falls back to the app-derived guess.
+// never counts as agreement. A publisher read that FAILS, for the one solution or any of several, is
+// reported as `publisherUnreadable` (the reason), and the caller then treats the prefix as unknown rather
+// than guess it: a failed read says nothing about the publisher. Only when there is simply no usable
+// prefix — a bundle without getSolution, or a publisher without a customization prefix — does the caller
+// fall back to the app-derived guess.
 async function recoverAppSolution(sdk, appId) {
   let real;
   try {
@@ -1840,26 +1844,32 @@ async function recoverAppSolution(sdk, appId) {
     return { unreadable: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
   }
   if (!real.length) return null;
-  // Guarded on the method existing so an older vendored bundle (pre-getSolution) degrades to the
-  // caller's fallback. An empty-string prefix is legitimate for some first-party publishers, but it is
-  // not usable as a customization prefix, so it reads as "none".
+  // Resolves to the prefix, to null when there is none to use, or to { failed: reason } when the read
+  // itself failed. Guarded on the method existing so an older vendored bundle (pre-getSolution) degrades
+  // to the caller's fallback. An empty-string prefix is legitimate for some first-party publishers, but it
+  // is not usable as a customization prefix, so it reads as "none".
   const prefixOf = async (s) => {
     if (typeof sdk.getSolution !== 'function') return null;
     try {
       const info = await sdk.getSolution(s.uniquename);
       return info && info.publisherPrefix ? String(info.publisherPrefix).toLowerCase() : null;
-    } catch { return null; }
+    } catch (e) {
+      return { failed: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
+    }
   };
   if (real.length === 1) {
     const out = withDescription({ uniqueName: real[0].uniquename }, real[0].description);
     const prefix = await prefixOf(real[0]);
-    if (prefix) out.publisherPrefix = prefix;
+    if (typeof prefix === 'string') out.publisherPrefix = prefix;
+    else if (prefix) out.publisherUnreadable = prefix.failed;
     return out;
   }
   const prefixes = [];
   for (const s of real) prefixes.push(await prefixOf(s));
   const out = { ambiguous: real.map((s) => String(s.uniquename)) };
-  if (prefixes.every(Boolean) && new Set(prefixes).size === 1) out.publisherPrefix = prefixes[0];
+  if (prefixes.every((p) => typeof p === 'string') && new Set(prefixes).size === 1) out.publisherPrefix = prefixes[0];
+  const failed = prefixes.find((p) => p && typeof p === 'object');
+  if (failed) out.publisherUnreadable = failed.failed;
   return out;
 }
 
@@ -2144,14 +2154,22 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
   const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  // Several candidate solutions whose publishers do not share one prefix, or none that could be read: the
-  // prefix is UNKNOWN. The app-name guess is exactly the heuristic that ambiguity refuses to use (see
-  // recoverAppSolution), and a wrong prefix renames every relationship not carrying it, so a same-environment
-  // rebuild creates each a second time. So it is not used: the prefix stays the unverified default, and
-  // relationships keep their deployed names.
-  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable);
+  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
+  // Several candidate solutions whose publishers do not share one prefix, none that could be read, or a
+  // publisher whose read FAILED — the one solution's included: the prefix is UNKNOWN. The app-name guess is
+  // exactly the heuristic that ambiguity refuses to use (see recoverAppSolution), and a wrong prefix renames
+  // every relationship not carrying it, so a same-environment rebuild creates each a second time. So it is
+  // not used: the prefix stays the unverified default, and relationships keep their deployed names. (A failed
+  // read of the one solution's publisher used to read as "no prefix", which fell back to the guess.)
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
   if (prefixUnknown) {
-    process.stderr.write(`WARNING: ${solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown'}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
+    let why = solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown';
+    if (publisherUnreadable) {
+      why = solutionCandidates
+        ? `the publishers of those solutions could not all be read (${publisherUnreadable})`
+        : `the publisher of solution '${recovered.uniqueName}' could not be read (${publisherUnreadable})`;
+    }
+    process.stderr.write(`WARNING: ${why}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
   }
   const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
