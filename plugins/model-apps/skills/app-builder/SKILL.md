@@ -216,6 +216,10 @@ unless destructive authority was supplied independently.
      `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
      (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
      warning; `personas[]` does not take one at all. See the schema reference for why.)
+     The app itself takes two: `app.description` is the short tile text, and `app.aiDescription` is
+     the **routing description** an orchestrator reads to choose between apps — who the app is for,
+     what it covers and excludes, and how to tell it from a sibling app over the same tables. Write
+     it whenever such a sibling exists or is planned.
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison

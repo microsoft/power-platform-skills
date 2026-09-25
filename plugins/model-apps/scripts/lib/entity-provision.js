@@ -553,6 +553,15 @@ function makeRunner({ emit, total }) {
   return { run, mapLimit, skip, emit, total };
 }
 
+// Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see
+// requireSuccessfulPush below for which, and why both spellings of the commit flag are read). Shared so
+// every caller that reacts to a failed push decides "failed" exactly as the halt does.
+function pushFailed(result) {
+  if (!result) return false;
+  const committed = result.saved !== undefined ? result.saved : result.success;
+  return committed === false || (committed === undefined && Boolean(result.error));
+}
+
 // Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
 // pushArtifact RESOLVES (it does NOT throw) with a failed PushResult on a 412 — the artifact changed
 // in Maker since our last fetch — and on an ARTIFACT_ALREADY_EXISTS collision. The engine previously
@@ -570,8 +579,7 @@ function makeRunner({ emit, total }) {
 // the check is written to fail CLOSED against both bundle generations rather than assume one.
 function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
-  const committed = result.saved !== undefined ? result.saved : result.success;
-  if (committed === false || (committed === undefined && result.error)) {
+  if (pushFailed(result)) {
     // SEVERAL different by-value failures reach here and they need different remedies, so the
     // diagnosis is SELECTED from the SDK's own error code rather than assumed.
     //
@@ -1344,4 +1352,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

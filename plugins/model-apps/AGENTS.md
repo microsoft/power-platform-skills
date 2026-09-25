@@ -207,6 +207,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
   warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
   a silent success.
+  **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
+  and on an existing app when it differs from the fetched draft, riding that run's app push. The
+  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
+  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
+  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  other failed push that carried the change resets the copy too — except a concurrent edit
+  (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
+  without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
+  nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
+  run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,

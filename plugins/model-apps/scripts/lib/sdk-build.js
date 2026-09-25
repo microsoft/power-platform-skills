@@ -44,6 +44,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
   requireSuccessfulPush,
+  pushFailed,
   reportPartialPush,
   errorCodeChain,
   makeEntitySetResolver,
@@ -980,8 +981,143 @@ function appDef(spec, result, opts = {}) {
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
       subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)).filter(Boolean) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },
+    // #583: the routing description, only when the spec sets one (see applyAppAiDescription).
+    ...(spec.app.aiDescription ? { aiDescription: spec.app.aiDescription } : {}),
     ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
+}
+
+// #583: set the routing description (`app.aiDescription` → `appmodule.aiappdescription`) on the FETCHED
+// artifact of an app that already exists. Returns true when the artifact changed and needs a push.
+//
+//   * Only when the spec sets one. Absent means "leave the deployed value alone" — the platform can write
+//     this text itself — so an omitted field is never written, and never blanked.
+//   * Only when it differs from the FETCHED artifact, which is the draft layer
+//     (RetrieveUnpublishedMultiple) the SDK's own push compares the header against. So `true` here means
+//     exactly "the push will write the header", and a plain rebuild neither pushes nor publishes for
+//     nothing. Same rule as the chart description reconcile: read the layer the write targets.
+//   * A fetched app carries `aiDescription` only when the row has one, and `updateElement` refuses a
+//     path that is not there (PATH_NOT_FOUND). So the key is ADDED at the artifact root when absent and
+//     updated when present.
+// LIVE-MEASURED: addElement at the root and a push write `aiappdescription` (read back before and after
+// publish); a later updateElement and push change it; an unrelated edit and push leave it untouched.
+async function applyAppAiDescription(provision, spec, appId) {
+  const want = spec.app && spec.app.aiDescription;
+  if (typeof want !== 'string' || !want.trim()) return false;
+  const current = (await provision.getArtifact('app', appId)) || {};
+  if (current.aiDescription === want) return false;
+  if (current.aiDescription === undefined) await provision.addElement('app', appId, '', { aiDescription: want });
+  else await provision.updateElement('app', appId, '/aiDescription', want);
+  return true;
+}
+
+// #583: halt precisely when the push of an app whose routing description this run changed was refused
+// because Dataverse will not take a header write until the app is PUBLISHED — rather than because of a
+// concurrent edit. Called before requireSuccessfulPush, whose generic 412 remedy (re-download and
+// rebuild) reads the same draft and fails the same way. The SDK reports that state two ways:
+//   * APP_DRAFT_HEADER_NOT_WRITABLE, THROWN (see pushAppHeader) for an app that was never published. The
+//     SDK's own message names the state, so no read is needed.
+//   * VERSION_CONFLICT, RESOLVED (saved:false) for a published app with an unpublished header change.
+//     LIVE-MEASURED: once a header change (name, description or routing description) is pushed but not
+//     published, the appmodule row has a second, unpublished layer with its own version number, and the
+//     SDK's next header PATCH fails with 412 although nothing changed since the fetch; a sitemap-only
+//     push over the same state still succeeds, and publishing clears it. The state arises from a header
+//     edit saved in Maker but not published, or from a build whose publish did not complete. A 412 is
+//     relabelled only when it was the APPMODULE row's and a draft read PROVES that state (componentstate
+//     1 = Unpublished:
+//     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_ComponentState);
+//     any other outcome — a settled row, a read that fails — returns and leaves the generic halt in place.
+//
+//     Whose 412 it was matters because the SDK writes an app in two PATCHes, the header then the sitemap,
+//     each conditional on its own version, and names the refused one in the error's `detail`:
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/appmodules(<id>)
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/sitemaps(<id>)
+//     A sitemap 412 is a concurrent sitemap edit — and by then this push's own header write has committed,
+//     leaving exactly the unpublished layer the draft read finds. Relabelling it reset the copy, and
+//     "publish, then re-run" then overwrote the other edit; the kept copy is what makes that re-run stop.
+//
+// Before halting it RESETS the workspace copy to the server's. The refused push left this run's edits in
+// it; once the operator publishes, the server moves, and a plain fetch then refuses to discard unpushed
+// edits (LOCAL_EDITS_WOULD_BE_LOST) — so "publish, then re-run" would halt again. Measured against the
+// vendored bundle. The edits were projected from the spec and the re-run re-applies them, so nothing is
+// lost; if the reset itself fails, the halt names the workspace to delete instead.
+async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
+  // pushFailed reads `saved`, then the older SDK spelling `success`, then a bare error — the same reading
+  // requireSuccessfulPush applies, so the precise halt fires for either result shape.
+  const code = pushFailed(pushed) && pushed.error && pushed.error.code;
+  const neverPublished = code === 'APP_DRAFT_HEADER_NOT_WRITABLE';
+  if (!neverPublished) {
+    if (code !== 'VERSION_CONFLICT' || !provision.dataverse || typeof provision.dataverse.get !== 'function') return;
+    if (!/\/appmodules\(/i.test(`${pushed.error.detail || ''} ${pushed.error.message || ''}`)) return;
+    let pending = false;
+    try {
+      // No `$top`: look for the unpublished layer among EVERY row the draft read returns. Measured, it
+      // returns only the unpublished row while one exists, but that is not a documented guarantee, and a
+      // published row read first would silently fall through to the generic halt this exists to replace.
+      const res = await provision.dataverse.get(`/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=componentstate&$filter=appmoduleid eq ${appId}`);
+      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        pending = res.body.value.some((r) => r && r.componentstate === 1);
+      }
+    } catch {
+      return;
+    }
+    if (!pending) return;
+  }
+  let reset = true;
+  try {
+    await provision.fetchArtifact('app', appId, { overwrite: true });
+  } catch {
+    reset = false;
+  }
+  const workspace = reset ? ''
+    : ' First delete the .maker-workspace directory (or the --workspace one): it still holds this run\'s unpushed copy of the app, which a re-run would refuse to overwrite.';
+  const why = neverPublished
+    ? 'the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is'
+    : 'the app has an unpublished change to its name, description or routing description (saved in Maker, or by a build whose publish did not complete), and Dataverse refuses another write to those fields until it is published';
+  const fix = neverPublished ? 'publish the app in Power Apps' : 'publish the app in Power Apps (or discard the change)';
+  throw new BuildHalt(`push app ${name} failed: ${why}. Re-downloading reads the same draft and fails the same way: ${fix}, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
+}
+
+// #583: push an app artifact whose header this run may have changed (the routing description). A refusal
+// that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
+// else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
+// FAILED push which carried a header change first resets the workspace copy (discardUnrecordedHeader).
+async function pushAppHeader(provision, appId, name, headerChanged) {
+  let pushed;
+  try {
+    pushed = await provision.pushArtifact('app', appId);
+  } catch (e) {
+    if (headerChanged) {
+      await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
+      await discardUnrecordedHeader(provision, appId, e, true);
+    }
+    throw e;
+  }
+  if (headerChanged) {
+    await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+    if (pushFailed(pushed)) await discardUnrecordedHeader(provision, appId, pushed.error, false);
+  }
+  return pushed;
+}
+
+// #583: after a push that carried this run's header change FAILED, reset the workspace copy to the
+// server's. The edit was never recorded, and a copy still holding it hurts the re-run twice: its plain
+// fetch refuses to discard the unpushed edit (LOCAL_EDITS_WOULD_BE_LOST) once the server has moved, and
+// applyAppAiDescription compares against that local copy, so the pending change reads as "already set"
+// and the re-run's push goes out as a header-less one — losing the precise halt above if it is refused.
+// The edits are projected from the spec, so the re-run re-applies them and nothing is lost.
+//
+// A concurrent edit is the one failure that KEEPS the copy: a VERSION_CONFLICT, or a returned failure
+// with no code at all (the bare 412 requireSuccessfulPush reads the same way). There the remedy is a
+// fresh download, and the unrecorded copy is what makes a blind re-run stop instead of overwriting the
+// other edit. Best-effort: a reset that fails leaves the copy exactly as it was before this existed.
+async function discardUnrecordedHeader(provision, appId, error, thrown) {
+  const code = error && error.code;
+  if (code === 'VERSION_CONFLICT' || (!thrown && !code)) return;
+  try {
+    await provision.fetchArtifact('app', appId, { overwrite: true });
+  } catch { /* see above */ }
 }
 
 // A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
@@ -3539,6 +3675,15 @@ async function runSdkBuild(spec, opts = {}) {
       if (existingId) {
         appWasExisting = true;
         await provision.fetchArtifact('app', existingId);
+        // #583: the routing description rides an app push this run ALREADY makes — never a second push from
+        // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
+        // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
+        // sitemap writer, and applies it there, after its own re-fetch and after the removal gate. Pushing
+        // the fetched app HERE would re-send the LIVE sitemap, which the SDK validates reference by
+        // reference, so a subarea whose page or table was deleted in Maker would halt the run before the
+        // pages phase could drop it. Without the pages phase it is applied below, right before the push
+        // that carries it — after the live-page gate, so a gate that halts leaves no unrecorded edit in
+        // the workspace copy for the re-run's plain fetch to refuse.
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
         // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
         // stay pinned. Explicit forms/views/charts component pins are applied at CREATE only (below):
@@ -3570,8 +3715,28 @@ async function runSdkBuild(spec, opts = {}) {
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
+          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+        } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
+          // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
+          // --apply): a page-backed app's sitemap is not written on this run, so the routing description
+          // needs its own push. That push re-sends the workspace copy's sitemap, which the SDK validates —
+          // and which is the live one only while the copy is CLEAN: a plain fetch returns a copy holding
+          // edits an earlier run could not push (a failed sitemap rewrite) unchanged, as long as the server
+          // has not moved past it. Pushing that replayed the stale rewrite, detaching live pages with no
+          // gate and no --allow-destructive. So a dirty copy is refused here, before anything is applied —
+          // and before the routing description is compared, not only when it needs a push: the copy's value
+          // may be this very edit, left unpushed by the earlier run, and "unchanged" against the copy would
+          // then skip the push the server still needs while the build reported success.
+          const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === existingId);
+          if (listed && listed.isDirty) {
+            throw new BuildHalt(`app ${def.name}: the workspace copy holds edits an earlier run did not push, and pushing the routing description would send them too. Run the build with the pages phase, or delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+          }
+          if (await applyAppAiDescription(provision, spec, existingId)) {
+            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
+            reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
@@ -3839,8 +4004,12 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
           await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+          // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
+          // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
+          const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
+          const appName = (spec.app && spec.app.name) || result.created.app;
+          requireSuccessfulPush(await pushAppHeader(provision, result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
       } else {
@@ -4553,4 +4722,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

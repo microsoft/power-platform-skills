@@ -857,6 +857,20 @@ test('requireSuccessfulPush halts on a result that carries an error but neither 
   assert.throws(() => requireSuccessfulPush(odd, 'chart c1'), (err) => err.name === 'BuildHalt');
 });
 
+// Both spellings of the commit flag are read — `saved` first, the older bundle's `success` when `saved` is
+// absent — and pushFailed is the one place that decides it, for the halt and for the app-header reset.
+test('pushFailed reads saved, then the legacy success flag, then a bare error', () => {
+  const { pushFailed } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+  assert.strictEqual(pushFailed({ success: false }), true, 'an older bundle reporting a failure with no error object');
+  assert.throws(() => requireSuccessfulPush({ type: 'app', id: 'a1', success: false }, 'app a1'), (err) => err.name === 'BuildHalt');
+  assert.strictEqual(pushFailed({ saved: true, success: false }), false, '`saved` wins when both are present');
+  assert.strictEqual(pushFailed({ saved: false }), true);
+  assert.strictEqual(pushFailed({ success: true, error: new Error('partial') }), false, 'a committed push with a note is not a failure');
+  assert.strictEqual(pushFailed({ error: new Error('boom') }), true);
+  assert.strictEqual(pushFailed({}), false);
+  assert.strictEqual(pushFailed(undefined), false);
+});
+
 // #447 regression net. The bug this fixes was a SINGLE label-emitting call that forgot to pass a
 // language, and it stayed invisible until a user in a German org filed a bug — CI runs offline mocks
 // and nobody's CI runs against a non-1033 org. So pinning only the two call sites that happened to be

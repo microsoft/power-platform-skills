@@ -1110,6 +1110,31 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // App routing description (`app.aiDescription`, #583). Asserted only when the spec sets one: absent
+  // means the build left the deployed value alone, so there is nothing to compare. The oracle is the
+  // row's own `appmodule.aiappdescription`, found by the SAME identity the build wrote under
+  // (`appUniqueName(spec)`). Reader-gated on `queryRecords`; a failed read FAILS the check, because a
+  // routing description nobody can read back is not proven applied.
+  const wantAiDescription = spec.app && typeof spec.app.aiDescription === 'string' && spec.app.aiDescription.trim()
+    ? spec.app.aiDescription : null;
+  if (wantAiDescription && typeof read.queryRecords === 'function') {
+    let got;
+    let error;
+    try {
+      const rows = await read.queryRecords('appmodule', { select: ['aiappdescription'], filter: `uniquename eq '${odataLit(appUniqueName(spec))}'`, top: 1 });
+      if (!rows || !rows[0]) error = `no app module with unique name '${appUniqueName(spec)}' was found`;
+      else got = rows[0].aiappdescription;
+    } catch (e) {
+      error = (e && e.message) || String(e);
+    }
+    const present = !error && got === wantAiDescription;
+    const shown = (s) => JSON.stringify(s.length > 80 ? `${s.slice(0, 77)}...` : s);
+    add('app-ai-description', 'app.aiDescription', present, present ? ''
+      : error ? `could not read the app's routing description: ${error}`
+        : got ? `the deployed routing description ${shown(got)} differs from the spec's`
+          : 'the app has no routing description (appmodule.aiappdescription is empty)');
+  }
+
   // AI row summaries (`ai.summaries`). AB#6689110.
   //
   // Without this a spec that REQUESTS a row summary verified clean when none was created: the build

@@ -1078,6 +1078,37 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
   });
 });
 
+// #583: the routing description is asserted only when the spec sets one, against the row's own
+// `appmodule.aiappdescription`, found by the identity the build wrote under.
+test('#583 verify checks the deployed routing description when the spec sets one', async () => {
+  const base = { solution: { publisherPrefix: 'new' }, app: { name: 'Ops', uniqueName: 'new_ops' } };
+  const withRouting = { ...base, app: { ...base.app, aiDescription: 'Route ops work here.' } };
+  const reader = (rows, fail) => ({
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      if (set !== 'appmodule') return [];
+      if (fail) throw new Error('read denied');
+      assert.match(o.filter, /uniquename eq 'new_ops'/, 'read by the identity the build wrote under');
+      return rows;
+    },
+  });
+  const check = async (spec, read) => (await verifySpec(spec, read)).checks.find((c) => c.kind === 'app-ai-description');
+
+  assert.strictEqual((await check(withRouting, reader([{ aiappdescription: 'Route ops work here.' }]))).present, true);
+  for (const [what, read, re] of [
+    ['a different value', reader([{ aiappdescription: 'Other text' }]), /differs from the spec/],
+    ['no value', reader([{ aiappdescription: null }]), /no routing description/],
+    ['no app', reader([]), /no app module with unique name 'new_ops'/],
+    ['an unreadable row', reader([], true), /could not read the app's routing description: read denied/],
+  ]) {
+    const c = await check(withRouting, read);
+    assert.strictEqual(c.present, false, what);
+    assert.match(c.detail, re, what);
+  }
+  assert.strictEqual(await check(base, reader([{ aiappdescription: 'Written by the platform.' }])), undefined,
+    'nothing is asserted when the spec leaves it to the platform');
+});
+
 // ---------------------------------------------------------------------------
 // App-module TABLE (type-1) membership.
 // ---------------------------------------------------------------------------

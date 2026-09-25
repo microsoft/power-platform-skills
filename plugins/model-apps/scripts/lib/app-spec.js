@@ -1020,6 +1020,27 @@ function validateDescription(value, label, errors, opts = {}) {
   }
 }
 
+// `app.aiDescription` (#583) — the app's ROUTING description: what an agent or router reads to choose
+// between sibling apps over the same tables ("prefer My Work when the request is about the signed-in
+// contributor's own assigned work"). It is distinct from `app.description`, which is the text on the
+// app tile. It maps to the platform's `appmodule.aiappdescription`, a Memo of up to 1,048,576 characters:
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_aiappdescription
+//
+// ABSENT means "leave the deployed value alone": the platform can write this text itself, so the build
+// never writes the field unless the spec sets it. That makes an empty string the one value that could
+// blank a description nobody asked to remove, so it is refused rather than written.
+const AI_DESCRIPTION_MAX = 1048576;
+function validateAiDescription(value, errors) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string') {
+    errors.push('app.aiDescription must be a string');
+  } else if (!value.trim()) {
+    errors.push('app.aiDescription must not be blank — omit it to leave the deployed value alone');
+  } else if (value.length > AI_DESCRIPTION_MAX) {
+    errors.push(`app.aiDescription is ${value.length} characters (max ${AI_DESCRIPTION_MAX})`);
+  }
+}
+
 // Per-control form-field options: `readOnly`, `hidden`, `after`.
 //
 // Reachable two ways — inline on an EXPLICIT layout's `sections[].fields[]` entry, or via the
@@ -1771,6 +1792,7 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
+  validateAiDescription(spec.app && spec.app.aiDescription, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
     // guidance exists because the bare message named the mistake without naming the fix, and a
