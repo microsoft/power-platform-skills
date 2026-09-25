@@ -332,8 +332,8 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
         // held for a moment (its own write) leaves ours in place, and the run's result stands.
         const conflicted = generationOnDisk(ws) !== inv.generation;
         log(`▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (${cas.reason}) — the next run will do a full build`);
-        distrustWorkspace(ws, log);
-        if (conflicted) return conflictResult(r, decision, 'fast apply', log);
+        const seen = distrustWorkspace(ws, log, inv.generation);
+        if (conflicted || seen.foreign || !seen.resolved) return conflictResult(r, decision, 'fast apply', log);
       }
       else log('✓ changed-only: fast apply verified; snapshot re-blessed eligible');
     } else if (r && r.ok && !r.dryRun) {
@@ -388,8 +388,8 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     if (!wrote.ok) {
       const conflicted = generationOnDisk(ws) !== expectedGen;
       log(`▸ changed-only: full apply succeeded but the snapshot was not persisted (${wrote.reason})`);
-      distrustWorkspace(ws, log);
-      if (conflicted) return conflictResult(r, decision, 'build', log);
+      const seen = distrustWorkspace(ws, log, expectedGen);
+      if (conflicted || seen.foreign || !seen.resolved) return conflictResult(r, decision, 'build', log);
     }
     else log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
   }
@@ -433,20 +433,29 @@ async function buildHolding(ws, held, log, build) {
 // rotated so that no pending writer's CAS can land — and the next run builds in full. Each invalidate is fenced to
 // the generation just read and keeps the snapshot's contents: tombstone, debt and teardown list (teardowns release
 // by id, not by generation). A writer landing between the read and the invalidate is read again and invalidated in
-// turn. Best-effort: the run is already reporting the conflict.
+// turn.
+//
+// Returns what it saw, for a caller still deciding whether it was overlapped at all (a baseline write refused by a
+// busy lease): `foreign` when any generation it read was not `held`, the one the caller's run holds. That lease may
+// have been an older build's, about to rotate the generation, and the flag read before this call cannot see that.
+// `resolved` is false when the invalidate never landed; the caller fails closed on that too.
 const DISTRUST_ATTEMPTS = 4;
-function distrustWorkspace(ws, log) {
+function distrustWorkspace(ws, log, held) {
   let reason = '';
+  let foreign = false;
   for (let attempt = 1; attempt <= DISTRUST_ATTEMPTS; attempt += 1) {
     const now = store.readSnapshot(ws);
-    if (!now) return;
-    const inv = store.invalidateSnapshot(ws, { expectedGeneration: now.generation || null });
-    if (inv.ok) return;
+    const generation = (now && now.generation) || null;
+    if (held !== undefined && generation !== held) foreign = true;
+    if (!now) return { foreign, resolved: true };
+    const inv = store.invalidateSnapshot(ws, { expectedGeneration: generation });
+    if (inv.ok) return { foreign, resolved: true };
     reason = inv.reason;
     // A lease another writer holds for a moment (its own snapshot write) is waited out briefly.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
   log(`▸ changed-only: could not invalidate the snapshot another run left (${reason}) — run the next build without --changed-only`);
+  return { foreign, resolved: false };
 }
 
 // Force a FULL-phase apply: changed-only decides its own phases, so it must ignore any --stage/--only/etc.

@@ -759,6 +759,35 @@ test('run: a baseline write refused by a busy lease leaves the result standing',
   } finally { rm(dir); }
 });
 
+// A baseline write refused by a busy lease looked like no conflict: the generation read then was still this run's. But
+// that lease can be an older build's, about to rotate the generation. What distrust then sees decides it too, and a
+// distrust that cannot land at all fails the run closed.
+test('run: a busy-lease refusal whose lease turns out to be another writer\'s fails the run', async (t) => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, invalidate] of [
+    ['another writer rotates the generation during distrust', (real) => {
+      let calls = 0;
+      return (d, o) => {
+        calls += 1;
+        if (calls === 1) { real(d, { expectedGeneration: o.expectedGeneration }); return { ok: false, reason: 'the snapshot changed since this run read it' }; }
+        return real(d, o);
+      };
+    }],
+    ['distrust never lands', () => () => ({ ok: false, reason: 'snapshot lease unavailable (held)' })],
+  ]) {
+    const dir = ws();
+    try {
+      const realInvalidate = store.invalidateSnapshot;
+      t.mock.method(store, 'casWriteSnapshot', () => ({ ok: false, reason: 'snapshot lease unavailable (held)' }));
+      t.mock.method(store, 'invalidateSnapshot', invalidate(realInvalidate));
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      t.mock.restoreAll();
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/, what);
+    } finally { t.mock.restoreAll(); rm(dir); }
+  }
+});
+
 // A writer can land between distrust's read and its invalidate (the fenced invalidate is then refused). What it left is
 // read again and invalidated in turn, rather than left eligible.
 test('distrustWorkspace invalidates a baseline that landed between its read and its invalidate', (t) => {
