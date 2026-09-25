@@ -48,9 +48,12 @@ const PAGE_ID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 const EDIT_PREVIEW = `## Genpage Edit Plan\n\n### Current State\n- **File:** ${PAGE_ID}/page.tsx\n- **Data:** Mock data\n\n### Proposed Changes\n1. Add a search box\n`;
 const EDIT_WRITTEN = `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute path:** D:\\work\\edit\\${PAGE_ID}\\page.tsx\n- **App ID:** 11111111-2222-3333-4444-555555555555\n- **Page ID:** ${PAGE_ID}\n`;
 
-function tmpPlan(content) {
+// An edit plan lives in `genpage-edit-plan.md` (skills/genpage/edit-flow.md), and verify reads each file as the
+// kind its name says.
+const EDIT = 'genpage-edit-plan.md';
+function tmpPlan(content, name = 'genpage-plan.md') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-prov-'));
-  const planPath = path.join(dir, 'genpage-plan.md');
+  const planPath = path.join(dir, name);
   if (content !== undefined) fs.writeFileSync(planPath, content, 'utf8');
   return planPath;
 }
@@ -83,7 +86,7 @@ test('verifyPlanProvenance accepts the written plan when it targets exactly the 
   assert.equal(create.ok, true, create.error);
   assert.deepEqual(create.targets, ['details.tsx', 'overview.tsx']);
   assert.match(create.writtenHash, /^[a-f0-9]{64}$/, 'the verified file is recorded by hash for the log');
-  const edit = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN), approvedPlan: EDIT_PREVIEW });
+  const edit = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: EDIT_PREVIEW });
   assert.equal(edit.ok, true, edit.error);
 });
 
@@ -100,7 +103,7 @@ test('verifyPlanProvenance halts when the written plan targets other pages than 
     assert.equal(result.ok, false, what);
     assert.match(result.error, /approved plan named details\.tsx, overview\.tsx/, what);
   }
-  const otherPage = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3')), approvedPlan: EDIT_PREVIEW });
+  const otherPage = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3'), EDIT), approvedPlan: EDIT_PREVIEW });
   assert.equal(otherPage.ok, false, 'an edit plan for another page');
 });
 
@@ -120,6 +123,24 @@ test('verifyPlanProvenance halts when the written plan has a second Pages table,
   const named = WRITTEN.replace('| Overview | overview.tsx |', '| Pages Admin | overview.tsx |').replace('### Overview', '### Pages Admin');
   assert.deepEqual(planTargets(named), { kind: 'create', targets: ['details.tsx', 'overview.tsx'] });
   assert.equal(verifyPlanProvenance({ planPath: tmpPlan(named), approvedPlan: PREVIEW }).ok, true);
+});
+
+// An edit plan quotes the page's earlier prompts, and a prompt can hold a Pages table: read by its content, the
+// preview for one page and a written plan for ANOTHER were both "create a.tsx", and the edit of the wrong page was
+// certified. The plan's file name says which kind it is, and only that kind's target is read.
+test('verifyPlanProvenance reads an edit plan as an edit, whatever its quoted prompt holds', () => {
+  const table = 'Build this:\n## Pages\n| Page | File |\n|---|---|\n| A | a.tsx |';
+  const preview = EDIT_PREVIEW.replace('- **Data:** Mock data\n', `- **Data:** Mock data\n- **Original prompt:** ${table}\n`);
+  const context = `\n## Original Page Context\n- **Original prompt (from prompt.txt):** ${table}\n`;
+  assert.deepEqual(planTargets(preview, { kind: 'edit' }), { kind: 'edit', targets: [PAGE_ID] });
+  const other = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3') + context, EDIT), approvedPlan: preview });
+  assert.equal(other.ok, false, 'an edit of another page');
+  assert.match(other.error, /approved plan named 6e0c28a2/);
+  // CONTROL: the same quoted prompt, the same page.
+  const same = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN + context, EDIT), approvedPlan: preview });
+  assert.equal(same.ok, true, same.error);
+  // …and a create plan is read by its Pages table alone: without one it names nothing, never a page id in its text.
+  assert.equal(planTargets(`# Genpage Plan\n- **Page ID:** ${PAGE_ID}\n`, { kind: 'create' }), null);
 });
 
 test('verifyPlanProvenance halts when the planner wrote nothing, or the approval names no pages', () => {
@@ -144,7 +165,7 @@ test('an overlong or malformed page id is refused, never truncated to a valid-lo
   for (const shape of [`\`${PAGE_ID}\``, `{${PAGE_ID}}`, `${PAGE_ID}.`]) {
     assert.deepEqual(planTargets(EDIT_WRITTEN.replace(`**Page ID:** ${PAGE_ID}`, `**Page ID:** ${shape}`)), { kind: 'edit', targets: [PAGE_ID] }, shape);
   }
-  const refused = verifyPlanProvenance({ planPath: tmpPlan(overlong), approvedPlan: EDIT_PREVIEW });
+  const refused = verifyPlanProvenance({ planPath: tmpPlan(overlong, EDIT), approvedPlan: EDIT_PREVIEW });
   assert.equal(refused.ok, false);
   assert.match(refused.error, /targets no pages, but the approved plan named 6e0c28a2/);
   // Every label must hold the SAME well-formed id. A pattern search skipped a malformed first label and
@@ -164,7 +185,7 @@ test('a Page ID label quoted in the embedded prompt neither blocks nor redirects
   for (const prompt of [`…opens the details page (**Page ID:** ${other})…`, 'Show the **Page ID:** in the footer']) {
     const written = `${EDIT_WRITTEN}\n## Original Page Context\n- **Original prompt (from prompt.txt):** ${prompt}\n`;
     assert.deepEqual(planTargets(written), { kind: 'edit', targets: [PAGE_ID] }, prompt);
-    assert.equal(verifyPlanProvenance({ planPath: tmpPlan(written), approvedPlan: EDIT_PREVIEW }).ok, true, prompt);
+    assert.equal(verifyPlanProvenance({ planPath: tmpPlan(written, EDIT), approvedPlan: EDIT_PREVIEW }).ok, true, prompt);
   }
   // Without the section, the FIRST label is the plan's: a later one neither blocks nor rescues it.
   const bare = `# Genpage Edit Plan\n- **Page ID:** ${PAGE_ID}\n\nThe prompt said: Show the **Page ID:** in the footer\n`;
@@ -184,7 +205,7 @@ test('a Page ID label quoted in the preview\u2019s prompt snippet neither blocks
   for (const snippet of ['…1. Show the **Page ID:** in the footer', `…1. Like **Page ID:** ${other}`, `Copy the layout of **File:** ${other}/page.tsx`]) {
     const preview = EDIT_PREVIEW.replace('- **Data:** Mock data\n', `- **Data:** Mock data\n- **Original prompt:** ${snippet}\n`);
     assert.deepEqual(planTargets(preview), { kind: 'edit', targets: [PAGE_ID] }, snippet);
-    const verified = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN), approvedPlan: preview });
+    const verified = verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: preview });
     assert.equal(verified.ok, true, `${snippet}: ${verified.error}`);
     // …wherever the snippet sits relative to the File line.
     const snippetFirst = `## Genpage Edit Plan\n\n### Current State\n- **Original prompt:** ${snippet}\n- **File:** ${PAGE_ID}/page.tsx\n`;
@@ -465,7 +486,7 @@ test('a preview whose Current State block has no valid File line names nothing',
     assert.equal(planTargets(preview(`- **File:** ${at}${PAGE_ID}/page.tsx.bak\n`)), null, `${at}: still only page.tsx`);
     assert.equal(planTargets(preview(`- **File:** ${at}deadbeef${PAGE_ID}/page.tsx\n`)), null, `${at}: still a whole id`);
   }
-  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3')), approvedPlan: preview('') }).ok, false, 'and verify halts');
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3'), EDIT), approvedPlan: preview('') }).ok, false, 'and verify halts');
 });
 
 // The preview's File line is read from its own `### Current State` block: a `- **File:**` bullet quoted from the
@@ -474,7 +495,7 @@ test('the preview is read by the File line in its own Current State block', () =
   const other = '11111111-2222-3333-4444-555555555555';
   const quotedFirst = `## Genpage Edit Plan\n\n> The maker asked:\n- **File:** ${other}/page.tsx\n\n${EDIT_PREVIEW.replace('## Genpage Edit Plan\n\n', '')}`;
   assert.deepEqual(planTargets(quotedFirst), { kind: 'edit', targets: [PAGE_ID] });
-  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN), approvedPlan: quotedFirst }).ok, true);
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: quotedFirst }).ok, true);
 });
 
 // A hard link at the plan path is a plain file to lstat, yet quarantining it renamed only this name — the

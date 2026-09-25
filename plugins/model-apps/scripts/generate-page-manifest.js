@@ -151,7 +151,10 @@ function validateExistingPackageJson(filePath, expectedPkg) {
 
   let existing;
   try {
-    existing = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    // One leading UTF-8 byte-order mark is dropped: Windows PowerShell's `Set-Content -Encoding UTF8` writes
+    // one, npm reads such a manifest fine, and JSON.parse refuses it — so a valid package.json halted every
+    // rerun. The file itself is left as it is.
+    existing = JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
   } catch (err) {
     const e = new Error(`existing package.json could not be parsed, so its dependencies cannot be verified (${err.message}); fix it or rerun with --force`);
     e.code = 'STALE_MANIFEST';

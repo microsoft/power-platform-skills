@@ -235,6 +235,21 @@ test('no TODO: pass when spreads exist (...props is fine)', () => {
   assert.equal(result.status, 'pass');
 });
 
+test('no TODO: fail on executable template elision while allowing legal multiline spread', () => {
+  const check = ASSERTIONS.get('Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies');
+  const spread = ['const rows = [1, 2];', 'const copy = [', '  ...', '  rows', '];'].join('\n');
+  const template = [
+    'const GeneratedComponent = () => {',
+    '  const title = `${(() => {',
+    '    ...',
+    '  })()}`;',
+    '  return null;',
+    '};',
+  ].join('\n');
+  assert.equal(check({ files: [f('spread.tsx', spread)], eval: evalStub() }).status, 'pass');
+  assert.equal(check({ files: [f('template.tsx', template)], eval: evalStub() }).status, 'fail');
+});
+
 // The eval and the runtime worker-output gate share one rule (findElisionMarker): elision counts only
 // in a comment or a bare line, so the same words as UI copy never fail a page.
 test('no TODO: UI copy with an ellipsis or the word TODO passes; an elision comment fails', () => {

@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { blankLiterals, endsMidStatement, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition } = require('../lib/source-literals.js');
+const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition } = require('../lib/source-literals.js');
 
 test('blanks comments, strings and template bodies while preserving offsets', () => {
   const src = 'const a = "hi"; // note\nconst b = `t${x}`; /* c */ const d = 1;';
@@ -251,6 +251,19 @@ test('every prefix the gates accept is a module a real parser accepts', () => {
 
 // Inside `${…}` a `/` is a regex or a division depending on the CODE before it. A comment's last word
 // is not that code, in either direction.
+test('a closed TypeScript type assertion inside a template expression is an operand before division', () => {
+  const code = [
+    'import React from "react";',
+    'const total = 12, count = 2;',
+    'const label = `${total as NonNullable<number> / count}/month`;',
+    'const GeneratedComponent = () => React.createElement("span", null, label);',
+    'export default GeneratedComponent;',
+  ].join('\n');
+  assert.equal(hasDefaultExport(code), true);
+  assert.equal(hasUnbalancedBrackets(code), false);
+  assert.equal(endsMidStatement(code), false);
+});
+
 test('a comment inside a template expression does not decide what a following slash is', () => {
   const exprEnd = (src) => scanTemplateExpressionEnd(src, src.indexOf('${') + 2);
   // The comment ends in `:`, which would read as a regex start — but `total / count` is a division.
@@ -400,6 +413,7 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     ['an array pattern inside an object pattern', 'const { a: [Page] } = lib;\nexport default Page;\n'],
     // A member chain followed by a line break is a complete statement (a cut would have removed it).
     ['a member chain on its own line', 'import * as React from "react";\nexport default React.memo\n'],
+    ['a member chain at EOF', 'const pages = { Home: () => null };\nexport default pages.Home'],
     ['a return type naming a property like a statement word', 'export default function P(): Schema.module { return null as any; }\n'],
     // Overload signatures come before the body; any complete `export default` will do.
     ['overloads', 'export default function f(x: string): string;\nexport default function f(x: any) { return x; }\n'],
@@ -457,6 +471,8 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     // An expression that stops at a token needing more.
     ['cut after a dot', 'import * as React from "react";\nexport default React.'],
     ['cut after an optional dot', 'import * as React from "react";\nexport default React?.'],
+    ['cut after a member dot at EOF', 'const pages = { Home: () => null };\nexport default pages.'],
+    ['cut after an optional member dot at EOF', 'const pages = { Home: () => null };\nexport default pages?.'],
     ['cut after `as`', 'const P = () => null;\nexport default P as'],
     ['cut after `as` and a namespace', 'const P = () => null;\nexport default P as React.'],
     ['cut after `satisfies`', 'const P = () => null;\nexport default P satisfies'],
@@ -476,6 +492,47 @@ test('hasDefaultExport requires the export itself to be complete', () => {
   ]) {
     assert.equal(hasDefaultExport(code), false, what);
   }
+});
+
+test('endsMidStatement distinguishes dangling operators from postfix and JSX or regex closers', () => {
+  for (const [what, code] of [
+    ['relational greater-than needs a right operand', 'const count = 1;\nexport default () => count >'],
+    ['division slash needs a right operand', 'const count = 1;\nexport default () => count /'],
+    ['prefix bang needs its operand', 'const count = 1;\nexport default () => !'],
+  ]) {
+    assert.equal(endsMidStatement(code), true, what);
+  }
+  for (const [what, code] of [
+    ['a JSX tag can end with >', 'export default () => <div />'],
+    ['a regex literal can end with /', 'const re = /a+/;\nexport default re'],
+    ['a postfix non-null assertion can end with !', 'const count = 1;\nexport default count!'],
+  ]) {
+    assert.equal(endsMidStatement(code), false, what);
+  }
+});
+
+test('findElisionMarker distinguishes legal multiline spread from elision in executable template bodies', () => {
+  const legalSpread = [
+    'const rows = [1, 2];',
+    'const copy = [',
+    '  ...',
+    '  rows',
+    '];',
+    'const GeneratedComponent = () => copy.length ? null : null;',
+    'export default GeneratedComponent;',
+  ].join('\n');
+  assert.equal(findElisionMarker(legalSpread), null);
+  assert.match(findElisionMarker('const rows = [\n  ...\n];') || '', /bare `\.\.\.` line/);
+  const executableTemplateBody = [
+    'const GeneratedComponent = () => {',
+    '  const title = `${(() => {',
+    '    ...',
+    '  })()}`;',
+    '  return null;',
+    '};',
+    'export default GeneratedComponent;',
+  ].join('\n');
+  assert.match(findElisionMarker(executableTemplateBody) || '', /bare `\.\.\.` line/);
 });
 
 test('every committed .tsx the repo ships is accepted (false-positive corpus)', () => {

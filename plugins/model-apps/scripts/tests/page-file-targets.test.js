@@ -139,9 +139,10 @@ test('a name Windows cannot store is refused on every platform', () => {
   assert.match(pageFileProblems(['page:alt.tsx'])[0].message, /a character Windows reserves in "page:alt\.tsx", which Windows cannot store as a file name$/);
   // Windows stores a short-name form fine; the problem is that it can BE another file.
   assert.match(pageFileProblems(['REPORT~1.TSX'])[0].message, /a Windows short-name form \(`~1`\) in "REPORT~1\.TSX", which on Windows can be the short name of another file$/);
-  // CONTROLS: names that only resemble a device, inner spaces, dotted stems, a tilde without a digit, and
-  // a lone "." segment.
-  assert.deepEqual(codes(['console.tsx', 'con-page.tsx', 'my page.tsx', 'a.b.tsx', './e.tsx', 'com10.tsx', 'tilde~page.tsx']), []);
+  // CONTROLS: names that only resemble a device, dotted stems, and a lone "." segment. An inner space and a tilde
+  // without a digit are storable, and are refused by the shell rule instead (the next test).
+  assert.deepEqual(codes(['console.tsx', 'con-page.tsx', 'a.b.tsx', './e.tsx', 'com10.tsx']), []);
+  assert.deepEqual(codes(['my page.tsx', 'tilde~page.tsx']), ['shell:my page.tsx', 'shell:tilde~page.tsx']);
   // Built pages are not written, so the write-target rules — this one included — do not apply to them.
   assert.deepEqual(codes(['next.tsx'], { built: ['CON.tsx'] }), []);
 });
@@ -228,9 +229,10 @@ test('the File column is read from the plan\'s Pages table, and a plan without o
 });
 
 // The plan's `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`: a Pages table quoted
-// there decided the files the gate checked, while the workers wrote the real table's. A second Pages section
-// is refused — a fenced one too, since a fence left open would swallow the real section.
-test('a plan with more than one Pages section is refused, not read by its first', () => {
+// there decided the files the gate checked, while the workers wrote the real table's. A second Pages table with
+// a File column is refused — a fenced one too, since a fence left open would swallow the real section — while
+// a maker's own `## Pages` list, which names no file, is no second table.
+test('a plan with more than one Pages table is refused, not read by its first', () => {
   const real = ['## Pages', '| Page | File | Purpose | Entities |', '|---|---|---|---|', '| A | approved.tsx | x | account |'];
   const quoted = ['## Pages', '| Page | File | Purpose | Entities |', '|---|---|---|---|', '| X | outside.tsx | y | account |'];
   const plan = (...requirements) => ['# Genpage Plan', '## User Requirements', 'Build one page.', ...requirements,
@@ -239,14 +241,25 @@ test('a plan with more than one Pages section is refused, not read by its first'
     ['fenced', ['```markdown', ...quoted, '```']],
     ['fenced, with the fence left open', ['```', ...quoted]],
     ['not fenced', quoted],
-    ['with no table under it', ['## Pages', 'The pages are listed below.']],
+    ['quoted from an approval preview', ['### Pages (1 total)', ...quoted.slice(1)]],
+    ['quoted with ">"', quoted.map((l) => `> ${l}`)],
+    ['quoted, over an unquoted table', ['> ## Pages', ...quoted.slice(1)]],
+    ['indented', quoted.map((l) => `    ${l}`)],
   ]) {
-    assert.equal(pagesSections(plan(...block)).length, 2, what);
+    assert.deepEqual(pagesSections(plan(...block)), [['outside.tsx'], ['approved.tsx']], what);
     assert.equal(pageFilesFromPlan(plan(...block)), null, what);
   }
-  // CONTROLS: a quoted or indented example is no section, and a plan with one Pages table is read.
-  assert.deepEqual(pageFilesFromPlan(plan(...quoted.map((l) => `> ${l}`))), ['approved.tsx']);
-  assert.deepEqual(pageFilesFromPlan(plan(...quoted.map((l) => `    ${l}`))), ['approved.tsx']);
+  // CONTROLS: a maker's own `## Pages` list, prose, or a table without a File column names no file, so the real
+  // table is read; and a plan with one Pages table is read.
+  for (const [what, block] of [
+    ['a list of pages', ['## Pages', '- Overview: summary cards', '- Details: one record']],
+    ['prose', ['## Pages', 'The pages are listed below.']],
+    ['a table without a File column', ['## Pages', '| Page | Purpose |', '|---|---|', '| Overview | cards |']],
+    ['a page named "Pages Admin" specified', ['### Pages Admin', '- **File:** admin.tsx', '- **Purpose:** settings']],
+  ]) {
+    assert.deepEqual(pagesSections(plan(...block)), [null, ['approved.tsx']], what);
+    assert.deepEqual(pageFilesFromPlan(plan(...block)), ['approved.tsx'], what);
+  }
   assert.deepEqual(pageFilesFromPlan(plan()), ['approved.tsx']);
   // The gate says why, and checks no file of either table.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-two-'));
@@ -255,11 +268,31 @@ test('a plan with more than one Pages section is refused, not read by its first'
     fs.writeFileSync(p, plan('```', ...quoted, '```'));
     const res = checkPageFiles({ planPath: p });
     assert.equal(res.exit, 1);
-    assert.match(res.result.error, /has 2 ## Pages headings, so which table the pages come from is ambiguous/);
+    assert.match(res.result.error, /has 2 Pages tables with a File column, so which one the pages come from is ambiguous/);
     assert.equal(res.result.files, undefined);
+    // CONTROL: a maker's own `## Pages` list is no second table — the gate reads the real one.
+    fs.writeFileSync(p, plan('## Pages', '- Overview: summary cards'));
+    const listed = checkPageFiles({ planPath: p });
+    assert.equal(listed.exit, 0, JSON.stringify(listed.result));
+    assert.deepEqual(listed.result.files, ['approved.tsx']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The skill's commands put page paths in double quotes, and some in none, and the orchestrator substitutes the name
+// as text: `$(Join-Path .. outside).tsx` passed every rule, and PowerShell expanded it inside the quotes — the
+// dispatch stamp landed outside the working directory. A `;` or a space in an unquoted argument ends it.
+test('a page name a shell would expand or split on is refused', () => {
+  const bad = ['$(Join-Path .. outside).tsx', 'a`b.tsx', 'a;rm -rf ~ #.tsx', 'my page.tsx', 'pages/$HOME/x.tsx',
+    "it's.tsx", 'a&b.tsx', 'a%PATH%.tsx', 'wow!.tsx', 'a,b.tsx', 'a(1).tsx', 'a+b.tsx', 'a\u201cb\u201d.tsx', 'a\u2013b.tsx'];
+  assert.deepEqual(codes(bad), bad.map((f) => `shell:${f}`));
+  const [dollar] = pageFileProblems(['$(Join-Path .. outside).tsx']);
+  assert.match(dollar.message, /has "\$" in "\$\(Join-Path \.\. outside\)\.tsx", which a shell command line would expand or split on/);
+  assert.match(pageFileProblems(['my page.tsx'])[0].message, /has a space in/);
+  // CONTROLS: letters and digits of any script, with their combining marks, `.`, `-` and `_`, in folders too.
+  assert.deepEqual(codes(['project-overview.tsx', 'under_score.tsx', 'a.b.tsx', 'pages/home.tsx', './x.tsx',
+    '\u00dcbersicht.tsx', '\u6982\u8981.tsx', 'cafe\u0301.tsx', '\u0645\u0644\u062e\u0635.tsx']), []);
 });
 
 test('check-page-files.js gates dispatch: exit 0 when safe, 3 with the problems when not, 1 when unreadable', () => {

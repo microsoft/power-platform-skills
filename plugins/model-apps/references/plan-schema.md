@@ -207,7 +207,7 @@ connector bindings." sentinel).]
 | `## Working Directory` | All downstream agents | Absolute path, forward slashes on Windows |
 | `## Plugin Root` | Page-builder (to Read references/samples) | Absolute path |
 | `## Environment` | Orchestrator | URL, app decision, languages |
-| `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique. Exactly one `## Pages` heading: `check-page-files.js` refuses a plan with a second, one quoted in `## User Requirements` included |
+| `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique, and use only letters, digits, `.`, `-` and `_` (kebab-case, e.g. `project-overview.tsx`). Exactly one Pages table with a File column: `check-page-files.js` refuses a plan with a second, one quoted in `## User Requirements` included |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |

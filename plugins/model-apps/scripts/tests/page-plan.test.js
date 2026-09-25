@@ -429,8 +429,8 @@ test('CLI refuses a working directory that exists and is not a directory', () =>
 });
 
 // The plan file is checked like the working directory: a link or hard link at its path put the plan wherever
-// it points, and --out could name any path at all. The plan goes only into the working directory, as a plain file.
-test('CLI refuses to write the plan through a link, a hard link or a folder, or outside the working directory', (t) => {
+// it points. Its path is not configurable — an --out could name any file, the input spec included.
+test('CLI refuses to write the plan through a link, a hard link or a folder, and takes no --out', (t) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-leaf-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const wd = path.join(base, 'wd');
@@ -468,22 +468,18 @@ test('CLI refuses to write the plan through a link, a hard link or a folder, or 
     assert.deepEqual(fs.readdirSync(outside), ['precious.md'], 'nothing is written through the dangling link');
     fs.unlinkSync(planPath);
   }
-  // --out naming a file outside the working directory, or in a folder under it, is refused.
-  for (const out of [path.join(outside, 'plan.md'), path.join(wd, 'sub', 'plan.md'), wd, base]) {
-    res = run('--out', out);
-    assert.notEqual(res.status, 0, out);
-    assert.match(res.stdout + res.stderr, /--out must name a file directly in the working directory/, out);
-  }
+  // --out is no flag at all: it could name the input spec, which the plan would then overwrite.
+  fs.writeFileSync(path.join(wd, 'app-spec.json'), '{"keep":true}');
+  res = run('--out', path.join(wd, 'app-spec.json'));
+  assert.notEqual(res.status, 0, res.stdout);
+  assert.match(res.stdout + res.stderr, /--out/);
+  assert.equal(fs.readFileSync(path.join(wd, 'app-spec.json'), 'utf8'), '{"keep":true}');
   assert.deepEqual(fs.readdirSync(outside), ['precious.md']);
-  assert.equal(fs.existsSync(path.join(wd, 'sub')), false);
-  // CONTROLS: a plain plan left by an earlier run is rewritten, and --out may rename the plan in place.
+  // CONTROL: a plain plan left by an earlier run is rewritten.
   fs.writeFileSync(planPath, 'stale');
   res = run();
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.notEqual(fs.readFileSync(planPath, 'utf8'), 'stale');
-  res = run('--out', path.join(wd, 'other-plan.md'));
-  assert.equal(res.status, 0, res.stdout + res.stderr);
-  assert.ok(fs.existsSync(path.join(wd, 'other-plan.md')));
 });
 
 test('CLI refuses a plan path it cannot inspect, and writes no plan', (t) => {
@@ -557,7 +553,7 @@ test('CLI refuses to write a plan when a referenced sample is absent', (t) => {
   let stderr = '';
 
   try {
-    process.argv = [process.execPath, cliPath, '--spec', '@' + specPath, '--working-dir', dir, '--out', outPath];
+    process.argv = [process.execPath, cliPath, '--spec', '@' + specPath, '--working-dir', dir];
     process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
     process.exit = (code) => { throw new Error(`process.exit(${code})`); };
     fs.existsSync = (p) => (

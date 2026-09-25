@@ -43,6 +43,11 @@ function expressionPosition(src, i) {
   // opens one: `return !/\(/.test(s)`, and `if (bad) !/\(/.test(s)` (see closesStatementHead).
   if (ch === '!') return expressionPosition(src, index);
   if ((ch === '+' || ch === '-') && src[index - 1] === ch) return false;
+  // A `>` can be either a binary relational operator (`count > /re/.test(x)`) or the end of an
+  // operand-like construct (`value as NonNullable<number> / count`, `<Icon /> / scale`). When it
+  // closes a compact angle/tag group, the next `/` divides; treating every `>` as expression-start
+  // made a generic type assertion inside `${...}` swallow the rest of the template as a regex.
+  if (ch === '>') return !greaterThanEndsOperand(src, index);
   if (EXPR_START_PUNCT.has(ch)) return true;
   // A `)` usually ends an operand — `counts.get(k)! / total`, `(a + b) / 2` — but the `)` that
   // closes an `if (…)`, `for (…)` or `while (…)` head is followed by a STATEMENT, where an
@@ -69,6 +74,36 @@ function isPropertyName(src, s) {
   let p = s;
   while (p >= 0 && /\s/.test(src[p])) p -= 1;
   return src[p] === '.' && !(src[p - 1] === '.' && src[p - 2] === '.');
+}
+
+// Heuristic for the ambiguous `>` token in dependency-free TSX scanning. The raw shapes this protects:
+//   total as NonNullable<number> / count    `>` closes a type argument list; `/` is division
+//   export default () => <Icon />           `>` closes JSX; EOF is complete
+//   export default () => count >            `>` is a relational operator; EOF is truncated
+// Keep this intentionally conservative: only a compact `<...>` group is treated as an operand end.
+// Spaced comparisons like `a < b >` stay operators.
+function greaterThanEndsOperand(src, close) {
+  let depth = 0;
+  for (let k = close; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
+    const c = src[k];
+    if (c === '>') depth += 1;
+    else if (c === '<') {
+      depth -= 1;
+      if (depth !== 0) continue;
+      const body = sliceChars(src, k + 1, close);
+      if (!body || /^\s|\s$/.test(body)) return false;
+      return src[k + 1] === '/' || /[A-Za-z_$]/.test(src[k + 1] || '');
+    } else if (c === '\n' || c === ';') {
+      return false;
+    }
+  }
+  return false;
+}
+
+function sliceChars(src, start, end) {
+  let out = '';
+  for (let k = start; k < end; k += 1) out += src[k];
+  return out;
 }
 
 // True when the `)` at `close` ends the head of an `if`, `for`, `while` or `with` statement. The
@@ -517,6 +552,12 @@ function blankNonCodePreservingTemplateExpressions(code) {
     if (src[i] !== '`' || out[i] !== '`') continue;
     const { end, expressions } = scanTemplateLiteral(src, i, scratch);
     for (const expr of expressions) {
+      // Keep executable substitutions from being concatenated through blanked template text. In
+      //   `${Xrm.Navigation.navigateTo} text ${({ pageType: "generative", pageId: "PAGEREF_x" })}`
+      // the two expressions are independent, but blanking the `${` / `}` delimiters to spaces made
+      // call-site regexes see `navigateTo   ({ ... })`. A same-length semicolon at the close boundary
+      // preserves offsets while making the expression boundary syntactically non-whitespace.
+      if (expr.end < out.length && out[expr.end] !== '\n') out[expr.end] = ';';
       const blanked = blankNonCodePreservingTemplateExpressions(src.slice(expr.start, expr.end));
       for (let k = 0; k < blanked.length; k += 1) out[expr.start + k] = blanked[k];
     }
@@ -591,9 +632,12 @@ function defaultExportIsComplete(bare, at) {
   if (cls) return hasDeclarationBody(rest, cls[0].length);
   const name = /^([\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)[ \t]*(?:;|\r?\n|$)/u.exec(rest);
   if (!name) {
-    // A member chain that stops at the end of the file, with no `;` or line break after it, is a write
-    // cut before its call: `export default React.memo` of `export default React.memo(Page);`.
-    if (/^[\p{ID_Start}$_][\p{ID_Continue}$]*(?:\s*\??\.\s*[\p{ID_Start}$_][\p{ID_Continue}$]*)+[ \t]*$/u.test(rest)) return false;
+    // A member chain at EOF can be a complete export (`export default pages.Home`) or a common
+    // higher-order helper cut before its call (`export default React.memo` from `React.memo(Page)`).
+    // Accept local object members, but keep imported namespace helpers fail-closed unless a newline or
+    // semicolon made them a complete statement (covered by the existing expression path).
+    const member = /^([\p{ID_Start}$_][\p{ID_Continue}$]*)(?:\s*\??\.\s*[\p{ID_Start}$_][\p{ID_Continue}$]*)+[ 	]*$/u.exec(rest);
+    if (member) return declaresObjectName(bare, member[1]);
     // So is an arrow's parameter list with the arrow cut off — `export default ()`,
     // `(props: { a: string })`, `(props): JSX.Element` of `export default (props) => <div/>;` —
     // when the group cannot be an expression: empty, spreading at its own level, annotating a type at
@@ -635,6 +679,14 @@ function defaultExportIsComplete(bare, at) {
   }
   // `export default GeneratedComponent;` — the module must declare or import the name.
   return declaresName(bare, name[1]);
+}
+
+// True when `name` is a local object binding. This is narrower than declaresName on purpose:
+// `export default pages.Home` is complete when `pages` is an object literal, but `React.memo` at EOF
+// is usually a truncated call on an imported namespace and remains rejected.
+function declaresObjectName(bare, name) {
+  const w = `(?<![\\p{ID_Continue}$])${name.replace(/\$/g, '\\$')}(?![\\p{ID_Continue}$])`;
+  return new RegExp(`(?<![\\p{ID_Continue}$.])(?:const|let|var)\\s+${w}\\s*=\\s*\\{`, 'u').test(bare);
 }
 
 // True when `bare` (blanked code) DECLARES or imports `name` — not merely mentions it:
@@ -816,7 +868,24 @@ function endsMidStatement(code) {
   const out = src.split('');
   let open = false;
   lexInto(src, out, 0, { onEnd: (end) => { open = end.open; } });
-  return open || DANGLING_TAIL.test(out.join(''));
+  const bare = out.join('');
+  return open || DANGLING_TAIL.test(bare) || hasDanglingFinalOperator(out);
+}
+
+function hasDanglingFinalOperator(out) {
+  const { ch, index } = prevSignificant(out, out.length);
+  if (ch === '>') return !greaterThanEndsOperand(out, index);
+  if (ch === '/') return !slashEndsRegex(out, index);
+  if (ch === '!') return expressionPosition(out, index);
+  return false;
+}
+
+function slashEndsRegex(out, close) {
+  for (let k = close - 1; k >= 0 && out[k] !== '\n'; k -= 1) {
+    if (out[k] !== '/') continue;
+    return expressionPosition(out, k);
+  }
+  return false;
 }
 
 /**
@@ -869,9 +938,31 @@ function findElisionMarker(code) {
     // list: "upload the rest of the file in 4 MB chunks" is how a file-handling page describes itself.
     if (/\bomitted for brevity\b/i.test(body)) return 'a comment that elides code ("omitted for brevity")';
   }
-  // Comments and strings are blanked here, so a line that is nothing but an ellipsis is code.
-  if (/^[ \t]*(\.\.\.|…)[ \t]*$/m.test(blankLiterals(src))) return 'a bare `...` line standing in for code';
+  // Comments and strings are blanked here, but executable `${...}` template bodies are kept: an
+  // ellipsis inside an IIFE in a template is code, not template text. A bare `...` followed by an
+  // operand on a later line is a legal multiline spread (`[ ... rows ]`), while EOF or a closing
+  // delimiter means the generator left a placeholder.
+  if (bareEllipsisElidesCode(blankNonCodePreservingTemplateExpressions(src))) return 'a bare `...` line standing in for code';
   return null;
+}
+
+function bareEllipsisElidesCode(mask) {
+  const line = /^[ 	]*(\.\.\.|…)[ 	]*$/gm;
+  let m;
+  while ((m = line.exec(mask)) !== null) {
+    let k = line.lastIndex;
+    while (k < mask.length && /\s/.test(mask[k])) k += 1;
+    if (k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
+  }
+  return false;
+}
+
+function ellipsisFollowedByStatement(mask, k) {
+  if (!/[\w$]/.test(mask[k])) return false;
+  let j = k;
+  while (j < mask.length && /[\w$]/.test(mask[j])) j += 1;
+  const word = mask.slice(k, j);
+  return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
 module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, scanTemplateExpressionEnd };

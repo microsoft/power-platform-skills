@@ -529,7 +529,9 @@ ${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
-the exact heading. Page filenames in the `## Pages` table must be unique.
+the exact heading. Page filenames in the `## Pages` table must be unique, and use only letters,
+digits, `-`, `_` and `.` — kebab-case such as `project-overview.tsx`, never a space or a shell
+character: the dispatch gate refuses any other name, and the build halts.
 
 ### CRITICAL — Prefix discipline in `## Entity Creation Required`
 

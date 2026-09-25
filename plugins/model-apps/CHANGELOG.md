@@ -178,7 +178,8 @@ downloads that round-trip Choice columns.
   keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
   still commit, and a re-send could only be refused as a false version conflict. Activating a
   business process flow on a newly created table can take longer than the old 60 s.
-- **`/genpage` runs only the plan you approved** ([#585]). A plan left over from an earlier run is
+- **`/genpage` runs only the plan you approved** ([#585]). An edit plan is read as an edit, by its file name,
+  so a Pages table quoted from the page's prompt cannot make an edit of another page pass. A plan left over from an earlier run is
   quarantined before the planner writes, and the new file must build exactly the pages the approved
   plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
   A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included), or a
@@ -206,12 +207,14 @@ downloads that round-trip Choice columns.
   LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
 - **Re-running the manifest generator with a new feature no longer reports success over a stale
   `package.json`** ([#585]). A missing package fails with the fix, and `/genpage` halts there for you
-  to merge it or rerun with `--force`; a version you changed is kept and reported as `versionDrift`.
+  to merge it or rerun with `--force`; a version you changed is kept and reported as `versionDrift`. A
+  manifest saved with a UTF-8 byte-order mark (Windows PowerShell's default) is read as usual.
 - **The code-generation rules list exactly the packages the page installs** ([#585]), and a test
   fails when they drift from the dependency map. Three libraries the rules offered but the package
   never installed are gone from the list.
 - **Icons are verified however they are imported** ([#585]). A namespace, default, `require` or
-  dynamic `import()` of `@fluentui/react-icons` is blocked — in any quote style — since only named
+  dynamic `import()` of `@fluentui/react-icons` is blocked — in any quote style, anywhere on a line,
+  combined with a named import, or with a trailing comma or import options — since only named
   imports can be checked.
   A shipped sample that used two unverified sized icons is fixed, and every sample must now pass.
 - **Navigation checks read code, not prose** ([#588]). A `navigateTo` in help text no longer counts
@@ -222,18 +225,22 @@ downloads that round-trip Choice columns.
 - **A complete page is no longer rejected as truncated** ([#585]). `/app-builder`'s page promotion
   read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
   a comment right before JSX or a regex, and a `/` after a property named like a keyword
-  (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`. The same checks back
+  (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
+  cast (`total as NonNullable<number> / count`), a spread whose operand is on the next line, and a
+  member export such as `export default pages.Home` at the end of the file. The same checks back
   `/genpage`'s new gate.
 - **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
-  `..`, backslash aliases, a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
+  `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
+  names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
   a trailing dot), a name that is not a `.tsx` page (`package.json`), a page path that is itself a link
   or not a regular file, a folder that links outside the working directory or cannot be read, and
   names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
   already there) halt the build, as does a new page that is an already-built one reached through a link
   or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
-  table — one quoted in the requirements, fenced or not — halts too, instead of only the first being
-  checked, and `/app-builder` writes its page plan only as a plain file directly in the working
-  directory, never through a link, hard link or folder at its path. The same rule covers the
+  table naming files — one quoted in the requirements, fenced, quoted or not — halts too, instead of only the
+  first being checked, and `/app-builder` writes its page plan only as a plain file in the working
+  directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
+  `--out`). The same rule covers the
   pages `/app-builder` generates — which now
   runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
   cannot be read fails its check instead of crashing it.

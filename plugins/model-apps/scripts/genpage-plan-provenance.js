@@ -90,22 +90,26 @@ function currentStateBlock(src) {
   const next = /^#{1,3}[ \t]+\S/m.exec(rest);
   return next ? rest.slice(0, next.index) : rest;
 }
-function planTargets(text) {
+// `kind` is what the flow says the document is ('create' | 'edit' — see planKindOf), or null to read it from
+// the document itself. With a kind, only that kind's target is read.
+function planTargets(text, { kind = null } = {}) {
   const src = String(text || '');
-  // A Pages table decides "create" first: edit plans never have one, while a create plan's per-page
-  // `- **File:**` lines could hold a `<guid>/page.tsx` path and be misread as an edit target. Each file
-  // is compared in the page-file rule's own spelling, `.` segments dropped: `./overview.tsx` in the
-  // preview and `overview.tsx` in the written plan name the same page.
-  // The written plan's `## Pages` is looked for first, under the page-file gate's own heading, and only when
-  // there is none the preview's looser `### Pages (N total)`: the looser one also matches the per-page
-  // `### Pages …` specification of a page whose name begins with "Pages", a second section in a written plan.
-  // More than one names nothing — a Pages table quoted in the requirements used to stand in for the real one
-  // (lib/page-file-targets.js pagesSections) — and an edit plan never has one, so it is no edit either.
-  const exact = pagesSections(src);
-  const sections = exact.length ? exact : pagesSections(src, { heading: /^#{2,3}\s+Pages\b/ });
-  if (sections.length > 1) return null;
-  const files = sections[0];
-  if (files && files.length) return { kind: 'create', targets: files.map((f) => path.posix.normalize(f.trim())).sort() };
+  if (kind !== 'edit') {
+    // A Pages table decides "create" first when the kind is not known: an edit plan has none of its own,
+    // while a create plan's per-page `- **File:**` lines could hold a `<guid>/page.tsx` path and be misread
+    // as an edit target. Each file is compared in the page-file rule's own spelling, `.` segments dropped:
+    // `./overview.tsx` in the preview and `overview.tsx` in the written plan name the same page.
+    // Read by the page-file gate's own rule, `## Pages` in the written plan and `### Pages (N total)` in the
+    // preview alike. More than one table with a File column names nothing — a Pages table quoted in the
+    // requirements used to stand in for the real one (lib/page-file-targets.js pagesSections).
+    const tables = pagesSections(src).filter(Boolean);
+    if (tables.length > 1) return null;
+    const files = tables[0];
+    if (files && files.length) return { kind: 'create', targets: files.map((f) => path.posix.normalize(f.trim())).sort() };
+    // A create plan is read by its Pages table alone: without one it names nothing, never a page id its text
+    // happens to hold.
+    if (kind === 'create') return null;
+  }
   // The edit target is the page's GUID: the written plan's `- **Page ID:** <guid>`, or else the GUID
   // folder directly before `page.tsx`, which both the preview's `- **File:** <guid>/page.tsx` and the
   // written plan's `- **Absolute path:** <working-dir>/<guid>/page.tsx` carry.
@@ -198,11 +202,25 @@ function preparePlanProvenance({ planPath }) {
   }
 }
 
+// Which kind of plan a path holds is the flow's choice, not the document's: /genpage writes a create plan to
+// `genpage-plan.md` and an edit plan to `genpage-edit-plan.md` (skills/genpage/SKILL.md and edit-flow.md), and
+// neither the planner nor the maker's text names the file. The document cannot say it reliably: an edit plan
+// quotes the page's earlier prompts, and a Pages table quoted there — in the preview's prompt snippet and the
+// written plan's `## Original Page Context` alike — read both as the same create, so an edit of ANOTHER page
+// was certified. null for any other name, which is then read from the document as before.
+function planKindOf(planPath) {
+  const name = path.basename(String(planPath || '')).toLowerCase();
+  if (name === 'genpage-edit-plan.md') return 'edit';
+  if (name === 'genpage-plan.md') return 'create';
+  return null;
+}
+
 function verifyPlanProvenance({ planPath, approvedPlan }) {
   if (!planPath) return { ok: false, error: '--plan is required' };
   if (approvedPlan == null) return { ok: false, error: '--approved is required' };
   const absPlanPath = path.resolve(planPath);
-  const approved = planTargets(approvedPlan);
+  const kind = planKindOf(absPlanPath);
+  const approved = planTargets(approvedPlan, { kind });
   if (!approved) {
     return {
       ok: false,
@@ -231,7 +249,7 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
   }
   // Recorded, not compared: an audit line for workflow-log.md naming the exact file that was verified.
   const writtenHash = sha256(written);
-  const actual = planTargets(written);
+  const actual = planTargets(written, { kind });
   const same = actual && actual.kind === approved.kind
     && actual.targets.length === approved.targets.length
     && actual.targets.every((t, i) => t === approved.targets[i]);

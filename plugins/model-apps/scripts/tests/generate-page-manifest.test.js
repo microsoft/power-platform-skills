@@ -214,6 +214,28 @@ test('CLI: rerunning with a new feature refuses a stale package.json instead of 
   }
 });
 
+// Windows PowerShell's `Set-Content -Encoding UTF8` writes a byte-order mark, which npm reads fine and JSON.parse
+// refuses — so a valid package.json halted every rerun. It is read without the mark, and left as it is.
+test('CLI: an existing package.json saved with a UTF-8 byte-order mark is read, and left as it is', () => {
+  const dir = mkdirTemp();
+  try {
+    assert.equal(runScript([dir, 'bom-page']).code, 0);
+    const file = path.join(dir, 'package.json');
+    const withBom = `\uFEFF${fs.readFileSync(file, 'utf8')}`;
+    fs.writeFileSync(file, withBom, 'utf8');
+    const again = runScript([dir, 'bom-page']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(fs.readFileSync(file, 'utf8'), withBom, 'the file is not rewritten');
+    // CONTROL: a manifest broken past the mark is still refused.
+    fs.writeFileSync(file, '\uFEFF{ not json', 'utf8');
+    const broken = runScript([dir, 'bom-page']);
+    assert.equal(broken.code, 2);
+    assert.match(broken.stderr, /could not be parsed/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // A package.json whose dependencies cannot be checked is not proof the page's dependencies are there.
 test('CLI: an existing package.json that cannot be verified is refused, not skipped as fine', () => {
   const dir = mkdirTemp();

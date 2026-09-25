@@ -209,6 +209,20 @@ test('namespace icon imports are blocked because member access cannot be verifie
   assert.match(stderr, /@fluentui\/react-icons/);
 });
 
+test('unsupported static icon imports are blocked at code-token boundaries and in combined clauses (exit 2)', () => {
+  for (const [kind, line, expected] of [
+    ['namespace', 'import React from "react"; import * as Icons from "@fluentui/react-icons";', /namespace/],
+    ['default plus namespace', 'import DefaultIcon, * as Icons from "@fluentui/react-icons";', /default|namespace/],
+    ['default plus named', 'import DefaultIcon, { AddRegular } from "@fluentui/react-icons";', /default/],
+  ]) {
+    const content = `${line}\n${GENPAGE_HEADER}\nconst x = Icons && DefaultIcon;\n`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 2, kind);
+    assert.match(stderr, expected, kind);
+  }
+});
+
 test('default icon imports are blocked because the verified list contains named exports only (exit 2)', () => {
   const content = `import Icons from '@fluentui/react-icons';\n${GENPAGE_HEADER}\nconst x = <Icons.AddRegular />;\n`;
   const fp = writeTemp(tmp, 'page.tsx', content);
@@ -229,6 +243,20 @@ test('CommonJS icon imports are blocked because they bypass named import validat
 
 // Member access through an inline require or a dynamic import reaches an icon without any import
 // declaration at all, so these are matched wherever they appear.
+test('require and dynamic import block on the icon module argument before trailing commas or options (exit 2)', () => {
+  for (const [kind, line] of [
+    ['CommonJS', 'const Icons = require("@fluentui/react-icons",);'],
+    ['dynamic import', 'const Icons = await import("@fluentui/react-icons",);'],
+    ['dynamic import', 'const Icons = await import("@fluentui/react-icons", {});'],
+  ]) {
+    const content = `${GENPAGE_HEADER}\n${line}\n`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 2, `${kind}: ${line}`);
+    assert.match(stderr, new RegExp(kind), kind);
+  }
+});
+
 test('inline require and dynamic import() of the icon module are blocked too (exit 2)', () => {
   for (const [kind, line] of [
     ['CommonJS', "const x = React.createElement(require('@fluentui/react-icons').TotallyMadeUpIconRegular);"],

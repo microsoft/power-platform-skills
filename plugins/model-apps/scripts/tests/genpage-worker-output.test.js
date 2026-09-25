@@ -226,6 +226,7 @@ test('elided code is rejected, but the same words as UI copy are not', () => {
     ['an elision block comment', '  /* ... */'],
     ['an omitted-for-brevity comment', '  // Implementation omitted for brevity'],
     ['a bare ellipsis line', '  ...'],
+    ['a bare ellipsis line inside executable template code', '  const title = `${(() => {\n    ...\n  })()}`;'],
   ]) {
     const result = validatePageOutput({ filePath: write(page(body)) });
     assert.equal(result.ok, false, what);
@@ -233,6 +234,7 @@ test('elided code is rejected, but the same words as UI copy are not', () => {
   }
   for (const [what, body] of [
     ['an ellipsis in a label', '  const label = "Loading…";'],
+    ['a legal multiline spread', '  const rows = [1, 2];\n  const copy = [\n    ...\n    rows\n  ];'],
     ['a TODO status value', "  const STATUSES = ['TODO', 'DOING', 'DONE'];"],
     ['todo as prose in a comment', '  // Render the todo list, newest first'],
     ['todo as prose in a JSDoc block', '  /**\n   * Renders the todo list.\n   * @returns the page\n   */'],

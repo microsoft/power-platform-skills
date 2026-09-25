@@ -158,8 +158,8 @@ function extractIconImports(content) {
   if (!codeMask) code = stripCommentsForImports(content);
   const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
-    "^[ \\t]*import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
-    'gm'
+    "(?<![\\w$.])import\\s+(?:type\\s+)?(?:[A-Za-z_$][\\w$]*\\s*,\\s*)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
+    'g'
   );
   let m;
   while ((m = re.exec(code)) !== null) {
@@ -211,10 +211,16 @@ function extractUnsupportedIconImports(content) {
   //   const Icons = await import("@fluentui/react-icons");
   // both reach an icon by member access, which no named-specifier check ever sees.
   const patterns = [
-    { kind: 'namespace import', keyword: 'import', re: new RegExp("^[ \\t]*import\\s+\\*\\s+as\\s+[A-Za-z_$][\\w$]*\\s+from\\s*['\"]" + escapedModule + "['\"]", 'gm') },
-    { kind: 'default import', keyword: 'import', re: new RegExp("^[ \\t]*import\\s+[A-Za-z_$][\\w$]*(?:\\s*,\\s*\\{[^}]*\\})?\\s+from\\s*['\"]" + escapedModule + "['\"]", 'gm') },
-    { kind: 'CommonJS require', keyword: 'require', re: new RegExp("\\brequire\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*\\)", 'g') },
-    { kind: 'dynamic import()', keyword: 'import', re: new RegExp("\\bimport\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*\\)", 'g') },
+    // Static imports need code-token boundaries, not line starts: generated files often put
+    // `import React ...; import * as Icons ...` on one line. Combined clauses are unsupported too
+    // (`import DefaultIcon, * as Icons ...`, `import DefaultIcon, { AddRegular } ...`) because the
+    // default/namespace binding can still reach unchecked member names even when named imports exist.
+    { kind: 'namespace import', keyword: 'import', re: new RegExp("(?<![\\w$.])import\\s+(?:[A-Za-z_$][\\w$]*\\s*,\\s*)?\\*\\s+as\\s+[A-Za-z_$][\\w$]*\\s+from\\s*['\"]" + escapedModule + "['\"]", 'g') },
+    { kind: 'default import', keyword: 'import', re: new RegExp("(?<![\\w$.])import\\s+[A-Za-z_$][\\w$]*(?:\\s*,\\s*(?:\\{[^}]*\\}|\\*\\s+as\\s+[A-Za-z_$][\\w$]*))?\\s+from\\s*['\"]" + escapedModule + "['\"]", 'g') },
+    // Loader forms are blocked as soon as the first argument is the icon module; a trailing comma or
+    // dynamic-import options object still loads the same unchecked namespace.
+    { kind: 'CommonJS require', keyword: 'require', re: new RegExp("\\brequire\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]", 'g') },
+    { kind: 'dynamic import()', keyword: 'import', re: new RegExp("\\bimport\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]", 'g') },
   ];
   // Only a keyword in CODE is an import. The plugin's TSX lexer blanks comments, strings, template
   // text and JSX text but keeps code inside `${…}`, so an import merely quoted in a help string, a

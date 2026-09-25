@@ -8,15 +8,16 @@
 //
 // Usage:
 //   node write-page-plan.js --spec @<working-dir>/app-spec.json --working-dir <dir>
-//     [--env <orgUrl>] [--app <label>] [--languages "English (1033) only"] [--out <path>]
+//     [--env <orgUrl>] [--app <label>] [--languages "English (1033) only"]
 //
 // The default output is `app-builder-page-plan.md`, NOT `genpage-plan.md`. Both skills derive their
 // working directory from a slug off the user's request, so the two can land on the same folder — and
 // `genpage-plan.md` is the filename standalone `/genpage` treats as its authoritative state. Writing
 // there would let a later `/genpage` run silently consume an app-builder plan, whose dialect differs
 // (`Mode: app-builder` + stable keys vs. no Mode + filename stems), producing wrong PAGEREF tokens.
-// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ. `--out`
-// may rename it, but only to a file directly in the working directory (see the checks before the write).
+// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ. It is not
+// configurable: an `--out` could name any file — the input `app-spec.json`, the page manifest, /genpage's
+// own `genpage-plan.md` — and the plan would overwrite it, so the working directory alone decides the path.
 //
 // Output: { "ok": true, "planPath": "...", "pages": [{ "key", "file", "dataMode" }, ...] }
 // The `pages[]` echo is what Phase 1.5 iterates to dispatch one worker per page, so the CLI is the
@@ -34,12 +35,12 @@ function main() {
   const { positional, flags } = parseArgs(argv);
   const USAGE =
     'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
-    + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <file in the working dir>]';
+    + '[--env <orgUrl>] [--app <label>] [--languages <text>]';
   // Every flag here carries a value, so all of them go in needValue; a bare one would otherwise
   // reach path.resolve/readFile as a boolean.
   const flagError = validateFlags(argv, {
-    known: ['spec', 'working-dir', 'env', 'app', 'languages', 'out'],
-    needValue: ['spec', 'working-dir', 'env', 'app', 'languages', 'out'],
+    known: ['spec', 'working-dir', 'env', 'app', 'languages'],
+    needValue: ['spec', 'working-dir', 'env', 'app', 'languages'],
   });
   if (flagError) {
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
@@ -69,7 +70,7 @@ function main() {
     pluginRoot: path.resolve(__dirname, '..').replace(/\\/g, '/'),
   });
 
-  const planPath = flags.out ? path.resolve(flags.out) : path.join(absWorkingDir, 'app-builder-page-plan.md');
+  const planPath = path.join(absWorkingDir, 'app-builder-page-plan.md');
 
   // Fail BEFORE writing if the plan names a sample that does not exist — the worker's Step 3 reads
   // `${PLUGIN_ROOT}/samples/<name>` and a missing file derails generation with a confusing error.
@@ -114,16 +115,11 @@ function main() {
     emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it is a symbolic link or junction. Pass the directory it points to if that is intended.`));
     return;
   }
-  // The plan file itself. A link at its path — or a hard link, whose other names the write rewrites too —
-  // put the plan wherever it points, outside the working directory included, and `--out` could name any
-  // path at all. So the plan is written only as a plain file directly in the working directory, whose own
-  // checks are above. Nothing else is ever at that path, so refusing costs a legitimate run nothing, and a
-  // plain plan left by an earlier run is still rewritten; a folder there gets a reason, not EISDIR.
-  const planName = path.relative(absWorkingDir, planPath);
-  if (!planName || planName === '..' || /[\\/]/.test(planName)) {
-    emitResult(false, new Error(`refusing to write the page plan to ${planPath}: --out must name a file directly in the working directory ${absWorkingDir}`));
-    return;
-  }
+  // The plan file itself, directly in the working directory whose own checks are above. A link at its path —
+  // or a hard link, whose other names the write rewrites too — put the plan wherever it points, outside the
+  // working directory included. Nothing else is ever at that path, so refusing costs a legitimate run
+  // nothing, and a plain plan left by an earlier run is still rewritten; a folder there gets a reason, not
+  // EISDIR.
   let planEntry = null;
   try {
     planEntry = fs.lstatSync(planPath);

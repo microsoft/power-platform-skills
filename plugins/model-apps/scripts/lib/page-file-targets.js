@@ -16,6 +16,9 @@
 //   ../outside.tsx   x/../../a.tsx   traversal  (`..` segments; a lone `.` cannot climb and is allowed)
 //   CON.tsx   page:alt.tsx   x./a.tsx  unportable (a Windows device name, a reserved character — `:` writes
 //                                                an NTFS alternate stream — or a trailing dot or space)
+//   $(x).tsx   a;b.tsx   my page.tsx   shell (a character a shell expands or splits on — the skill's commands
+//                                                put page paths in double quotes, some in none; only letters
+//                                                and digits of any script, `.`, `-` and `_` are accepted)
 //   package.json   RuntimeTypes.ts   extension  (every Pages File is a page `.tsx` — references/plan-schema.md;
 //                                                any other name is some other file of the working
 //                                                directory, which a worker would overwrite with a page)
@@ -73,6 +76,15 @@ function unportableSegment(segment) {
   if (/~\d/.test(segment)) return ['a Windows short-name form (`~1`)', 'which on Windows can be the short name of another file'];
   return null;
 }
+
+// A character of a page file name that a shell leaves alone. The skill's commands put page paths in double
+// quotes (`--file "<working-dir>/<file>"`) and some in none (`--code-file <working-dir>/<file>.tsx`), and the
+// orchestrator substitutes the name as text: `$(Join-Path .. outside).tsx` passed every other rule, and
+// PowerShell expanded it inside the quotes, so the dispatch stamp was written outside the working directory; a
+// `;` or a space in an unquoted argument ends it, and the rest runs as another command. A page name needs none of
+// that, so only letters and digits (any script, with their combining marks), `.`, `-` and `_` are accepted.
+// PowerShell also reads the typographic quotes and dashes as syntax; they are punctuation, not letters.
+const SHELL_SAFE = /[\p{L}\p{N}\p{M}._-]/u;
 
 // The first component on the way to a target — a folder or the file itself — that is ALREADY on disk
 // under another spelling of the same name (case, or Unicode normalization), as its relative path, or
@@ -222,6 +234,13 @@ function pageFileProblems(files, opts = {}) {
           return;
         }
       }
+      for (const segment of file.split('/')) {
+        const ch = segment && segment !== '.' ? [...segment].find((c) => !SHELL_SAFE.test(c)) : undefined;
+        if (ch !== undefined) {
+          add(file, 'shell', `"${file}" has ${ch === ' ' ? 'a space' : `"${ch}"`} in "${segment}", which a shell command line would expand or split on; page file names use letters, digits, ".", "-" and "_" only`);
+          return;
+        }
+      }
       if (!/[^/]\.tsx$/i.test(file)) {
         add(file, 'extension', `"${file}" is not a .tsx page file; the plan's File column names pages only`);
         return;
@@ -274,46 +293,53 @@ function pageFileProblems(files, opts = {}) {
  *   | Page | File | Purpose | Entities |
  *   |------|------|---------|----------|
  *   | Overview | overview.tsx | Summary cards | account |
- * and the preview the planner hands back for approval has the same table under `### Pages (N total)`,
- * which `opts.heading` selects. Returns null when the plan has no Pages section, or more than one (see
- * pagesSections), or when its table has no File column — a malformed plan, which the caller must refuse,
- * not read as "no pages".
+ * and the preview the planner hands back for approval has the same table under `### Pages (N total)`, so
+ * both headings are read. Returns null when the plan has no Pages table with a File column — a
+ * malformed plan, which the caller must refuse, not read as "no pages" — or more than one (see
+ * pagesSections).
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
  * @returns {string[]|null}
  */
 function pageFilesFromPlan(plan, opts = {}) {
-  const sections = pagesSections(plan, opts);
-  return sections.length === 1 ? sections[0] : null;
+  const tables = pagesSections(plan, opts).filter(Boolean);
+  return tables.length === 1 ? tables[0] : null;
 }
 
 /**
- * Every Pages section of a plan, in order: a line `opts.heading` matches, up to the next heading of any
- * level. Each entry is that section's File column, or null when it holds no table with one. An escaped
- * pipe (`\|`) inside a cell is not a column boundary.
+ * Every Pages section of a plan, in order: a `##` or `###` heading that begins with the word Pages (or the
+ * line `opts.heading` matches), up to the next heading of any level. Each entry is that section's File
+ * column, or null when it holds no table with one. An escaped pipe (`\|`) inside a cell is not a column
+ * boundary.
  *
- * Several are AMBIGUOUS, and pageFilesFromPlan refuses them rather than read the first: the plan's
- * `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`, so a Pages table quoted there
- * decided the files the gate checked while the workers wrote the real table's. A heading inside a code
- * fence counts like any other. Skipping fenced lines would let a fence left open swallow the real section
- * and the example stand in for it, and the plan's reader is an AI, not a Markdown parser. A heading that
- * does not begin its line — quoted (`> ## Pages`) or indented — is no section, and cannot hide the real
- * one: a quote ends at the first line without its marker.
+ * Two tables with a File column are AMBIGUOUS, and pageFilesFromPlan refuses them rather than read the
+ * first: the plan's `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`, so a Pages
+ * table quoted there — under either heading, since a preview can be quoted as easily as a plan — decided the
+ * files the gate checked while the workers wrote the real table's. Choosing
+ * one by its place in the plan would not help — the orchestrator reading the plan is an AI, and could take
+ * the other — so only a plan with one such table says which files the pages are. A heading and its rows count
+ * however they are marked: inside a code fence (skipping fenced lines let a fence left open swallow the real
+ * section, and the example stand in for it), quoted with `>` or indented — `> ## Pages` over an unquoted table
+ * was invisible to both gates, and a reader could still take that table for the plan's. Counting one too many
+ * can only refuse a plan, never pick a wrong table. A section with no File column — a maker's own `## Pages`
+ * list of what they want, prose, a per-page `### Pages …` specification — names no file, so it is no table.
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
  * @returns {Array<string[]|null>}
  */
 function pagesSections(plan, opts = {}) {
-  const heading = opts.heading || /^##\s+Pages\s*$/;
+  const heading = opts.heading || /^#{2,3}\s+Pages\b/;
   const lines = String(plan || '').replace(/\r\n?/g, '\n').split('\n');
   const cells = (row) => row.replace(/\\\|/g, '\u0000').trim().replace(/^\|/, '').replace(/\|$/, '')
     .split('|').map((c) => c.replace(/\u0000/g, '|').trim());
+  // The line with its blockquote markers and indentation taken off: `> > ## Pages` → `## Pages`.
+  const bare = (line) => line.replace(/^(?:[ \t]*>)*[ \t]*/, '');
   const sections = [];
   lines.forEach((line, start) => {
-    if (!heading.test(line)) return;
+    if (!heading.test(bare(line))) return;
     const rows = [];
-    for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(lines[i]); i += 1) {
-      if (lines[i].trim().startsWith('|')) rows.push(lines[i]);
+    for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(bare(lines[i])); i += 1) {
+      if (bare(lines[i]).startsWith('|')) rows.push(bare(lines[i]));
     }
     const col = rows.length >= 2 && /^[\s|:-]+$/.test(rows[1]) ? cells(rows[0]).map((h) => h.toLowerCase()).indexOf('file') : -1;
     sections.push(col === -1 ? null : rows.slice(2).map((row) => cells(row)[col] || ''));

@@ -678,9 +678,10 @@ Before invoking any builders, verify:
   ```
 
   Continue only on `"ok":true`. It reads the plan's one `## Pages` table: a plan with a second
-  `## Pages` heading is refused, not read by its first — a Pages table quoted in the requirements,
-  fenced or not, counts. It refuses absolute paths (drive-qualified ones included), `..`
-  traversal, backslash separator aliases, a name Windows cannot store (a device name such as
+  Pages table that has a File column is refused, not read by its first — one quoted in the
+  requirements, fenced, quoted or not, counts. It refuses absolute paths (drive-qualified ones included), `..`
+  traversal, backslash separator aliases, a character a shell would expand or split on (a space,
+  `$`, a backtick, `;` — page file names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (a device name such as
   `CON.tsx`, a reserved character such as `:`, or a trailing dot or space), a name that is not a
   `.tsx` page file (such as `package.json` or `RuntimeTypes.ts`), a page path that is itself a link,
   junction or hard link or is not a regular file, a parent that resolves through a link or junction
