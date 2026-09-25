@@ -666,6 +666,8 @@ test('endsMidStatement treats non-JSX final type argument lists as documented in
     'type alias with nested type arguments at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Record<string, Array<number>>',
     'type alias with object type argument at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Array<{ id: string; label: string }>',
     'generic-looking arrow expression at EOF': 'export default () => a<b + c>',
+    'cast type arguments at EOF': 'const v = [1];\nexport default v as unknown as Array<number>',
+    'satisfies type arguments at EOF': 'const counts = { a: 1 };\nexport default counts satisfies Record<string, number>',
   };
   for (const [label, code] of Object.entries(incomplete)) assert.equal(endsMidStatement(code), true, label);
   assert.equal(endsMidStatement('function Page<T>() { return null; }\nexport default Page<string>;'), false, 'semicolon makes the documented limit explicit');
