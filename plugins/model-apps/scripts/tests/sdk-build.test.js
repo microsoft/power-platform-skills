@@ -2524,7 +2524,12 @@ test('form topology: a tab the deployed form lacks is CREATED with empty section
   const tabAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === '/tabs');
   assert.strictEqual(tabAdds.length, 1, `exactly one tab added; saw ${tabAdds.length}`);
   assert.strictEqual(tabAdds[0].args[3].name, 'tab_audit');
-  assert.deepStrictEqual(tabAdds[0].args[3].columns[0].sections[0].rows, [], 'its sections arrive EMPTY so the field pass owns every control');
+  // The tab arrives with its form-columns but no sections: each section then goes through the same
+  // per-section pass as an existing tab's, so one already on the form elsewhere would be MOVED in.
+  assert.deepStrictEqual(tabAdds[0].args[3].columns[0].sections, [], 'the new tab arrives without sections');
+  const sectionAdd = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/1/columns/0/sections');
+  assert.ok(sectionAdd && sectionAdd.args[3].name === 'section_audit', 'its genuinely new section is then created in it');
+  assert.deepStrictEqual(sectionAdd.args[3].rows, [], 'EMPTY, so the field pass owns every control');
   // And the field it declares still lands inside the new tab rather than back in the first section.
   const extra = find(calls, 'addElement').find((c) => /\/rows$/.test(String(c.args[2])) && (((c.args[3] || {}).cells || [])[0] || {}).control && c.args[3].cells[0].control.fieldName === 'new_extra');
   assert.ok(extra && extra.args[2].startsWith('/tabs/1/'), `new_extra should land in the new tab, landed at ${extra && extra.args[2]}`);
@@ -2545,7 +2550,10 @@ test('form topology: a tab that gains a second form-column has the column ADDED 
   assert.strictEqual(colAdds.length, 1, `exactly one form-column added; saw ${colAdds.map((c) => c.args[2]).join(', ')}`);
   assert.strictEqual(colAdds[0].args[2], '/tabs/0/columns');
   assert.strictEqual(colAdds[0].args[3].width, '40%', 'the authored width is carried onto the new column');
-  assert.deepStrictEqual(colAdds[0].args[3].sections[0].rows, [], 'and its sections arrive empty');
+  assert.deepStrictEqual(colAdds[0].args[3].sections, [], 'the new column arrives without sections');
+  const sectionAdd = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/0/columns/1/sections');
+  assert.ok(sectionAdd && sectionAdd.args[3].name === 'section_side', 'its new section is then created in it');
+  assert.deepStrictEqual(sectionAdd.args[3].rows, [], 'and arrives empty');
 });
 
 test('form topology: a field moving into an EMPTY section gets a row seeded for it first', async () => {
@@ -4848,6 +4856,8 @@ test('form topology: a section emptied by a layout move is removed, not left as 
     `exactly one vacated section should be reclaimed; saw ${removedSections.map((c) => c.args[2]).join(', ')}`);
   assert.ok(warnings.some((w) => /removed the now-empty section/.test(w) && /section_0_1/.test(w)),
     `the removal must be reported and name the section; got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some((w) => /section_0_1/.test(w) && /Give a section an explicit `name`/.test(w)),
+    'a GENERATED name lost its identity on the move, so the report says how to keep it');
 });
 
 // The sweep must never touch a section that still holds anything, nor one the engine owns.
@@ -5800,4 +5810,520 @@ test('form topology: narrowing a cell in an already-overflowing reserved row is 
     [['new_name', 'new_tier', 'new_code'], ['(spacer)']], 'but no cell moves — the row is not re-flowed');
   assert.ok(res.skipped.layout.some((m) => /was applied, but its row still overflows/.test(m)),
     `the remaining overflow must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
+});
+
+// --- A NAMED section the spec places in another tab or form-column is MOVED there ------------------
+//
+// It used to be reused in place: found by name anywhere on the form, its attributes patched, its
+// location left alone. The build reported success with the section still in the old tab, and verify,
+// which checks placement, then failed the form.
+const tabsForm = (tabs) => ({ id: 'f1', bag: { a: [], c: [] }, tabs: tabs.map(([name, label, sections], ti) => ({
+  id: `t${ti}`, name, label, expanded: true, visible: true,
+  columns: [{ width: '100%', sections: sections.map(([id, sname, slabel, fields]) => ({
+    id, ...(sname ? { name: sname } : {}), label: slabel, visible: true, showLabel: true, columns: 1,
+    rows: fields.map((fn) => ({ cells: [{ control: { fieldName: fn } }] })) })) }] })) });
+const formShape = async (sdk, calls) => {
+  const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+  return form.tabs.map((t) => [t.name, t.columns.flatMap((c) => c.sections.map((s) =>
+    [s.id || 'new', s.name || null, (s.rows || []).flatMap((r) => (r.cells || []).map((x) => x.control && x.control.fieldName))]))]);
+};
+const sectionMoves = (calls) => find(calls, 'moveElement')
+  .filter((c) => c.args[0] === 'form' && /\/sections\/\d+$/.test(String(c.args[2])))
+  .map((c) => [c.args[2], c.args[3], c.args[4] && c.args[4].index]);
+const sectionAdds = (calls) => find(calls, 'addElement').filter((c) => c.args[0] === 'form' && /\/sections$/.test(String(c.args[2])));
+const relocateSpec = () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  return spec;
+};
+const formsOnly = ['solution', 'data-model', 'forms'];
+const inOldTab = () => tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]], ['tab_two', 'Two', []]]);
+
+test('form topology: a named section the spec moves to another tab is MOVED there — the same section, fields and all', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: inOldTab() });
+  const warnings = [];
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 0]]);
+  assert.ok(warnings.some((w) => w.includes("moved section 'sec_wide' from tab 'tab_one' (form-column 1) to tab 'tab_two' (form-column 1)")),
+    `a move a maker may not expect is reported; got ${JSON.stringify(warnings)}`);
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ], 'the section keeps its id and its field, and nothing is left behind');
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty twin is created in the new tab');
+});
+
+test('form topology: a section relocation converges — a second build moves nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: inOldTab() });
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  const first = calls.length;
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls.slice(first)), []);
+  assert.strictEqual(find(calls.slice(first), 'moveElement').length, 0, 'no cell moves either');
+});
+
+test('form topology: a moved section lands after the ones its new column already matched', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.unshift({ name: 'sec_first', label: 'First', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]],
+    ['tab_two', 'Two', [['s5', 'sec_first', 'First', []], ['s6', 'sec_maker', 'Added in Maker', []]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 1]]);
+  assert.deepStrictEqual((await formShape(sdk, calls))[1][1].map((s) => s[1]), ['sec_first', 'sec_wide', 'sec_maker'],
+    'after the authored section before it, ahead of a section the author never declared');
+});
+
+// Without the guard, sec_main claimed sec_wide by its LABEL, and sec_wide's own name hit then moved it
+// to tab_two — carrying sec_main's field along and leaving sec_main nowhere.
+test('form topology: a label or position match never takes a section another authored section claims by name', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s1', 'sec_wide', 'Main', ['new_name', 'new_tier']]]], ['tab_two', 'Two', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['sec_main'], 'sec_main gets a section of its own');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['new', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});
+
+// The naming hint is for a GENERATED name, which loses its identity on a move. An author may NAME a section
+// `section_1_0`, and a copy of that needs no advice to give it a name — while a copy of the same name
+// generated from the section's position still gets it.
+test('form topology: an emptied copy is given the naming hint only when its name was generated', async () => {
+  for (const [what, named] of [['named by the author', true], ['generated from its position', false]]) {
+    const spec = relocateSpec();
+    if (named) spec.forms[0].tabs[1].sections[0].name = 'section_1_0';
+    else delete spec.forms[0].tabs[1].sections[0].name;
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'section_1_0', 'Wide', ['new_tier']]]],
+      ['tab_two', 'Two', [['s9', 'section_1_0', 'Wide', []]]]]);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+    const removal = warnings.find((w) => /removed the now-empty section 'section_1_0'/.test(w));
+    assert.ok(removal, `${what}: the emptied copy is removed; got ${JSON.stringify(warnings)}`);
+    assert.strictEqual(/Give a section an explicit `name`/.test(removal), !named, `${what}: ${removal}`);
+    assert.deepStrictEqual((await formShape(sdk, calls))[1], ['tab_two', [['s9', 'section_1_0', ['new_tier']]]], what);
+  }
+});
+
+// A GENERATED name encodes the section's place (`section_<tab>[_<column>]_<index>`), so it is no identity to
+// look for across the form: a section of that name found elsewhere — dragged there in Maker, or another
+// section that now carries it after a reorder — is not moved back. As documented for a generated section,
+// it is created where the layout places it, its fields follow, and the original, emptied, is removed.
+test('form topology: a section with a generated name found elsewhere is recreated in place, not moved', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }, { label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_two', label: 'Two', columns: 1, fields: [] }] },
+  ]);
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]],
+    ['tab_two', 'Two', [['s9', 'sec_two', 'Two', []], ['s1', 'section_0_1', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the dragged section is not moved back');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_0_1', ['new_tier']]]],
+    ['tab_two', [['s9', 'sec_two', []]]],
+  ]);
+  assert.ok(warnings.some((w) => /removed the now-empty section 'section_0_1'/.test(w) && /Give a section an explicit `name`/.test(w)), JSON.stringify(warnings));
+});
+
+// A section the build CREATES lands where the layout places it — right after the sections already matched in
+// its column — not at the end. Appended, it followed every section still to come, and since the build never
+// reorders what exists (and verify does not check order) the wrong order was permanent: a new section
+// declared mid-column, or a generated one recreated after a drag in Maker.
+test('form topology: a section the build creates lands where the layout places it, not at the end', async () => {
+  const layout = (middle) => explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }, middle, { name: 'sec_after', label: 'After', columns: 1, fields: ['new_x'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_two', label: 'Two', columns: 1, fields: [] }] },
+  ]);
+  for (const [what, middle, dragged] of [
+    ['a new named section declared mid-column', { name: 'sec_new', label: 'New', columns: 1, fields: ['new_tier'] }, false],
+    ['a generated section dragged away in Maker', { label: 'Wide', columns: 1, fields: ['new_tier'] }, true],
+  ]) {
+    const spec = makeSpec();
+    spec.forms = layout(middle);
+    const two = [['s9', 'sec_two', 'Two', []]].concat(dragged ? [['s1', 'section_0_1', 'Wide', ['new_tier']]] : []);
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s2', 'sec_after', 'After', ['new_x']]]], ['tab_two', 'Two', two]]);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    const name = middle.name || 'section_0_1';
+    const shape = [
+      ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', name, ['new_tier']], ['s2', 'sec_after', ['new_x']]]],
+      ['tab_two', [['s9', 'sec_two', []]]],
+    ];
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, what);
+    const first = calls.length;
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    const later = calls.slice(first);
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, `${what}: stable`);
+    assert.deepStrictEqual([find(later, 'moveElement').length, sectionAdds(later).length, find(later, 'removeElement').length], [0, 0, 0], `${what}: the next build changes nothing`);
+  }
+});
+
+// An older build could leave two sections of one name: the real one in the old tab and an empty twin
+// in the new one. The twin already in place is used, so nothing is moved on top of it.
+test('form topology: a same-named section already in the target column wins over one elsewhere', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]],
+    ['tab_two', 'Two', [['s9', 'sec_wide', 'Wide', []]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'no section is moved');
+  const removal = warnings.find((w) => /removed the now-empty section 'sec_wide'/.test(w));
+  assert.ok(removal && !/Give a section an explicit/.test(removal), `the copy is reported without a naming hint it does not need; got ${JSON.stringify(warnings)}`);
+  const shape = await formShape(sdk, calls);
+  assert.deepStrictEqual(shape[1], ['tab_two', [['s9', 'sec_wide', ['new_tier']]]], 'the field is moved into the twin in place');
+  // The emptied original is not the section the layout claims, so the sweep reclaims it: claims are
+  // judged by where each target resolves, never by a name the two share.
+  assert.deepStrictEqual(shape[0], ['tab_one', [['s0', 'sec_main', ['new_name']]]], 'and the empty copy left behind is removed');
+});
+
+// A match made by label or position keeps the deployed section's own (here: absent) name, so the
+// field pass finds it through the POINTER recorded when it matched — the pointer a later move shifts.
+test('form topology: a section recorded by position still receives its field after a move shifts it', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_other', displayName: 'Other', type: 'Text' });
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [
+      { name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] },
+      { name: 'sec_old', label: 'Old', columns: 1, fields: ['new_other'] },
+    ] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']], ['s2', null, 'Old', []]]],
+    ['tab_two', 'Two', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s2', null, ['new_other']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});// The correction is scoped to the column the section LEFT. A position-recorded section in another
+// column is untouched by the move, so correcting it too would send its field somewhere else.
+test('form topology: a move corrects recorded pointers only in the column it left', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_other', displayName: 'Other', type: 'Text' });
+  spec.forms = explicitForm([
+    { name: 'tab_a', label: 'A', sections: [
+      { name: 'sec_a', label: 'Main', columns: 1, fields: ['new_name'] },
+      { name: 'sec_old', label: 'Old', columns: 1, fields: ['new_other'] },
+    ] },
+    { name: 'tab_c', label: 'C', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  const deployed = tabsForm([['tab_a', 'A', [['s0', 'sec_a', 'Main', ['new_name']], ['s2', null, 'Old', []]]],
+    ['tab_b', 'B', [['s1', 'sec_wide', 'Wide', ['new_tier']]]], ['tab_c', 'C', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  const shape = await formShape(sdk, calls);
+  assert.deepStrictEqual(shape[0], ['tab_a', [['s0', 'sec_a', ['new_name']], ['s2', null, ['new_other']]]]);
+  assert.deepStrictEqual(shape[2], ['tab_c', [['s1', 'sec_wide', ['new_tier']]]]);
+});// A section the spec moves into a tab or form-column the deployed form does not have yet is still
+// MOVED: the new container arrives without sections, and each of its sections goes through the same
+// per-section pass. Creating the container WITH its sections made a same-named copy, the field pass
+// filled the copy, and the emptied original survived the sweep under its claimed name — while verify,
+// which looks only at authored containers, passed the form.
+test('form topology: a named section moved into a NEW tab is moved, not duplicated', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1] = { name: 'tab_three', label: 'Three', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 0]]);
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), [], 'no copy is created');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_three', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});
+
+test('form topology: a named section moved into a NEW form-column is moved, not duplicated', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', tabs: [{ name: 'tab_one', label: 'One', columns: [
+    { width: '60%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] },
+    { width: '40%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ] }] }];
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  // Same tab, different form-columns: different arrays, so the index needs no compensation.
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/0/columns/1/sections', 0]]);
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'no copy is created');
+  const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+  assert.deepStrictEqual(form.tabs[0].columns.map((c) => c.sections.map((s) => s.id)), [['s0'], ['s1']]);
+});
+
+// The notes/timeline section is appended by the COMPILER, not placed by the author, and nothing
+// verifies where it sits — so a timeline a maker moved to another tab stays there.
+test('form topology: an engine-owned section a maker moved is left where it is', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[1].columns[0].sections.push({ id: 's7', name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
+    rows: [{ cells: [{ control: { classId: '{06375649-C143-495E-A496-C962E5B4488E}', fieldName: null } }] }] });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the timeline is not dragged back to the first tab');
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'nor copied there');
+  assert.ok((await formShape(sdk, calls))[1][1].some((s) => s[0] === 's7'), 'it stays in the tab the maker put it in');
+});
+
+// An AUTHORED section may legally carry the name the engine gives its own host — `section_notes` is a
+// natural name for a section that holds a notes field — and the name lookups took the host: the move
+// dragged the timeline into the author's tab and the field pass poured the author's fields into it.
+// An engine-owned host is simply not a candidate for an authored want; the want is matched or created
+// like any other authored section, and the host stays exactly as it was.
+// The timeline's real control class id, as the SDK projects it (no braces, its original case).
+const NOTES_CONTROL = '06375649-c143-495e-a496-c962e5b4488e';
+const timelineHost = (id) => ({ id, name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: NOTES_CONTROL, fieldName: null } }] }] });
+test('form topology: an authored section named like the timeline host never takes the host from another tab', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the timeline host is not moved into the author\u2019s tab');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s7', 'section_notes', [null]]]],
+    ['tab_two', [['new', 'section_notes', ['new_tier']]]],
+  ], 'the author gets a section of their own, and the host keeps only its timeline');
+});
+
+test('form topology: an authored section named like the timeline host never takes the host in its own column', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[0].sections.push({ name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]],
+  ], 'not by name, label or position: the host stays a timeline, and the authored section is created beside it, where the layout places it');
+});
+
+// With notes on, the COMPILER appends its own `section_notes` want after the author's sections in the
+// first form-column, so an authored `section_notes` there shares its name. Recording the engine's want
+// replaced the author's field target: the field pass poured the author's fields into the timeline, the
+// sweep removed the emptied authored section, and verify still passed.
+const notesOnSpec = () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].tabs[0].sections.push({ name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  return spec;
+};
+test('form topology: with notes on, the compiled notes section never takes an authored section_notes\u2019 fields', async () => {
+  // Deployed exactly as compiled: the author's section_notes, then the timeline host.
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s3', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]],
+  ], 'an unchanged spec changes nothing');
+  assert.ok(!warnings.some((w) => /removed the now-empty section/.test(w)), warnings.join('\n'));
+  assert.deepStrictEqual([find(calls, 'moveElement').length, sectionAdds(calls).length], [0, 0]);
+});
+
+test('form topology: with notes on and the authored section_notes not deployed, it is created with its fields, and the builds settle', async () => {
+  for (const [what, withHost] of [['only the timeline deployed', true], ['neither deployed', false]]) {
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+    if (withHost) deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const shape = [['tab_one', withHost
+      ? [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]
+      : [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['new', 'section_notes', [null]]]]];
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, `${what}: the field lands in the authored section, not the timeline`);
+    const first = calls.length;
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const later = calls.slice(first);
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, what);
+    assert.deepStrictEqual([find(later, 'moveElement').length, sectionAdds(later).length, find(later, 'removeElement').length], [0, 0, 0], `${what}: the next build changes nothing`);
+  }
+});
+
+// The timeline's host is found form-wide (a maker may have moved it), and the author's own section_notes
+// holding fields elsewhere is not it: taking that one meant the form never got its timeline.
+test('form topology: with notes on, an authored section_notes in another tab is never taken for the timeline host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), []);
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', [null]]]],
+    ['tab_two', [['s3', 'section_notes', ['new_tier']]]],
+  ], 'the timeline is added to the first tab, and the author\u2019s section keeps its field');
+});
+
+// With no host to find, the notes section is CREATED. It has no label or position to go on, and taking the
+// maker section at its index relabelled it "Notes" and re-flowed it to one column, with still no timeline,
+// on every build.
+test('form topology: with notes on and no timeline deployed, the maker section at its index is never taken for it', async () => {
+  for (const [what, prune, extra] of [
+    ['a maker section with fields, prune off', false, (s) => Object.assign(s, { columns: 2, rows: [{ cells: [{ control: { fieldName: 'new_x' } }, { control: { fieldName: 'new_y' } }] }] })],
+    ['an empty maker section', true, (s) => s],
+  ]) {
+    const spec = notesOnSpec();
+    if (!prune) spec.forms[0].prune = false;
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']], ['s9', 'sec_extra', 'Extra', []]]]]);
+    extra(deployed.tabs[0].columns[0].sections[2]);
+    const before = JSON.parse(JSON.stringify(deployed.tabs[0].columns[0].sections[2]));
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    for (const build of [1, 2]) {
+      await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+      const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+      const sections = form.tabs[0].columns[0].sections;
+      assert.deepStrictEqual(sections.find((s) => s.id === 's9'), before, `${what}, build ${build}: the maker's section is untouched`);
+      assert.strictEqual(sections.filter((s) => s.name === 'section_notes' && s.rows.some((r) => r.cells.some((c) => c.control && !c.control.fieldName))).length, 1,
+        `${what}, build ${build}: exactly one timeline, created on the first build`);
+      assert.strictEqual(sections[sections.length - 1].name, 'section_notes', `${what}, build ${build}: added last, where the compiler places it`);
+    }
+  }
+});
+
+// The timeline's host holds the timeline's own control. An authored `section_notes` holding a field and a
+// maker's web resource holds AN unbound control but not that one — taking it for the host meant the form
+// never got its timeline, and the notes want re-patched the author's section on every build.
+test('form topology: with notes on, a section_notes holding a field and a maker web resource is never the timeline host', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections[1].rows.push({ cells: [{ control: { classId: 'webresource-class', fieldName: null } }] });
+  const before = JSON.parse(JSON.stringify(deployed.tabs[0].columns[0].sections[1]));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  for (const build of [1, 2]) {
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+    const sections = form.tabs[0].columns[0].sections;
+    assert.deepStrictEqual(sections.find((s) => s.id === 's3'), before, `build ${build}: the author's section is untouched`);
+    assert.strictEqual(sections.filter((s) => s.rows.some((r) => r.cells.some((c) => c.control && String(c.control.classId).toLowerCase() === NOTES_CONTROL))).length, 1,
+      `build ${build}: exactly one timeline`);
+  }
+});
+
+// …while a timeline host a maker put a field into still holds that control, so it is still found and no
+// second timeline is added.
+test('form topology: with notes on, a timeline host a maker added a field to is still the host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const host = timelineHost('s7');
+  host.rows.push({ cells: [{ control: { fieldName: 'new_x' } }] });
+  deployed.tabs[0].columns[0].sections.push(host);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), [], 'no second timeline section');
+});
+
+// A timeline or sub-grid host a maker added a bound field to is no longer engine-owned by STRUCTURE — not
+// every cell is unbound — yet it is still the host: it holds the control the engine put it there for. An
+// authored section sharing its name took it by name, so the build moved the host into the author's tab and
+// poured the author's fields into it; and any authored want could take it by label or position.
+const mixedHost = (host) => { host.rows.push({ cells: [{ control: { fieldName: 'new_x' } }] }); return host; };
+const subgridHost = (id) => ({ id, name: 'section_grid_contacts', label: 'Contacts', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: 'E7A81278-8635-4D9E-8D4D-59480B391C5B', fieldName: null, parameters: { RelationshipName: 'new_customer_contacts' } } }] }] });
+test('form topology: an engine host a maker added a field to is never taken by an authored section named like it', async () => {
+  for (const [what, host] of [['timeline', mixedHost(timelineHost('s7'))], ['sub-grid', mixedHost(subgridHost('s7'))]]) {
+    const spec = relocateSpec();
+    spec.forms[0].prune = false;
+    spec.forms[0].tabs[1].sections[0] = { name: host.name, label: host.label, columns: 1, fields: ['new_tier'] };
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+    deployed.tabs[0].columns[0].sections.push(host);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    assert.deepStrictEqual(sectionMoves(calls), [], `${what}: the host is not moved into the author\u2019s tab`);
+    assert.deepStrictEqual(await formShape(sdk, calls), [
+      ['tab_one', [['s0', 'sec_main', ['new_name']], ['s7', host.name, [null, 'new_x']]]],
+      ['tab_two', [['new', host.name, ['new_tier']]]],
+    ], `${what}: the author gets a section of their own, and the host keeps its control and the maker's field`);
+  }
+});
+
+// A host is known by the control ITS name exists for. A `section_notes` holding a sub-grid and a field is no
+// timeline host, so it is the author's, and the spec moves it like any other named section.
+test('form topology: a section named like the timeline host but holding a sub-grid is the author\u2019s', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].prune = false;
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+  deployed.tabs[0].columns[0].sections.push(mixedHost(Object.assign(subgridHost('s7'), { name: 'section_notes', label: 'Notes' })));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'no second section_notes');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s7', 'section_notes', [null, 'new_x', 'new_tier']]]],
+  ]);
+});
+
+test('form topology: a timeline host a maker added a field to is never taken by label or position', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].prune = false;
+  spec.forms[0].tabs[0].sections.push({ name: 'sec_new', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+  deployed.tabs[0].columns[0].sections.push(mixedHost(timelineHost('s7')));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'sec_new', ['new_tier']], ['s7', 'section_notes', [null, 'new_x']]]],
+  ], 'the new section sits where its label and index point, but beside the host, not in it');
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['sec_new'], 'and the timeline is not added twice');
+});
+
+// A section is engine-owned by STRUCTURE (only unbound controls), which cannot say who laid it out: an
+// authored section declared with no fields that a maker filled with a web resource looks the same. Skipping
+// it by name created an empty duplicate beside it, and when the spec moved it, left the maker's control
+// behind. Its authored name is the evidence it is the author's; only the engine's own names mark a host.
+const makerFilled = (id, name) => ({ id, name, label: 'Related', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: 'webresource-class', fieldName: null } }] }] });
+test('form topology: an authored section a maker filled with a control is still found by its name', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[0].sections.push({ name: 'sec_related', label: 'Related', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s4', 'sec_related'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty duplicate is created beside it');
+  assert.deepStrictEqual((await formShape(sdk, calls))[0], ['tab_one', [['s0', 'sec_main', ['new_name']], ['s4', 'sec_related', [null]]]]);
+});
+
+test('form topology: an authored section a maker filled with a control moves WITH its control', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.push({ name: 'sec_related', label: 'Related', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s4', 'sec_related'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 1]]);
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty copy in the new tab');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']], ['s4', 'sec_related', [null]]]],
+  ]);
+});
+
+// …while a host under the engine's OTHER name — a sub-grid's `section_grid_<relationship>` — is kept from
+// an authored want of that name exactly like the timeline.
+test('form topology: an authored section named like a sub-grid host never takes the host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.push({ name: 'section_grid_new_ticket', label: 'Tickets', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s8', 'section_grid_new_ticket'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the host stays where it is');
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['section_grid_new_ticket'], 'the authored section is created');
 });

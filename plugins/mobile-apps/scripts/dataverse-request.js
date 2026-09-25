@@ -194,25 +194,51 @@ function createDataverseRequestExecutor({
   solution = null,
   getToken = getAuthToken,
   sendRequest = doRequest,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
 }) {
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
 
   let token = null;
   let tokenPromise = null;
+  let refreshPromise = null;
+  const rateLimitListeners = new Set();
   async function ensureToken() {
     if (token) return token;
-    if (!tokenPromise) tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
-    token = await tokenPromise;
-    tokenPromise = null;
+    if (!tokenPromise) {
+      tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
+    }
+    const pendingToken = tokenPromise;
+    try {
+      token = await pendingToken;
+    } finally {
+      if (tokenPromise === pendingToken) tokenPromise = null;
+    }
     if (!token) {
       throw new Error('Failed to get Azure CLI token. Run `az login` first.');
     }
     return token;
   }
 
-  return async (method, apiPath, body = null, includeHeaders = false) => {
-    const requestToken = await ensureToken();
+  async function refreshToken(staleToken) {
+    if (token && staleToken && token !== staleToken) {
+      return token;
+    }
+    if (!refreshPromise) {
+      refreshPromise = Promise.resolve(getToken(envUrl, tenantId))
+        .then((refreshed) => {
+          if (refreshed) token = refreshed;
+          return refreshed;
+        })
+        .finally(() => {
+          refreshPromise = null;
+        });
+    }
+    return refreshPromise;
+  }
+
+  const execute = async (method, apiPath, body = null, includeHeaders = false) => {
+    const currentToken = await ensureToken();
     let bodyString = null;
     if (body !== null && body !== undefined) {
       bodyString = typeof body === 'string' ? body : JSON.stringify(body);
@@ -222,14 +248,25 @@ function createDataverseRequestExecutor({
       String(method || '').toUpperCase(),
       apiPath,
       bodyString,
-      requestToken,
+      currentToken,
       includeHeaders,
       solution,
       tenantId,
-      getToken,
+      async (_environmentUrl, _tenantId, staleToken) => refreshToken(staleToken),
       sendRequest,
+      {
+        sleep,
+        onRateLimited: (event) => {
+          for (const listener of rateLimitListeners) {
+            try {
+              listener(event);
+            } catch {
+              // Backpressure observers must not change request behavior.
+            }
+          }
+        },
+      },
     );
-    token = executed.token;
     return {
       status: executed.status,
       data: executed.data,
@@ -238,6 +275,12 @@ function createDataverseRequestExecutor({
       rateLimited: executed.rateLimited,
     };
   };
+  execute.onRateLimited = (listener) => {
+    if (typeof listener !== 'function') throw new Error('rate-limit listener must be a function');
+    rateLimitListeners.add(listener);
+    return () => rateLimitListeners.delete(listener);
+  };
+  return execute;
 }
 
 async function main() {
@@ -991,6 +1034,10 @@ async function runOneMetadataOperation(
   tenantId,
   getToken = getAuthToken,
   sendRequest = doRequest,
+  {
+    sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+    onRateLimited = () => {},
+  } = {},
 ) {
   let token = initialToken;
   let rateLimited = false;
@@ -1010,12 +1057,14 @@ async function runOneMetadataOperation(
           uncertain: true,
         };
       }
-      if (attempt < maxRetries) continue;
+      if (attempt < maxRetries) {
+        continue;
+      }
       return { status: 0, error: res.error, token, rateLimited };
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId, token);
       if (!refreshed) {
         return { status: 401, error: 'Token refresh failed', token, rateLimited };
       }
@@ -1025,13 +1074,14 @@ async function runOneMetadataOperation(
 
     if (res.statusCode === 429 && attempt < maxRetries) {
       const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
+      if (!rateLimited) onRateLimited({ delayMs, attempt: attempt + 1 });
       rateLimited = true;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await sleep(delayMs);
       continue;
     }
 
     if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await sleep(5000);
       continue;
     }
 

@@ -759,24 +759,48 @@ explicit layout.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a
-section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, and a field sitting in
-the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
+section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, a named section that
+sits in another tab or form-column is **moved** to where the layout places it, and a field sitting
+in the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
 maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
 earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
 is renamed, because form scripts and business rules can reference a section by name.
 
-Two rules keep that matching from claiming the wrong container. An index an earlier tab or section
+Three rules keep that matching from claiming the wrong container. An index an earlier tab or section
 already matched is **not reused**, because an unlabeled container compiles to a default label
 (`General` for a tab, `Details` for a section) and several of them would otherwise all match the
-first one. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
+first one. A section whose name another section in the layout declares is matched only **by that
+name**, so it can be moved to its own place instead of being taken over by a neighbour with the same
+label. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
 matched only by `name`: a label or a position is not evidence about what a container *is*, and
 matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
+Their name is the engine's own, so a section **you** declare never takes one even by name: a section
+of yours called `section_notes` gets a section of its own rather than the timeline host of that name.
+A host is known by that name *and* by what it holds: only controls without a field, or the control the
+host exists for — the timeline in `section_notes`, a sub-grid in `section_grid_…` — even after a maker
+added a field beside it. A section of yours that a maker filled with a web resource or sub-grid keeps
+its own name, and is still found by it. (One you name `section_notes` or `section_grid_…` is
+indistinguishable from a host when it has no fields, or when a maker puts that host's control into it:
+the build then gives your fields a section of their own beside it. Give it another name. And a host
+that a maker both renamed and gave a field carries neither mark, so it is matched like any other
+section — keep the engine's section names when you customise its sections in Maker.)
 
-⚠ Containers are only ever added or updated, never removed. Moving a section between form-columns or
-tabs while letting its `name` be generated therefore leaves the original behind as an **empty
-section with the same label** — generated names encode position (`section_<tab>_<column>_<index>`),
-so the moved section is a different identity. Give a section an explicit `name` when you intend to
-move it, and delete a section you no longer want in Maker.
+⚠ **Moving a section.** A section with an explicit `name` is found wherever it is on the deployed
+form and moved to the tab and form-column the layout places it in — the same section, so its fields,
+id and anything set on it in Maker travel with it, and the build reports the move. It lands after
+every section the layout places before it in that column (or first, when there is none). A section
+whose `name` is **generated** is a different identity once it moves — generated names encode
+position (`section_<tab>_<column>_<index>`) — so it is created in the new place, its fields are moved
+into it, and the original, left empty by this run, is removed (unless `"prune": false`). Give a
+section an explicit `name` when you intend to move it. A section the layout stops mentioning is
+removed only when this run empties it — its fields pruned, or moved into another section — and
+`prune` is on; anything else it still holds keeps it, and a section it leaves alone is yours to
+remove in Maker.
+
+⚠ **Field order.** A field the form lacks is appended to the end of its section; a field it already
+has stays where it is. So reordering a section's `fields` list on an existing form changes nothing
+(`--verify` does not check order either). Position a field explicitly with `fieldOptions[x].after`,
+below.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or

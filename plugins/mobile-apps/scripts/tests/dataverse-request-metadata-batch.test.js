@@ -265,6 +265,178 @@ test('in-process request executor reuses one token across sequential metadata re
   assert.deepEqual(new Set(requests.map((item) => item.token)), new Set(['shared-token']));
 });
 
+test('concurrent 401 responses share one token refresh', async () => {
+  let tokenCalls = 0;
+  const attempts = new Map();
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      return tokenCalls === 1 ? 'initial' : 'refreshed';
+    },
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      const count = (attempts.get(apiPath) || 0) + 1;
+      attempts.set(apiPath, count);
+      await Promise.resolve();
+      return token === 'initial'
+        ? { statusCode: 401, body: '', headers: {} }
+        : { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const results = await Promise.all([
+    request('GET', "EntityDefinitions(LogicalName='new_a')/Attributes"),
+    request('GET', "EntityDefinitions(LogicalName='new_b')/Attributes"),
+  ]);
+
+  assert.equal(tokenCalls, 2);
+  assert.deepEqual(results.map((result) => result.status), [200, 200]);
+  assert.deepEqual([...attempts.values()], [2, 2]);
+});
+
+test('token acquisition can retry after an initial rejection', async () => {
+  let tokenCalls = 0;
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      if (tokenCalls === 1) throw new Error('temporary token failure');
+      return 'recovered-token';
+    },
+    sendRequest: async () => ({ statusCode: 200, body: '{"value":[]}', headers: {} }),
+  });
+
+  await assert.rejects(request('GET', 'first'), /temporary token failure/);
+  const recovered = await request('GET', 'second');
+
+  assert.equal(recovered.status, 200);
+  assert.equal(tokenCalls, 2);
+});
+
+test('a slow request cannot restore a token replaced by a concurrent refresh', async () => {
+  let tokenCalls = 0;
+  let releaseSlow;
+  let markSlowStarted;
+  const slowStarted = new Promise((resolve) => {
+    markSlowStarted = resolve;
+  });
+  const slowRelease = new Promise((resolve) => {
+    releaseSlow = resolve;
+  });
+  const seen = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      return tokenCalls === 1 ? 'old' : 'new';
+    },
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      seen.push([apiPath, token]);
+      if (apiPath === 'slow') {
+        markSlowStarted();
+        await slowRelease;
+        return { statusCode: 200, body: '{"value":[]}', headers: {} };
+      }
+      if (apiPath === 'refresh' && token === 'old') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const slow = request('GET', 'slow');
+  await slowStarted;
+  assert.equal((await request('GET', 'refresh')).status, 200);
+  releaseSlow();
+  assert.equal((await slow).status, 200);
+  assert.equal((await request('GET', 'third')).status, 200);
+
+  assert.equal(tokenCalls, 2);
+  assert.deepEqual(seen.at(-1), ['third', 'new']);
+});
+
+test('an older refresh retry cannot replace a newer refreshed token', async () => {
+  let tokenCalls = 0;
+  let releaseFirstRetry;
+  let markFirstRetryStarted;
+  const firstRetryStarted = new Promise((resolve) => {
+    markFirstRetryStarted = resolve;
+  });
+  const firstRetryRelease = new Promise((resolve) => {
+    releaseFirstRetry = resolve;
+  });
+  const seen = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => ['t0', 't1', 't2'][tokenCalls++],
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      seen.push([apiPath, token]);
+      if (apiPath === 'first' && token === 't0') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      if (apiPath === 'first' && token === 't1') {
+        markFirstRetryStarted();
+        await firstRetryRelease;
+        return { statusCode: 200, body: '{"value":[]}', headers: {} };
+      }
+      if (apiPath === 'second' && token === 't1') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const first = request('GET', 'first');
+  await firstRetryStarted;
+  assert.equal((await request('GET', 'second')).status, 200);
+  releaseFirstRetry();
+  assert.equal((await first).status, 200);
+  assert.equal((await request('GET', 'third')).status, 200);
+
+  assert.equal(tokenCalls, 3);
+  assert.deepEqual(seen.at(-1), ['third', 't2']);
+});
+
+test('staggered stale 401 responses reuse the token already refreshed by a peer', async () => {
+  let tokenCalls = 0;
+  let markRefreshed;
+  const refreshed = new Promise((resolve) => {
+    markRefreshed = resolve;
+  });
+  const attempts = new Map();
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      if (tokenCalls === 2) markRefreshed();
+      return tokenCalls === 1 ? 'old' : 'new';
+    },
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      const attempt = (attempts.get(apiPath) || 0) + 1;
+      attempts.set(apiPath, attempt);
+      if (token === 'old') {
+        if (apiPath !== 'request-0') await refreshed;
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const results = await Promise.all(Array.from(
+    { length: 5 },
+    (_, index) => request('GET', `request-${index}`),
+  ));
+
+  assert.equal(tokenCalls, 2);
+  assert.deepEqual(results.map((result) => result.status), [200, 200, 200, 200, 200]);
+  assert.deepEqual([...attempts.values()], [2, 2, 2, 2, 2]);
+});
+
 test('metadata transport loss is uncertain and mutation is not retried', async () => {
   let requests = 0;
   const result = await runOneMetadataOperation(

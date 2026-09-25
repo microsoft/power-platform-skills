@@ -1244,6 +1244,23 @@ function formColumnsOf(tab) {
   return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
 }
 
+// Every section name an explicit layout DECLARES, under the name the compiler gives it, lower-cased.
+// The build and verify both take it from here, so their label and position passes skip exactly the
+// same containers (form-container-match.js `claimedByAuthoredName`). Engine-owned sections — the
+// notes section, sub-grid hosts — are never in it: the compiler appends those, the author does not.
+// `{ named: true }` keeps only the names the author GAVE, leaving out the ones generated from a
+// section's position.
+function authoredSectionNames(formSpec, { named = false } = {}) {
+  const names = new Set();
+  const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
+  tabs.forEach((t, ti) => formColumnsOf(t).forEach((col, ci) => {
+    ((col && Array.isArray(col.sections)) ? col.sections : []).forEach((sec, si) => {
+      if (sec && typeof sec === 'object' && (!named || sec.name)) names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
+    });
+  }));
+  return names;
+}
+
 // The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
 //
 // Cached, and NULL when the manifest cannot be read. The caller decides what that means, and it is
@@ -3551,6 +3568,7 @@ module.exports = {
   generatedTabName,
   generatedSectionName,
   formColumnsOf,
+  authoredSectionNames,
   validateAppSpec,
   validateSampleDataRows,
   normalizePageSource,
