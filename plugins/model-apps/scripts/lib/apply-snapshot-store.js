@@ -68,17 +68,23 @@ function writeSnapshotAtomic(workspaceDir, envelope) {
 // Rolling back is safe for a claim precisely because nobody else ever removes or reclaims one. It is NOT used for
 // the lease lock: an empty lock ages into a reclaimable one, and deleting it after another writer had reclaimed it
 // let a third take the path fresh — two holders. writeFileSync on the descriptor writes the whole text (a single
-// writeSync may write only part of it). Throws what open or write threw; EEXIST means another writer holds it.
+// writeSync may write only part of it). The final close is part of the write: one that reports an error (EIO) threw
+// past the rollback, and the claim stayed behind with every later attempt refused. Throws what open, write or close
+// threw; EEXIST means another writer holds it.
 function createExclusive(file, text) {
   const fd = fs.openSync(file, 'wx');
+  let open = true;
   try {
     fs.writeFileSync(fd, text);
+    // Counted as closed BEFORE the call: a close that throws has still released the descriptor (Linux, Windows),
+    // and closing it again could close another file that has reused the number meanwhile.
+    open = false;
+    fs.closeSync(fd);
   } catch (e) {
-    try { fs.closeSync(fd); } catch { /* best-effort */ }
+    if (open) { try { fs.closeSync(fd); } catch { /* best-effort */ } }
     try { fs.rmSync(file, { force: true }); } catch { /* best-effort: it is empty, and names itself (acquireLease) */ }
     throw e;
   }
-  fs.closeSync(fd);
 }
 
 // Is `pid` a live process? Best-effort: process.kill(pid, 0) throws ESRCH when the pid is gone, EPERM when

@@ -657,6 +657,76 @@ test('createExclusive writes the whole text even when the OS takes it one byte a
   } finally { rm(d); }
 });
 
+// The final close is part of the write. A close that reported an error (EIO) threw past the rollback and left the
+// claim behind: only its creator removes a claim, so every later clear or reclaim then refused. A descriptor whose
+// close failed is not closed again — the number may belong to another file by then.
+test('createExclusive removes its file when the final close reports an error, and closes only once', (t) => {
+  const d = ws();
+  try {
+    const file = path.join(d, 'claim');
+    const realClose = fs.closeSync;
+    let closes = 0;
+    t.mock.method(fs, 'closeSync', (fd) => { closes += 1; realClose(fd); throw Object.assign(new Error('i/o error'), { code: 'EIO' }); });
+    assert.throws(() => store.createExclusive(file, 'token'), { code: 'EIO' });
+    t.mock.restoreAll();
+    assert.strictEqual(closes, 1, 'a close that failed is not repeated');
+    assert.strictEqual(fs.existsSync(file), false, 'the file it created is removed');
+  } finally { rm(d); }
+});
+
+// Fails only the CLAIM's close: writeFileSync by path opens and closes through fs on some Node versions, and the
+// lease must not fail with it.
+function failClaimClose(t, claim) {
+  const realOpen = fs.openSync;
+  const realClose = fs.closeSync;
+  let claimFd = null;
+  t.mock.method(fs, 'openSync', (target, ...rest) => {
+    const fd = realOpen(target, ...rest);
+    if (target === claim) claimFd = fd;
+    return fd;
+  });
+  t.mock.method(fs, 'closeSync', (fd) => {
+    realClose(fd);
+    if (fd === claimFd) { claimFd = null; throw Object.assign(new Error('i/o error'), { code: 'EIO' }); }
+  });
+}
+
+test('a reservation whose close fails leaves no claim behind, and the next clear succeeds', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-clear-eio-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    fs.mkdirSync(d);
+    const claim = `${store.leasePath(d)}.reclaim`;
+    failClaimClose(t, claim);
+    const failed = store.clearWorkspace(d);
+    t.mock.restoreAll();
+    assert.strictEqual(failed.ok, false, JSON.stringify(failed));
+    assert.match(failed.reason, /its lease could not be reserved \(EIO\)/);
+    assert.ok(!fs.existsSync(claim), 'the claim is removed again');
+    assert.ok(!fs.existsSync(store.leasePath(d)), 'and the lease released');
+    assert.ok(store.clearWorkspace(d).ok, 'so the next clear is not blocked');
+  } finally { rm(base); }
+});
+
+test('a stale-lease reclaim whose claim close fails leaves no claim behind, and the next reclaim succeeds', (t) => {
+  const d = ws();
+  try {
+    const lp = store.leasePath(d);
+    fs.writeFileSync(lp, JSON.stringify({ pid: 999999, at: 1, rnd: 'dead' }));
+    const dead = { processAlive: () => false };
+    failClaimClose(t, `${lp}.reclaim`);
+    const failed = store.acquireLease(d, dead);
+    t.mock.restoreAll();
+    assert.strictEqual(failed.ok, false, JSON.stringify(failed));
+    assert.match(failed.reason, /stale lease reclaim failed/);
+    assert.ok(!fs.existsSync(`${lp}.reclaim`), 'the claim is removed again');
+    const again = store.acquireLease(d, dead);
+    assert.strictEqual(again.ok, true, JSON.stringify(again));
+    assert.strictEqual(again.reclaimed, true);
+    store.releaseLease(again);
+  } finally { rm(d); }
+});
+
 // A folder renamed away between mkdir's own steps surfaced as ENOENT from a folder that had existed, and read as
 // "no workspace can exist here": the teardown then ran with no fence. An ENOENT is retried.
 test('tombstoneSnapshot retries a mkdir that fails with ENOENT, and fences the folder it then makes', () => {
