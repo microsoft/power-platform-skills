@@ -66,7 +66,7 @@ Record the selected `<app-id>`.
 ### 1b. Discover existing pages in the selected app
 
 ```powershell
-pac model genpage list --app-id <app-id>
+pac model genpage list --app-id '<app-id>'
 ```
 
 This returns the list of generative pages already deployed in the selected app,
@@ -93,9 +93,9 @@ No `AskUserQuestion` here — this is a status update before the next phase.
 
 ```powershell
 pac model genpage download `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --output-directory <working-dir>
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --output-directory '<working-dir>'
 ```
 
 The download creates a `<working-dir>/<page-id>/` folder with fixed filenames:
@@ -111,8 +111,8 @@ page uses Dataverse entities — generate the schema:
 
 ```powershell
 pac model genpage generate-types `
-  --data-sources "entity1,entity2" `
-  --output-file <working-dir>/RuntimeTypes.ts
+  --data-sources 'entity1,entity2' `
+  --output-file '<working-dir>/RuntimeTypes.ts'
 ```
 
 Pass the exact entity list from `config.json.dataSources`. If `dataSources` is an
@@ -284,7 +284,7 @@ cannot be replaced by an inline fallback that invents its approved contract.
   Before that approval writeback dispatch, quarantine any prior edit plan:
 
   ```powershell
-  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-edit-plan.md"
+  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan '<working-dir>/genpage-edit-plan.md'
   ```
 
   Continue only on `"ok":true` — on `"ok":false` (a link, junction or wrong kind of
@@ -297,7 +297,7 @@ cannot be replaced by an inline fallback that invents its approved contract.
   planner returns, verify the file it wrote targets the page that plan named:
 
   ```powershell
-  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan "<working-dir>/genpage-edit-plan.md" --approved "@<working-dir>/.approved-genpage-edit-plan.md"
+  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-edit-plan.md' --approved '@<working-dir>/.approved-genpage-edit-plan.md'
   ```
 
   Continue only when the JSON result has `"ok":true`; if the written edit plan is for
@@ -354,7 +354,7 @@ Connector binding rules for edit deploy:
   agent (Mode: `edit`) has already gated on the flag and written the full desired
   binding set to `<working-dir>/connectors.json` (a removal writes the remaining
   bindings). Pre-flight that `pac model genpage upload --help` contains `--connectors`
-  and include `--connectors "<working-dir>/connectors.json"` in the upload — this is a
+  and include `--connectors '<working-dir>/connectors.json'` in the upload — this is a
   full replace, so it also deletes any binding left out of the file.
 - **Code/visual-only edit (connectors unchanged):** omit `--connectors`; pac
   preserves existing bindings.
@@ -368,7 +368,7 @@ Custom API binding rules for edit deploy (identical matrix, `--actions` for
   agent (Mode: `edit`) has already gated on the flag and written the full desired binding
   set to `<working-dir>/actions.json` (a removal writes the remaining bindings). Pre-flight
   that `pac model genpage upload --help` contains `--actions` and include
-  `--actions "<working-dir>/actions.json"` in the upload — a full replace that also deletes
+  `--actions '<working-dir>/actions.json'` in the upload — a full replace that also deletes
   any binding left out of the file.
 - **Code/visual-only edit (Custom APIs unchanged):** omit `--actions`; pac preserves
   existing `actionBindings`.
@@ -378,21 +378,32 @@ Custom API binding rules for edit deploy (identical matrix, `--actions` for
 ```powershell
 # The edit request is arbitrary user text, and a downloaded prompt is a multi-line
 # conversation transcript. Both go to pac BY FILE via scripts/genpage-upload.js, never on a
-# command line, so quotes/newlines/metacharacters cannot be reinterpreted by the shell.
-Set-Content -Path "<working-dir>/prompt.txt" -Value $editRequest -Encoding UTF8 -NoNewline
-Set-Content -Path "<working-dir>/agent-message.txt" -Value $changeSummary -Encoding UTF8 -NoNewline
+# command line, so quotes/newlines/metacharacters cannot be reinterpreted by the shell. Each is
+# held in a single-quoted here-string, and neither name is written through a link (SKILL.md Phase 6).
+$wd = '<working-dir>'
+$editRequest = @'
+<the edit request: only the changes>
+'@
+$changeSummary = @'
+<the change summary>
+'@
+foreach ($f in 'prompt.txt', 'agent-message.txt') {
+  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
+}
+Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Value $editRequest -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value $changeSummary -Encoding UTF8 -NoNewline
 
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file <working-dir>/<page-id>/page.tsx `
-  --data-sources "entity1,entity2" `
-  --connectors "<working-dir>/connectors.json" `
-  --actions "<working-dir>/actions.json" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<page-id>/page.tsx' `
+  --data-sources 'entity1,entity2' `
+  --connectors '<working-dir>/connectors.json' `
+  --actions '<working-dir>/actions.json' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 The prompt file holds the user's edit request — **only the changes, not the full page**.

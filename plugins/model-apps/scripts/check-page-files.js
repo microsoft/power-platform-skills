@@ -31,7 +31,7 @@ function checkPageFiles({ planPath, workingDir }) {
   }
   const { tables, unreadable } = pagesTables(plan);
   if (unreadable) {
-    return { exit: 1, result: { ok: false, error: `${abs} has table rows under a Pages heading that no table header claims, so which files they name cannot be read — re-plan` } };
+    return { exit: 1, result: { ok: false, error: `${abs} has table rows in a Pages section that are not its File table's rows (rows ahead of its header, a second delimiter row, or a table with no File column beside it), so which files they name cannot be read — re-plan with the one table` } };
   }
   // Refused, not read by the first: a Pages table quoted in the requirements (fenced or not) decided the
   // files checked here while the workers wrote the real table's (lib/page-file-targets.js).

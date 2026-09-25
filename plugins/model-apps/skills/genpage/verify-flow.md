@@ -107,19 +107,24 @@ read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
 to change the bindings, or `--clear-data-sources` to remove them deliberately.
 
 ```powershell
-Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
-  -Value "Fix sort handler on Name column; correct accidental DataGrid type prop"
-Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
-  -Value "Phase 7.5 fix re-deploy"
+$wd = '<working-dir>'
+$prompt = @'
+Fix sort handler on Name column; correct accidental DataGrid type prop
+'@
+foreach ($f in 'prompt.txt', 'agent-message.txt') {
+  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
+}
+Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Value $prompt -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value 'Phase 7.5 fix re-deploy' -Encoding UTF8 -NoNewline
 
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file "<working-dir>/<file>.tsx" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 **Common Playwright issues:**

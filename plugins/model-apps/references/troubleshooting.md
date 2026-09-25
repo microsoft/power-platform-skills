@@ -47,6 +47,9 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 
 - Verify app-id: run `pac model list` to get the correct GUID
 - Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
+- `--prompt-file …/prompt.txt is a symbolic link or junction, not a file written in place` (or `is a hard link`,
+  for any input file): something other than the skill left a link at that name, and writing it may have changed
+  the file it points to. Check that file, delete the link, and re-run; the skill then writes a plain file there
 - Check `.tsx` file exists and has no syntax errors
 - Verify `--data-sources` matches entities used in code
 - Ensure schema was generated for entity-based pages

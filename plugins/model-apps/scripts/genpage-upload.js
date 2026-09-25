@@ -45,6 +45,23 @@ const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <gu
   + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
   + '[--connectors <path>] [--actions <path>] [--add-to-sitemap]';
 
+// The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
+// into the working directory just before the upload, and a write through a link left at one of those names (a
+// symbolic link, a junction, or a hard link whose other name lives elsewhere) rewrites the file it points to,
+// outside the working directory included. The skill checks each name before it writes (SKILL.md Phase 6); this is
+// the check that holds when that step was skipped: the upload stops, and says the linked file may have been
+// changed. Returns null for a plain file, and for a path that is not there (the read or pac reports that).
+function notPlainFile(abs) {
+  let st;
+  try { st = fs.lstatSync(abs); } catch (e) {
+    return e && e.code === 'ENOENT' ? null : `${abs} could not be inspected (${(e && e.code) || e})`;
+  }
+  if (st.isFile() && st.nlink <= 1) return null;
+  if (st.isSymbolicLink()) return `${abs} is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to; check that file, remove the link and re-run`;
+  if (st.isFile()) return `${abs} is a hard link (${st.nlink} names for one file), not a file written in place — writing it changed its other names too; check them, remove this one and re-run`;
+  return `${abs} is not a plain file (a folder or a special file) — remove it and re-run`;
+}
+
 // Resolve one text input that may arrive inline or by file. Returns { ok, value } or { ok:false,
 // error }. Supplying BOTH is rejected rather than silently preferring one: the two would be
 // different text, and quietly picking either means deploying a prompt the caller did not intend.
@@ -71,6 +88,8 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     // /app-builder wrapper path preserves a final newline, so stripping one here made the same text
     // deploy differently depending on which path carried it. A prompt that legitimately ends with a
     // newline (a downloaded transcript, a heredoc) keeps it.
+    const linked = notPlainFile(path.resolve(file));
+    if (linked) return { ok: false, error: `--${fileFlag} ${linked}` };
     try {
       return {
         ok: true,
@@ -151,6 +170,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       error: '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
         + 'entry, and the page it names is already placed. Drop one of the two.',
     });
+  }
+
+  // pac reads these two itself; they are checked here for the same reason as the text files (notPlainFile).
+  for (const flag of ['connectors', 'actions']) {
+    const linked = typeof flags[flag] === 'string' && flags[flag] ? notPlainFile(path.resolve(flags[flag])) : null;
+    if (linked) return emit(false, { error: `--${flag} ${linked}` });
   }
 
   const cli = cliFactory(flags.env);
@@ -304,4 +329,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { main, resolveText };
+module.exports = { main, resolveText, notPlainFile };

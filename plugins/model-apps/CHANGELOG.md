@@ -228,12 +228,21 @@ downloads that round-trip Choice columns.
   read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
   a comment right before JSX or a regex, and a `/` after a property named like a keyword
   (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
-  cast (`total as NonNullable<number> / count`), a spread whose operand is on the next line, and a
-  member export such as `export default pages.Home` at the end of the file. The same checks back
-  `/genpage`'s new gate.
+  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines), a spread
+  whose operand is on the next line (in an object too), and a file that ends in a member export such
+  as `export default pages.Home`, a generic (`export default Page<string>`, a `type` alias) or a
+  self-closing element with a callback prop. A spread inside grouping parentheses, which TypeScript
+  rejects, is now caught as the placeholder it is. The same checks back `/genpage`'s new gate.
 - **A page's display name reaches the upload by file** ([#588]). `genpage-upload.js` takes `--name-file`, and
   `/genpage` writes the name to a file as it does the prompt: substituted into `--name "<name>"`, a shell expanded
   `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.
+- **`/genpage` single-quotes every value it fills into a command.** A working directory with a space in its
+  path became two arguments, and a `$` in an app or solution name was expanded; the skill now states the rule
+  once, and every command template follows it.
+- **The upload's input files are never written or read through a link.** `/genpage` checks the prompt,
+  agent-message and page-name files before writing them, and `genpage-upload.js` refuses any of its input files —
+  those three, `--connectors` and `--actions` — that is a link, a hard link or a folder, since a write through
+  one rewrites the file it points to.
 - **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
   `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
   names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
@@ -244,7 +253,9 @@ downloads that round-trip Choice columns.
   or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
   table naming files — one quoted in the requirements, fenced, quoted or not, and each table counted on its own,
   however many share a heading — halts too, instead of only the
-  first being checked, and `/app-builder` writes its page plan only as a plain file in the working
+  first being checked. So does a Pages section with any other table row beside its File table: a
+  delimiter row repeated under a page row had made that row a header, and its page vanished from
+  both checks. `/app-builder` writes its page plan only as a plain file in the working
   directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
   `--out`). The same rule covers the
   pages `/app-builder` generates — which now

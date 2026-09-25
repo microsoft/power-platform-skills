@@ -74,6 +74,15 @@ application of planned edits.
 
 Follow these phases in order for every `/genpage` invocation.
 
+**Every `<…>` you fill into a command goes in single quotes** (`'<working-dir>/prompt.txt'`, `'<App Name>'`).
+PowerShell and bash expand nothing inside them — not `$name`, not `$(…)`, not a backtick — and a space does not split
+the value. Escape a single quote inside the value the shell's way: in PowerShell double it, the typographic `‘ ’`
+included (`'Bob''s app'`); in bash close, escape and reopen (`'Bob'\''s app'`). Never use double quotes for a value
+(`"Revenue $100"` arrived as `Revenue `) and never leave one bare (`D:\Work Projects\…` became two arguments). A value
+holding a double quote `"` is not put on a command line at all — Windows PowerShell 5.1 drops it and can split the
+argument there — so ask for an app or solution name without one. Free text (a prompt, an agent message, a page's
+display name) never goes on a command line: it is written to a file and passed by path (Phase 6).
+
 ### Phase 0: Create Working Directory
 
 Derive a short folder name from the user's requirements:
@@ -93,7 +102,7 @@ definition" in their editor. Versions come from
 `scripts/lib/supported-dependencies.js`).
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slug>
+node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-slug>'
 ```
 
 - `<kebab-slug>` is the same slug used for the working directory.
@@ -255,7 +264,7 @@ missing and stop, so the run can be re-driven with the decision supplied.
    plan so a stale file cannot satisfy the post-dispatch existence check:
 
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan "<working-dir>/genpage-plan.md"
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan '<working-dir>/genpage-plan.md'
    ```
 
    Continue only on `"ok":true`. It refuses a plan path, approval sidecar
@@ -288,7 +297,7 @@ missing and stop, so the run can be re-driven with the decision supplied.
    If it exists, verify its provenance before Phase 2:
 
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan "<working-dir>/genpage-plan.md" --approved "@<working-dir>/.approved-genpage-plan.md"
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md'
    ```
 
    Continue only when the JSON result has `"ok":true`, and record its `writtenHash`
@@ -516,7 +525,7 @@ Read `genpage-plan.md` for the app decision and the `Solution` line in
 **If "create new":**
 
 ```powershell
-pac model create --name "App Name" --solution "<Solution unique name>" --publish
+pac model create --name '<App Name>' --solution '<Solution unique name>' --publish
 ```
 
 **`--solution` is mandatory.** `pac model create` errors out with
@@ -541,7 +550,7 @@ the `Solution` line is informational only for this phase.
 If any page uses Dataverse entities, generate the TypeScript schema:
 
 ```powershell
-pac model genpage generate-types --data-sources "entity1,entity2,..." --output-file <working-dir>/RuntimeTypes.ts
+pac model genpage generate-types --data-sources 'entity1,entity2,...' --output-file '<working-dir>/RuntimeTypes.ts'
 ```
 
 > **Windows + Bash**: Always use forward slashes in file paths (e.g., `D:/temp/RuntimeTypes.ts`).
@@ -674,7 +683,7 @@ Before invoking any builders, verify:
   it applies the same rule as the plan validator and `/app-builder`:
 
   ```powershell
-  node "${PLUGIN_ROOT}/scripts/check-page-files.js" --plan "<working-dir>/genpage-plan.md"
+  node "${PLUGIN_ROOT}/scripts/check-page-files.js" --plan '<working-dir>/genpage-plan.md'
   ```
 
   Continue only on `"ok":true`. It reads the plan's one `## Pages` table: a plan with a second
@@ -730,7 +739,7 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    extension (`candidate-tracker.tsx` gives `candidate-tracker`):
 
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"
+   node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file '<working-dir>/<filename>.tsx'
    ```
 
    Then write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
@@ -746,7 +755,7 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
     worker's page, and this is also the page a 5c fallback produces:
 
     ```powershell
-    node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file "<working-dir>/<filename>.tsx"
+    node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file '<working-dir>/<filename>.tsx'
     ```
 
     On `"ok":false`, rewrite the page once from the same plan inputs and run the
@@ -765,7 +774,7 @@ workers can tell a page a worker wrote from one an earlier attempt left there (c
 plan without its `.tsx` extension (`candidate-tracker.tsx` gives `candidate-tracker`):
 
 ```powershell
-node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file "<working-dir>/<filename>.tsx"
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file '<working-dir>/<filename>.tsx'
 ```
 
 Then invoke a `genpage-page-builder`
@@ -820,7 +829,7 @@ After the parallel workers return, validate every target file with the determini
 completeness gate:
 
 ```powershell
-node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file "<working-dir>/<filename>.tsx"
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file '<working-dir>/<filename>.tsx'
 ```
 
 The script reuses the source-literals checks for a complete default export (a file
@@ -854,7 +863,7 @@ The help output must contain `--connectors`. If it does not, stop and surface:
 not silently drop bindings.
 
 Connector deployment matrix:
-- **Create (new page):** include `--connectors "<working-dir>/connectors.json"`
+- **Create (new page):** include `--connectors '<working-dir>/connectors.json'`
   with the first `upload --add-to-sitemap`.
 - **Edit — connectors changed, added, or one removed:** write the full desired
   binding set to `connectors.json` and include `--connectors` with
@@ -869,7 +878,7 @@ must contain `--actions`; if not, stop and surface "Custom API deploy requires a
 `pac model genpage upload --actions` (PowerPlatform-Scale-AdminTools)." Don't silently drop bindings.
 
 Custom API deployment follows the **identical matrix** as connectors, substituting
-`--actions "<working-dir>/actions.json"` for `--connectors`: pass it on create; on an edit only
+`--actions '<working-dir>/actions.json'` for `--connectors`: pass it on create; on an edit only
 when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
 existing); write `[]` and pass it to clear all `actionBindings`.
 
@@ -885,25 +894,44 @@ Was it quote wrapped? No, be sure to wrap values that contain spaces.
 
 **Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
 paths. The display name is the maker's text too: substituted into `--name "<name>"`, PowerShell expanded `$(…)` in
-it before the script ran, and `Revenue $100` arrived as `Revenue `. Pass it with `--name-file`, never `--name`:
+it before the script ran, and `Revenue $100` arrived as `Revenue `. Pass it with `--name-file`, never `--name`.
+Hold each text in a single-quoted here-string — nothing in one is expanded or needs escaping; only a line that
+begins with `'@` would end it early — and **check that no name is a link before writing**: a write through a link or
+hard link left at one of these names rewrites the file it points to, outside the working directory included.
+`genpage-upload.js` refuses such an input too, but only after the write:
 
 ```powershell
-Set-Content -Path "<working-dir>/prompt.txt"        -Value $prompt        -Encoding UTF8 -NoNewline
-Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encoding UTF8 -NoNewline
-Set-Content -Path "<working-dir>/page-name.txt"     -Value $pageName      -Encoding UTF8 -NoNewline
+$wd = '<working-dir>'
+$prompt = @'
+<the prompt, verbatim>
+'@
+$agentMessage = @'
+<the agent message>
+'@
+$pageName = @'
+<the page's display name>
+'@
+foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
+  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) {
+    throw "$f in $wd is a link or hard link, not a file this skill wrote: remove it and re-run"
+  }
+}
+Set-Content -LiteralPath (Join-Path $wd 'prompt.txt')        -Value $prompt       -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value $agentMessage -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath (Join-Path $wd 'page-name.txt')     -Value $pageName     -Encoding UTF8 -NoNewline
 ```
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file "<path>" --data-sources '<entities>' --prompt-file "<working-dir>/prompt.txt" --model <model-id> --name-file "<working-dir>/page-name.txt" --agent-message-file "<working-dir>/agent-message.txt" --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env '<org-url>' --app-id '<id>' --code-file '<path>' --data-sources '<entities>' --prompt-file '<working-dir>/prompt.txt' --model '<model-id>' --name-file '<working-dir>/page-name.txt' --agent-message-file '<working-dir>/agent-message.txt' --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
 
-When present, the logged command must also include `--connectors "<working-dir>/connectors.json"`
-and/or `--actions "<working-dir>/actions.json"`.
+When present, the logged command must also include `--connectors '<working-dir>/connectors.json'`
+and/or `--actions '<working-dir>/actions.json'`.
 
 #### Prompt semantics
 
@@ -925,16 +953,16 @@ re-deploys, and the entire edit flow.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --code-file <working-dir>/<file>.tsx `
-  --name-file "<working-dir>/page-name.txt" `
-  --data-sources "entity1,entity2" `
-  --connectors "<working-dir>/connectors.json" `
-  --actions "<working-dir>/actions.json" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt" `
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --name-file '<working-dir>/page-name.txt' `
+  --data-sources 'entity1,entity2' `
+  --connectors '<working-dir>/connectors.json' `
+  --actions '<working-dir>/actions.json' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt' `
   --add-to-sitemap
 ```
 
@@ -949,16 +977,16 @@ Use `--page-id`, omit `--add-to-sitemap`, and **scope the prompt to the delta on
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file <working-dir>/<file>.tsx `
-  --data-sources "entity1,entity2" `
-  --connectors "<working-dir>/connectors.json" `
-  --actions "<working-dir>/actions.json" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --data-sources 'entity1,entity2' `
+  --connectors '<working-dir>/connectors.json' `
+  --actions '<working-dir>/actions.json' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 For updates, include the `--connectors` line only when this upload intentionally
@@ -989,20 +1017,24 @@ phase substitutes the real GUIDs.
    describes the delta only — not the original page description:
 
    ```powershell
-   Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
-     -Value "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)"
-   Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
-     -Value "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
+   $wd = '<working-dir>'
+   foreach ($f in 'prompt.txt', 'agent-message.txt') {
+     if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
+   }
+   Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Encoding UTF8 -NoNewline `
+     -Value 'Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)'
+   Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Encoding UTF8 -NoNewline `
+     -Value 'Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6'
 
    node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-     --env <org-url> `
-     --app-id <app-id> `
-     --page-id <page-id-from-Phase-6> `
-     --code-file <working-dir>/<file>.tsx `
-     --data-sources "entity1,entity2" `
-     --prompt-file "<working-dir>/prompt.txt" `
-     --model "<current-model-id>" `
-     --agent-message-file "<working-dir>/agent-message.txt"
+     --env '<org-url>' `
+     --app-id '<app-id>' `
+     --page-id '<page-id-from-Phase-6>' `
+     --code-file '<working-dir>/<file>.tsx' `
+     --data-sources 'entity1,entity2' `
+     --prompt-file '<working-dir>/prompt.txt' `
+     --model '<current-model-id>' `
+     --agent-message-file '<working-dir>/agent-message.txt'
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.
@@ -1014,14 +1046,14 @@ Adds the deployed app, the GenPage(s), and any connection references to the
 target solution so they travel cross-environment.
 
 1. Ensure the solution exists — create it only if it doesn't already exist:
-   `node ${PLUGIN_ROOT}/scripts/provision-solution.js <envUrl> <solutionUniqueName> "<Friendly Name>" [--publisher <uniqueName>]`
+   `node "${PLUGIN_ROOT}/scripts/provision-solution.js" '<envUrl>' '<solutionUniqueName>' '<Friendly Name>' [--publisher '<uniqueName>']`
    It prints `{ "ok": true, "solutionId": …, "uniqueName": …, "publisherPrefix": … }`;
    `uniqueName` must start with a letter and contain only letters, digits, and
    underscores. Without `--publisher` it resolves the environment's default publisher.
 2. Add the app + GenPage(s) + connection references (pass the page-id(s) returned
    by Phase 6 as `--page-ids` — the GenPage is added explicitly, it does NOT travel
    with the app on its own):
-   `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --page-ids "<page-id1,page-id2>" --connection-refs "<logicalName1,logicalName2>"`
+   `node "${PLUGIN_ROOT}/scripts/add-page-to-solution.js" '<envUrl>' '<solutionUniqueName>' '<app-id>' --page-ids '<page-id1,page-id2>' --connection-refs '<logicalName1,logicalName2>'`
 3. Log the command + result to `workflow-log.md`.
 
 Cross-env note: the app (80) pulls the sitemap (62); the GenPage

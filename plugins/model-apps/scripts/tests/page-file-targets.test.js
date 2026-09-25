@@ -282,7 +282,7 @@ test('a plan with more than one Pages table is refused, not read by its first', 
 
 // A section was judged by its first table: a `| Page | Purpose |` table ahead of the `| Page | File |` one hid it, and
 // a Pages table quoted elsewhere then passed as the plan's only one. Every table under a Pages heading counts.
-test('every table under a Pages heading counts on its own, and rows no header claims make the plan unreadable', () => {
+test('every table under a Pages heading counts on its own, and rows that are not its File table\'s make the plan unreadable', () => {
   const purpose = ['| Page | Purpose |', '|---|---|', '| Overview | cards |'];
   const files = ['| Page | File | Purpose | Entities |', '|---|---|---|---|', '| A | ../outside.tsx | x | account |'];
   const quoted = ['```', '## Pages', '| Page | File |', '|---|---|', '| A | approved.tsx |', '```'];
@@ -291,8 +291,11 @@ test('every table under a Pages heading counts on its own, and rows no header cl
   // The review's case: the real table after a Purpose table, and a quoted example — two File tables, refused.
   assert.deepEqual(pagesTables(plan(quoted, [...purpose, '', ...files])).tables, [['approved.tsx'], ['../outside.tsx']]);
   assert.equal(pageFilesFromPlan(plan(quoted, [...purpose, '', ...files])), null);
-  // Alone, the File table after a Purpose table is read — and so its unsafe name reaches the page-file rule.
-  assert.deepEqual(pageFilesFromPlan(plan([], [...purpose, '', ...files])), ['../outside.tsx']);
+  // Alone, a Purpose table beside the File table still leaves rows no File column claims — rows a reader could take
+  // for pages the gates never saw — so the plan is unreadable, not read by its File table alone.
+  const beside = plan([], [...purpose, '', ...files]);
+  assert.deepEqual(pagesTables(beside), { tables: [['../outside.tsx']], unreadable: true });
+  assert.equal(pageFilesFromPlan(beside), null);
   // A blank line inside a table does not end it: its later rows are still its rows, and are checked.
   assert.deepEqual(pageFilesFromPlan(plan([], [...files, '', '| B | b.tsx | y | account |'])), ['../outside.tsx', 'b.tsx']);
   // Rows ahead of the first header belong to no table: the plan is unreadable, rather than those rows dropped.
@@ -305,12 +308,46 @@ test('every table under a Pages heading counts on its own, and rows no header cl
     fs.writeFileSync(p, stray);
     const res = checkPageFiles({ planPath: p });
     assert.equal(res.exit, 1);
-    assert.match(res.result.error, /has table rows under a Pages heading that no table header claims/);
+    assert.match(res.result.error, /has table rows in a Pages section that are not its File table's rows/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   // CONTROL: stray rows in a section that names no file are no table, and change nothing.
   assert.deepEqual(pageFilesFromPlan(plan(['## Pages', '| just | a row |'], files)), ['../outside.tsx']);
+});
+
+// A delimiter row repeated under a page row made that row the header of a second table — one with no File column, so
+// it was dropped, and its page with it: both gates passed a plan whose `../outside.tsx` neither ever saw.
+test('a repeated delimiter row cannot turn a page row into a header and hide it', () => {
+  const plan = (pages) => ['# Genpage Plan', '## User Requirements', 'Build two pages.', '## Pages', ...pages,
+    '## Entity Creation Required', 'None.'].join('\n');
+  const header = ['| Page | File | Purpose | Entities |', '|---|---|---|---|'];
+  const a = '| A | approved.tsx | Overview | mock data |';
+  const b = '| B | ../outside.tsx | Details | mock data |';
+  const delimiter = '|---|---|---|---|';
+  for (const [what, pages] of [
+    ['a delimiter under the last row', [...header, a, b, delimiter]],
+    ['a delimiter under a row after a blank line', [...header, a, '', b, delimiter, '| C | c.tsx | x | mock data |']],
+    ['a second delimiter directly under the header', [...header, delimiter, a]],
+    ['a row that names a File column over a delimiter', [...header, a, '| B | File | Details | mock data |', delimiter, b]],
+  ]) {
+    const got = pagesTables(plan(pages));
+    assert.equal(pageFilesFromPlan(plan(pages)), null, what);
+    assert.ok(got.unreadable || got.tables.length > 1, `${what}: ${JSON.stringify(got)}`);
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-delimiter-'));
+  try {
+    const p = path.join(dir, 'genpage-plan.md');
+    fs.writeFileSync(p, plan([...header, a, b, delimiter]));
+    const res = checkPageFiles({ planPath: p });
+    assert.equal(res.exit, 1, JSON.stringify(res.result));
+    assert.match(res.result.error, /has table rows in a Pages section that are not its File table's rows/);
+    assert.equal(res.result.files, undefined, 'no file of the plan is reported as checked');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // CONTROL: the same rows under one header and one delimiter are read, the unsafe name included.
+  assert.deepEqual(pageFilesFromPlan(plan([...header, a, b])), ['approved.tsx', '../outside.tsx']);
 });
 
 // The skill's commands put page paths in double quotes, and some in none, and the orchestrator substitutes the name

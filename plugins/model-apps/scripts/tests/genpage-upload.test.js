@@ -183,6 +183,56 @@ test('a display name passed by file reaches upload() intact, and a blank or doub
   assert.strictEqual(empty.calls.length, 0, 'no generated name deployed in place of the one supplied');
 });
 
+// The skill writes these files into the working directory just before the upload, and a write through a link left at
+// one of those names — a symbolic link or junction, or a hard link — rewrote the file it points to, outside the working
+// directory included. An input that is not a plain file stops the upload, and says the other file may have changed.
+test('a prompt, agent-message, name, connectors or actions file that is a link or a folder stops the upload', async (t) => {
+  const d = tmp();
+  const outside = tmp();
+  const plain = (name, text) => { const p = path.join(d, name); fs.writeFileSync(p, text, 'utf8'); return p; };
+  const pf = plain('prompt.txt', 'Build the revenue page');
+  const af = plain('agent-message.txt', 'Initial deploy');
+  const nf = plain('page-name.txt', 'Revenue');
+  const cf = plain('connectors.json', '[]');
+  const xf = plain('actions.json', '[]');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'not the skill\'s file', 'utf8');
+  const argv = (over = {}) => {
+    const files = { 'prompt-file': pf, 'agent-message-file': af, 'name-file': nf, connectors: cf, actions: xf, ...over };
+    return ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx',
+      ...Object.entries(files).flatMap(([k, v]) => [`--${k}`, v])];
+  };
+  // CONTROL: every input a plain file — the upload runs.
+  const ok = capturingCli();
+  assert.strictEqual((await runMain(argv(), ok)).ok, true);
+  assert.strictEqual(ok.calls.length, 1);
+  for (const flag of ['prompt-file', 'agent-message-file', 'name-file', 'connectors', 'actions']) {
+    const hard = path.join(d, `hard-${flag}`);
+    fs.linkSync(victim, hard);
+    const cli = capturingCli();
+    const r = await runMain(argv({ [flag]: hard }), cli);
+    assert.strictEqual(r.ok, false, flag);
+    assert.match(r.payload.error, new RegExp(`^--${flag} .*hard-${flag} is a hard link \\(2 names for one file\\)`), flag);
+    assert.match(r.payload.error, /changed its other names too/, flag);
+    assert.strictEqual(cli.calls.length, 0, `${flag}: nothing uploaded`);
+    fs.unlinkSync(hard);
+  }
+  const folder = path.join(d, 'folder.txt');
+  fs.mkdirSync(folder);
+  const inFolder = capturingCli();
+  const r = await runMain(argv({ 'name-file': folder }), inFolder);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /^--name-file .*folder\.txt is not a plain file \(a folder or a special file\)/);
+  assert.strictEqual(inFolder.calls.length, 0);
+  const sym = path.join(d, 'sym-prompt.txt');
+  try { fs.symlinkSync(victim, sym, 'file'); } catch (e) { t.skip(`cannot create a file symlink here: ${e.message}`); return; }
+  const viaLink = capturingCli();
+  const s = await runMain(argv({ 'prompt-file': sym }), viaLink);
+  assert.strictEqual(s.ok, false);
+  assert.match(s.payload.error, /^--prompt-file .*sym-prompt\.txt is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to/);
+  assert.strictEqual(viaLink.calls.length, 0);
+});
+
 test('a downloaded conversation transcript survives an update by file', async () => {
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');

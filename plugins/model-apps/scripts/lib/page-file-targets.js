@@ -295,8 +295,8 @@ function pageFileProblems(files, opts = {}) {
  *   | Overview | overview.tsx | Summary cards | account |
  * and the preview the planner hands back for approval has the same table under `### Pages (N total)`, so
  * both headings are read. Returns null when the plan has no Pages table with a File column — a
- * malformed plan, which the caller must refuse, not read as "no pages" — more than one, or rows under a
- * Pages heading that no table header claims (see pagesTables).
+ * malformed plan, which the caller must refuse, not read as "no pages" — more than one, or rows in a Pages
+ * section that are not its File table's rows (see pagesTables).
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
  * @returns {string[]|null}
@@ -311,9 +311,18 @@ function pageFilesFromPlan(plan, opts = {}) {
  * `opts.heading` matches), up to the next heading of any level, every header row followed by its delimiter
  * row starts a table, whose rows run to the next such header or the end of the section — a blank line inside
  * one does not end it. Returns { tables, unreadable }: the File column of every table that has one, in order,
- * and whether a section that names files also holds rows ahead of its first header, rows no header claims,
- * whose files cannot be read: that plan is unreadable, refused rather than those rows dropped. An escaped
- * pipe (`\|`) inside a cell is not a column boundary.
+ * and whether a section that names files also holds a `|` row that is not one of its File tables' rows, whose
+ * files therefore cannot be read: that plan is unreadable, refused rather than the row dropped. Such a row is
+ *   - one ahead of the section's first header;
+ *   - a row of a table with no File column beside the File table — a page row turns into a "header" when a
+ *     delimiter row follows it, and its page vanished from both gates:
+ *       | Page | File | Purpose |
+ *       |---|---|---|
+ *       | A | approved.tsx | Overview |
+ *       | B | ../outside.tsx | Details |    <- read as the header of a second table, which has no File column
+ *       |---|---|---|
+ *   - a delimiter row among a table's own rows (a second one under its header).
+ * An escaped pipe (`\|`) inside a cell is not a column boundary.
  *
  * A section is not judged by its first table: a `| Page | Purpose |` table ahead of the `| Page | File |` one
  * hid it, and a Pages table quoted elsewhere then passed as the plan's only one.
@@ -352,13 +361,14 @@ function pagesTables(plan, opts = {}) {
     }
     const starts = [];
     for (let k = 0; k + 1 < rows.length; k += 1) if (!isDelimiter(rows[k]) && isDelimiter(rows[k + 1])) starts.push(k);
-    const found = starts.map((k, n) => {
-      const col = cells(rows[k]).map((h) => h.toLowerCase()).indexOf('file');
-      const body = rows.slice(k + 2, n + 1 < starts.length ? starts[n + 1] : rows.length);
-      return col === -1 ? null : body.map((row) => cells(row)[col] || '');
-    }).filter(Boolean);
-    if (found.length && starts[0] > 0) unreadable = true;
-    tables.push(...found);
+    const parsed = starts.map((k, n) => ({
+      col: cells(rows[k]).map((h) => h.toLowerCase()).indexOf('file'),
+      body: rows.slice(k + 2, n + 1 < starts.length ? starts[n + 1] : rows.length),
+    }));
+    const named = parsed.filter((t) => t.col !== -1);
+    if (!named.length) return;
+    if (starts[0] > 0 || named.length < parsed.length || named.some((t) => t.body.some(isDelimiter))) unreadable = true;
+    tables.push(...named.map((t) => t.body.map((row) => cells(row)[t.col] || '')));
   });
   return { tables, unreadable };
 }
