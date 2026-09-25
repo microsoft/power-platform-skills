@@ -47,6 +47,7 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 
 - Verify app-id: run `pac model list` to get the correct GUID
 - Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
+- A page display name with a straight double quote (`"`) is stored with a backslash before each one (`\"Q3\"`). The name reaches pac intact, and the extra backslash is added inside pac. Until pac is fixed, use typographic quotes (`“Q3”`) in page names
 - `--prompt-file …/prompt.txt is a symbolic link or junction, not a file written in place` (or `is a hard link`,
   for any input file): something other than the skill left a link at that name, and writing it may have changed
   the file it points to. Check that file, delete the link, and re-run; the skill then writes a plain file there
