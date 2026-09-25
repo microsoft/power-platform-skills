@@ -17,8 +17,26 @@ CONNECTION_ID argument is required for connector data sources
 Use one of these supported paths:
 
 - If the caller already has an existing connection ID, use it directly with `--connection-id`.
+- If the caller supplied a connection reference, preserve it with `--connection-ref`;
+  do not rediscover or create a replacement binding.
 - If the app is solution-aware and the caller has a solution ID, run `list-connection-references` and use the returned connection reference name with `--connection-ref`.
 - Otherwise create a connection with `create-connection` and use the returned `connectionId`.
+
+Resolve from explicit arguments and the approved handoff before calling a picker.
+If both binding forms are supplied without a clear approved choice, or the
+connector/environment does not match, return `NEEDS_CONTEXT` to the owner (ask
+standalone). Blank or malformed supplied values are errors, not permission to
+create a new binding. Only a genuinely missing binding enters lookup/creation.
+When both values are intentionally supplied, follow the approved generation
+binding: a backing connection ID supplied only for picker calls does not replace
+the approved connection reference in `add-data-source`.
+
+For tabular discovery, use already-supplied dataset/table/procedure values when
+available. Picker commands below require a connection ID, not a reference name.
+If only a reference is available and a picker is needed, obtain that reference's
+backing ID or ask for the concrete dataset/table values. Preserve the approved
+reference in the final `add-data-source`; never create another connection to
+make discovery convenient.
 
 ```bash
 npx power-apps create-connection --api-id <apiId> --json
@@ -98,8 +116,13 @@ Cloud flows are added with `add-flow`, not `add-data-source`:
 
 ```bash
 npx power-apps add-flow --flow-id <flow-guid> --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
+
+For removal, use [data-source-removal.md](references/data-source-removal.md).
+`delete-data-source` / `remove-flow` own app registration, schema, and
+model/service cleanup; they do not delete server data. `npm run generate-schemas`
+only rebuilds the mobile runtime schema map afterward. Use the removal workflow
+for approval, `--force`, shared-reference preflight, and postcondition checks.
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
 

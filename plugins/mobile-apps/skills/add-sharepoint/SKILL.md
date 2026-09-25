@@ -2,7 +2,7 @@
 name: add-sharepoint
 description: Use when the user wants to read or write SharePoint lists, manage documents in a SharePoint document library, or create a new SharePoint list from a Power Apps mobile app.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Skill
 model: sonnet
 ---
 
@@ -15,6 +15,24 @@ model: sonnet
 - [list-management-reference.md](./references/list-management-reference.md) — Query, create, extend lists and columns
 
 # Add SharePoint
+
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+Keep SharePoint list/library schemas in Connectors, not the Dataverse
+Data Model. Forward supplied site/list/connection choices and ask only for missing
+values; return scope changes to the orchestrator before mutation.
+
+**Removal branch:** after entry routing, `--remove` or an approved list/library
+binding removal executes
+[data-source-removal.md](../../shared/references/data-source-removal.md) and
+returns. Do not create a connection/list or run Steps 1-12 for removal; the
+SharePoint list/library and its contents remain on the server.
+
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-list
+service refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-12. Preserve the exact `--data-source-name` and approved
+binding identity; do not create a list/connection or run `add-data-source`.
 
 Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
@@ -39,7 +57,8 @@ test -f power.config.json && test -f app.config.js && echo "OK" || echo "ERROR: 
 
 **Telemetry checkpoint: `plan_sharepoint_data_source`**
 
-Ask the user:
+Reuse the supplied site/list and existing-vs-new decisions. Ask only for missing
+values:
 
 1. Which SharePoint list(s) do they need?
 2. Do the lists **already exist** on their site, or do they need to **create new** ones?
@@ -98,13 +117,25 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Get the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+Apply [connector-reference.md](../../shared/connector-reference.md#step-1--get-a-connection)
+before any lookup or creation. Use **`shared_sharepointonline`** as `apiId`.
+
+- Supplied `--connection-id` or approved `connectionId`: reuse the exact ID;
+  skip `create-connection` and `/list-connections`.
+- Supplied `--connection-ref` or approved `connectionRef`: retain the exact
+  reference for Step 9; skip `create-connection` and `/list-connections`.
+- Missing binding only: use the approved solution-reference lookup when
+  solution-aware, or create a connection with the command below. Conflicting,
+  blank, or wrong-environment supplied bindings must be clarified, not replaced.
 
 ```bash
-npx power-apps create-connection --api-id shared_sharepointonline --json
+npx --no-install power-apps create-connection --api-id shared_sharepointonline --json
 ```
 
-Use **`shared_sharepointonline`** as the `apiId` and capture **`connectionId`** from the output. Use these exact values in the commands below.
+Only on the creation path, capture the returned `connectionId`. The following
+picker examples use the ID path. With a reference, skip pickers when site/list
+values are supplied; otherwise obtain the backing ID for that same reference or
+ask for the missing choices. Do not create another connection for discovery.
 
 If `create-connection` cannot complete because browser-based connection creation is disabled or the connector needs interactive auth, direct the user to create one:
 
@@ -112,14 +143,16 @@ If `create-connection` cannot complete because browser-based connection creation
 
 ### Step 7: Discover Sites
 
+Skip this picker when the approved site URL is already supplied.
+
 **Print before starting:**
 > "→ Discovering SharePoint sites accessible to this connection…"
 
 ```bash
-npx power-apps list-datasets --api-id <apiId-from-list> --connection-id <connection-id> --json
+npx --no-install power-apps list-datasets --api-id shared_sharepointonline --connection-id '<connectionId>' --json
 ```
 
-Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
+Present the discovered sites only when a site choice is missing.
 
 **If `npx power-apps list-datasets` fails or returns no results:**
 - Auth, wrong user, or multiple accounts: follow shared-instructions command-failure handling and retry once.
@@ -127,13 +160,15 @@ Present the sites to the user and ask which one(s) they want to connect to. If t
 
 ### Step 8: Discover Tables
 
+Skip this picker for supplied list/library identities; reuse the approved values.
+
 **Print before starting:**
 > "→ Discovering lists/document libraries on each selected site…"
 
 For each selected site:
 
 ```bash
-npx power-apps list-tables --api-id <apiId-from-list> --connection-id <connection-id> --dataset '<site-url>' --json
+npx --no-install power-apps list-tables --api-id shared_sharepointonline --connection-id '<connectionId>' --dataset '<site-url>' --json
 ```
 
 Present the tables to the user and ask which ones they want to add. Suggest tables that look relevant to their use case. If lists were created in Step 5, they should appear here.
@@ -145,15 +180,24 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 **Print before starting:**
 > "→ Running `npx power-apps add-data-source` per list (sequential, ~10–20 seconds each)."
 
-SharePoint is a tabular datasource — requires `--connection-id`, `--dataset`, and `--resource-name`:
+SharePoint is tabular: use `--dataset` and `--resource-name` with the exact
+binding selected in Step 6. Run only the applicable command:
 
 ```bash
-npx power-apps add-data-source --api-id <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --resource-name '<table-name>'
+# Supplied/resolved connection ID
+npx --no-install power-apps add-data-source --api-id shared_sharepointonline --connection-id '<connectionId>' --dataset '<site-url>' --resource-name '<table-name>'
+
+# Supplied/resolved connection reference
+npx --no-install power-apps add-data-source --api-id shared_sharepointonline --connection-ref '<connectionRef>' --dataset '<site-url>' --resource-name '<table-name>'
 ```
 
 Run once per list or document library.
 
 ### Step 10: Configure
+
+In orchestrated mode, inspect and return service signatures to the owner for
+screen integration; do not independently edit screens. In implementation-only
+mode provide usage guidance and explicitly report that screens were not wired.
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
 

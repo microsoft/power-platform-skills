@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, AskUserQuestion
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
+**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first, then skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
 
 # Check Updates (`/check-updates`)
 

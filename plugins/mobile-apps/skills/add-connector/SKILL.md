@@ -10,6 +10,21 @@ model: sonnet
 
 # Add Connector (Generic)
 
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+Action connectors and cloud flows do not imply Dataverse Data Model changes.
+
+**Removal branch:** after entry routing, if `--remove` or the approved scope
+requests removal, execute
+[data-source-removal.md](../../shared/references/data-source-removal.md) and return.
+Do not run Steps 1-6, connection creation, or `add-data-source` for a removal.
+
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-source
+refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-6. Preserve the exact `--data-source-name` and approved
+binding identity; do not create connections or run `add-data-source`.
+
 Fallback skill for any connector not covered by a dedicated `/add-*` skill. For common connectors, prefer the dedicated skills:
 
 - `/add-dataverse` — Dataverse tables
@@ -47,12 +62,29 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
 
-**Before proceeding, check if the connector has a dedicated skill. If it does, delegate immediately and STOP:**
+Classify the requested operation before matching the delegation table. Dataverse
+actions/functions follow the discovery-only branch below directly, skipping
+connection lookup and data-source generation, never the table CRUD workflow.
+If the operation is ambiguous, ask before delegating.
+Use aliases only for routing; pass the exact discovered API ID to CLI commands.
+
+**Dataverse actions/functions: discover and return here.**
+
+```bash
+npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
+```
+
+Surface the matching metadata and STOP this leaf with a clear note that this
+plugin adds Dataverse table CRUD, not actions/functions. Do not enter Step 3,
+invoke `/list-connections`, or generate a table service on this branch.
+If the user actually needs table CRUD, use the delegation table below.
+
+**Then check if this operation has a dedicated skill. If it does, delegate and STOP:**
 
 | Connector API name      | Delegate to        |
 | ----------------------- | ------------------ |
-| `sharepointonline`      | `/add-sharepoint`  |
-| `commondataservice`     | `/add-dataverse`   |
+| `sharepointonline`, `shared_sharepointonline` | `/add-sharepoint` |
+| `dataverse`, `commondataservice`, `shared_commondataservice`, `commondataserviceforapps`, `shared_commondataserviceforapps` (table CRUD only) | `/add-dataverse` |
 
 Invoke the appropriate skill with the same `$ARGUMENTS` and **do not continue this skill's workflow**.
 
@@ -70,11 +102,8 @@ npx power-apps list-flows --search '<flow-name-or-keyword>' --json
 npx power-apps add-flow --flow-id <flow-guid> --non-interactive
 ```
 
-To remove a flow later:
-
-```bash
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
-```
+To remove a flow later, use the removal branch, which verifies consumers and
+approval before the CLI removes the app binding.
 
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
@@ -82,9 +111,28 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 **Telemetry checkpoint: `generate_connector_data_source`**
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+**First, preserve or resolve the connection binding** using
+[connector-reference.md](../../shared/connector-reference.md#step-1--get-a-connection):
 
-Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
+- Supplied `--connection-id` (or approved caller `connectionId`): reuse that exact
+  ID for the confirmed connector/environment; skip `/list-connections` and creation.
+- Supplied `--connection-ref` (or approved caller `connectionRef`): preserve that
+  reference for generation; skip `/list-connections` and creation. Do not replace
+  it with a newly selected ID.
+- Missing binding only: invoke `/list-connections` with the connector API ID
+  and current scoped context to resolve the missing value. Conflicting, blank,
+  or ambiguous supplied values return to the owner instead of creating a fallback.
+
+The commands below show the connection-ID path. For a reference binding,
+replace `--connection-id <connectionId>` with
+`--connection-ref '<connectionRef>'` on `add-data-source` only. Reuse supplied
+dataset/table/procedure choices and skip their discovery. If discovery is still
+needed and requires an ID, obtain the backing ID for the approved reference or
+the missing concrete choices; do not create another connection or pass an
+unsupported reference flag to a picker command.
+
+If creation was needed but cannot complete in the CLI, direct the user to the
+environment-specific Connections URL from `power.config.json` `environmentId`:
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
 **Classify the connector before running `add-data-source`:**
@@ -124,16 +172,6 @@ npx power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset
 npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
 
-**For Dataverse actions/functions rather than tables, discovery is available but this plugin only adds Dataverse table CRUD:**
-
-```bash
-npx power-apps find-dataverse-api --search '<operation-name>' --json
-```
-
-Surface the matching operation metadata and STOP with a clear note that this plugin can add Dataverse table CRUD through `/add-dataverse`, but does not add Dataverse actions/functions.
-
-If the user actually needs Dataverse table CRUD, stop and delegate to `/add-dataverse`; do not add Dataverse tables from this generic connector skill.
-
 **Parameter reference:**
 
 - `--api-id` / `-a` — connector API ID (often `shared_<connector>`, e.g., `shared_office365users`). Use the exact value provided by the caller or connector docs.
@@ -165,7 +203,9 @@ For each method the user needs:
 2. Read just that method's section (use `offset` and `limit` parameters on Read)
 3. Identify required vs optional parameters and response type
 
-Help the user write code using the generated service methods.
+Return the needed method signatures and integration notes to the orchestrator.
+Screen implementations belong to `/edit-app` or `/create-mobile-app`; in
+implementation-only mode provide usage guidance without changing screens.
 
 ### Step 5 — Build
 
@@ -181,7 +221,13 @@ npm run generate-schemas
 npx tsc --noEmit
 ```
 
-Fix TypeScript errors before proceeding. Common gotcha: the new generated service may import a peer dependency you don't have installed yet — if so, `npx expo install <missing-package>` (NOT plain `npm install`, so versions stay Expo-compatible).
+Fix TypeScript errors before proceeding. If a generated service requires a missing
+dependency, inspect its package contents before choosing a repair. Do not install
+native packages absent from the template. Return a JS-only dependency requirement
+to the orchestrator for the approved exact-version
+[JavaScript dependency plan](../../shared/references/javascript-dependency-planning.md);
+in implementation-only mode obtain that approval before installation. Do not
+install an unplanned package merely to silence TypeScript.
 
 Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
 
@@ -191,15 +237,15 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 
 ## Remove a data source or flow
 
-If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
+Apply the entry routing first for removals too. `/edit-app` must identify consuming
+screens/services and approve their update or removal before deleting a dependency;
+implementation-only removal must stop if it would leave broken consumers.
 
-```bash
-npx power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --non-interactive
-npx power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
-```
-
-Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting success.
+Read and execute
+[data-source-removal.md](../../shared/references/data-source-removal.md) for the
+supported command, scope preflight, generated/config cleanup checks, and
+inventory reconciliation. This also covers sources originally added outside
+this skill; use the actual registered identity rather than assuming its name.
 
 ## Runtime connector handling
 

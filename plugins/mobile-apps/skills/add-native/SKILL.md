@@ -2,15 +2,25 @@
 name: add-native
 description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Resolve `--working-dir` / owner context there; use the resolved absolute root for
+every shell call and file tool, not a previous shell's cwd.
+
 # Add Native Capability
 
-Generate a one-file typed wrapper under `src/native/` for a native device capability that the upstream template already ships. Screens import the wrapper instead of touching Expo modules directly, so the discriminated-union result contract stays consistent across the app.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+The leaf generates typed wrappers under `src/native/` for native capabilities that
+the upstream template already ships. Screens import the wrapper instead of touching
+Expo modules directly, so the discriminated-union result contract stays consistent.
 
 ## Hard rules — do NOT cross these lines
 
@@ -127,7 +137,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
 | `camera`, `take-photo`, `photo`, `expo-camera` | `expo-camera` | `src/native/camera.ts` | `/add-native` routes internally to `add-camera` |
-| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/imagePicker.ts` | `/add-native` routes internally to `add-camera` |
+| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/camera.ts` (`pickImage`) | `/add-native` routes internally to `add-camera`; preserve compatible existing re-exports |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
 | `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; 0.2.9+ opens HTTPS URLs and file URIs |
@@ -181,7 +191,8 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 ### Step 1 — Verify project
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 ### Step 2 — Resolve capability
@@ -203,6 +214,7 @@ If the user names something not in the supported table, apply the Native capabil
 For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 case "<capability>" in
   camera|image-picker|barcode-scanner|qr-scanner) test -f "${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
   pdf-report) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
@@ -213,7 +225,16 @@ case "<capability>" in
 esac
 ```
 
-- **INTERNAL_HELPER:** read the printed helper file, execute its workflow with the same `--working-dir` and forwarded arguments, then STOP. `/add-native` remains the only user-facing command for these controls.
+- **INTERNAL_HELPER:** read the printed helper file and execute its workflow with
+  the same absolute `working_dir`, arguments, supplied answers, mode flags, and
+  current owner/phase/`approved_scope`. The helper must bind every operation to
+  that root using Step 0, even if launched from another directory. Each helper must execute
+  [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+  before its writes/reuse and before its success summary; outer Step 5 is not
+  reached on this branch. Propagate `NEEDS_CONTEXT`/`BLOCKED` and the artifact
+  result to the owner, then STOP this leaf, not the owning workflow. Do not
+  fall through to inline generation or report success for a partial helper result.
+  `/add-native` remains the only user-facing command for these controls.
 - **INLINE:** continue to Step 4.
 
 ### Step 4 — Verify module is template-shipped
@@ -221,6 +242,7 @@ esac
 Confirm the underlying native-capability package is actually present in the project's `package.json` (catches the case where the user hand-removed it or the template version is older than expected):
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template should ship it. Re-scaffold via /create-mobile-app, restore it from upstream, or wait for the template release that adds it — this skill will not install it.'); process.exit(1); }"
 ```
 
@@ -233,7 +255,14 @@ If the check fails, STOP. Do not run `npx expo install`. Print the error verbati
 **Print before starting:**
 > "→ Writing src/native/<wrapper>.ts (typed wrapper with discriminated-union result + iOS/Android platform guards)…"
 
-Create `src/native/<wrapper-filename>.ts` (per the supported-capabilities table). If the file already exists, **do NOT overwrite** — append a comment noting "regeneration skipped — wrapper already exists" and skip to Step 6.
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the inline capability row before writing or reusing output.
+Create `src/native/<wrapper-filename>.ts` only when missing and in scope. If the
+file already exists, inspect its exports against the approved capability
+contract, including behavior and storage. Reuse it unchanged when compatible;
+make a scoped update without re-asking when already approved. Otherwise return
+`NEEDS_CONTEXT` to the owner (or ask standalone) before updating; never silently
+skip the feature or overwrite custom code.
 
 Each wrapper exports:
 
@@ -293,12 +322,19 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
-Fix any wrapper-side errors. Do NOT run platform-specific native build commands here — and you should not need to, because no native config changed.
+Fix only in-scope wrapper-side errors. Execute the shared compatibility contract's
+Step 4 after type-checking: recheck all requested artifacts, API/behavior, and
+storage obligations before returning success. Type-check success alone is
+insufficient. Do NOT run platform-specific native build commands here.
 
 ### Step 7 — Summary
+
+Return the shared compatibility result before the summary; use the actual
+created/updated/reused paths and do not claim completion for unresolved artifacts.
 
 ```
 ✅ Native wrapper generated: <capability>

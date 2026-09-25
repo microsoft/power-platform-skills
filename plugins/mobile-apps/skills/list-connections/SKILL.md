@@ -2,11 +2,11 @@
 name: list-connections
 description: Use to find or create a Power Platform connection ID or reference for an Expo/React Native Power Apps mobile app.
 user-invocable: true
-allowed-tools: Bash
+allowed-tools: Read, Bash
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first for cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
 
 # List Connections
 

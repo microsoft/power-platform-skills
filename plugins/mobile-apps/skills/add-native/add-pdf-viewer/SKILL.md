@@ -9,6 +9,11 @@ model: sonnet
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 # Add PDF Viewer
 
 **Internal helper.** Users should invoke `/add-native pdf-viewer`, `/add-native pdf-control`, or `/add-native @microsoft/power-apps-native-pdf-viewer`; `/add-native` routes here after resolving the capability.
@@ -20,7 +25,8 @@ Generate or verify the native PDF viewer wrapper and show how to call its **nati
 ### 1. Verify app
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
@@ -28,14 +34,29 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } let v; try { v=require('./node_modules/' + m + '/package.json').version; } catch { console.error('MISSING_INSTALL: cannot verify the installed ' + m + ' version. Run the project package install first.'); process.exit(1); } const [major,minor,patch]=v.split('.').map(Number); if (!(major > 0 || minor > 2 || (minor === 2 && patch >= 9))) { console.error('UNSUPPORTED_VERSION: ' + m + ' ' + v + ' does not support file:// URIs. Version 0.2.9+ is required.'); process.exit(1); } console.log('OK: native PDF viewer ' + v + ' supports https:// and file://');"
 ```
 
 If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Version 0.2.9+ must already be part of the app's native build.
 
+### 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the PDF viewer row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/pdfViewer.ts` for `openHttpsPdf`, `PdfViewerResult`, requested
+options/actions, and the actual HTTPS/local-file behavior against installed
+version 0.2.9+. An HTTPS-only implementation cannot satisfy a requested local
+`file://` preview. Check invalid URI and missing-native-module paths, not just
+exports; an incompatible artifact outside approval returns `NEEDS_CONTEXT` to
+the owner, or asks standalone.
+
 ### 3. Write or verify `src/native/pdfViewer.ts`
 
-Create `src/native/pdfViewer.ts` if it does not exist. If it already exists, inspect it and patch only if it violates the supported URI rules or throws instead of returning a result.
+Apply Step 2a's decision for `src/native/pdfViewer.ts`: create when requested and
+missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom code, exports, and callers; do not overwrite from the example.
 
 The wrapper MUST:
 
@@ -95,6 +116,8 @@ export async function openHttpsPdf(
 
 ### 4. Use the wrapper
 
+Integration guidance for the owner; do not edit screens in this helper.
+
 Screens import the wrapper, not the native package directly:
 
 ```ts
@@ -133,10 +156,14 @@ Notes:
 ### 5. Type-check
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix only in-scope helper errors, then execute the shared compatibility contract's
+Step 4. Recheck requested inputs/options/actions, invalid URI rejection, missing
+native module, and viewer failures. Type-check success alone is insufficient;
+do not fix screen/generated files.
 
 ### 6. Native rebuild note
 
@@ -153,6 +180,10 @@ import NativePdfViewerExtension from "@microsoft/power-apps-native-pdf-viewer";
 Do not wire Companion PCF or `NativePdfViewerExtension`. In Power Apps native code apps, use the native React Native API above.
 
 ### 8. Summary
+
+Return the shared compatibility result and actual created/updated/reused paths
+before this summary. Update memory-bank only after success, and leave final
+updates to the owner when orchestrated.
 
 Tell the user:
 

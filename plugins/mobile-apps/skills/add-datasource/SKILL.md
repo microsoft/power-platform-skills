@@ -10,6 +10,9 @@ model: sonnet
 
 # Add Data Source
 
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
 Router skill that understands the user's goal and connects them to the right data source — without requiring them to know Power Platform terminology.
 
 ## Workflow
@@ -32,6 +35,8 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 | User's goal | Best approach | Invoke |
 |---|---|---|
+| Refresh generated services for a retained data source | Resolve the existing registration; preserve its platform and binding | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--refresh --data-source-name "<registered-name>"` |
+| Stop using a registered table, connector, or flow in this app | Preserve the removal intent and resolve its existing registration type; do not infer a new data platform | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--remove` |
 | Store and manage structured business data (custom tables, forms, CRUD) | Dataverse is the platform's native database | `/add-dataverse` |
 | Invoke an existing Dataverse action/function/API | Discover with Power Apps CLI `find-dataverse-api`; this plugin only adds Dataverse table CRUD | `/add-connector` |
 | Read lists, manage documents, integrate with SharePoint sites | SharePoint Online — dedicated skill with list creation support | `/add-sharepoint` |
@@ -41,12 +46,21 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 **Note:** Dedicated skills for Teams, Excel, OneDrive, Office 365, and Azure DevOps are planned for v1. Until then, `/add-connector` handles all of them — it covers every connector the platform supports and generates the same `src/generated/` service layer.
 
 **Important routing rules:**
+- For refreshes, forward the exact registered identity, `--refresh`,
+  `--data-source-name`, mode, and current approved scope to the matching leaf.
+  Never convert a refresh into an add or request a new connection.
+  Conflicting add/refresh/remove scopes return to the owner for separate calls.
+- For removals, forward the approved identities and scope unchanged to the
+  matching leaf's removal branch; never turn "remove this source" into an add
+  command. Use [data-source-removal.md](../../shared/references/data-source-removal.md).
 - When the user wants to **perform actions** (send an email, post a Teams message, create a file), route to `/add-connector` with the connector name as the argument (e.g., `/add-connector office365`, `/add-connector teams`).
 - When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `npx power-apps list-flows --json` followed by `npx power-apps add-flow --flow-id <flow-guid> --non-interactive` from the app root.
 - When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `npx power-apps find-dataverse-api --search '<operation-name>' --json`; then stop and explain that this plugin only adds Dataverse table CRUD.
 - When the user wants to **store or query structured business data** with custom schema, route to `/add-dataverse`.
 
-4. If the user wants multiple capabilities, invoke each skill in sequence.
+4. If the approved scope includes multiple capabilities, invoke each skill in
+   sequence and return the combined results to the owner. Do not independently
+   expand a connector request into schema or screen changes.
 
 ### When the User Isn't Sure
 

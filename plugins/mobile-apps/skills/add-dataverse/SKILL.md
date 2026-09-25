@@ -2,7 +2,7 @@
 name: add-dataverse
 description: Use when the user wants to add Dataverse tables (existing or new) to a Power Apps mobile app, extend an existing Dataverse table with new columns, or apply an approved data model plan.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task, Skill
 model: opus
 ---
 
@@ -10,9 +10,27 @@ model: opus
 
 # Add Dataverse
 
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+An existing plan alone does not mean it includes or approves the new request;
+never replay the old Data Model instead of resolving the requested delta.
+
+**Removal branch:** after entry routing, `--remove` or an approved app-binding
+removal executes
+[data-source-removal.md](../../shared/references/data-source-removal.md), then
+returns without entering Steps 1-9. Removing a plan row is not implemented by
+re-running table creation or by deleting Dataverse metadata. For a mixed edit,
+the owner adds/refreshes first and invokes removal separately after consumer edits.
+
+**Refresh branch:** after entry routing, `--refresh` or an approved service-only
+refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+and returns before Steps 1-9. Preserve the exact `--data-source-name` and approved
+binding identity. Do not replay schema writes, publish, or run `add-data-source`.
+
 Two paths:
 
-- **Existing tables only** — skip to Step 5 (just runs `npx power-apps add-data-source` per table)
+- **Existing tables only** — resolve the current scope in Steps 1–2, then skip schema writes and use Step 6 to add only missing approved bindings or refresh approved retained sources.
 - **New / extended tables** — full workflow with Web API mutations in dependency order
 
 ## Workflow
@@ -25,12 +43,25 @@ Two paths:
 
 Confirm Power Apps mobile app:
 
+For `--plan-only` or a planning-phase handoff, check the app files read-only and
+use the shared proposal-only environment-context rule. Use the same non-persisting
+lookup before approval in a normal invocation. Incomplete or conflicting context
+returns `NEEDS_CONTEXT` after read-only recovery; never remove the safety flags
+or redirect output into configuration to make planning succeed.
+
 ```bash
-test -f power.config.json && test -f app.config.js
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd "<working_dir>" || exit 1
+if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
+  printf '%s\n' 'ERROR: selected working directory is not an initialized mobile app' >&2
+  exit 1
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "<selected-environment-id>" --no-cache --require-tenant
 ```
 
-Capture the **environment URL** (`https://orgXXX.crm.dynamics.com`), **environment ID**, and **tenant ID** from `resolve-environment.js` — needed for Step 3. If only the environment URL is available, pass that URL instead of the ID.
+Read `<selected-environment-id>` from this app's `power.config.json`. Capture the
+**environment URL** (for example `https://contoso.crm.dynamics.com`),
+**environment ID**, and **tenant ID** from the resolver for Step 3. Use the
+owner's absolute `working_dir` for every command and artifact.
 
 ### Step 2 — Resolve plan
 
@@ -42,26 +73,65 @@ Look for `native-app-plan.md` in the project root:
 test -f native-app-plan.md
 ```
 
+**Resolve the current request before consuming an existing plan.** A direct
+implementation-only invocation must compare its requested tables/columns/service
+changes with the existing plan and read-only live evidence. Present and approve
+that exact delta at Step 2.7 after shared planning validation, then save only
+the accepted plan changes before implementation.
+If the request adds nothing, verify the existing outcome and report a no-op;
+do not apply other pending rows. If intent or scope is missing, ask or return
+`NEEDS_CONTEXT` without mutation. An explicit request to apply the whole existing
+plan still requires approval of the reconciled operation set.
+For an approved child call, use only the supplied current `approved_scope`.
+In either case, `--plan-only` returns the proposal and STOPs before plan saving,
+approval-receipt creation, service generation, or Steps 3–9; a planning-phase
+caller has the same proposal-only boundary.
+
 Before reading plan content, inspect `$ARGUMENTS` for the five fast-path
 artifact flags in Step 2a. When all are present, only confirm
 `native-app-plan.md` exists for hash validation; do not parse its Data Model
 section or build operations/service lists from Markdown.
 
-**If present and `<operation_manifest_mode> = fallback`:** read the
+For all non-fast-path Dataverse proposals, including an existing-plan delta,
+read and execute
+[dataverse-change-planning.md](../../shared/references/dataverse-change-planning.md).
+Use its scoped evidence/contract for the diagram, architect, or inline path.
+An approved child with `planning_snapshot`, `architect_evidence`, and
+`schema_contract` instead enters Step 2b to verify that supplied scope; it must
+not rediscover or re-approve it. New-binding requests use this planning path;
+service-only refreshes and retirements have already returned from their branches.
+
+**Legacy input only, if present and `<operation_manifest_mode> = fallback`
+without a shared scoped contract:** read the
 `## Data Model` section. Extract:
 - The target reconciliation table (`reuse` / `extend` / `create` / `adapt` / `defer` decisions and evidence)
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
 - Every table referenced by `## Screens`, identity resolution, related-entity fields, forms, dashboards, or shared hooks, including standard reused tables such as `systemuser`, `contact`, and `account`
 
-Build `SERVICE_REQUIRED_TABLES` as the union of:
+For legacy callers without scoped planning artifacts, build
+`SERVICE_REQUIRED_TABLES` as the union of:
 1. every non-deferred row in Target Reconciliation (`reuse`, `extend`, `create`, or `adapt`);
 2. every table in Creation Order;
 3. every table named by screen/hook data requirements.
 
+For the shared scoped path, use the normalized contract's non-deferred
+`serviceRequired` declarations instead. Keep the broader existing-app service
+inventory as retained context, not a registration or mutation work list.
+
 **Hard rule:** `reuse` means "do not mutate schema"; it does **not** mean "skip generated service." If app code reads or writes a reused table, that table must be in `SERVICE_REQUIRED_TABLES`.
 
 Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) decisions with their recorded reasons, and apply the alias map to every name you use. A data-modelling conflict never halts this skill — it resolves to `adapt` or `defer` and is reported in Step 9.
+This classification belongs to planning: after approval, a changed decision
+returns to the owner for revision/approval before any write.
+
+For an edit handoff, restrict schema writes to the exact `approved_scope` delta;
+unaffected plan rows are context, not permission to replay their mutations.
+Apply the same restriction to the newly approved standalone request delta.
+Retain the full required-service set for existing screens. If reconciliation
+would change an approved name, storage target, or screen contract, return the
+proposed adaptation to the owner before writing; update and approve the dependent
+plan/screen changes together rather than silently renaming underneath the app.
 
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
@@ -74,7 +144,13 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
   > (b) Let the data-model-architect agent analyze and propose one (default)
   > (c) Cancel — I'll plan it elsewhere first"
 
-  Default the answer to (b) so empty/cancel input auto-proceeds. The 99% case (user gave a description but no diagram) skips this prompt entirely.
+  Recommend (b), but wait for an explicit answer. Empty input is not approval;
+  cancellation stops the workflow without planning or mutation. A supplied
+  description may select the read-only architect path, not approve its result.
+
+With an existing plan and a new request, take the same diagram or architect/
+inline proposal path for only that delta, then Step 2.7. Do not skip validation
+because a saved plan exists.
 
 #### Step 2a — Approved operation-manifest fast path
 
@@ -102,6 +178,33 @@ exact validation errors and return control to the orchestrator. Never jump to
 Step 4 without Step 2 initialization, partially trust a candidate, or mix its
 operations with agent-derived operations.
 
+For an approved implementation candidate, continue to Step 3 and the existing
+Step 3c manifest validation; skip Steps 2b and 2.5–2.7. Supplied execution
+artifacts never override `--plan-only` or a planning-phase caller: those calls
+return the proposal without entering Step 3.
+
+#### Step 2b — Approved scoped planning context
+
+Enter only for scoped context, not a creation fast-path candidate. Setup/edit pass the
+absolute `planning_snapshot`, `architect_evidence`, and `schema_contract` paths
+plus accepted operations, `contract_sha256`, and `plan_sha256` in
+`approved_scope`. Require all fields and real implementation approval;
+partial, missing, changed, or mismatched context returns `NEEDS_CONTEXT` to
+the owner, never a fallback to whole-plan replay or fresh approval inference.
+
+Before Step 3, compare SHA-256 of the contract and final plan file bytes with
+those frozen approval hashes, verify the selected target identity, and run the
+shared compact-evidence and decision validators against the supplied artifacts.
+Do not overwrite either hash to accept changed files. Read mutation intent
+from the normalized scoped contract, not historical Markdown rows; retain
+unaffected generated services. A proposal-only caller returns without mutation.
+
+After success, keep `<operation_manifest_mode> = fallback` for the existing
+standalone execution/reconciliation path, skip Steps 2.5–2.7, and proceed to
+Step 3. Planning evidence is not fresh write evidence: Step 4 still reconciles
+only this accepted delta and its required dependencies against the live target.
+Do not fabricate a `create-mobile-app` receipt or partially supply Step 2a flags.
+
 ### Step 2.5 — Path A: Parse user-provided diagram
 
 Used when the user has an existing diagram from another tool (Visio, dbdiagram.io, screenshot, hand-drawn).
@@ -112,7 +215,7 @@ Accept three input formats:
 |---|---|
 | **Image path** (`*.png` / `*.jpg` / `*.jpeg`) | Use `Read` on the file path. The vision-capable model extracts entities, columns, relationships. |
 | **Mermaid syntax** | User pastes a `erDiagram` block in chat. Parse the entities, columns, and `\|\|--o{` cardinalities directly. |
-| **Text description** | User types a structured description ("Account has many ServiceVisits; each ServiceVisit has many WorkItems and Photos"). Spawn `data-model-architect` agent in `parse-only` mode with the text as input. |
+| **Text description** | Parse the requested entities/relationships as intent, then use the shared snapshot-only architect handoff with the text and scoped compact evidence. |
 
 Whichever format, normalize into the same structure used by the planner agent:
 
@@ -126,22 +229,46 @@ tables:
     relationships: [...]
 ```
 
-Then:
-1. Query existing Dataverse (Step 4 logic) to mark each table as `new`, `modified`, or `reused`.
-2. Generate a Mermaid ER diagram from the parsed structure for visual confirmation.
-3. Present back to the user via `EnterPlanMode` for approval.
-4. On `ExitPlanMode`, write the approved data model into `native-app-plan.md` `## Data Model` section (creating the file if it doesn't exist).
-5. Continue to Step 3.
+Then follow the shared planning workflow to generate `_dm_section.md` with
+the Mermaid diagram and a normalized `.tmp/dataverse-schema-contract.json`
+from compact evidence. Run its decision validation for the diagram just as for
+an architect result, then continue to Step 2.7. Do not save the live plan here.
 
 ### Step 2.6 — Path B: Spawn architect agent
 
-If the user picked Path B (or the user-provided diagram parse failed), spawn the `mobile-app:data-model-architect` agent via `Task` (the `mobile-app:` plugin-name prefix is required) with the user's high-level requirements as input. The agent returns `_dm_section.md`. Embed it in `native-app-plan.md`, present via `EnterPlanMode` for approval, then continue to Step 3.
+If the user picked Path B, use the shared workflow's
+`mobile-app:data-model-architect` handoff with `Dataverse planning mode: required`,
+the absolute snapshot/compact-evidence paths, the scoped request, and planning/
+proposal-only context. Require `_dm_section.md` and the normalized contract.
+If the host cannot spawn agents, produce both inline from that same evidence.
+Use the shared structured-signal recovery before generic retries. A diagram
+parse failure requires resolving the intended entities, not silently inventing
+a replacement model.
 
-If they need new tables and refuse both paths, recommend they run `/setup-datamodel` (alias of this skill) explicitly, or `native-app-planner` for a full app-level plan. STOP if neither.
+If they need new tables and refuse both paths, recommend `/setup-datamodel` for
+data-only planning or `/edit-app` for full app integration. STOP if neither.
+
+### Step 2.7 — Validate and approve the standalone delta
+
+For every new standalone proposal, require exit `0` from
+`validate-dataverse-planning-decisions.js` for the current normalized contract
+and snapshot before presenting the existing approval gate. This includes
+diagrams, architect results, inline fallbacks, and edits to an existing plan.
+If either `--plan-only` or a planning-phase caller applies, return the validated
+proposal and STOP before saving the live plan or granting execution permission.
+
+Otherwise show the exact delta and its concerns with `EnterPlanMode`. Approval
+saves only that delta into `native-app-plan.md`, preserving unaffected sections.
+Freeze the shared planning paths, accepted operations, and current
+`contract_sha256` / `plan_sha256` as this invocation's approved context; verify
+it using Step 2b before implementation. Revision repeats planning validation;
+cancellation stops without saving or mutation. Already-approved scoped child
+calls and valid creation fast-path calls do not repeat this gate.
 
 ### Step 3 — Setup Dataverse Web API auth
 
-Required only if creating or extending tables. Skip to Step 5 for read-only `add-data-source`.
+Required only after implementation approval. For approved existing-table
+bindings with no schema mutation, skip to Step 6, not the schema-write phases.
 
 #### Step 3a — Environment consistency check
 
@@ -275,6 +402,10 @@ summary.
 > "→ Reconciling every planned table and column against live target metadata before any write…"
 
 Do not use the custom-table list as the source of truth, and do not issue one request per table. Fetch **every** plan entry (`Reuse`, `Extend`, or `Create`) — including standard and managed dependencies — in a **single** filtered query that also expands their columns:
+
+On the scoped planning path, "every plan entry" means only the approved
+normalized contract and its required dependencies, never all saved-plan rows.
+Do not substitute the planning snapshot or inventory cache for this live read.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
@@ -1049,10 +1180,20 @@ When `<operation_manifest_mode> = valid`, set `SERVICE_REQUIRED_TABLES` from
 names and exclude only explicit deferred rows. Service generation remains
 sequential outside BATCH-METADATA.
 
-For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
+For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create),
+verify its registered service before deciding whether generation is needed.
+Preserve verified unchanged services outside the approved delta. For an approved
+refresh or a service affected by this run's approved schema changes, use
+[Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
+with the exact existing registration. Only an approved missing binding takes
+the add command below. A required unregistered service outside approved scope
+returns `NEEDS_CONTEXT`, not permission to register unrelated tables.
+Do not derive the service list from Creation Order alone because reused tables
+are intentionally absent from creation tiers. The CLI reads the environment ID
+from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
+npx --no-install power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name> --non-interactive
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
@@ -1183,6 +1324,14 @@ and Steps 6c–6d, not by replaying successful schema writes. Recording a reused
 table does not authorize a metadata POST or republish; the existing sample-data
 record-count checks and standard-system-table exclusions still apply.
 
+During an edit with pending removals, preserve retiring entries until the
+removal branch verifies that their app bindings/services are gone. The owner
+then reconciles the final inventory; a shortened plan alone is not cleanup.
+Return the actual created/extended/reused table sets for this invocation to the
+owner; historical manifest status is not `createdThisEdit`. Seeding must use an
+explicit approved allowlist excluding retirements, never this transitional
+inventory as its insertion scope.
+
 ### Step 7 — Inspect generated files
 
 ```text
@@ -1266,7 +1415,10 @@ Fix any errors. Common: missing peer dependencies — `npx expo install <package
 
 A schema change here (new table or new column) can leave an existing Mobile Offline Profile behind — new tables never sync to devices and new columns come down blank. Reconcile the profile with what you just created.
 
-**Skip this step entirely when `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path). `/create-mobile-app`, `/setup-datamodel`, and `/edit-app` own offline reconciliation in their own flow, so running it here too would double-prompt.
+**Skip this step only for a valid scoped orchestrator handoff with
+`--skip-planning`**. `/create-mobile-app`, `/setup-datamodel`, and `/edit-app`
+own offline reconciliation in their own flow, so running it here too would
+double-prompt. The flag alone must not suppress standalone reconciliation.
 
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 
@@ -1325,12 +1477,19 @@ Next:
 
 After printing the summary, **offer one-click sample-data seeding** — but only when invoked manually (not from `/create-mobile-app`, which handles this in its own Step 8.5).
 
-- **If `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path): skip the prompt. The orchestrator invokes `/add-sample-data` separately.
-- **Otherwise (manual invocation)**, if the manifest contains any tables, ask:
+- **For a valid scoped orchestrator handoff with `--skip-planning`**: skip the
+  prompt. The orchestrator invokes `/add-sample-data` separately.
+- **Otherwise (manual invocation)**, propose exact verified, non-retiring seed
+  targets from this operation and a count policy; do not select every table
+  just because it appears in the manifest. Ask:
 
-  > "Seed <N> tables with sample records so the app shows real-looking data on first launch? (yes / no — default: yes)"
+  > "Seed these <N> tables with sample records using the proposed counts? (yes / no)"
 
-  Default to "yes" so empty input auto-proceeds. On "yes", invoke `/add-sample-data`. On "no", print "→ Skipped sample data. Run `/add-sample-data` later to populate." and stop.
+  Only an explicit yes approves seeding. On no/cancel/dismissal, stop without
+  inserts; empty input is not consent. On yes, invoke `/add-sample-data` with the
+  same absolute `--working-dir`, `--tables "<approved-logical-names>"`, and
+  `--exclude-tables "<retiring-logical-names-or-empty>"`. Carry the specific
+  approval forward; do not broaden it if lookups need additional parents.
 
 ## Key Rules
 

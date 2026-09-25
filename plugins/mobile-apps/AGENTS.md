@@ -81,6 +81,52 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 13. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
 14. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
 15. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
+16. **Feature entry points share one edit owner** — Direct native, connector,
+    data-model, and design requests on existing apps ask a lightweight
+    implementation-only/full-integration/cancel question before invoking
+    `/edit-app`. Full integration requires an explicit choice; do not run costly
+    planning or scans just to ask. Approved child calls skip this question and carry invocation-scoped
+    `MOBILE_APP_ORCHESTRATING=1` plus owner, working directory, phase, and approved
+    scope; neither a shell flag nor an existing plan is approval. Follow
+    [`shared/references/app-edit-routing.md`](shared/references/app-edit-routing.md)
+    for the implementation-only escape hatch, conditional Dataverse modeling,
+    operational exceptions, and no-recursion return contract.
+    Native entry/helpers also bind every shell call and file tool to the resolved
+    absolute app root before project/package gates; a parent's `cd` does not
+    persist between calls. Follow Step 0 of
+    [`native-artifact-compatibility.md`](shared/references/native-artifact-compatibility.md).
+17. **Data-source retirement is app-local and CLI-owned** — After approved
+    consumer edits, use the supported removal command to update registrations,
+    schemas, and generated models/services, then regenerate the runtime schema
+    map. Never turn a removed plan row into server-table deletion. Follow
+    [`shared/references/data-source-removal.md`](shared/references/data-source-removal.md)
+    for shared-reference safety, inventory/offline reconciliation, and no-op
+    detection; successful exit alone is insufficient.
+18. **Seed scope is not the schema inventory** — Orchestrated `/add-sample-data`
+    calls pass an approved `--tables` allowlist and the retiring-table exclusions.
+    Lookup fanout, prototype seeds, media uploads, and retries cannot widen that
+    scope. Preserve transitional manifest entries until verified removal; never
+    prune the inventory merely to steer seeding.
+19. **Shared entry policy is not copied into every skill** — Every new public
+    app workflow starts with a read-first link to `shared/shared-instructions.md`
+    and allows `Read`. The shared preflight classifies feature work before
+    operational commands; leaves only link to it. Invocation discovery tests
+    cover newly added skills automatically. These static checks verify the
+    instruction contract, not model compliance; do not claim smaller-model or
+    host reliability without agent-run evidence.
+20. **Offline retirement survives addition checks** — Preserve per-table
+    `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
+    `in-sync` never clears a pending profile decision/migration. App-binding
+    approval is not permission to delete offline profile items or server data.
+21. **Dataverse change planning shares creation's helpers, not its gates** —
+    Setup/edit/standalone proposals use compact hash-bound evidence, required
+    snapshot-only architect context, and decision validation before the owner's
+    existing approval. The same checks apply to diagrams and inline fallbacks.
+    Preapproval environment resolution uses `--no-cache --require-tenant`;
+    never downgrade to the persistent resolver to recover a planning failure.
+    Follow [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
+    Its accepted contract/plan hashes travel in the existing scoped context;
+    do not fabricate the four-approval create-only execution receipt for an edit.
 
 ## Telemetry
 

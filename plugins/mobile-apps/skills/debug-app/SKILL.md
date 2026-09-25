@@ -877,7 +877,7 @@ Apply this gate before D3 whenever the failing stack, module, or export involves
 | `app/` screen file, `_layout.tsx`, route segment | Inline edit via `Edit` tool |
 | `src/components/` | Inline edit via `Edit` tool |
 | `src/hooks/`, `src/services/` | Inline edit via `Edit` tool |
-| `src/generated/` | **Do not edit.** Fix the upstream query or schema and run `npm run generate-schemas` |
+| `src/generated/` | **Do not edit.** Hand off service/model repair to the owning data-source skill using CLI refresh; `npm run generate-schemas` only regenerates the runtime connector map. Do not re-add an intentionally retired source. |
 | Dataverse schema (column/table missing) | Run D2's read-only Dataverse diagnostic sequence first. If live metadata/generated artifacts confirm the schema or service is missing, **hand off** to `/add-dataverse`. Do not mutate Dataverse or edit generated files from `/debug-app`. |
 | Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
@@ -923,7 +923,7 @@ Before applying any recipe, run the first-party native package ownership gate wh
 | Error pattern | Precondition | Action |
 |---|---|---|
 | `SyntaxError: <file>:<line>:<col>` in `app/`, `src/components/`, `src/hooks/`, `src/services/` | The cited line is in editable user code (NOT `src/generated/`, NOT `node_modules/`) | `Read` the file around the cited line (±10 lines), identify the syntactic issue (unclosed JSX tag, missing closing brace/paren, stray comma, missing `from` in import, unterminated string, missing semicolon between statements), apply a single minimal `Edit`. Do NOT reformat surrounding code. |
-| `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
+| `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** For `connectorSchemas.ts`, regenerate the runtime map. For services/models, resolve the existing registration and hand off to `/add-connector` or `/add-dataverse` with `--refresh --data-source-name "<registered-name>"`, the absolute app root, and approved scope for targeted CLI refresh and validation. Check the approved plan first: a removed source needs consumer cleanup through `/edit-app`, not re-registration. Missing/ambiguous registrations block refresh; do not fall back to addition. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
 | `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
 | `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload. Never kill an unowned process. |
@@ -1040,7 +1040,10 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 ## Constraints
 
 - **Never fix native config files** (`app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle`, `gradle.properties`) — report the error to the user with the exact line and a suggested manual action.
-- **Never modify `src/generated/`** — these files are auto-generated. Fix the upstream query / service / schema instead, then run `npm run generate-schemas`.
+- **Never modify `src/generated/`** — these files are auto-generated. The owning
+  data-source skill uses CLI add/refresh/remove for models/services and config;
+  `npm run generate-schemas` only rebuilds the runtime map afterward. Preserve
+  the approved source inventory; do not resurrect retired sources during repair.
 - **Never patch or fork first-party native packages in a customer project** — for confirmed defects in `@microsoft/power-apps-native-*`, do not edit `node_modules/`, generate `patch-package` artifacts or postinstall rewrites, vendor/copy package source, generate or install a fork, replace the dependency with a git/tarball/local path, or add resolver aliases/shims that shadow the package. Route the sanitized evidence to `/report-issue`.
 - **Dataverse diagnosis is read-only** — `/debug-app` may resolve the configured environment and issue bounded Dataverse `GET` requests through the bundled scripts. It must never perform metadata/data writes, publish, seed records, intentionally trigger throttling, invalidate tokens, switch CLI accounts, or replace generated services with direct HTTP.
 - **Do not ask the user about errors mid-cycle** — investigate autonomously using the tools above. Only surface to the user when:

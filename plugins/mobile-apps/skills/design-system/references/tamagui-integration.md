@@ -1,7 +1,8 @@
 # Tamagui Integration
 
-Internal reference used by `/create-mobile-app` Step 9b after `/design-system`
-writes `brand/tokens.ts`. This is not a user-invocable skill.
+Internal reference used by `/create-mobile-app` Step 9b and `/edit-app` Step 5
+after `/design-system` writes approved brand artifacts. This is not a
+user-invocable skill.
 
 The native host owns the baseline Tamagui contract. Generated applications
 must extend that contract rather than copying its semantic aliases, color
@@ -22,6 +23,7 @@ parsing, contrast selection, animations, or font fallback into each app.
 
 | Condition | Action |
 |---|---|
+| Approved design includes a custom dark palette | Apply brand-import mode plus the conditional dark-palette branch below; require its approved artifact and export shape. |
 | `brand/tokens.ts` exists | Apply the brand-import implementation below. |
 | `## Design` requires custom tokens but `brand/tokens.ts` is missing | Materialize the approved tokens first, then use brand-import mode. |
 | No custom design tokens exist | Verify the template calls `createPowerAppsTamaguiConfig({})`; make no config edit. |
@@ -112,15 +114,91 @@ declare module 'tamagui' {
 }
 ```
 
-The generated schema has one palette. Light mode receives its approved
-surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces
-and text while carrying the approved accent and status colors.
+Without an approved custom dark palette, light mode receives the brand palette's
+surfaces, text, accents, and statuses. This default dark branch keeps Config v5
+dark surfaces and text while carrying the approved accent and status colors.
+When custom dark is approved, apply the conditional branch below instead.
 
 Never copy `parseColorChannels`, `readableForeground`, or
 `withSemanticAliases` into the app. The host helper owns those rules.
 
 Never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`,
 `4xl`) onto Tamagui numeric keys. Preserve the default numeric scale.
+
+## Approved dark palette (conditional)
+
+This branch is required for both `/create-mobile-app` Step 9b and `/edit-app`
+Step 5 when the approved design includes a custom dark palette. Without one,
+keep the Brand Import example above unchanged and do not import a nonexistent
+dark file. An unapproved file's presence alone does not authorize wiring it.
+
+`/design-system` writes `brand/tokens.dark.ts` with this exact named export.
+The color keys match `BrandTokens['color']`, but their values are the approved
+dark palette, not the light palette's literal types:
+
+```ts
+import type { BrandTokens } from './tokens';
+
+export const darkTokens = {
+  color: {
+    bg: '{{approved-dark-bg}}',
+    surface: '{{approved-dark-surface}}',
+    primary: '{{approved-dark-primary}}',
+    accent: '{{approved-dark-accent}}',
+    text: '{{approved-dark-text}}',
+    textMuted: '{{approved-dark-text-muted}}',
+    border: '{{approved-dark-border}}',
+    statusSuccess: '{{approved-dark-success}}',
+    statusWarning: '{{approved-dark-warning}}',
+    statusDanger: '{{approved-dark-danger}}',
+    statusInfo: '{{approved-dark-info}}',
+  },
+} as const satisfies { color: { [K in keyof BrandTokens['color']]: string } };
+```
+
+After verifying that artifact, add this import in `tamagui.config.ts` and
+**replace**, do not duplicate, the Brand Import example's `appDarkTheme` declaration:
+
+```ts
+import { darkTokens } from './brand/tokens.dark';
+
+export const appDarkTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.dark,
+  darkTokens.color,
+);
+```
+
+The full dark palette supplies surfaces/text as well as accents/statuses.
+Keep `appLightTheme` sourced from `brandTokens.color`, and keep
+`customConfig.themes.dark: appDarkTheme`. The Root Provider Wiring below must
+map that same resolved `appDarkTheme` into `brandedDarkTheme` and pass it through
+`PowerAppsProvider darkTheme={brandedDarkTheme}`; do not map light tokens there or
+introduce a parallel theme registry/provider. Include any requested switch UI in
+the owner's approved screen scope.
+
+Missing files, missing exports/keys, or unresolved placeholder values block
+custom-dark integration. Do not silently fall back to default dark surfaces
+and report the approved palette as applied. Return the mismatch to the owner.
+
+## Restored dark state
+
+For refresh or rollback, first follow
+[the snapshot contract](./refresh-flow.md#snapshot-contract) and reconcile the
+Design plan with the resulting approved state. Do not choose a branch from the
+mere presence of `brand/tokens.dark.ts` or the abandoned newer plan.
+
+- **Approved custom dark restored:** verify the exact restored `darkTokens`
+  artifact, then apply the conditional branch above so `appDarkTheme` consumes
+  the restored `darkTokens.color`, not the previous palette.
+- **Default dark restored or custom dark removed:** remove only stale
+  `tokens.dark` imports and custom-dark overrides from the theme configuration.
+  Use the unchanged Brand Import default dark declaration, retaining Config v5
+  dark surfaces/text and approved light-brand accents/statuses. Do not import or
+  create an absent dark file, and do not delete unrelated theme customizations.
+- **Both branches:** rebuild `brandedDarkTheme` from the same resolved
+  `appDarkTheme` using Root Provider Wiring below, preserving unrelated provider
+  props, and perform the validation below. Artifact-only callers must return
+  this runtime dependency to their owner, not claim the app already uses it.
 
 ## Root Provider Wiring
 
@@ -203,3 +281,11 @@ npx tsc --noEmit
 Also verify that `tamagui.config.ts` contains no local color parser or semantic
 alias implementation and that both provider themes map every
 surface/text/accent value from `appLightTheme` / `appDarkTheme`.
+For the custom-dark branch, also verify the `darkTokens` import, that
+`appDarkTheme` consumes `darkTokens.color`, and that the resolved dark
+surface/text values reflect the approved palette rather than the light/default
+palette. A generated dark file alone does not satisfy this integration check.
+After restoring default dark, verify there is no stale `tokens.dark` import or
+custom-dark override and the provider reflects the base dark branch. Runtime
+verification belongs to the owning create/edit flow; instruction-contract tests
+alone are not native rendering evidence.

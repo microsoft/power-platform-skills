@@ -9,6 +9,11 @@ model: sonnet
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 # Add Geolocation
 
 Internal helper for `/add-native geolocation`, `/add-native location-tracking`, `/add-native background-location`, `/add-native gps-tracking`, and `/add-native @microsoft/power-apps-native-bglocation`.
@@ -25,7 +30,8 @@ Hard rules:
 ## 1. Verify app and package
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
 ```
 
@@ -42,6 +48,7 @@ msdyn_locationrecords
 Do not ask the user for a table name and do not invent a custom table. `msdyn_locationrecords` must already exist before the control can be used.
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e "console.log(require('./power.config.json').environmentId)")")
 ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.environmentUrl || '')" "$ENV_JSON")
 
@@ -58,6 +65,7 @@ Required result:
 When the table exists, verify every mapped column exists:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "EntityDefinitions(LogicalName='<logicalName>')/Attributes?\$select=LogicalName,AttributeType"
 ```
@@ -71,9 +79,25 @@ msdyn_altitude, msdyn_accuracy, msdyn_heading, msdyn_speed, msdyn_timestamp
 
 If any active `fieldMap` column is missing, stop. Mark `BLOCKED (target columns missing)` and tell the user to fix the control table through the geolocation-control table provisioning/setup mechanism.
 
+## 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the geolocation row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/geolocation.ts` for all requested tracking/status/location
+exports, `GeoTrackingTarget`, MSAL-only `geoService`/`BgLocationClient`, required
+`connectionUrl`/`trackInBackground`/`persistAcrossRestarts`, durable storage, and
+Dataverse sync. Reuse Step 2's verified `msdyn_locationrecords` columns; one-shot
+location or a wrapper targeting another table is not compatible. An incompatible
+artifact outside approval returns `NEEDS_CONTEXT` to the owner, or asks standalone;
+missing table/columns remain `BLOCKED`, never a usable-control success.
+
 ## 3. Write `src/native/geolocation.ts`
 
-Create or patch `src/native/geolocation.ts` so screens import this wrapper, not the package directly.
+Apply Step 2a's decision for `src/native/geolocation.ts`: create when requested
+and missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom code, exports, and callers; do not overwrite from the
+example. Screens import this wrapper, not the package directly.
 
 The target config must require the README's two tracking flags:
 - `trackInBackground: boolean`
@@ -181,6 +205,8 @@ export async function getCurrentLocation(): Promise<GeoResult<LocationData>> {
 
 ## 4. Usage shape
 
+Integration guidance for the owner; do not edit screens in this helper.
+
 Screens must pass `connectionUrl`, `trackInBackground`, and `persistAcrossRestarts`. Do not pass `tableName` or `fieldMap`; the control uses the default `msdyn_locationrecords` table and default `msdyn_*` field map. `intervalMs`, `distanceFilterMeters`, and `notification` are optional.
 
 ```ts
@@ -196,10 +222,16 @@ await startTracking('my-wrap-app', target);
 ## 5. Type-check and summary
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
-Only after table + columns are verified and TypeScript passes, report:
+Execute the shared compatibility contract's Step 4 after type-checking. Recheck
+all requested tracking APIs/flags, MSAL auth, durable storage/sync, and failure
+paths. Type-check success alone is insufficient; do not fix screen/generated
+files. Only after the requested artifact contract, table + columns, and
+TypeScript all pass, return the shared compatibility result and actual
+created/updated/reused paths before reporting:
 
 ```text
 Geolocation status : READY
