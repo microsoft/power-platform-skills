@@ -751,6 +751,18 @@ test('cast type arguments reach their `as` through intersections and unions, and
   assert.equal(hasDefaultExport(direct), true);
   assert.equal(endsMidStatement(direct), false);
   assert.equal(endsMidStatement(`type Value = number | undefined;\n${d}export default () => total as Value extends undefined ? 0 : NonNullable<Value> / count /`), true);
+  // Each part of the conditional may be a union: the true branch, the constraint, the checked type.
+  const vd = `type Value = number | undefined;\n${d}`;
+  for (const [label, code] of Object.entries({
+    'a union true branch': `${vd}const label = \`\${total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`,
+    'a union constraint': `${vd}const label = \`\${total as Value extends string | undefined ? 0 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`,
+    'a union checked type': `${vd}const label = \`\${total as number | Value extends undefined ? 0 : NonNullable<Value> / count}\`;\nexport default () => null;`,
+  })) {
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
+  assert.equal(endsMidStatement(`${vd}export default () => total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count /`), true);
+  assert.deepEqual(navReferencedKeys(`${vd}const m = \`\${total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count / 2 ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}\`;\nexport default () => null;`), ['details']);
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {

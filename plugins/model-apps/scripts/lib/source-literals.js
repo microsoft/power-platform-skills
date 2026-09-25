@@ -151,6 +151,17 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     const s = skipName(r);
     return s === r ? null : s;
   };
+  // Steps back over a union or intersection of constituents that ends at `r` (`0 | 1`, `string | undefined`), for the
+  // parts of a conditional type. Returns the index before it, or null.
+  const skipCompound = (r) => {
+    let s = skipConstituent(r);
+    while (s !== null) {
+      const q = skipSpace(s);
+      if (!((src[q] === '&' || src[q] === '|') && src[q - 1] !== src[q])) return s;
+      s = skipConstituent(skipSpace(q - 1));
+    }
+    return null;
+  };
   // The head, the name the `<` belongs to. TypeScript attaches type arguments only to a plain (qualified) type name on
   // the same line as the `<`. An indexed type (`Row[Key] <`), a literal (`0 | 1 <`), a primitive or `this`, or a line
   // break before the `<` (`as Count` then `< high` on the next line) makes that `<` a comparison.
@@ -171,19 +182,20 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
       p = r;
       continue;
     }
-    // A conditional type's false branch: `as V extends U ? 0 : NonNullable<V> / count`. Step back over the true branch,
-    // its `?`, the extends type and `extends` itself, to the checked type. A ternary or an object property has no
-    // `extends` before its `?`, so the walk refuses it here.
+    // A conditional type's false branch: `as V extends U ? 0 | 1 : NonNullable<V> / count`. Step back over the true
+    // branch, its `?`, the extends type and `extends` itself, to the checked type. Each part may be a union or an
+    // intersection. A ternary or an object property has no `extends` before its `?`, so the walk refuses it here, and
+    // so it does a nested conditional or a parenthesized type inside a branch.
     if (op === ':' && src[q - 1] !== ':') {
-      let r = skipConstituent(skipSpace(q - 1));
+      let r = skipCompound(skipSpace(q - 1));
       if (r === null) return false;
       r = skipSpace(r);
       if (src[r] !== '?' || src[r - 1] === '?') return false;
-      r = skipConstituent(skipSpace(r - 1));
+      r = skipCompound(skipSpace(r - 1));
       if (r === null) return false;
       const { s, w } = wordEndingAt(skipSpace(r));
       if (w !== 'extends') return false;
-      r = skipConstituent(skipSpace(s));
+      r = skipCompound(skipSpace(s));
       if (r === null) return false;
       p = r;
       continue;
