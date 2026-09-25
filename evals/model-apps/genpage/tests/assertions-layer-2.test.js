@@ -235,7 +235,7 @@ test('no TODO: pass when spreads exist (...props is fine)', () => {
   assert.equal(result.status, 'pass');
 });
 
-test('no TODO: fail on executable template elision while allowing legal multiline spread', () => {
+test('no TODO: fail on executable template elision and bare-line multiline spread', () => {
   const check = ASSERTIONS.get('Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies');
   const spread = ['const rows = [1, 2];', 'const copy = [', '  ...', '  rows', '];'].join('\n');
   const template = [
@@ -246,7 +246,9 @@ test('no TODO: fail on executable template elision while allowing legal multilin
     '  return null;',
     '};',
   ].join('\n');
-  assert.equal(check({ files: [f('spread.tsx', spread)], eval: evalStub() }).status, 'pass');
+  // Documented limit: a line holding only `...` fails closed as a placeholder. Generators should
+  // write multiline spread as `...rows` on one line.
+  assert.equal(check({ files: [f('spread.tsx', spread)], eval: evalStub() }).status, 'fail');
   const blockElision = ['export default function GeneratedComponent() {', '  ...', '  renderRows();', '  return null;', '}'].join('\n');
   assert.equal(check({ files: [f('template.tsx', template)], eval: evalStub() }).status, 'fail');
   assert.equal(check({ files: [f('block.tsx', blockElision)], eval: evalStub() }).status, 'fail');

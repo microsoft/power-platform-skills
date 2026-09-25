@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition } = require('../lib/source-literals.js');
+const { navReferencedKeys } = require('../lib/pageref-resolver.js');
 
 // The TypeScript parser the lexer's review snippets are checked against. The plugin ships dependency-free, so a
 // checkout has none: point TYPESCRIPT_ORACLE_PATH at a `typescript` package to run that check, skipped otherwise.
@@ -564,29 +565,42 @@ test('endsMidStatement distinguishes dangling operators from postfix and JSX or 
   }
 });
 
-test('findElisionMarker distinguishes legal multiline spread from elision in executable template bodies', () => {
-  const legalSpread = [
-    'const rows = [1, 2];',
-    'const copy = [',
-    '  ...',
-    '  rows',
-    '];',
-    'const GeneratedComponent = () => copy.length ? null : null;',
-    'export default GeneratedComponent;',
-  ].join('\n');
-  assert.equal(findElisionMarker(legalSpread), null);
-  assert.match(findElisionMarker('const rows = [\n  ...\n];') || '', /bare `\.\.\.` line/);
-  assert.match(findElisionMarker('export default function GeneratedComponent() {\n  ...\n  renderRows();\n  return null;\n}') || '', /bare `\.\.\.` line/);
-  const executableTemplateBody = [
-    'const GeneratedComponent = () => {',
-    '  const title = `${(() => {',
-    '    ...',
-    '  })()}`;',
-    '  return null;',
-    '};',
-    'export default GeneratedComponent;',
-  ].join('\n');
-  assert.match(findElisionMarker(executableTemplateBody) || '', /bare `\.\.\.` line/);
+test('findElisionMarker treats any bare ellipsis line as elision, even parser-valid multiline spread', () => {
+  // Documented limit: without a full parser, a line containing only `...` can be either a legal
+  // multiline spread/rest or an elided block. The gate fails closed; generators should write
+  // `...rows` on one line instead.
+  for (const [what, code] of [
+    ['multiline array spread', [
+      'const rows = [1, 2];',
+      'const copy = [',
+      '  ...',
+      '  rows',
+      '];',
+      'const GeneratedComponent = () => copy.length ? null : null;',
+      'export default GeneratedComponent;',
+    ].join('\n')],
+    ['multiline object spread', 'const base = { title: "Ready" };\nconst copy = {\n  ...\n  base\n};\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['multiline call spread', 'const rows = [1, 2];\ncollect<number>(\n  ...\n  rows\n);\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['multiline optional call spread', 'const rows = [1, 2];\ncollect?.(\n  ...\n  rows\n);\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['multiline non-null call spread', 'const rows = [1, 2];\ncollect!(\n  ...\n  rows\n);\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['rest-parameter arrow with return type', 'const f = (\n  ...\n  args\n): number => args.length;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['ternary object spread', 'const copy = ready ? { a: 1,\n  ...\n  base\n} : {};\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['case block elision', 'switch (kind) {\n  case 1: {\n    ...\n    renderRows();\n  }\n}\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['array ternary elision', 'const rows = [ready ?\n  ...\n  rows : []];\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;'],
+    ['executable template elision', [
+      'const GeneratedComponent = () => {',
+      '  const title = `${(() => {',
+      '    ...',
+      '  })()}`;',
+      '  return null;',
+      '};',
+      'export default GeneratedComponent;',
+    ].join('\n')],
+  ]) {
+    assert.match(findElisionMarker(code) || '', /bare `\.\.\.` line/, what);
+  }
+  assert.equal(findElisionMarker('const { a, ...rest } = o;\nexport default rest;'), null, 'same-line object rest remains ordinary code');
+  assert.equal(findElisionMarker('const rows = [...items];\nexport default rows;'), null, 'same-line array spread remains ordinary code');
 });
 
 test('TypeScript parser oracle documents lexer review snippets and adversarial neighbours', (t) => {
@@ -637,41 +651,37 @@ test('TypeScript parser oracle documents lexer review snippets and adversarial n
   assertTsRejects(oracle, 'const x = a >', /Expression expected/, 'dangling relational greater-than is not TypeScript');
 });
 
-test('findElisionMarker follows parser-valid spread and rest contexts only', () => {
-  const accepted = {
-    'object spread after object literal open': [
-      'const base = { title: "Ready" };',
-      'const copy = {',
-      '  ...',
-      '  base',
-      '};',
-      'const GeneratedComponent = () => null;',
-      'export default GeneratedComponent;',
-    ].join('\n'),
-    'object rest destructuring': 'const { a, ...rest } = o;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
-    'array spread': 'const rows = [1, 2];\nconst copy = [\n  ...\n  rows\n];\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
-    'call spread': 'const args = [1, 2];\nconst copy = fn(\n  ...\n  args\n);\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
-    'arrow rest params': 'const f = (\n  ...\n  args\n) => args.length;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
-  };
-  for (const [label, code] of Object.entries(accepted)) assert.equal(findElisionMarker(code), null, label);
-  const rejected = {
-    'block elision': 'export default function GeneratedComponent() {\n  ...\n  renderRows();\n  return null;\n}',
-    'grouping parens do not allow spread': 'const GeneratedComponent = () => (\n  ...\n  renderRows()\n);\nexport default GeneratedComponent;',
-  };
-  for (const [label, code] of Object.entries(rejected)) assert.match(findElisionMarker(code) || '', /bare `\.\.\.` line/, label);
+test('navigation regex after relational greater-than remains visible', () => {
+  const code = 'const marker = `${lo<hi && count > /}/.source.length ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;';
+  assert.deepEqual(navReferencedKeys(code), ['details']);
 });
 
-test('endsMidStatement accepts parser-complete generic and type tails but rejects dangling relational operators', () => {
-  const complete = {
+test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {
+  // Documented limit: without a full parser, a final `>` can be a type-argument close or the end
+  // of a relational expression. Only recorded JSX tag closes finish a file; type-argument tails need
+  // a semicolon.
+  const incomplete = {
     'generic instantiation default export at EOF': 'function Page<T>() { return null; }\nexport default Page<string>',
+    'generic instantiation with trivia before type arguments': 'function Page<T>() { return null; }\nexport default Page /* c */ <string>',
     'type alias with nested type arguments at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Record<string, Array<number>>',
-    'nested type arguments before division in a template': 'const total = 12, count = 2;\nconst label = `${total as Record<string, Array<number>> / count}/month`;\nexport default label;',
+    'type alias with object type argument at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Array<{ id: string; label: string }>',
+    'generic-looking arrow expression at EOF': 'export default () => a<b + c>',
+  };
+  for (const [label, code] of Object.entries(incomplete)) assert.equal(endsMidStatement(code), true, label);
+  assert.equal(endsMidStatement('function Page<T>() { return null; }\nexport default Page<string>;'), false, 'semicolon makes the documented limit explicit');
+  assert.equal(endsMidStatement('const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Array<{ id: string; label: string }>;'), false, 'semicolon makes a type alias complete');
+  assert.equal(endsMidStatement('const x = a >'), true, 'dangling relational greater-than still needs a right operand');
+  assert.equal(endsMidStatement('const x = a < b > c'), false, 'a complete relational chain is an operand');
+});
+
+test('cast and annotation type arguments still make a following slash division', () => {
+  const complete = {
+    'cast type arguments before division in a template': 'const total = 12, count = 2;\nconst label = `${total as Record<string, Array<number>> / count}/month`;\nexport default label;',
+    'annotation type arguments before division': 'const total: Record<string, Array<number>> = {};\nconst label = total / count;\nexport default label;',
     'non-null assertion at EOF': 'const x = y!;\nexport default x!',
     'non-null assertion before division at EOF': 'const z = x! / y;\nexport default z',
   };
   for (const [label, code] of Object.entries(complete)) assert.equal(endsMidStatement(code), false, label);
-  assert.equal(endsMidStatement('const x = a >'), true, 'dangling relational greater-than still needs a right operand');
-  assert.equal(endsMidStatement('const x = a < b > c'), false, 'a complete relational chain is an operand');
 });
 
 test('template expression slash classification handles multiline and nested type arguments', () => {

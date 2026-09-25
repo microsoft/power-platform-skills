@@ -228,11 +228,13 @@ downloads that round-trip Choice columns.
   read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
   a comment right before JSX or a regex, and a `/` after a property named like a keyword
   (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
-  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines), a spread
-  whose operand is on the next line (in an object too), and a file that ends in a member export such
-  as `export default pages.Home`, a generic (`export default Page<string>`, a `type` alias) or a
-  self-closing element with a callback prop. A spread inside grouping parentheses, which TypeScript
-  rejects, is now caught as the placeholder it is. The same checks back `/genpage`'s new gate.
+  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines), and a
+  file that ends in a member export such as `export default pages.Home` or a self-closing element
+  with a callback prop. Two shapes the text alone cannot tell from a cut-off page are refused on
+  purpose, and the page rules tell workers to avoid them: a line holding only `...` is always a
+  placeholder, even where TypeScript would read a spread of the next line, and a file whose last
+  statement ends in type arguments (`export default Page<string>`, a `type` alias) needs its `;`.
+  The same checks back `/genpage`'s new gate.
 - **A page's display name reaches the upload by file** ([#588]). `genpage-upload.js` takes `--name-file`, and
   `/genpage` writes the name to a file as it does the prompt: substituted into `--name "<name>"`, a shell expanded
   `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.

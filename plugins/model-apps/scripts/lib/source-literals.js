@@ -78,11 +78,15 @@ function isPropertyName(src, s) {
 
 // Heuristic for the ambiguous `>` token in dependency-free TSX scanning. The raw shapes this protects:
 //   total as NonNullable< number > / count    `>` closes a cast type argument; `/` is division
-//   export default Page<string>               `>` closes a generic instantiation; EOF is complete
-//   type Rows = Record<string, Array<number>> `>` closes a type-alias RHS; EOF is complete
 //   export default () => <Icon />             `>` closes JSX; EOF is complete
 //   export default () => count >              `>` is a relational operator; EOF is truncated
 //   count<limit ? () => /re/ : () => /none/   the `>` in `=>` is not an angle close
+//
+// Dependency-free text cannot safely tell a generic instantiation or type-alias tail from a
+// relational expression in all TSX contexts. So expression classification is intentionally narrow:
+// `/` after `>` divides only when `>` closes type arguments in a cast/annotation context (`as`,
+// `satisfies`, or `: Foo<Bar>`). EOF handling is even stricter below: a final `>` completes only
+// when the lexer recorded it as a JSX tag close, and a final type-argument list needs `;`.
 function greaterThanEndsOperand(src, close) {
   if (src[close - 1] === '=') return false;
   return greaterThanClosesTypeArguments(src, close) || greaterThanClosesJsxTag(src, close);
@@ -91,7 +95,7 @@ function greaterThanEndsOperand(src, close) {
 function greaterThanClosesTypeArguments(src, close) {
   const open = matchingTypeArgumentOpen(src, close);
   if (open === -1) return false;
-  return typeArgumentOpenFollowsCastOrAnnotation(src, open) || typeArgumentOpenFollowsIdentifier(src, open);
+  return typeArgumentOpenFollowsCastOrAnnotation(src, open);
 }
 
 function matchingTypeArgumentOpen(src, close) {
@@ -120,15 +124,6 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
   return before === 'as' || before === 'satisfies' || before === ':';
 }
 
-function typeArgumentOpenFollowsIdentifier(src, open) {
-  // Generic instantiation and type-alias RHS shapes put `<` immediately after the type name:
-  //   export default Page<string>
-  //   type Rows = Record<string, Array<number>>
-  // A relational chain with spacing (`a < b > c`) is not this shape, so its final `>` remains an
-  // operator. The no-whitespace requirement is deliberate; it keeps expression comparisons from
-  // becoming "generic" just because the right operand happens to look like a type name.
-  return /[\p{ID_Continue}$\])]/u.test(src[open - 1] || '');
-}
 
 function prevWordOrPunct(src, before) {
   let p = before - 1;
@@ -932,7 +927,7 @@ function endsMidStatement(code) {
 
 function hasDanglingFinalOperator(out, regexEnds, jsxTagEnds) {
   const { ch, index } = prevSignificant(out, out.length);
-  if (ch === '>') return !jsxTagEnds.has(index) && !greaterThanEndsOperand(out, index);
+  if (ch === '>') return !jsxTagEnds.has(index);
   if (ch === '/') return !regexEnds.has(index);
   if (ch === '!') return expressionPosition(out, index);
   return false;
@@ -989,84 +984,17 @@ function findElisionMarker(code) {
     if (/\bomitted for brevity\b/i.test(body)) return 'a comment that elides code ("omitted for brevity")';
   }
   // Comments and strings are blanked here, but executable `${...}` template bodies are kept: an
-  // ellipsis inside an IIFE in a template is code, not template text. A bare `...` followed by an
-  // operand on a later line is a legal multiline spread (`[ ... rows ]`), while EOF or a closing
-  // delimiter means the generator left a placeholder.
+  // ellipsis inside an IIFE in a template is code, not template text. A line holding only `...`
+  // always fails closed as a placeholder. The text alone cannot reliably distinguish every legal
+  // multiline spread/rest from an elided block without a full parser, so generated code must write
+  // the spread and operand together: `...rows`, not `...` followed by `rows` on the next line.
   if (bareEllipsisElidesCode(blankNonCodePreservingTemplateExpressions(src))) return 'a bare `...` line standing in for code';
   return null;
 }
 
 function bareEllipsisElidesCode(mask) {
-  const line = /^[ 	]*(\.\.\.|…)[ 	]*$/gm;
-  let m;
-  while ((m = line.exec(mask)) !== null) {
-    let k = line.lastIndex;
-    while (k < mask.length && /\s/.test(mask[k])) k += 1;
-    if (!ellipsisContextAllowsOperand(mask, m.index) || k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
-  }
-  return false;
+  return /^[ 	]*(\.\.\.|…)[ 	]*$/m.test(mask);
 }
-
-function ellipsisContextAllowsOperand(mask, index) {
-  const context = innermostDelimiter(mask, index);
-  if (!context) return false;
-  if (context.ch === '[') return true;
-  if (context.ch === '{') return braceAllowsBareEllipsis(mask, context.index);
-  if (context.ch === '(') return parenAllowsBareEllipsis(mask, context.index, index);
-  return false;
-}
-
-function innermostDelimiter(mask, end) {
-  const stack = [];
-  const pairs = { ')': '(', ']': '[', '}': '{' };
-  for (let k = 0; k < end; k += 1) {
-    const c = mask[k];
-    if (c === '(' || c === '[' || c === '{') stack.push({ ch: c, index: k });
-    else if (pairs[c]) {
-      for (let j = stack.length - 1; j >= 0; j -= 1) {
-        if (stack[j].ch === pairs[c]) { stack.length = j; break; }
-      }
-    }
-  }
-  return stack[stack.length - 1] || null;
-}
-
-function braceAllowsBareEllipsis(mask, open) {
-  // A bare-line `...` is valid inside object literals and binding patterns:
-  //   const copy = { ... base }
-  //   const { a, ... rest } = row
-  // but the same raw line inside a statement block is an elision placeholder:
-  //   function GeneratedComponent() { ... renderRows(); }
-  const before = prevSignificant(mask, open);
-  if (before.ch === '=' || before.ch === ':' || before.ch === '(' || before.ch === '[' || before.ch === ',') return true;
-  const { word } = wordBefore(mask, open);
-  return word === 'const' || word === 'let' || word === 'var' || word === 'return';
-}
-
-function parenAllowsBareEllipsis(mask, open, index) {
-  // Calls and arrow-parameter lists allow multiline spread/rest:
-  //   fn( ... args )
-  //   (... args) => args.length
-  // A grouping expression after an arrow does not:
-  //   () => ( ... renderRows() )
-  const before = prevSignificant(mask, open).ch;
-  if (/[\p{ID_Continue}$\])}]/u.test(before)) return true;
-  const close = matchingParenAfter(mask, open, index);
-  if (close === -1) return false;
-  let k = close + 1;
-  while (k < mask.length && /\s/.test(mask[k])) k += 1;
-  return mask[k] === '=' && mask[k + 1] === '>';
-}
-
-function matchingParenAfter(mask, open, from) {
-  let depth = 1;
-  for (let k = Math.max(open + 1, from); k < mask.length; k += 1) {
-    if (mask[k] === '(') depth += 1;
-    else if (mask[k] === ')' && --depth === 0) return k;
-  }
-  return -1;
-}
-
 function ellipsisFollowedByStatement(mask, k) {
   if (!/[\w$]/.test(mask[k])) return false;
   let j = k;
