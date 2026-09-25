@@ -217,13 +217,30 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // the workspace is read once more when the build returns: a generation that moved means a teardown or another
   // build ran alongside this one, so what this build made may already be partly deleted, and the run fails
   // rather than report a success nothing can vouch for.
+  //
+  // With no snapshot at all there is no generation to compare: a teardown that begins AND finishes during the
+  // build writes its tombstone and deletes it on release, so "none" before and "none" after hid it. So the run
+  // first claims a placeholder, which gives it a generation of its own (claimBaselineSnapshot: ineligible,
+  // debt-free, "no baseline yet"), and drops it again afterwards if it is still that placeholder, so this path
+  // still leaves no snapshot behind.
   if (!live) {
     const genOf = (s) => (s && s.generation) || null;
-    const before = genOf(store.readSnapshot(ws));
+    let before = genOf(store.readSnapshot(ws));
     if (before !== genOf(snapshot)) {
       const msg = 'changed-only: the workspace changed while the live identity was being resolved (a teardown or another build started) — re-run the build once it has finished';
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace changed during identity discovery' } };
+    }
+    let claimed = null;
+    if (before === null) {
+      const claim = store.claimBaselineSnapshot(ws, {});
+      if (!claim.ok) {
+        const msg = `changed-only: could not claim the workspace before the build (${claim.reason}) — aborting before any change`;
+        log(`✗ ${msg}`);
+        return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace could not be claimed' } };
+      }
+      claimed = claim.generation;
+      before = claimed;
     }
     log('▸ changed-only: could not resolve live identity (WhoAmI/app discovery) — running a normal full build');
     const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);
@@ -231,6 +248,10 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       const msg = 'changed-only: the workspace changed while this build ran (a teardown or another build ran alongside it), so what it built may already be partly deleted — re-run the build once that has finished';
       log(`✗ ${msg}`);
       return { ...r, ok: false, errors: [...((r && r.errors) || []), msg], changedOnly: { decision: 'full', reason: 'the workspace changed during the build' } };
+    }
+    if (claimed) {
+      const dropped = store.dropBaselineClaim(ws, claimed);
+      if (!dropped.ok) log(`▸ changed-only: the placeholder this build claimed was left in place (${dropped.reason}); it is ineligible, so the next run still builds in full`);
     }
     return { ...r, changedOnly: { decision: 'full', reason: 'no live identity' } };
   }

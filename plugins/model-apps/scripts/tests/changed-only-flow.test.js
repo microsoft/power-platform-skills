@@ -544,6 +544,57 @@ test('run: the no-identity fallback fails when the workspace changed while the b
   } finally { rm(dir); }
 });
 
+// With no snapshot there was no generation to compare: a teardown that began AND finished during the build wrote its
+// tombstone and deleted it on release, and "none" before and after hid it. The run claims a placeholder first, and
+// drops it afterwards when nothing raced, so this path still leaves no snapshot behind.
+test('run: the no-identity fallback on a workspace with no snapshot sees a teardown that came and went during the build', async () => {
+  const dir = ws();
+  try {
+    const record = [];
+    const build = async (spec, opts) => {
+      record.push(opts.phases);
+      assert.ok(store.readSnapshot(dir), 'the build runs under the placeholder the run claimed');
+      const t = store.tombstoneSnapshot(dir);
+      assert.deepStrictEqual(store.releaseTombstone(dir, t.teardownId), { ok: true, deleted: true }, 'precondition: the teardown finished and deleted its tombstone');
+      return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+    };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(record.length, 1);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/);
+  } finally { rm(dir); }
+  // CONTROL: nothing raced — the build's result stands, and the placeholder is gone again.
+  const quiet = ws();
+  try {
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: quiet, apply: true }, deps: baseDeps(quiet, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual(store.readSnapshot(quiet), null, 'no snapshot is left behind');
+  } finally { rm(quiet); }
+  // A claim that cannot be made (another writer holds the lease) stops the run before it builds anything.
+  const busy = ws();
+  try {
+    fs.writeFileSync(store.leasePath(busy), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: busy, apply: true }, deps: baseDeps(busy, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /could not claim the workspace before the build/);
+    assert.strictEqual(record.length, 0, 'nothing is built');
+  } finally { rm(busy); }
+});
+
+test('dropBaselineClaim removes only the placeholder it was given', () => {
+  const dir = ws();
+  try {
+    const claim = store.claimBaselineSnapshot(dir, {});
+    assert.strictEqual(claim.ok, true);
+    assert.strictEqual(store.dropBaselineClaim(dir, 'another-generation').ok, false, 'not a placeholder this run claimed');
+    assert.ok(store.readSnapshot(dir), 'so it stays');
+    assert.deepStrictEqual(store.dropBaselineClaim(dir, claim.generation), { ok: true });
+    assert.strictEqual(store.readSnapshot(dir), null);
+    assert.strictEqual(store.dropBaselineClaim(dir, claim.generation).ok, false, 'nothing left to drop');
+  } finally { rm(dir); }
+});
+
 // A tombstone no teardown still holds — one that failed, or a day old — does not block: the build runs, and
 // the tombstone's debt keeps its baseline ineligible, as it always did.
 test('run: a tombstone no teardown still holds only makes the baseline ineligible', async () => {

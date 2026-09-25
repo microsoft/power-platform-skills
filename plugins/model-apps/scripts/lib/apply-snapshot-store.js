@@ -455,6 +455,27 @@ function claimBaselineSnapshot(workspaceDir, identity, deps = {}) {
   }
 }
 
+// Undo claimBaselineSnapshot for a run that writes no baseline over its placeholder (the changed-only
+// no-identity fallback, which claims one only to have a generation to compare after its build). Deletes the
+// placeholder under the lease, and only while it is still the one this run claimed: anything else there now —
+// a teardown's tombstone, another build's baseline — belongs to someone else and stays. Best-effort: a
+// placeholder left behind is ineligible and debt-free, exactly "no baseline yet". Returns { ok, reason? }.
+function dropBaselineClaim(workspaceDir, generation, deps = {}) {
+  let lease;
+  try { lease = acquireLease(workspaceDir, deps); } catch (e) { return { ok: false, reason: `drop failed: ${e.message}` }; }
+  if (!lease.ok) return { ok: false, reason: `snapshot lease unavailable (${lease.reason})` };
+  try {
+    const disk = readSnapshot(workspaceDir);
+    if (!disk || disk.generation !== generation) return { ok: false, reason: 'the snapshot is no longer the placeholder this run claimed' };
+    fs.rmSync(snapshotPath(workspaceDir), { force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: `drop failed: ${e.message}` };
+  } finally {
+    releaseLease(lease);
+  }
+}
+
 // Undo tombstoneSnapshot's folder creation after a clean teardown: remove the folders it created, deepest
 // first, up to and including `createdDir`. rmdir — never a recursive rm — so a folder that is no longer
 // empty (a build started meanwhile and wrote into it) is left alone, and so is every folder above it. A
@@ -600,6 +621,7 @@ module.exports = {
   invalidateSnapshot,
   tombstoneSnapshot,
   claimBaselineSnapshot,
+  dropBaselineClaim,
   removeCreatedDir,
   plainPath,
   deleteSnapshot,
