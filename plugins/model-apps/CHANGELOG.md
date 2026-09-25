@@ -200,7 +200,8 @@ downloads that round-trip Choice columns.
 - **Solution packaging checks every connection reference before changing anything** ([#585]). A
   missing reference used to fail after the app and pages had already been added to the solution.
 - **Connections without both ids are no longer offered for binding** ([#585]). A listing where no row
-  has a connection and a connector id is an error, not "no connections".
+  has a connection and a connector id is an error, not "no connections" — in every table layout PAC
+  prints, including a connection row that matches none of its columns.
 - **Right-to-left layout follows PAC's RTL column** ([#585]), not a list of six Arabic and Hebrew
   LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
 - **Re-running the manifest generator with a new feature no longer reports success over a stale
@@ -229,7 +230,8 @@ downloads that round-trip Choice columns.
   or not a regular file, a folder that links outside the working directory or cannot be read, and
   names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
   already there) halt the build, as does a new page that is an already-built one reached through a link
-  or junction. The same rule covers the pages `/app-builder` generates — which now
+  or junction, or a working directory that is a link or not a folder at all. The same rule covers the
+  pages `/app-builder` generates — which now
   runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
   cannot be read fails its check instead of crashing it.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy

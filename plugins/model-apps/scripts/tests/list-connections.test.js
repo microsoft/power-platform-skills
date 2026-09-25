@@ -169,6 +169,28 @@ test('parses current PAC Id/Name/API Id/Status output without a separator row', 
   ]);
 });
 
+// A row that does not match the Id/Name/API Id shape is kept as a row with no ids: when every row fails to
+// match (a changed column layout, say) the listing fails closed instead of reading as "no connections", and
+// beside a usable row it is dropped — never offered as a connection.
+test('an Id/Name/API Id listing with no row carrying both ids fails closed', () => {
+  const header = 'Id                               Name                                API Id                                                              Status';
+  // Connection rows read wrong: each carries a connector's API path but not the columns around it.
+  assert.throws(() => parsePacConnectionList([header, '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', 'Contoso /providers/Microsoft.PowerApps/apis/shared_office365'].join('\n')),
+    /Id\/Name\/API Id table contained 2 row\(s\), but no usable connection rows/);
+  // A line with no API path is no connection: a message under the header is still an empty listing.
+  assert.deepEqual(parsePacConnectionList([header, 'No connections found.'].join('\n')), []);
+  // A Status of several words, or none, still parses.
+  const status = (s) => `00000000000000000000000000000001 Contoso Dataverse                   /providers/Microsoft.PowerApps/apis/shared_commondataservice${s}`;
+  for (const s of ['        Not connected', '']) {
+    assert.deepEqual(parsePacConnectionList([header, status(s)].join('\n')).map((r) => r.connectionId), ['00000000000000000000000000000001'], JSON.stringify(s));
+  }
+  const mixed = [header,
+    '00000000000000000000000000000001 Contoso Dataverse                   /providers/Microsoft.PowerApps/apis/shared_commondataservice        Connected',
+    '(wrapped name tail)'].join('\n');
+  assert.deepEqual(parsePacConnectionList(mixed).map((r) => r.connectionId), ['00000000000000000000000000000001']);
+  assert.deepEqual(parsePacConnectionList(header), [], 'a header with no rows is still an empty listing');
+});
+
 test('header matching is case- and punctuation-insensitive', () => {
   // normalizeHeader strips non-alphanumerics and lower-cases, so "Connection Id", "connectionId"
   // and "CONNECTION-ID" are the same column. Without that, a cosmetic CLI header change silently

@@ -408,6 +408,26 @@ test('CLI refuses a working directory that is itself a link, even with no page l
 });
 
 // A working directory that cannot even be inspected is refused with a reason, not a stack trace.
+// A FILE at the working-directory path cannot hold the plan: refused with a reason before anything is written,
+// not left to throw EEXIST out of mkdir.
+test('CLI refuses a working directory that exists and is not a directory', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pageplan-wdfile-'));
+  try {
+    const wd = path.join(base, 'not-a-dir');
+    fs.writeFileSync(wd, 'x');
+    const specPath = path.join(base, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+    const cli = path.join(__dirname, '..', 'write-page-plan.js');
+    const res = spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', wd], { encoding: 'utf8' });
+    assert.notEqual(res.status, 0, res.stdout);
+    assert.match(res.stdout + res.stderr, /refusing to write the page plan into .* it exists and is not a directory/);
+    assert.doesNotMatch(res.stdout + res.stderr, /EEXIST|\n\s+at /, 'a reason, not a stack trace');
+    assert.equal(fs.readFileSync(wd, 'utf8'), 'x', 'the file is untouched');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('CLI refuses a working directory it cannot inspect, and writes no plan', (t) => {
   const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-lstat-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -119,16 +119,20 @@ function parseWhitespaceTable(raw) {
   // with no dashed separator. Names may contain spaces, so splitting each row on
   // whitespace loses the boundary. The connector API path is the stable delimiter.
   if (normalizedHeaders.join(',') === 'id,name,apiid,status') {
+    // Every connection row in this layout carries its connector's API path, so a line that does too but does
+    // not match is a connection row read wrong — a changed column layout, say. It is kept as a row with no
+    // ids, so usableConnectionRows fails closed when no row has both, where dropping it read the listing as
+    // "no connections"; beside a usable row it is dropped. A line WITHOUT the path is not a connection at all
+    // — a message such as "No connections found.", a notice, the wrapped tail of a long name — and is
+    // dropped. The Status column may be several words ("Not connected"), or empty.
     return usableConnectionRows(lines
       .slice(headerIndex + 1)
-      .map((line) => line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)\s*$/i))
-      .filter(Boolean)
-      .map((match) => mapConnectionRow({
-        Id: match[1],
-        Name: match[2],
-        'API Id': match[3],
-        Status: match[4],
-      })), 'Id/Name/API Id table');
+      .map((line) => {
+        const match = line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)(?:\s+(.+?))?\s*$/i);
+        if (match) return mapConnectionRow({ Id: match[1], Name: match[2], 'API Id': match[3], Status: match[4] || '' });
+        return /\/providers\/Microsoft\.PowerApps\/apis\//i.test(line) ? { connectorId: '', connectionId: '', displayName: line.trim() } : null;
+      })
+      .filter(Boolean), 'Id/Name/API Id table');
   }
   return usableConnectionRows(lines
     .slice(headerIndex + 1)

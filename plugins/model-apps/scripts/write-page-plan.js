@@ -95,7 +95,14 @@ function main() {
   // followed. A directory that is not there yet is created below.
   let linkedWorkingDir = false;
   try {
-    linkedWorkingDir = fs.lstatSync(absWorkingDir).isSymbolicLink();
+    const at = fs.lstatSync(absWorkingDir);
+    linkedWorkingDir = at.isSymbolicLink();
+    // Anything else that is not a folder — a file there — cannot hold the plan: refused before the write,
+    // not left to throw EEXIST out of mkdir. generate-page-manifest.js applies the same rule.
+    if (!linkedWorkingDir && !at.isDirectory()) {
+      emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it exists and is not a directory`));
+      return;
+    }
   } catch (e) {
     if (!(e && e.code === 'ENOENT')) {
       emitResult(false, new Error(`cannot inspect the working directory ${absWorkingDir} (${(e && e.code) || e}); fix its permissions or pass another one`));

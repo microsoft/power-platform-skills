@@ -180,6 +180,15 @@ test('a disk error other than "not there" refuses the file instead of reading as
   const rootless = pageFileProblems(['a.tsx', 'b.tsx'], { workingDir: root });
   assert.deepEqual(rootless.map((p) => p.code), ['unresolvable', 'unresolvable']);
   assert.match(rootless[0].message, /the working directory cannot be resolved \(EIO\)/);
+  // …and so does a working directory that cannot even be INSPECTED: its lstat is read before its realpath now.
+  t.mock.restoreAll();
+  t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+    if (path.resolve(String(p)) === path.resolve(root)) throw denied('EACCES');
+    return realLstat(p, ...rest);
+  });
+  const uninspectable = pageFileProblems(['a.tsx'], { workingDir: root });
+  assert.deepEqual(uninspectable.map((p) => p.code), ['unresolvable']);
+  assert.match(uninspectable[0].message, /the working directory cannot be resolved \(EACCES\)/);
 });
 
 // A name one case-insensitive filesystem stores as a page ALREADY in its folder is that page: the worker

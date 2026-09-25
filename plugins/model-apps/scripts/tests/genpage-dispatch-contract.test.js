@@ -690,9 +690,9 @@ test('every claim family is caught directly and as a continuation, so the two vo
 
 test('no genpage instruction presents transpilation as a type check', () => {
   for (const file of mdFiles()) {
-    assert.deepEqual(transpileTypeClaims(fs.readFileSync(file, 'utf8')), [], `${rel(file)} must not present transpilation as a type check`);
+    assert.deepEqual(transpileTypeClaims(readDoc(file)), [], `${rel(file)} must not present transpilation as a type check`);
   }
-  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
   assert.match(builder, /genpage transpile`\s+only transpiles the page: it does not type-check it/, 'the page-builder must say transpilation is not a type check');
 });
 
