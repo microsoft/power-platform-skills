@@ -111,15 +111,60 @@ function matchingTypeArgumentOpen(src, close) {
       if (depth === 0) return k;
     } else if (c === ';' && depth === 1) {
       return -1;
+    } else if (EXPRESSION_ONLY_OPERATOR(src, k)) {
+      // An operator no type can hold ends the match: the `<` and `>` of
+      //   lo as number < hi && count > /}/.source.length
+      // are comparisons, and pairing them as type arguments read the regex after them as a division.
+      return -1;
     }
   }
   return -1;
 }
 
+// `&&`, `||`, `??`, `+`, `*`, `/`, `%`, `!`, and `=` outside `=>`: expression operators that never appear inside
+// type arguments. A single `&` or `|` (intersection, union), `?` and `:` (conditional and optional types), `-`
+// (negative literal types) and `=>` (function types) all can, so they are not in this set.
+function EXPRESSION_ONLY_OPERATOR(src, k) {
+  const c = src[k];
+  if ((c === '&' || c === '|' || c === '?') && (src[k - 1] === c || src[k + 1] === c)) return true;
+  if (c === '+' || c === '*' || c === '/' || c === '%' || c === '!') return true;
+  return c === '=' && src[k + 1] !== '>';
+}
+
+// Type names that take no type arguments: `as number <` can only be a comparison.
+const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined', 'null', 'number', 'string',
+  'boolean', 'bigint', 'symbol', 'object']);
+
+// Is the `<` at `open` the start of type arguments in a cast or annotation? The type they belong to may be one
+// constituent of an intersection or union, so the walk back steps over the others to reach `as`/`satisfies`/`:`:
+//   total as number & Brand<"USD"> / count     `Brand<…>` is part of the cast; `/` is division
+//   value as A | B.C<D> / n                    the same with a union and a qualified name
+// Each constituent is a (qualified) name, optionally with its own closed type arguments. Anything else ends the
+// walk and the `<` is not taken for type arguments — the conservative reading for the division check.
 function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
-  let p = open - 1;
-  while (p >= 0 && /\s/.test(src[p])) p -= 1;
-  while (p >= 0 && /[\w$.\]]/.test(src[p])) p -= 1;
+  const skipSpace = (i) => { while (i >= 0 && /\s/.test(src[i])) i -= 1; return i; };
+  const skipName = (i) => { while (i >= 0 && /[\w$.\]\[]/.test(src[i])) i -= 1; return i; };
+  let end = skipSpace(open - 1);
+  let p = skipName(end);
+  // Char by char, not `slice`: `src` may be the lexer's partly blanked output ARRAY (see expressionPosition).
+  let name = '';
+  for (let k = p + 1; k <= end; k += 1) name += src[k];
+  if (p === end || PRIMITIVE_TYPES.has(name)) return false;
+  for (let guard = 0; guard < 16; guard += 1) {
+    const q = skipSpace(p);
+    const op = src[q];
+    if (!((op === '&' || op === '|') && src[q - 1] !== op)) break;
+    let r = skipSpace(q - 1);
+    if (src[r] === '>') {
+      const o = matchingTypeArgumentOpen(src, r);
+      if (o === -1) return false;
+      r = skipSpace(o - 1);
+    }
+    const e = r;
+    r = skipName(r);
+    if (r === e) return false;
+    p = r;
+  }
   const before = prevWordOrPunct(src, p + 1);
   return before === 'as' || before === 'satisfies' || before === ':';
 }

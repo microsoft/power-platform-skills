@@ -656,6 +656,40 @@ test('navigation regex after relational greater-than remains visible', () => {
   assert.deepEqual(navReferencedKeys(code), ['details']);
 });
 
+// A cast's type may be one constituent of an intersection or union, so the check for "type arguments in a cast"
+// walks back over the others to the `as`: missing it read `/ count}/` as a regex, and the page lost its default
+// export. And angle brackets around an expression operator are comparisons even after a cast — pairing them as type
+// arguments hid a navigation call. Every expectation matches TypeScript's parser.
+test('cast type arguments reach their `as` through intersections and unions, and never span an expression operator', () => {
+  const brand = 'type Brand<T> = { readonly __brand: T };\nconst total = 12, count = 2;\n';
+  const complete = {
+    'intersection cast before division': `${brand}const label = \`\${total as number & Brand<"USD"> / count}/month\`;\nexport default () => <p>{label}</p>;`,
+    'union cast with a qualified name before division': 'namespace B { export type C<D> = D; }\nconst value = 4, n = 2;\nconst v = `${value as string | B.C<number> / n}`;\nexport default () => null;',
+  };
+  for (const [label, code] of Object.entries(complete)) {
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(hasUnbalancedBrackets(code), false, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
+  assert.equal(endsMidStatement(`${brand}export default () => total as number & Brand<"USD"> / count /`), true,
+    'a division cut after its slash is still dangling');
+  const nav = 'const lo = 0, hi = 2, count = 3;\nconst marker = `${lo as number < hi && count > /}/.source.length ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default function Page() { return null; }';
+  assert.deepEqual(navReferencedKeys(nav), ['details'], 'a primitive takes no type arguments, and `&&` is no type operator');
+  // Without the `&&`, only the primitive rule tells the comparison apart. TypeScript reads `lo as number` and two
+  // comparisons around the regex `/}/`; inside a template substitution the `/` was read as a division, and its `}`
+  // closed the substitution over the navigation call.
+  const primitive = 'const lo = 0, hi = 2;\nconst marker = `${lo as number < hi > /}/.source.length ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default function Page() { return null; }';
+  assert.deepEqual(navReferencedKeys(primitive), ['details'], '`number` takes no type arguments');
+  // A property's `:` reads like an annotation, so only the operator rule tells `lo < hi && count >` from type
+  // arguments there. TypeScript reads two comparisons around the regex `/}/`.
+  const property = 'const lo = 0, hi = 2, count = 3, s = "";\nconst o = { ok: lo < hi && count > /}/.test(s) };\nexport default function Page() { return null; }';
+  assert.equal(hasDefaultExport(property), true);
+  assert.equal(hasUnbalancedBrackets(property), false);
+  assert.equal(endsMidStatement(property), false);
+  const propertyNav = 'const lo = 0, hi = 2, count = 3;\nconst marker = `${({ ok: lo < hi && count > /}/.source.length }).ok ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default function Page() { return null; }';
+  assert.deepEqual(navReferencedKeys(propertyNav), ['details']);
+});
+
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {
   // Documented limit: without a full parser, a final `>` can be a type-argument close or the end
   // of a relational expression. Only recorded JSX tag closes finish a file; type-argument tails need
