@@ -155,6 +155,10 @@ test('verifyPlanProvenance reads the preview by its Current State and the writte
   // A written plan without its section names nothing, whatever else it quotes; nor does a preview without its block.
   assert.equal(planTargets(`# Genpage Edit Plan\n## Original Page Context\n- **File:** ${PAGE_ID}/page.tsx\n`, { kind: 'edit', doc: 'written' }), null);
   assert.equal(planTargets(`## Genpage Edit Plan\n## File Being Edited\n- **Page ID:** ${PAGE_ID}\n`, { kind: 'edit', doc: 'preview' }), null);
+  // …and one whose section has neither a label nor a path names nothing: a page path quoted elsewhere in the plan is
+  // not the page it edits.
+  const bare = `# Genpage Edit Plan\n## File Being Edited\n- **App ID:** 11111111-2222-3333-4444-555555555555\n## Original Page Context\n- **File:** ${other}/page.tsx\n`;
+  assert.equal(planTargets(bare, { kind: 'edit', doc: 'written' }), null);
   // CONTROL: a written plan whose section has no Page ID label is read by the page folder in the section's own path.
   const noLabel = EDIT_WRITTEN.replace(`- **Page ID:** ${PAGE_ID}\n`, '') + `\n## Original Page Context\n- **File:** ${other}/page.tsx\n`;
   assert.deepEqual(planTargets(noLabel, { kind: 'edit', doc: 'written' }), { kind: 'edit', targets: [PAGE_ID] });
