@@ -51,13 +51,25 @@ async function readDashboards(sdk, app, warn) {
       if (typeof warn === 'function') warn(`dashboard '${title || id}' (${id}) could not be read: ${e && e.message}`);
       continue;
     }
-    let name = title || id;
+    let name = null;
     let description;
+    let nameError = null;
     try {
       const rows = await sdk.queryRecords('systemform', { select: ['name', 'description'], filter: `formid eq ${id}`, top: 1 });
       if (rows && rows[0] && rows[0].name) name = rows[0].name;
       description = rows && rows[0] && rows[0].description;
-    } catch { /* keep fallback */ }
+    } catch (e) { nameError = e; }
+    // An App Spec refers to a dashboard by NAME, and a rebuild finds the deployed one by that name. The
+    // sitemap title is only the subarea's label: standing in for an unread name, it made a rebuild create
+    // (or bind to) another dashboard, and hid a real name clash from the check below. So a dashboard whose
+    // name cannot be read is withheld like an unreadable one — its subarea dropped, which trips the
+    // lossy-download gate with this reason.
+    if (!name) {
+      if (typeof warn === 'function') {
+        warn(`dashboard '${title || id}' (${id}): its name could not be read (${nameError ? (nameError.message || nameError) : 'no row for it'}), and an App Spec refers to a dashboard by name, so it is left out; its sitemap subarea will be dropped. Download again once it can be read.`);
+      }
+      continue;
+    }
     const tiles = [];
     for (const c of art.components || []) {
       const p = c.parameters || {};
@@ -148,7 +160,11 @@ async function readDashboards(sdk, app, warn) {
 // Returns { relationships, skipped } — `skipped` feeds the not-round-tripped report so a
 // relationship this cannot express is DECLARED missing rather than silently absent, which was the
 // whole complaint in #567.
-async function readRelationships(sdk, logicals, publisherPrefix, warn) {
+//
+// `prefixUnknown`: the spec's publisher prefix is a placeholder (see runDownload), so every deployed name is
+// carried as it is. Omitting one because it equals the name the build would generate is only safe under the
+// REAL prefix: under the placeholder, a rebuild generates another name and creates the relationship twice.
+async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false } = {}) {
   const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
   const lc = (s) => String(s || '').toLowerCase();
   const relationships = [];
@@ -263,7 +279,8 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
       // column — and its data — off a table that teardown otherwise retains. A rebuild still creates a
       // missing one; only teardown reads the flag.
       const rel = { type: 'OneToMany', referenced, referencing, lookup, existing: true };
-      if (deployed && lc(deployed) !== lc(auto)) {
+      if (deployed && prefixUnknown) rel.schemaName = deployed;
+      else if (deployed && lc(deployed) !== lc(auto)) {
         if (prefixOk) rel.schemaName = deployed;
         else if (typeof warn === 'function') {
           // RENAMED, not skipped. This relationship IS pushed below, so recording it in `skipped`
@@ -306,7 +323,8 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
         const rel = { type: 'ManyToMany', entity1: e1, entity2: e2, existing: true }; // ownership unprovable, as for 1:N above
         const auto = manyToManySchemaName({ entity1: e1, entity2: e2 }, publisherPrefix);
         const deployed = r.SchemaName;
-        if (deployed && lc(deployed) !== lc(auto)) {
+        if (deployed && prefixUnknown) rel.schemaName = deployed;
+        else if (deployed && lc(deployed) !== lc(auto)) {
           if (!publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) rel.schemaName = deployed;
           else if (typeof warn === 'function') {
             // RENAMED, not skipped — this relationship IS carried into the spec, so recording it as
@@ -2126,7 +2144,16 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
   const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  const trustedPrefix = solutionPrefix || appDerivedPrefix;
+  // Several candidate solutions whose publishers do not share one prefix, or none that could be read: the
+  // prefix is UNKNOWN. The app-name guess is exactly the heuristic that ambiguity refuses to use (see
+  // recoverAppSolution), and a wrong prefix renames every relationship not carrying it, so a same-environment
+  // rebuild creates each a second time. So it is not used: the prefix stays the unverified default, and
+  // relationships keep their deployed names.
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable);
+  if (prefixUnknown) {
+    process.stderr.write(`WARNING: ${solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown'}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
+  }
+  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
   // `recoverAppSolution` already unwraps the solution's description; carry it across. This object is
@@ -2177,7 +2204,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   try {
     const rel = await readRelationships(sdk, allLogicals, solution.publisherPrefix, (m) => {
       process.stderr.write(`WARNING: ${m}\n`);
-    });
+    }, { prefixUnknown });
     relationships = rel.relationships;
     relationshipsSkipped = rel.skipped;
   } catch (e) {

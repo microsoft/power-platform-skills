@@ -1064,15 +1064,24 @@ test('the global-choice inventory unions the owned sets of every candidate solut
   assert.strictEqual(unread.globalChoices, undefined, 'nothing is claimed about a scope that could not be read');
 });
 
-test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
-  const sdk = {
-    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
-    queryRecords: async () => { throw new Error('systemform read throttled'); },
-  };
-  const dashboards = await readDashboards(sdk, {
-    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
-  });
-  assert.strictEqual(dashboards[0].name, 'Operations');
+// An App Spec refers to a dashboard by name, and the sitemap title is only its label. Standing in for a name that
+// could not be read, it made a rebuild create or bind to another dashboard, and hid a real name clash. Such a
+// dashboard is withheld, and said to be — its subarea dropped, which the lossy-download gate reports.
+test('readDashboards withholds a dashboard whose name cannot be read, instead of naming it after the sitemap title', async () => {
+  const app = { siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] } };
+  const fetchArtifact = async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] });
+  for (const [what, queryRecords, why] of [
+    ['a failed read', async () => { throw new Error('systemform read throttled'); }, /systemform read throttled/],
+    ['no row', async () => [], /no row for it/],
+  ]) {
+    const warnings = [];
+    const dashboards = await readDashboards({ fetchArtifact, queryRecords }, app, (m) => warnings.push(m));
+    assert.deepStrictEqual(dashboards, [], what);
+    assert.ok(warnings.some((w) => /dashboard 'Operations' \(dash-1\): its name could not be read/.test(w) && why.test(w) && /subarea will be dropped/.test(w)), `${what}: ${JSON.stringify(warnings)}`);
+  }
+  // CONTROL: a name that reads is the one emitted, whatever the title says.
+  const named = await readDashboards({ fetchArtifact, queryRecords: async () => [{ name: 'Ops Board' }] }, app);
+  assert.deepStrictEqual(named.map((d) => d.name), ['Ops Board']);
 });
 
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
@@ -1422,8 +1431,8 @@ test('recoverAppSolution never picks between several unmanaged solutions, whatev
 
 // A mock SDK for runDownload over an app in the two solutions above. Solution `a` (ContosoRelease) holds a
 // business rule; `members` overrides the membership read (e.g. to make it fail).
-function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members } = {}) {
-  const base = twoSolutionSdk(['a', 'b'], () => 'contoso');
+function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contoso', manyToMany = [] } = {}) {
+  const base = twoSolutionSdk(['a', 'b'], prefixOf);
   const RULE = '5111e0f2-0000-4000-8000-0000000000d9';
   return {
     fetchArtifact: async () => ({ name: 'Ambig', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
@@ -1448,7 +1457,7 @@ function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members } = {}) {
     },
     getSolution: base.getSolution,
     fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [] }),
-    dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) },
+    dataverse: { get: async (url) => ({ status: 200, headers: {}, body: { value: /ManyToManyRelationships/.test(url) ? manyToMany : [] } }) },
   };
 }
 
@@ -1484,6 +1493,41 @@ test('runDownload does not guess between unmanaged solutions, and still reports 
   assert.ok((res.notRoundTripped && res.notRoundTripped.classes || []).some((c) => c.kind === 'businessRules' && c.count === 1), JSON.stringify(res.notRoundTripped));
 });
 
+// With candidate solutions whose publishers disagree, the prefix is unknown. The app-name guess is the
+// heuristic the ambiguity refuses to use, and a wrong prefix renamed every relationship not carrying it — so a
+// same-environment rebuild created each a second time. The prefix stays the unverified default, relationships
+// keep their deployed names, and the maker is told to set it.
+test('runDownload does not guess a publisher prefix when the candidate solutions disagree', async () => {
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000f1';
+  // The app name carries 'contoso', the prefix of ONE candidate's publisher: exactly the guess refused here.
+  const APP_UNIQUE = 'contoso_disagree';
+  // One with a foreign prefix, and one that still has the name the build generated under its real prefix —
+  // which must be carried too: omitted, a rebuild under the placeholder prefix generated another and created it twice.
+  const { manyToManySchemaName } = require('../lib/app-spec.js');
+  const generated = manyToManySchemaName({ entity1: 'contoso_item', entity2: 'contoso_item' }, 'contoso');
+  const manyToMany = [
+    { SchemaName: 'fabrikam_ItemItemLink', Entity1LogicalName: 'contoso_item', Entity2LogicalName: 'contoso_item', IsCustomRelationship: true },
+    { SchemaName: generated, Entity1LogicalName: 'contoso_item', Entity2LogicalName: 'contoso_item', IsCustomRelationship: true },
+  ];
+  const sdk = ambiguousAppSdk(APP_ID, APP_UNIQUE, { prefixOf: (u) => (u === 'ContosoApp' ? 'contoso' : 'fabrikam'), manyToMany });
+  const { res, written } = await runCapturing(sdk, APP_ID, APP_UNIQUE);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.deepStrictEqual(res.solutionCandidates, ['ContosoApp', 'ContosoRelease']);
+  assert.strictEqual(res.spec.solution.publisherPrefix, 'new', 'not the app-name guess');
+  assert.ok(written.some((w) => /do not share one customization prefix/.test(w) && /solution\.publisherPrefix/.test(w)), written.join(''));
+  const nn = (res.spec.relationships || []).filter((r) => r.type === 'ManyToMany');
+  assert.deepStrictEqual(nn.map((r) => r.schemaName).sort(), ['fabrikam_ItemItemLink', generated].sort(), `every deployed name is kept; got ${JSON.stringify(res.spec.relationships)}`);
+  // With the membership unread the prefix is unknown too, and the generated name is carried the same way.
+  const unread = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { members: () => { throw new Error('HTTP 503'); }, manyToMany: [manyToMany[1]] }), APP_ID, APP_UNIQUE);
+  assert.deepStrictEqual((unread.res.spec.relationships || []).filter((r) => r.type === 'ManyToMany').map((r) => r.schemaName), [generated]);
+  // CONTROL: publishers that agree still give their prefix, and a relationship with the generated name is
+  // omitted as before, for the build to compose.
+  const agreeing = await runCapturing(ambiguousAppSdk(APP_ID, APP_UNIQUE, { manyToMany: [manyToMany[1]] }), APP_ID, APP_UNIQUE);
+  assert.strictEqual(agreeing.res.spec.solution.publisherPrefix, 'contoso');
+  assert.deepStrictEqual((agreeing.res.spec.relationships || []).filter((r) => r.type === 'ManyToMany').map((r) => r.schemaName), [undefined]);
+  assert.ok(!agreeing.written.some((w) => /do not share one customization prefix/.test(w)));
+});
+
 test('runDownload reports an unreadable solution membership as unknown, not as "no solution"', async () => {
   const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000e1';
   const APP_UNIQUE = 'contoso_unread';
@@ -1493,6 +1537,9 @@ test('runDownload reports an unreadable solution membership as unknown, not as "
   assert.strictEqual(res.spec.solution.uniqueName, 'Default');
   assert.strictEqual(res.solutionCandidates, undefined);
   assert.ok(written.some((w) => /could not be read \(HTTP 503/.test(w) && /solution\.uniqueName/.test(w)), written.join(''));
+  // With the solutions unread, the publisher is unknown too: the app-name guess ('contoso') is not used.
+  assert.strictEqual(res.spec.solution.publisherPrefix, 'new');
+  assert.ok(written.some((w) => /the publisher is unknown/.test(w) && /solution\.publisherPrefix/.test(w)), written.join(''));
   const unknown = ((res.notRoundTripped && res.notRoundTripped.incomplete) || []).map((i) => i.kind).sort();
   assert.deepStrictEqual(unknown.filter((k) => k === 'businessRules' || k === 'globalChoices'), ['businessRules', 'globalChoices'], JSON.stringify(res.notRoundTripped));
 });

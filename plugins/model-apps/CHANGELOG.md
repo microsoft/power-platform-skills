@@ -204,7 +204,8 @@ downloads that round-trip Choice columns.
   chart tile's chart and view belong to the tile's table.
 - **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
   ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
-  the other from the nav. A download withholds such a pair and says why.
+  the other from the nav. A download withholds such a pair and says why, and it withholds a dashboard
+  whose name cannot be read rather than naming it after its sitemap title.
 - **A dashboard belongs to the app through the app's solution** ([#586]). A name can also match another
   app's dashboard, and teardown used to delete every match. It now deletes only the dashboards the app's
   solution holds, none when the spec has no real solution to ask, and keeps the solution while any step
@@ -240,7 +241,10 @@ downloads that round-trip Choice columns.
 - **An app in several unmanaged solutions downloads the same way every time** ([#587]). The spec keeps
   `Default` and names the candidates in `solutionCandidates` — never whichever row the server happened
   to return first, which teardown would then delete. Its business rules and option sets are still
-  reported across all of them, and a membership that cannot be read is reported as unknown.
+  reported across all of them, and a membership that cannot be read is reported as unknown. When the
+  candidates' publishers do not share one prefix, or none can be read, the spec's publisher prefix is not
+  guessed from the app name: it stays the unverified `new`, relationships keep their deployed names, and
+  the download says to set it.
 - **The teardown summary no longer calls every skip "not found".** Steps kept on purpose and steps
   never attempted after a failed app delete are counted as what they are.
 - **A failure after the app is already deleted no longer strands the rest of the teardown.** The SDK

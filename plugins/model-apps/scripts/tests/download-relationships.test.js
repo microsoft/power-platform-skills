@@ -110,6 +110,13 @@ test('emits an explicit schemaName only when it diverges from the generated defa
   // beside the existing one instead of matching it.
   const diff = await readRelationships(mk('new_CustomerTicketLink'), ['new_customer', 'new_ticket'], 'new');
   assert.strictEqual(diff.relationships[0].schemaName, 'new_CustomerTicketLink');
+  // With the publisher prefix UNKNOWN (the spec carries a placeholder), a name equal to the generated default
+  // is carried too: omitted, a rebuild under the placeholder generated another name and created it twice. A
+  // foreign-prefix name is carried as it is, not renamed.
+  for (const deployed of ['new_customer_new_ticket', 'zzz_CustomerTicketLink']) {
+    const unknown = await readRelationships(mk(deployed), ['new_customer', 'new_ticket'], 'new', undefined, { prefixUnknown: true });
+    assert.strictEqual(unknown.relationships[0].schemaName, deployed, deployed);
+  }
 });
 
 // An unreadable parent and a confirmed-custom parent are different facts. Collapsing them made a
