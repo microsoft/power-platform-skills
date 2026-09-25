@@ -827,6 +827,25 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
   assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
 });
 
+// A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
+// run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
+test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {
+  const { isolatedReaderFor } = require('../verify-model-app.js');
+  const client = { request: async () => { throw new Error('no request is made'); } };
+  let made = 0;
+  const makeClient = () => { made += 1; return client; };
+  const read = isolatedReaderFor('https://contoso.crm.dynamics.com', { makeClient });
+  const a = await read();
+  const b = await read();
+  assert.strictEqual(made, 1, 'one client for the run');
+  assert.notStrictEqual(a.sdk, b.sdk, 'a fresh SDK per read');
+  a.dispose();
+  b.dispose();
+  const own = await isolatedReaderFor('https://contoso.crm.dynamics.com', { httpClient: client, makeClient })();
+  own.dispose();
+  assert.strictEqual(made, 1, 'with the run\u2019s own client, none is made');
+});
+
 test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
   const calls = [];
   const sdk = {

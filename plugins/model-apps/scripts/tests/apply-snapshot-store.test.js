@@ -598,13 +598,11 @@ test('a reservation whose write fails leaves no claim behind, and the next clear
     const d = path.join(base, '.maker-workspace');
     fs.mkdirSync(d);
     const claim = `${store.leasePath(d)}.reclaim`;
-    const realWrite = fs.writeSync;
-    // The lease is written first, the claim second: fail the claim's write.
-    let writes = 0;
-    const mock = t.mock.method(fs, 'writeSync', (fd, ...rest) => {
-      writes += 1;
-      if (writes === 2) throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
-      return realWrite(fd, ...rest);
+    const realWrite = fs.writeFileSync;
+    // The lease is written by path, the claim through its exclusively opened descriptor: fail the claim's write.
+    const mock = t.mock.method(fs, 'writeFileSync', (target, ...rest) => {
+      if (typeof target === 'number') throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
+      return realWrite(target, ...rest);
     });
     const failed = store.clearWorkspace(d);
     mock.mock.restore();
@@ -614,6 +612,26 @@ test('a reservation whose write fails leaves no claim behind, and the next clear
     assert.ok(!fs.existsSync(store.leasePath(d)), 'and the lease released');
     assert.ok(store.clearWorkspace(d).ok, 'so the next clear is not blocked');
   } finally { rm(base); }
+});
+
+// The LOCK is not rolled back when its write fails: an empty lock ages into a reclaimable one, and deleting it after
+// another writer had reclaimed it let a third take the path fresh — two holders.
+test('a lock whose write fails is left in place for the tokenless-lock rule, never deleted', (t) => {
+  const d = ws();
+  try {
+    const lp = store.leasePath(d);
+    const realWrite = fs.writeFileSync;
+    const mock = t.mock.method(fs, 'writeFileSync', (target, data, o) => {
+      if (target === lp && o && o.flag === 'wx') { fs.closeSync(fs.openSync(lp, 'wx')); throw Object.assign(new Error('no space'), { code: 'ENOSPC' }); }
+      return realWrite(target, data, o);
+    });
+    const r = store.acquireLease(d);
+    mock.mock.restore();
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, /lease create failed/);
+    assert.ok(fs.existsSync(lp), 'the empty lock stays');
+    assert.strictEqual(fs.readFileSync(lp, 'utf8'), '');
+  } finally { rm(d); }
 });
 
 // A folder renamed away between mkdir's own steps surfaced as ENOENT from a folder that had existed, and read as

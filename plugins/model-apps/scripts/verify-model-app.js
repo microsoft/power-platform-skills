@@ -25,12 +25,16 @@ const { depthFromMask } = require('./lib/role-privileges.js');
 // one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
 // concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
 // cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
-// the first one's cache.
-function isolatedReaderFor(env) {
+// the first one's cache. The HTTP client — and with it the Azure CLI token — is shared: `opts.httpClient` (the
+// run's own), else one made on the first read. A client per read ran `az account get-access-token` once per
+// dashboard. `opts.makeClient` is a test seam.
+function isolatedReaderFor(env, opts = {}) {
+  let client = opts.httpClient || null;
+  const makeClient = opts.makeClient || createAzHttpClient;
   return async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
     try {
-      const sdk = await makeProvision(env, dir);
+      const sdk = await makeProvision(env, dir, client || (client = makeClient(env)));
       return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
     } catch (e) {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -39,9 +43,8 @@ function isolatedReaderFor(env) {
   };
 }
 
-async function makeProvision(env, workspaceDir) {
+async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
   fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
@@ -444,9 +447,10 @@ async function main() {
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const sdk = await makeProvision(env, workspaceDir);
+  const httpClient = createAzHttpClient(env);
+  const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env) }));
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.

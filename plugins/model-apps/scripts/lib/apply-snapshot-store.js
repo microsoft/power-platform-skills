@@ -62,14 +62,17 @@ function writeSnapshotAtomic(workspaceDir, envelope) {
   }
 }
 
-// Create `file` holding `text` exclusively ('wx' — one writer wins), and remove it again when the write itself
-// fails. writeFileSync with 'wx' creates the file BEFORE it writes, so a write that failed (ENOSPC) left an empty
-// lock or claim behind — and a claim is removed only by its creator (acquireLease), so every later attempt then
-// refused. Throws what open or write threw; EEXIST means another writer holds the file.
+// Create a CLAIM `file` holding `text` exclusively ('wx' — one writer wins), and remove it again when the write
+// itself fails. writeFileSync with 'wx' creates the file BEFORE it writes, so a write that failed (ENOSPC) left an
+// empty claim behind — and a claim is removed only by its creator (acquireLease), so every later attempt refused.
+// Rolling back is safe for a claim precisely because nobody else ever removes or reclaims one. It is NOT used for
+// the lease lock: an empty lock ages into a reclaimable one, and deleting it after another writer had reclaimed it
+// let a third take the path fresh — two holders. writeFileSync on the descriptor writes the whole text (a single
+// writeSync may write only part of it). Throws what open or write threw; EEXIST means another writer holds it.
 function createExclusive(file, text) {
   const fd = fs.openSync(file, 'wx');
   try {
-    fs.writeSync(fd, text);
+    fs.writeFileSync(fd, text);
   } catch (e) {
     try { fs.closeSync(fd); } catch { /* best-effort */ }
     try { fs.rmSync(file, { force: true }); } catch { /* best-effort: it is empty, and names itself (acquireLease) */ }
@@ -101,7 +104,9 @@ function acquireLease(workspaceDir, deps = {}) {
   const lp = leasePath(workspaceDir);
   const token = JSON.stringify({ pid, at: now(), rnd: Math.random().toString(36).slice(2) });
   const tryCreate = () => {
-    try { createExclusive(lp, token); return { ok: true, path: lp, token }; }
+    // Not createExclusive: a write that fails after the create leaves a tokenless lock, which ages into a
+    // reclaimable one (below) — removing it instead could delete a lock another writer has since reclaimed.
+    try { fs.writeFileSync(lp, token, { flag: 'wx' }); return { ok: true, path: lp, token }; }
     catch (e) { return { ok: false, code: e && e.code, error: e }; }
   };
   let r = tryCreate();
