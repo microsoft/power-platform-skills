@@ -625,6 +625,19 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
     'main destructures keys makeSdk does not return (or ignores ones it does)');
 });
 
+// The build's verify read each dashboard through an isolated reader made with no client, so it created one of its
+// own — and a second Azure CLI token acquisition — beside the build's. makeSdk builds the reader around its own
+// client, and the verify wiring uses that reader.
+test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
+  assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
+  assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
+  const wiring = src.slice(src.indexOf('verify: (s, verifyOpts) =>'));
+  assert.match(wiring.slice(0, wiring.indexOf('\n')), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
+});
+
 // #447 follow-up: an LCID reaches Dataverse as a label LanguageCode, so a value that merely SURVIVES
 // a `Number()` cast is not good enough. `Number(true) === 1` and `Number([1033]) === 1033` both pass
 // a naive positive-integer check, so a spec containing `"languageCode": true` would have built every
