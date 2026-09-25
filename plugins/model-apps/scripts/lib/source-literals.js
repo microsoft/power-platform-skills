@@ -43,10 +43,10 @@ function expressionPosition(src, i) {
   // opens one: `return !/\(/.test(s)`, and `if (bad) !/\(/.test(s)` (see closesStatementHead).
   if (ch === '!') return expressionPosition(src, index);
   if ((ch === '+' || ch === '-') && src[index - 1] === ch) return false;
-  // A `>` can be either a binary relational operator (`count > /re/.test(x)`) or the end of an
-  // operand-like construct (`value as NonNullable<number> / count`, `<Icon /> / scale`). When it
-  // closes a compact angle/tag group, the next `/` divides; treating every `>` as expression-start
-  // made a generic type assertion inside `${...}` swallow the rest of the template as a regex.
+  // A `>` can be a binary relational operator (`count > /re/.test(x)`), the `>` of an arrow's `=>`,
+  // a JSX tag close, or a type-argument close after a cast. Only the latter two end an operand.
+  // The cast case is intentionally narrow: `total as NonNullable< number > / count` divides, but
+  // `count<limit ? () => /re/ : ...` must leave `=>` as an expression-start token before a regex.
   if (ch === '>') return !greaterThanEndsOperand(src, index);
   if (EXPR_START_PUNCT.has(ch)) return true;
   // A `)` usually ends an operand — `counts.get(k)! / total`, `(a + b) / 2` — but the `)` that
@@ -77,22 +77,25 @@ function isPropertyName(src, s) {
 }
 
 // Heuristic for the ambiguous `>` token in dependency-free TSX scanning. The raw shapes this protects:
-//   total as NonNullable<number> / count    `>` closes a type argument list; `/` is division
-//   export default () => <Icon />           `>` closes JSX; EOF is complete
-//   export default () => count >            `>` is a relational operator; EOF is truncated
-// Keep this intentionally conservative: only a compact `<...>` group is treated as an operand end.
-// Spaced comparisons like `a < b >` stay operators.
+//   total as NonNullable< number > / count    `>` closes a cast type argument; `/` is division
+//   export default () => <Icon />             `>` closes JSX; EOF is complete
+//   export default () => count >              `>` is a relational operator; EOF is truncated
+//   count<limit ? () => /re/ : () => /none/   the `>` in `=>` is not an angle close
 function greaterThanEndsOperand(src, close) {
+  if (src[close - 1] === '=') return false;
+  return greaterThanClosesCastTypeArguments(src, close) || greaterThanClosesJsxTag(src, close);
+}
+
+function greaterThanClosesCastTypeArguments(src, close) {
   let depth = 0;
   for (let k = close; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
     const c = src[k];
     if (c === '>') depth += 1;
+    else if (c === '=' && src[k + 1] === '>') return false;
     else if (c === '<') {
       depth -= 1;
       if (depth !== 0) continue;
-      const body = sliceChars(src, k + 1, close);
-      if (!body || /^\s|\s$/.test(body)) return false;
-      return src[k + 1] === '/' || /[A-Za-z_$]/.test(src[k + 1] || '');
+      return typeArgumentOpenFollowsCastOrAnnotation(src, k);
     } else if (c === '\n' || c === ';') {
       return false;
     }
@@ -100,10 +103,39 @@ function greaterThanEndsOperand(src, close) {
   return false;
 }
 
-function sliceChars(src, start, end) {
-  let out = '';
-  for (let k = start; k < end; k += 1) out += src[k];
-  return out;
+function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
+  let p = open - 1;
+  while (p >= 0 && /\s/.test(src[p])) p -= 1;
+  while (p >= 0 && /[\w$.\]]/.test(src[p])) p -= 1;
+  const before = prevWordOrPunct(src, p + 1);
+  return before === 'as' || before === 'satisfies' || before === ':';
+}
+
+function prevWordOrPunct(src, before) {
+  let p = before - 1;
+  while (p >= 0 && /\s/.test(src[p])) p -= 1;
+  if (src[p] === ':') return ':';
+  let e = p;
+  while (p >= 0 && /[\w$]/.test(src[p])) p -= 1;
+  let word = '';
+  for (let k = p + 1; k <= e; k += 1) word += src[k];
+  return word;
+}
+
+function greaterThanClosesJsxTag(src, close) {
+  let depth = 0;
+  for (let k = close; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
+    if (src[k] === '>') depth += 1;
+    else if (src[k] === '<') {
+      depth -= 1;
+      if (depth !== 0) continue;
+      if (src[k + 1] === '/') return true;
+      return /[A-Za-z_$/>]/.test(src[k + 1] || '') && expressionPosition(src, k);
+    } else if (src[k] === ';') {
+      return false;
+    }
+  }
+  return false;
 }
 
 // True when the `)` at `close` ends the head of an `if`, `for`, `while` or `with` statement. The
@@ -266,11 +298,12 @@ function blankLiterals(code, opts) {
   // COMMENT text uses this lexer's view of what a comment is rather than a regex that takes the `//`
   // in "https://…" for one. Optional: the blanked output is the same either way.
   const onComment = opts && typeof opts.onComment === 'function' ? opts.onComment : null;
+  const onRegexEnd = opts && typeof opts.onRegexEnd === 'function' ? opts.onRegexEnd : null;
   // split('') and NOT [...src]: the spread iterates by CODE POINT, so an astral character (an emoji
   // in a label, which generated pages do use) makes array indices drift out of step with the UTF-16
   // offsets everything else here uses, corrupting the output.
   const out = src.split('');
-  lexInto(src, out, 0, { onComment });
+  lexInto(src, out, 0, { onComment, onRegexEnd });
   return out.join('');
 }
 
@@ -285,7 +318,7 @@ function blankLiterals(code, opts) {
 // as the start of a regex that swallowed the closing `}`, and the apostrophe in `${<p>it's</p>}` as a
 // string. Either way the template never ended, and the page's `export default` vanished with it.
 // Otherwise it returns src.length.
-function lexInto(src, out, start, { onComment = null, untilCloseBrace = false, onEnd = null } = {}) {
+function lexInto(src, out, start, { onComment = null, onRegexEnd = null, untilCloseBrace = false, onEnd = null } = {}) {
   const blank = (from, to) => {
     for (let k = Math.max(0, from); k < to && k < src.length; k += 1) if (src[k] !== '\n') out[k] = ' ';
   };
@@ -383,6 +416,7 @@ function lexInto(src, out, start, { onComment = null, untilCloseBrace = false, o
         }
         if (j === -1) { i += 1; continue; }
         if (j >= src.length) unterminated = true;
+        else if (onRegexEnd) onRegexEnd(j);
         blank(i + 1, j);
         i = Math.min(j + 1, src.length);
         continue;
@@ -632,12 +666,12 @@ function defaultExportIsComplete(bare, at) {
   if (cls) return hasDeclarationBody(rest, cls[0].length);
   const name = /^([\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)[ \t]*(?:;|\r?\n|$)/u.exec(rest);
   if (!name) {
-    // A member chain at EOF can be a complete export (`export default pages.Home`) or a common
-    // higher-order helper cut before its call (`export default React.memo` from `React.memo(Page)`).
-    // Accept local object members, but keep imported namespace helpers fail-closed unless a newline or
-    // semicolon made them a complete statement (covered by the existing expression path).
+    // A member chain at EOF is syntactically complete: `export default UI.Spinner` and
+    // `export default pages.Home` are valid exports whether the base is imported or local. A cut at
+    // `React.memo` before its call is a known syntactically-complete limit documented for this gate;
+    // only truly dangling `React.` / `React?.` tails stay rejected by DANGLING_TAIL below.
     const member = /^([\p{ID_Start}$_][\p{ID_Continue}$]*)(?:\s*\??\.\s*[\p{ID_Start}$_][\p{ID_Continue}$]*)+[ 	]*$/u.exec(rest);
-    if (member) return declaresObjectName(bare, member[1]);
+    if (member) return true;
     // So is an arrow's parameter list with the arrow cut off — `export default ()`,
     // `(props: { a: string })`, `(props): JSX.Element` of `export default (props) => <div/>;` —
     // when the group cannot be an expression: empty, spreading at its own level, annotating a type at
@@ -866,25 +900,18 @@ const DANGLING_TAIL = /(?:=>|\?\.|[.,?:=&|^~*%<]|(?<!\+)\+|(?<!-)-|(?<![\p{ID_Co
 function endsMidStatement(code) {
   const src = String(code || '');
   const out = src.split('');
+  const regexEnds = new Set();
   let open = false;
-  lexInto(src, out, 0, { onEnd: (end) => { open = end.open; } });
+  lexInto(src, out, 0, { onRegexEnd: (index) => regexEnds.add(index), onEnd: (end) => { open = end.open; } });
   const bare = out.join('');
-  return open || DANGLING_TAIL.test(bare) || hasDanglingFinalOperator(out);
+  return open || DANGLING_TAIL.test(bare) || hasDanglingFinalOperator(out, regexEnds);
 }
 
-function hasDanglingFinalOperator(out) {
+function hasDanglingFinalOperator(out, regexEnds) {
   const { ch, index } = prevSignificant(out, out.length);
   if (ch === '>') return !greaterThanEndsOperand(out, index);
-  if (ch === '/') return !slashEndsRegex(out, index);
+  if (ch === '/') return !regexEnds.has(index);
   if (ch === '!') return expressionPosition(out, index);
-  return false;
-}
-
-function slashEndsRegex(out, close) {
-  for (let k = close - 1; k >= 0 && out[k] !== '\n'; k -= 1) {
-    if (out[k] !== '/') continue;
-    return expressionPosition(out, k);
-  }
   return false;
 }
 
@@ -950,9 +977,10 @@ function bareEllipsisElidesCode(mask) {
   const line = /^[ 	]*(\.\.\.|…)[ 	]*$/gm;
   let m;
   while ((m = line.exec(mask)) !== null) {
+    const prev = prevSignificant(mask, m.index).ch;
     let k = line.lastIndex;
     while (k < mask.length && /\s/.test(mask[k])) k += 1;
-    if (k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
+    if (!['[', '(', ','].includes(prev) || k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
   }
   return false;
 }

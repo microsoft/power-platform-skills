@@ -153,6 +153,36 @@ test('a hostile multi-line prompt reaches upload() byte-identical when passed by
   assert.strictEqual(r.payload.pageId, '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8');
 });
 
+// The page's display name travelled on the command line (`--name "<name>"`): PowerShell expanded `$(…)` in it before
+// the script ran — a name could run a command — and `Revenue $100` arrived as `Revenue `. By file it keeps every
+// character; the line break an editor adds at its end is not part of it.
+test('a display name passed by file reaches upload() intact, and a blank or doubled one is refused', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const af = path.join(d, 'agent.txt');
+  const nf = path.join(d, 'page-name.txt');
+  fs.writeFileSync(pf, 'Build the revenue page', 'utf8');
+  fs.writeFileSync(af, 'Initial deploy', 'utf8');
+  const NAME = 'Revenue $100 \u2014 "Q3" $(whoami) `x` 100% & more';
+  fs.writeFileSync(nf, `\uFEFF${NAME}\r\n`, 'utf8');
+  const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx', '--prompt-file', pf, '--agent-message-file', af];
+  const cli = capturingCli();
+  const r = await runMain([...base, '--name-file', nf], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls[0].name, NAME, 'every character, and no BOM or trailing line break');
+  const both = capturingCli();
+  const doubled = await runMain([...base, '--name', 'x', '--name-file', nf], both);
+  assert.strictEqual(doubled.ok, false);
+  assert.match(doubled.payload.error, /only one of --name or --name-file/);
+  assert.strictEqual(both.calls.length, 0);
+  fs.writeFileSync(nf, '\r\n', 'utf8');
+  const empty = capturingCli();
+  const blank = await runMain([...base, '--name-file', nf], empty);
+  assert.strictEqual(blank.ok, false);
+  assert.match(blank.payload.error, /the page name resolved to empty/);
+  assert.strictEqual(empty.calls.length, 0, 'no generated name deployed in place of the one supplied');
+});
+
 test('a downloaded conversation transcript survives an update by file', async () => {
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');

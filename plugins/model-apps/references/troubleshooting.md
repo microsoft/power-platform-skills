@@ -46,7 +46,7 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 ## Page Upload Fails
 
 - Verify app-id: run `pac model list` to get the correct GUID
-- Ensure `--name` is provided for new pages
+- Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
 - Check `.tsx` file exists and has no syntax errors
 - Verify `--data-sources` matches entities used in code
 - Ensure schema was generated for entity-based pages

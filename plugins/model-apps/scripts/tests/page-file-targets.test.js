@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { pageFileProblems, pageFilesFromPlan, pagesSections } = require('../lib/page-file-targets.js');
+const { pageFileProblems, pageFilesFromPlan, pagesTables } = require('../lib/page-file-targets.js');
 const { checkPageFiles } = require('../check-page-files.js');
 
 const SCRIPT = path.join(__dirname, '..', 'check-page-files.js');
@@ -246,7 +246,7 @@ test('a plan with more than one Pages table is refused, not read by its first', 
     ['quoted, over an unquoted table', ['> ## Pages', ...quoted.slice(1)]],
     ['indented', quoted.map((l) => `    ${l}`)],
   ]) {
-    assert.deepEqual(pagesSections(plan(...block)), [['outside.tsx'], ['approved.tsx']], what);
+    assert.deepEqual(pagesTables(plan(...block)).tables, [['outside.tsx'], ['approved.tsx']], what);
     assert.equal(pageFilesFromPlan(plan(...block)), null, what);
   }
   // CONTROLS: a maker's own `## Pages` list, prose, or a table without a File column names no file, so the real
@@ -257,7 +257,7 @@ test('a plan with more than one Pages table is refused, not read by its first', 
     ['a table without a File column', ['## Pages', '| Page | Purpose |', '|---|---|', '| Overview | cards |']],
     ['a page named "Pages Admin" specified', ['### Pages Admin', '- **File:** admin.tsx', '- **Purpose:** settings']],
   ]) {
-    assert.deepEqual(pagesSections(plan(...block)), [null, ['approved.tsx']], what);
+    assert.deepEqual(pagesTables(plan(...block)).tables, [['approved.tsx']], what);
     assert.deepEqual(pageFilesFromPlan(plan(...block)), ['approved.tsx'], what);
   }
   assert.deepEqual(pageFilesFromPlan(plan()), ['approved.tsx']);
@@ -278,6 +278,39 @@ test('a plan with more than one Pages table is refused, not read by its first', 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A section was judged by its first table: a `| Page | Purpose |` table ahead of the `| Page | File |` one hid it, and
+// a Pages table quoted elsewhere then passed as the plan's only one. Every table under a Pages heading counts.
+test('every table under a Pages heading counts on its own, and rows no header claims make the plan unreadable', () => {
+  const purpose = ['| Page | Purpose |', '|---|---|', '| Overview | cards |'];
+  const files = ['| Page | File | Purpose | Entities |', '|---|---|---|---|', '| A | ../outside.tsx | x | account |'];
+  const quoted = ['```', '## Pages', '| Page | File |', '|---|---|', '| A | approved.tsx |', '```'];
+  const plan = (requirements, pages) => ['# Genpage Plan', '## User Requirements', 'Build one page.', ...requirements,
+    '## Pages', ...pages, '## Entity Creation Required', 'None.'].join('\n');
+  // The review's case: the real table after a Purpose table, and a quoted example — two File tables, refused.
+  assert.deepEqual(pagesTables(plan(quoted, [...purpose, '', ...files])).tables, [['approved.tsx'], ['../outside.tsx']]);
+  assert.equal(pageFilesFromPlan(plan(quoted, [...purpose, '', ...files])), null);
+  // Alone, the File table after a Purpose table is read — and so its unsafe name reaches the page-file rule.
+  assert.deepEqual(pageFilesFromPlan(plan([], [...purpose, '', ...files])), ['../outside.tsx']);
+  // A blank line inside a table does not end it: its later rows are still its rows, and are checked.
+  assert.deepEqual(pageFilesFromPlan(plan([], [...files, '', '| B | b.tsx | y | account |'])), ['../outside.tsx', 'b.tsx']);
+  // Rows ahead of the first header belong to no table: the plan is unreadable, rather than those rows dropped.
+  const stray = plan([], ['| X | stray.tsx |', '', ...files]);
+  assert.equal(pagesTables(stray).unreadable, true);
+  assert.equal(pageFilesFromPlan(stray), null);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-stray-'));
+  try {
+    const p = path.join(dir, 'genpage-plan.md');
+    fs.writeFileSync(p, stray);
+    const res = checkPageFiles({ planPath: p });
+    assert.equal(res.exit, 1);
+    assert.match(res.result.error, /has table rows under a Pages heading that no table header claims/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // CONTROL: stray rows in a section that names no file are no table, and change nothing.
+  assert.deepEqual(pageFilesFromPlan(plan(['## Pages', '| just | a row |'], files)), ['../outside.tsx']);
 });
 
 // The skill's commands put page paths in double quotes, and some in none, and the orchestrator substitutes the name

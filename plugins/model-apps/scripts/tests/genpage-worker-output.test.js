@@ -226,6 +226,7 @@ test('elided code is rejected, but the same words as UI copy are not', () => {
     ['an elision block comment', '  /* ... */'],
     ['an omitted-for-brevity comment', '  // Implementation omitted for brevity'],
     ['a bare ellipsis line', '  ...'],
+    ['a bare ellipsis line before a statement in a block', '  ...\n  renderRows();'],
     ['a bare ellipsis line inside executable template code', '  const title = `${(() => {\n    ...\n  })()}`;'],
   ]) {
     const result = validatePageOutput({ filePath: write(page(body)) });

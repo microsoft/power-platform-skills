@@ -883,18 +883,21 @@ Was it quote wrapped? No, be sure to wrap values that contain spaces.
 
 …for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
 
-**Write the prompt and agent-message to files first**, then pass the paths:
+**Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
+paths. The display name is the maker's text too: substituted into `--name "<name>"`, PowerShell expanded `$(…)` in
+it before the script ran, and `Revenue $100` arrived as `Revenue `. Pass it with `--name-file`, never `--name`:
 
 ```powershell
 Set-Content -Path "<working-dir>/prompt.txt"        -Value $prompt        -Encoding UTF8 -NoNewline
 Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encoding UTF8 -NoNewline
+Set-Content -Path "<working-dir>/page-name.txt"     -Value $pageName      -Encoding UTF8 -NoNewline
 ```
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file "<path>" --data-sources '<entities>' --prompt-file "<working-dir>/prompt.txt" --model <model-id> --name "<page name>" --agent-message-file "<working-dir>/agent-message.txt" --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file "<path>" --data-sources '<entities>' --prompt-file "<working-dir>/prompt.txt" --model <model-id> --name-file "<working-dir>/page-name.txt" --agent-message-file "<working-dir>/agent-message.txt" --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
@@ -925,7 +928,7 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
   --env <org-url> `
   --app-id <app-id> `
   --code-file <working-dir>/<file>.tsx `
-  --name "Page Display Name" `
+  --name-file "<working-dir>/page-name.txt" `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
   --actions "<working-dir>/actions.json" `

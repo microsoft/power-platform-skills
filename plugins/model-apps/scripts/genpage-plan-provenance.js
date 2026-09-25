@@ -23,7 +23,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { pagesSections } = require('./lib/page-file-targets.js');
+const { pagesTables } = require('./lib/page-file-targets.js');
 
 function sha256(text) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
@@ -91,8 +91,10 @@ function currentStateBlock(src) {
   return next ? rest.slice(0, next.index) : rest;
 }
 // `kind` is what the flow says the document is ('create' | 'edit' — see planKindOf), or null to read it from
-// the document itself. With a kind, only that kind's target is read.
-function planTargets(text, { kind = null } = {}) {
+// the document itself. With a kind, only that kind's target is read. `doc` says which of the two documents
+// this is — the approval 'preview' or the 'written' plan — and each is then read by its own authoritative
+// part alone; null reads either way, as before.
+function planTargets(text, { kind = null, doc = null } = {}) {
   const src = String(text || '');
   if (kind !== 'edit') {
     // A Pages table decides "create" first when the kind is not known: an edit plan has none of its own,
@@ -102,8 +104,8 @@ function planTargets(text, { kind = null } = {}) {
     // Read by the page-file gate's own rule, `## Pages` in the written plan and `### Pages (N total)` in the
     // preview alike. More than one table with a File column names nothing — a Pages table quoted in the
     // requirements used to stand in for the real one (lib/page-file-targets.js pagesSections).
-    const tables = pagesSections(src).filter(Boolean);
-    if (tables.length > 1) return null;
+    const { tables, unreadable } = pagesTables(src);
+    if (unreadable || tables.length > 1) return null;
     const files = tables[0];
     if (files && files.length) return { kind: 'create', targets: files.map((f) => path.posix.normalize(f.trim())).sort() };
     // A create plan is read by its Pages table alone: without one it names nothing, never a page id its text
@@ -113,12 +115,25 @@ function planTargets(text, { kind = null } = {}) {
   // The edit target is the page's GUID: the written plan's `- **Page ID:** <guid>`, or else the GUID
   // folder directly before `page.tsx`, which both the preview's `- **File:** <guid>/page.tsx` and the
   // written plan's `- **Absolute path:** <working-dir>/<guid>/page.tsx` carry.
+  //
+  // The approval preview names its page in its own Current State block, and nowhere else: its prompt snippet
+  // may quote anything — a `## File Being Edited` section included, which, read first, named another page.
+  if (doc === 'preview') {
+    const state = currentStateBlock(src);
+    const file = state === null ? null : FILE_LINE.exec(state);
+    return file ? { kind: 'edit', targets: [file[1].toLowerCase()] } : null;
+  }
   const section = /^##[ \t]+File Being Edited[ \t]*$/im.exec(src);
+  // The written plan names its page in its `## File Being Edited` section, and nowhere else.
+  if (doc === 'written' && !section) return null;
+  let scope = src;
   if (section) {
     const rest = src.slice(section.index + section[0].length);
     const next = /^#{1,2}[ \t]+\S/m.exec(rest);
-    const labels = labelledPageIds(next ? rest.slice(0, next.index) : rest);
+    const body = next ? rest.slice(0, next.index) : rest;
+    const labels = labelledPageIds(body);
     if (labels.length) return labels.every((id) => id && id === labels[0]) ? { kind: 'edit', targets: [labels[0]] } : null;
+    if (doc === 'written') scope = body;
   } else {
     const state = currentStateBlock(src);
     const file = FILE_LINE.exec(state === null ? src : state);
@@ -127,7 +142,7 @@ function planTargets(text, { kind = null } = {}) {
     const [first] = labelledPageIds(src, { lineStart: true });
     if (first !== undefined) return first ? { kind: 'edit', targets: [first] } : null;
   }
-  const folder = src.match(new RegExp(`(?<![\\w-])(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'u'));
+  const folder = scope.match(new RegExp(`(?<![\\w-])(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'u'));
   if (folder) return { kind: 'edit', targets: [folder[1].toLowerCase()] };
   return null;
 }
@@ -220,7 +235,7 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
   if (approvedPlan == null) return { ok: false, error: '--approved is required' };
   const absPlanPath = path.resolve(planPath);
   const kind = planKindOf(absPlanPath);
-  const approved = planTargets(approvedPlan, { kind });
+  const approved = planTargets(approvedPlan, { kind, doc: 'preview' });
   if (!approved) {
     return {
       ok: false,
@@ -249,7 +264,7 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
   }
   // Recorded, not compared: an audit line for workflow-log.md naming the exact file that was verified.
   const writtenHash = sha256(written);
-  const actual = planTargets(written, { kind });
+  const actual = planTargets(written, { kind, doc: 'written' });
   const same = actual && actual.kind === approved.kind
     && actual.targets.length === approved.targets.length
     && actual.targets.every((t, i) => t === approved.targets[i]);

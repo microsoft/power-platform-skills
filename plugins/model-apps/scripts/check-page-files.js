@@ -18,7 +18,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { pageFileProblems, pagesSections } = require('./lib/page-file-targets.js');
+const { pageFileProblems, pagesTables } = require('./lib/page-file-targets.js');
 
 function checkPageFiles({ planPath, workingDir }) {
   if (!planPath) return { exit: 1, result: { ok: false, error: '--plan is required' } };
@@ -29,7 +29,10 @@ function checkPageFiles({ planPath, workingDir }) {
   } catch (e) {
     return { exit: 1, result: { ok: false, error: `--plan could not be read: ${e.message}` } };
   }
-  const tables = pagesSections(plan).filter(Boolean);
+  const { tables, unreadable } = pagesTables(plan);
+  if (unreadable) {
+    return { exit: 1, result: { ok: false, error: `${abs} has table rows under a Pages heading that no table header claims, so which files they name cannot be read — re-plan` } };
+  }
   // Refused, not read by the first: a Pages table quoted in the requirements (fenced or not) decided the
   // files checked here while the workers wrote the real table's (lib/page-file-targets.js).
   if (tables.length > 1) {

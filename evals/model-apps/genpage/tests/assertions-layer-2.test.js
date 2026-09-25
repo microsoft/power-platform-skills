@@ -247,7 +247,9 @@ test('no TODO: fail on executable template elision while allowing legal multilin
     '};',
   ].join('\n');
   assert.equal(check({ files: [f('spread.tsx', spread)], eval: evalStub() }).status, 'pass');
+  const blockElision = ['export default function GeneratedComponent() {', '  ...', '  renderRows();', '  return null;', '}'].join('\n');
   assert.equal(check({ files: [f('template.tsx', template)], eval: evalStub() }).status, 'fail');
+  assert.equal(check({ files: [f('block.tsx', blockElision)], eval: evalStub() }).status, 'fail');
 });
 
 // The eval and the runtime worker-output gate share one rule (findElisionMarker): elision counts only

@@ -179,7 +179,9 @@ downloads that round-trip Choice columns.
   still commit, and a re-send could only be refused as a false version conflict. Activating a
   business process flow on a newly created table can take longer than the old 60 s.
 - **`/genpage` runs only the plan you approved** ([#585]). An edit plan is read as an edit, by its file name,
-  so a Pages table quoted from the page's prompt cannot make an edit of another page pass. A plan left over from an earlier run is
+  and the approval preview by its own Current State block and the written plan by its own File Being Edited
+  section, so a Pages table or an edit section quoted from the page's prompt cannot make an edit of another
+  page pass. A plan left over from an earlier run is
   quarantined before the planner writes, and the new file must build exactly the pages the approved
   plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
   A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included), or a
@@ -229,6 +231,9 @@ downloads that round-trip Choice columns.
   cast (`total as NonNullable<number> / count`), a spread whose operand is on the next line, and a
   member export such as `export default pages.Home` at the end of the file. The same checks back
   `/genpage`'s new gate.
+- **A page's display name reaches the upload by file** ([#588]). `genpage-upload.js` takes `--name-file`, and
+  `/genpage` writes the name to a file as it does the prompt: substituted into `--name "<name>"`, a shell expanded
+  `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.
 - **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
   `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
   names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
@@ -237,7 +242,8 @@ downloads that round-trip Choice columns.
   names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
   already there) halt the build, as does a new page that is an already-built one reached through a link
   or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
-  table naming files — one quoted in the requirements, fenced, quoted or not — halts too, instead of only the
+  table naming files — one quoted in the requirements, fenced, quoted or not, and each table counted on its own,
+  however many share a heading — halts too, instead of only the
   first being checked, and `/app-builder` writes its page plan only as a plain file in the working
   directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
   `--out`). The same rule covers the

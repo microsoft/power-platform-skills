@@ -33,7 +33,7 @@ const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank } = require('./lib/genpage-cli.js');
 
-const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name',
+const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
   'model', 'connectors', 'actions', 'add-to-sitemap'];
 // Bare switches; every other flag carries a value.
@@ -41,7 +41,7 @@ const SWITCHES = ['add-to-sitemap', 'clear-data-sources'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
-  + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name <text>] '
+  + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
   + '[--connectors <path>] [--actions <path>] [--add-to-sitemap]';
 
@@ -102,6 +102,13 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   if (!prompt.ok) return emit(false, { error: prompt.error });
   const agentMessage = resolveText(flags, 'agent-message', 'agent-message-file', readFile);
   if (!agentMessage.ok) return emit(false, { error: agentMessage.error });
+  // The page's display name travels by file too. It is the maker's text as well, and the skill substituted it
+  // into `--name "<name>"`: PowerShell expanded `$(…)` in it before this script ran — a name could run a
+  // command — and `Revenue $100` arrived as `Revenue `. By file it is never command text, and keeps every
+  // character. Its trailing line break, which an editor adds, is not part of the name.
+  const pageName = resolveText(flags, 'name', 'name-file', readFile);
+  if (!pageName.ok) return emit(false, { error: pageName.error });
+  if (typeof flags['name-file'] === 'string' && pageName.value !== undefined) pageName.value = pageName.value.replace(/(?:\r?\n)+$/, '');
 
   // An EMPTY prompt or agent-message is refused rather than defaulted. `upload()` substitutes
   // `Generative page <name>` for a blank prompt and `Authored by app-builder` for a blank agent
@@ -112,6 +119,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   for (const [label, inlineFlag, fileFlag, resolved] of [
     ['prompt', 'prompt', 'prompt-file', prompt],
     ['agent message', 'agent-message', 'agent-message-file', agentMessage],
+    ['page name', 'name', 'name-file', pageName],
   ]) {
     const given = typeof flags[inlineFlag] === 'string' || typeof flags[fileFlag] === 'string';
     if (given && suppliedButBlank(resolved.value === undefined ? '' : resolved.value)) {
@@ -253,7 +261,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       pageId: flags['page-id'] || undefined,
       codeFile: flags['code-file'],
       compiledCodeFile: flags['compiled-code-file'] || undefined,
-      name: flags.name || undefined,
+      name: pageName.value || undefined,
       prompt: prompt.value,
       agentMessage: agentMessage.value,
       // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the

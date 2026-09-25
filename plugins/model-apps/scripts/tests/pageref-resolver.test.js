@@ -97,8 +97,16 @@ test('extractNavTargets IGNORES navigateTo prose inside ordinary quoted strings'
   assert.deepStrictEqual(navReferencedKeys(code), [], 'declared edges cannot be satisfied by help text');
 });
 
+test('extractNavTargets ignores navigateTo text inside regex literals after arrows', () => {
+  const code = 'const pattern = count<limit ? () => /navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" })/ : () => /none/;';
+  assert.deepStrictEqual(navReferencedKeys(code), []);
+  const { deployment, unresolved } = resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('x'), code);
+});
+
 test('extractNavTargets does not join separate template substitutions into a fake navigateTo call', () => {
-  const code = 'const hint = `${Xrm.Navigation.navigateTo} is a function; input: ${{ pageType: "generative", pageId: "PAGEREF_detail" }}`;';
+  const code = 'const hint = `${Xrm.Navigation.navigateTo} is a function; input: ${({ pageType: "generative", pageId: "PAGEREF_detail" })}`;';
   assert.deepStrictEqual(navReferencedKeys(code), []);
   const { deployment, unresolved } = resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']]));
   assert.deepStrictEqual(unresolved, []);

@@ -217,10 +217,11 @@ function extractUnsupportedIconImports(content) {
     // default/namespace binding can still reach unchecked member names even when named imports exist.
     { kind: 'namespace import', keyword: 'import', re: new RegExp("(?<![\\w$.])import\\s+(?:[A-Za-z_$][\\w$]*\\s*,\\s*)?\\*\\s+as\\s+[A-Za-z_$][\\w$]*\\s+from\\s*['\"]" + escapedModule + "['\"]", 'g') },
     { kind: 'default import', keyword: 'import', re: new RegExp("(?<![\\w$.])import\\s+[A-Za-z_$][\\w$]*(?:\\s*,\\s*(?:\\{[^}]*\\}|\\*\\s+as\\s+[A-Za-z_$][\\w$]*))?\\s+from\\s*['\"]" + escapedModule + "['\"]", 'g') },
-    // Loader forms are blocked as soon as the first argument is the icon module; a trailing comma or
-    // dynamic-import options object still loads the same unchecked namespace.
-    { kind: 'CommonJS require', keyword: 'require', re: new RegExp("\\brequire\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]", 'g') },
-    { kind: 'dynamic import()', keyword: 'import', re: new RegExp("\\bimport\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]", 'g') },
+    // Loader forms are blocked only when the FIRST argument is the complete module string. A derived
+    // expression such as `require("@fluentui/react-icons".replace("icons", "components"))` loads a
+    // different module and must not be blocked; trailing commas/options still load the icon namespace.
+    { kind: 'CommonJS require', keyword: 'require', re: new RegExp("\\brequire\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*(?:[,)])", 'g') },
+    { kind: 'dynamic import()', keyword: 'import', re: new RegExp("\\bimport\\s*\\(\\s*['\"`]" + escapedModule + "['\"`]\\s*(?:[,)])", 'g') },
   ];
   // Only a keyword in CODE is an import. The plugin's TSX lexer blanks comments, strings, template
   // text and JSX text but keeps code inside `${…}`, so an import merely quoted in a help string, a

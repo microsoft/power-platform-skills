@@ -295,22 +295,28 @@ function pageFileProblems(files, opts = {}) {
  *   | Overview | overview.tsx | Summary cards | account |
  * and the preview the planner hands back for approval has the same table under `### Pages (N total)`, so
  * both headings are read. Returns null when the plan has no Pages table with a File column — a
- * malformed plan, which the caller must refuse, not read as "no pages" — or more than one (see
- * pagesSections).
+ * malformed plan, which the caller must refuse, not read as "no pages" — more than one, or rows under a
+ * Pages heading that no table header claims (see pagesTables).
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
  * @returns {string[]|null}
  */
 function pageFilesFromPlan(plan, opts = {}) {
-  const tables = pagesSections(plan, opts).filter(Boolean);
-  return tables.length === 1 ? tables[0] : null;
+  const { tables, unreadable } = pagesTables(plan, opts);
+  return !unreadable && tables.length === 1 ? tables[0] : null;
 }
 
 /**
- * Every Pages section of a plan, in order: a `##` or `###` heading that begins with the word Pages (or the
- * line `opts.heading` matches), up to the next heading of any level. Each entry is that section's File
- * column, or null when it holds no table with one. An escaped pipe (`\|`) inside a cell is not a column
- * boundary.
+ * Every Pages TABLE of a plan. Under each `##` or `###` heading that begins with the word Pages (or the line
+ * `opts.heading` matches), up to the next heading of any level, every header row followed by its delimiter
+ * row starts a table, whose rows run to the next such header or the end of the section — a blank line inside
+ * one does not end it. Returns { tables, unreadable }: the File column of every table that has one, in order,
+ * and whether a section that names files also holds rows ahead of its first header, rows no header claims,
+ * whose files cannot be read: that plan is unreadable, refused rather than those rows dropped. An escaped
+ * pipe (`\|`) inside a cell is not a column boundary.
+ *
+ * A section is not judged by its first table: a `| Page | Purpose |` table ahead of the `| Page | File |` one
+ * hid it, and a Pages table quoted elsewhere then passed as the plan's only one.
  *
  * Two tables with a File column are AMBIGUOUS, and pageFilesFromPlan refuses them rather than read the
  * first: the plan's `## User Requirements` is the maker's text, verbatim, ahead of `## Pages`, so a Pages
@@ -325,26 +331,36 @@ function pageFilesFromPlan(plan, opts = {}) {
  * list of what they want, prose, a per-page `### Pages …` specification — names no file, so it is no table.
  * @param {string} plan
  * @param {{ heading?: RegExp }} [opts]
- * @returns {Array<string[]|null>}
+ * @returns {{ tables: string[][], unreadable: boolean }}
  */
-function pagesSections(plan, opts = {}) {
+function pagesTables(plan, opts = {}) {
   const heading = opts.heading || /^#{2,3}\s+Pages\b/;
   const lines = String(plan || '').replace(/\r\n?/g, '\n').split('\n');
   const cells = (row) => row.replace(/\\\|/g, '\u0000').trim().replace(/^\|/, '').replace(/\|$/, '')
     .split('|').map((c) => c.replace(/\u0000/g, '|').trim());
   // The line with its blockquote markers and indentation taken off: `> > ## Pages` → `## Pages`.
   const bare = (line) => line.replace(/^(?:[ \t]*>)*[ \t]*/, '');
-  const sections = [];
+  // `|---|:--:|`: pipes, colons, spaces and at least one dash.
+  const isDelimiter = (row) => /^[\s|:-]+$/.test(row) && row.includes('-');
+  const tables = [];
+  let unreadable = false;
   lines.forEach((line, start) => {
     if (!heading.test(bare(line))) return;
     const rows = [];
     for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(bare(lines[i])); i += 1) {
       if (bare(lines[i]).startsWith('|')) rows.push(bare(lines[i]));
     }
-    const col = rows.length >= 2 && /^[\s|:-]+$/.test(rows[1]) ? cells(rows[0]).map((h) => h.toLowerCase()).indexOf('file') : -1;
-    sections.push(col === -1 ? null : rows.slice(2).map((row) => cells(row)[col] || ''));
+    const starts = [];
+    for (let k = 0; k + 1 < rows.length; k += 1) if (!isDelimiter(rows[k]) && isDelimiter(rows[k + 1])) starts.push(k);
+    const found = starts.map((k, n) => {
+      const col = cells(rows[k]).map((h) => h.toLowerCase()).indexOf('file');
+      const body = rows.slice(k + 2, n + 1 < starts.length ? starts[n + 1] : rows.length);
+      return col === -1 ? null : body.map((row) => cells(row)[col] || '');
+    }).filter(Boolean);
+    if (found.length && starts[0] > 0) unreadable = true;
+    tables.push(...found);
   });
-  return sections;
+  return { tables, unreadable };
 }
 
-module.exports = { pageFileProblems, pageFilesFromPlan, pagesSections };
+module.exports = { pageFileProblems, pageFilesFromPlan, pagesTables };

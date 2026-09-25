@@ -264,6 +264,30 @@ test('a closed TypeScript type assertion inside a template expression is an oper
   assert.equal(endsMidStatement(code), false);
 });
 
+test('an arrow before a regex is not mistaken for a generic close', () => {
+  const code = 'const pattern = count<limit ? () => /\\(/ : () => /none/;\nexport default function P(){ return null; }';
+  assert.equal(hasDefaultExport(code), true);
+  assert.equal(hasUnbalancedBrackets(code), false);
+  assert.equal(endsMidStatement(code), false);
+});
+
+test('spaced type arguments after a type assertion are operands before division', () => {
+  const code = [
+    'const total = 12, count = 2;',
+    'const label = `${total as NonNullable< number > / count}/month`;',
+    'const GeneratedComponent = () => label;',
+    'export default GeneratedComponent;',
+  ].join('\n');
+  assert.equal(hasDefaultExport(code), true);
+  assert.equal(hasUnbalancedBrackets(code), false);
+  assert.equal(endsMidStatement(code), false);
+});
+
+test('a complete multiline JSX self-closing tag at EOF is not mid-statement', () => {
+  const code = 'export default () => <div\n  title="Ready"\n/>';
+  assert.equal(endsMidStatement(code), false);
+});
+
 test('a comment inside a template expression does not decide what a following slash is', () => {
   const exprEnd = (src) => scanTemplateExpressionEnd(src, src.indexOf('${') + 2);
   // The comment ends in `:`, which would read as a regex start — but `total / count` is a division.
@@ -413,7 +437,11 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     ['an array pattern inside an object pattern', 'const { a: [Page] } = lib;\nexport default Page;\n'],
     // A member chain followed by a line break is a complete statement (a cut would have removed it).
     ['a member chain on its own line', 'import * as React from "react";\nexport default React.memo\n'],
+    ['a syntactically complete member chain at EOF (documented cut limit)', 'import * as React from "react";\nconst Inner = () => null;\nexport default React.memo'],
+    ['a syntactically complete partial member name at EOF (documented cut limit)', 'import * as React from "react";\nconst Inner = () => null;\nexport default React.mem'],
     ['a member chain at EOF', 'const pages = { Home: () => null };\nexport default pages.Home'],
+    ['an imported namespace member chain at EOF', 'import * as UI from "@fluentui/react-components";\nexport default UI.Spinner'],
+    ['a typed object member chain at EOF', 'const pages: Record<string, () => null> = { Home: () => null };\nexport default pages.Home'],
     ['a return type naming a property like a statement word', 'export default function P(): Schema.module { return null as any; }\n'],
     // Overload signatures come before the body; any complete `export default` will do.
     ['overloads', 'export default function f(x: string): string;\nexport default function f(x: any) { return x; }\n'],
@@ -466,8 +494,6 @@ test('hasDefaultExport requires the export itself to be complete', () => {
     ['a name only an array literal holds', 'const list = [a, Page];\nexport default Page;\n'],
     ['a const declarator with no initializer', 'const Header = 1, as\nexport default as'],
     ['a computed destructuring key', 'const { [GeneratedComponent]: x } = obj;\nexport default GeneratedComponent;\n'],
-    ['cut before a call', 'import * as React from "react";\nconst Inner = () => null;\nexport default React.memo'],
-    ['cut inside a member name', 'import * as React from "react";\nconst Inner = () => null;\nexport default React.mem'],
     // An expression that stops at a token needing more.
     ['cut after a dot', 'import * as React from "react";\nexport default React.'],
     ['cut after an optional dot', 'import * as React from "react";\nexport default React?.'],
@@ -498,6 +524,7 @@ test('endsMidStatement distinguishes dangling operators from postfix and JSX or 
   for (const [what, code] of [
     ['relational greater-than needs a right operand', 'const count = 1;\nexport default () => count >'],
     ['division slash needs a right operand', 'const count = 1;\nexport default () => count /'],
+    ['JSX followed by dangling division slash needs a right operand', 'export default () => <div>Hi</div> /'],
     ['prefix bang needs its operand', 'const count = 1;\nexport default () => !'],
   ]) {
     assert.equal(endsMidStatement(code), true, what);
@@ -523,6 +550,7 @@ test('findElisionMarker distinguishes legal multiline spread from elision in exe
   ].join('\n');
   assert.equal(findElisionMarker(legalSpread), null);
   assert.match(findElisionMarker('const rows = [\n  ...\n];') || '', /bare `\.\.\.` line/);
+  assert.match(findElisionMarker('export default function GeneratedComponent() {\n  ...\n  renderRows();\n  return null;\n}') || '', /bare `\.\.\.` line/);
   const executableTemplateBody = [
     'const GeneratedComponent = () => {',
     '  const title = `${(() => {',

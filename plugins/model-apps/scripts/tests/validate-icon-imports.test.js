@@ -243,6 +243,18 @@ test('CommonJS icon imports are blocked because they bypass named import validat
 
 // Member access through an inline require or a dynamic import reaches an icon without any import
 // declaration at all, so these are matched wherever they appear.
+test('require and dynamic import allow expressions derived from the icon module string (exit 0)', () => {
+  for (const line of [
+    'const Icons = require("@fluentui/react-icons".replace("icons", "components"));',
+    'const Icons = await import("@fluentui/react-icons".replace("icons", "components"));',
+  ]) {
+    const content = `${GENPAGE_HEADER}\n${line}\n`;
+    const fp = writeTemp(tmp, 'page.tsx', content);
+    const { status, stderr } = runHook(payloadFor(fp, content));
+    assert.equal(status, 0, `${line}\n${stderr}`);
+  }
+});
+
 test('require and dynamic import block on the icon module argument before trailing commas or options (exit 2)', () => {
   for (const [kind, line] of [
     ['CommonJS', 'const Icons = require("@fluentui/react-icons",);'],

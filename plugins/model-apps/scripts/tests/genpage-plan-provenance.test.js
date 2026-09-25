@@ -143,6 +143,23 @@ test('verifyPlanProvenance reads an edit plan as an edit, whatever its quoted pr
   assert.equal(planTargets(`# Genpage Plan\n- **Page ID:** ${PAGE_ID}\n`, { kind: 'create' }), null);
 });
 
+// The preview's prompt snippet may quote anything — a `## File Being Edited` section included, which, read first,
+// named another page: the correct written plan then halted and a wrong one passed. The preview is read by its own
+// Current State block, and the written plan by its File Being Edited section.
+test('verifyPlanProvenance reads the preview by its Current State and the written plan by its own section', () => {
+  const other = '7f1d39b3-cdbf-41ec-9186-d10fd5de6e35';
+  const preview = EDIT_PREVIEW.replace('- **Data:** Mock data\n', `- **Data:** Mock data\n- **Original prompt:** Example:\n## File Being Edited\n- **Page ID:** ${other}\n`);
+  assert.deepEqual(planTargets(preview, { kind: 'edit', doc: 'preview' }), { kind: 'edit', targets: [PAGE_ID] });
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: preview }).ok, true, 'the approved page passes');
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN.replace(/6e0c28a2/g, '7f1d39b3'), EDIT), approvedPlan: preview }).ok, false, 'another page halts');
+  // A written plan without its section names nothing, whatever else it quotes; nor does a preview without its block.
+  assert.equal(planTargets(`# Genpage Edit Plan\n## Original Page Context\n- **File:** ${PAGE_ID}/page.tsx\n`, { kind: 'edit', doc: 'written' }), null);
+  assert.equal(planTargets(`## Genpage Edit Plan\n## File Being Edited\n- **Page ID:** ${PAGE_ID}\n`, { kind: 'edit', doc: 'preview' }), null);
+  // CONTROL: a written plan whose section has no Page ID label is read by the page folder in the section's own path.
+  const noLabel = EDIT_WRITTEN.replace(`- **Page ID:** ${PAGE_ID}\n`, '') + `\n## Original Page Context\n- **File:** ${other}/page.tsx\n`;
+  assert.deepEqual(planTargets(noLabel, { kind: 'edit', doc: 'written' }), { kind: 'edit', targets: [PAGE_ID] });
+});
+
 test('verifyPlanProvenance halts when the planner wrote nothing, or the approval names no pages', () => {
   const missing = verifyPlanProvenance({ planPath: tmpPlan(), approvedPlan: PREVIEW });
   assert.equal(missing.ok, false);
