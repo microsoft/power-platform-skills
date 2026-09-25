@@ -772,10 +772,16 @@ test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unver
 test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
   const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
     dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
-  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200 } = {}) => ({
+  const fetches = [];
+  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read.
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null } = {}) => {
+    let reads = 0;
+    const xml = () => (later && reads > 2 ? later : '<form/>');
+    return {
     findTables: async () => [],
     findColumns: async () => [],
-    queryRecords: async (set) => {
+    queryRecords: async (set, o) => {
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml() }]; }
       if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
       if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
       if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
@@ -784,28 +790,37 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
     listArtifacts: async (type) => (type === 'dashboard' ? [{ type, id: 'dash-1', isDirty: dirty }] : []),
     dataverse: { get: async (url) => {
       assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
-      return { status: draftStatus, body: { formxml: draftXml } };
+      reads += 1;
+      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml } };
     } },
-    fetchArtifact: async () => {},
+    fetchArtifact: async (type, id, o) => { fetches.push(o); },
     getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
       TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] }),
     fetchEntityMetadata: async () => ({ Relationships: [] }),
     resolveArtifact: async () => [],
     retrieveSetting: async () => null,
-  });
+    };
+  };
   const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
   for (const [what, opts, detail] of [
     ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
     ['unpushed edits in the workspace copy', { dirty: true }, /the workspace copy of dashboard dash-1 holds edits that were never pushed/],
     ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
+    ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
   ]) {
     const chk = await check(sdkWith(opts));
     assert.strictEqual(chk.present, false, what);
     assert.match(chk.detail, detail, what);
   }
-  // CONTROL: published, with nothing pending — the tiles are read and checked.
+  // A dirty copy is refused BEFORE the fetch: the fetch resets the copy, and must never discard unpushed edits.
+  fetches.length = 0;
+  await check(sdkWith({ dirty: true }));
+  assert.deepStrictEqual(fetches, [], 'nothing fetched over unpushed edits');
+  // CONTROL: published, with nothing pending — the tiles are read from a fresh fetch, and checked.
+  fetches.length = 0;
   const ok = await check(sdkWith());
   assert.strictEqual(ok.present, true, ok.detail);
+  assert.deepStrictEqual(fetches, [{ overwrite: true }], 'a fresh read, not the SDK cache');
 });
 
 test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {

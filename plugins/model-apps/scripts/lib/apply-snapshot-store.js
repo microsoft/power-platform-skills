@@ -285,6 +285,7 @@ function invalidateSnapshot(workspaceDir, options = {}) {
 // CANNOT be created is one no build can use either — it keeps its SDK state there, and a claim or a
 // baseline write needs the same mkdir — so that one case still answers ok without writing.
 const CANNOT_CREATE = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOTDIR', 'EEXIST', 'ENOENT', 'EINVAL', 'ENAMETOOLONG']);
+const MKDIR_ATTEMPTS = 5;
 
 // The teardowns in flight, as a tombstone lists them (see releaseTombstone). A running teardown refreshes its
 // entry's `beat` every TEARDOWN_BEAT_MS (beatTeardown), and an entry counts only while its process is alive
@@ -343,7 +344,20 @@ function tombstoneSnapshot(workspaceDir, deps = {}) {
   try {
     // Returns the first folder it created, or undefined when the whole path already existed — namespaced
     // on Node 22 for Windows (see plainPath).
-    createdDir = plainPath(mkdir(workspaceDir, { recursive: true })) || null;
+    //
+    // An ENOENT is retried. A folder moved away between mkdir's own steps — a --clear-workspace renaming it
+    // aside (clearWorkspace) — surfaces as ENOENT from a folder that existed a moment before, and read as "no
+    // workspace can exist here": the teardown then ran with no fence while a build could recreate the folder
+    // and bless a baseline. A race resolves on the next attempt, which makes a fresh folder; a path that truly
+    // cannot exist, on a drive that is not there, fails the same way every time.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        createdDir = plainPath(mkdir(workspaceDir, { recursive: true })) || null;
+        break;
+      } catch (e) {
+        if (!(e && e.code === 'ENOENT') || attempt >= MKDIR_ATTEMPTS) throw e;
+      }
+    }
   } catch (e) {
     // Any other code (EBUSY, EMFILE, ENOSPC, EIO, …) is transient: a build could still get the folder, so
     // the teardown fails closed rather than proceed unfenced.
@@ -504,10 +518,20 @@ function clearWorkspace(target, deps = {}) {
   try { lease = acquireLease(target, deps); } catch (e) { return { ok: false, reason: `the workspace lease could not be taken (${e.message})` }; }
   if (!lease.ok) return { ok: false, reason: `the workspace is in use (${lease.reason})` };
   let aside = null;
+  let reserved = false;
+  const claim = `${leasePath(target)}.reclaim`;
   try {
     if (fs.existsSync(snapshotPath(target))) {
       return { ok: false, reason: 'a changed-only snapshot was written to it after this teardown finished — another teardown or build of it is running' };
     }
+    // The reclaim claim is reserved too, the way a reclaimer takes it (acquireLease): a reclaim in progress
+    // refuses the clear, and none can start while the folder is moved. A claim that moved WITH the folder was
+    // later deleted by its reclaimer by path — in a folder recreated there, another writer's live claim. Ours
+    // moves with the folder and goes with it.
+    try { fs.writeFileSync(claim, lease.token, { flag: 'wx' }); } catch (e) {
+      return { ok: false, reason: e && e.code === 'EEXIST' ? 'a reclaim of its lease is in progress' : `its lease could not be reserved (${(e && e.code) || e})` };
+    }
+    reserved = true;
     if (typeof deps.beforeRename === 'function') deps.beforeRename();
     const candidate = `${target}.cleared-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
     fs.renameSync(target, candidate);
@@ -515,8 +539,11 @@ function clearWorkspace(target, deps = {}) {
   } catch (e) {
     return { ok: false, reason: `it could not be moved aside (${(e && e.code) || (e && e.message) || e})` };
   } finally {
-    // Once moved, the lock went with the folder: nothing is left here to release.
-    if (!aside) releaseLease(lease);
+    // Once moved, the lock and the claim went with the folder: nothing is left here to release.
+    if (!aside) {
+      if (reserved) { try { fs.rmSync(claim, { force: true }); } catch { /* best-effort: it names itself (acquireLease) */ } }
+      releaseLease(lease);
+    }
   }
   try {
     fs.rmSync(aside, { recursive: true, force: true });

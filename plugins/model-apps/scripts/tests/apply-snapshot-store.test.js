@@ -564,6 +564,53 @@ test('clearWorkspace removes the folder under its lease, never a snapshot writte
   } finally { rm(base); }
 });
 
+// A reclaimer's claim that moved with the folder was later deleted by that reclaimer by PATH — in a folder recreated
+// there, another writer's live claim. The clear reserves the claim itself: a reclaim in progress refuses it.
+test('clearWorkspace refuses while a reclaim of the lease is in progress, and leaves no claim behind', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-clear-claim-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    fs.mkdirSync(d);
+    const claim = `${store.leasePath(d)}.reclaim`;
+    fs.writeFileSync(claim, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'reclaimer' }));
+    const busy = store.clearWorkspace(d);
+    assert.strictEqual(busy.ok, false);
+    assert.match(busy.reason, /a reclaim of its lease is in progress/);
+    assert.ok(fs.existsSync(d), 'nothing moved');
+    assert.strictEqual(JSON.parse(fs.readFileSync(claim, 'utf8')).rnd, 'reclaimer', 'the reclaimer\u2019s claim is untouched');
+    assert.ok(!fs.existsSync(store.leasePath(d)), 'and the clear released its lease');
+    fs.rmSync(claim);
+    // While the clear holds the claim, a reclaimer finds it taken by a live writer.
+    let during = null;
+    const cleared = store.clearWorkspace(d, { beforeRename: () => { during = fs.existsSync(claim); } });
+    assert.ok(cleared.ok, JSON.stringify(cleared));
+    assert.strictEqual(during, true, 'the claim is reserved while the folder moves');
+    assert.ok(!fs.existsSync(d));
+  } finally { rm(base); }
+});
+
+// A folder renamed away between mkdir's own steps surfaced as ENOENT from a folder that had existed, and read as
+// "no workspace can exist here": the teardown then ran with no fence. An ENOENT is retried.
+test('tombstoneSnapshot retries a mkdir that fails with ENOENT, and fences the folder it then makes', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-tomb-enoent-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    let calls = 0;
+    const flaky = (p, o) => { calls += 1; if (calls === 1) throw Object.assign(new Error('gone mid-mkdir'), { code: 'ENOENT' }); return fs.mkdirSync(p, o); };
+    const tomb = store.tombstoneSnapshot(d, { mkdirSync: flaky });
+    assert.ok(tomb.ok && tomb.teardownId, JSON.stringify(tomb));
+    assert.strictEqual(calls, 2);
+    assert.ok(store.readSnapshot(d), 'the fence is written');
+    // A path that truly cannot exist keeps failing the same way: then there is no workspace to fence.
+    let tries = 0;
+    const never = () => { tries += 1; throw Object.assign(new Error('no such drive'), { code: 'ENOENT' }); };
+    const none = store.tombstoneSnapshot(path.join(base, 'nowhere', '.maker-workspace'), { mkdirSync: never });
+    assert.ok(none.ok && !none.teardownId, JSON.stringify(none));
+    assert.match(none.reason, /no workspace can exist/);
+    assert.ok(tries > 1, 'retried before concluding');
+  } finally { rm(base); }
+});
+
 // The folder is moved aside BEFORE anything is deleted, so a delete that fails leaves the path free, not a half-
 // deleted workspace — and names what is left, instead of a stack trace.
 test('clearWorkspace moves the folder aside first, and names what a failed delete leaves', (t) => {

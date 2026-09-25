@@ -259,22 +259,31 @@ function readerFor(sdk, appUnique, opts) {
     // published, or never pushed at all, passed while users still saw the broken dashboard. The deserializer
     // is kept (download reads tiles through it, and a second FormXML parser would drift from it), and the
     // read is refused unless it IS the published dashboard: the copy carries no unpushed edits, and the
-    // server's draft FormXML is the published row's.
+    // server's draft FormXML is the published row's — both before AND after the fetch the tiles come from.
+    // Checked only after it, a draft the fetch had cached and a maker then discarded passed, while the
+    // published dashboard was broken throughout. The fetch resets the (clean) copy, so the SDK's short-lived
+    // artifact cache cannot hand back an older read either.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
     dashboardComponents: async (dashboardId) => {
-      await sdk.fetchArtifact('dashboard', dashboardId);
+      // Checked FIRST: the fetch below resets the copy to the server's, which must never discard unpushed edits.
       const listed = (await sdk.listArtifacts('dashboard')).find((a) => a && a.id === dashboardId);
       if (listed && listed.isDirty) {
         throw new Error(`the workspace copy of dashboard ${dashboardId} holds edits that were never pushed, so it is not what is deployed — rebuild, or delete the workspace, then verify`);
       }
-      const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
-      const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
-      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
-      if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
-      const draftXml = draft.body && draft.body.formxml;
-      if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
-      if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
+      const publishedXml = async () => {
+        const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
+        const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
+        // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+        if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
+        const draftXml = draft.body && draft.body.formxml;
+        if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
+        if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
+        return row.formxml;
+      };
+      const before = await publishedXml();
+      await sdk.fetchArtifact('dashboard', dashboardId, { overwrite: true });
       const art = await sdk.getArtifact('dashboard', dashboardId);
+      if ((await publishedXml()) !== before) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
       // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
       // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
       // has no tiles, as download-model-app.js reads it.
