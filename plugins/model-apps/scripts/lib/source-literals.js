@@ -98,36 +98,53 @@ function greaterThanClosesTypeArguments(src, close) {
   return typeArgumentOpenFollowsCastOrAnnotation(src, open);
 }
 
+// The `<` that a type-argument `>` at `close` closes, or -1 when the span between them cannot be type arguments.
+// Scanned backward with two depths: `depth` counts angle brackets, `nest` the (), {} and [] groups inside the span.
+// Operators are judged by where they sit:
+//   - `&&`, `||` and `??` hold no type anywhere: `lo as number < hi && count > /}/` is two comparisons;
+//   - `+`, `*`, `/`, `%`, `!`, `:` and a bare `=` hold no type at the OUTER level, outside every nested group. There
+//     they are an expression's: `{ a: start < anchor + padding, b: end > /}/.exec(t) }` is two properties. Nested,
+//     they are type syntax: a type parameter's default in `ReturnType<<T = unknown>(x: T) => number>`, a mapped-type
+//     modifier in `(x: { +readonly [K in "v"]: number }) => number`, an annotation in `(a: number) => void`;
+//   - a `<` that sits inside a group the `>` is outside of (`(a < b) > c`) closes nothing here.
+// Function types are valid inside type arguments (`ReturnType<() => number>`): the arrow's `>` is not an angle close.
 function matchingTypeArgumentOpen(src, close) {
   let depth = 1;
+  let nest = 0;
   for (let k = close - 1; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
     const c = src[k];
-    // Function types are valid inside type arguments:
-    //   ReturnType<() => number>
-    // The arrow's `>` is not an angle close and must not change the balance.
+    if (c === ')' || c === '}' || c === ']') { nest += 1; continue; }
+    if (c === '(' || c === '{' || c === '[') {
+      if (nest === 0) return -1;
+      nest -= 1;
+      continue;
+    }
     if (c === '>' && src[k - 1] !== '=') depth += 1;
     else if (c === '<') {
       depth -= 1;
-      if (depth === 0) return k;
+      if (depth === 0) return nest === 0 ? k : -1;
     } else if (c === ';' && depth === 1) {
       return -1;
-    } else if (EXPRESSION_ONLY_OPERATOR(src, k)) {
-      // An operator no type can hold ends the match: the `<` and `>` of
-      //   lo as number < hi && count > /}/.source.length
-      // are comparisons, and pairing them as type arguments read the regex after them as a division.
+    } else if (LOGICAL_OPERATOR(src, k) || (depth === 1 && nest === 0 && OUTER_EXPRESSION_OPERATOR(src, k))) {
       return -1;
     }
   }
   return -1;
 }
 
-// `&&`, `||` and `??`: the operators no type syntax can hold, so a `<…>` span containing one is a comparison. Every
-// other operator character appears in some type: a single `&` or `|` (intersection, union), `=` (a type parameter's
-// default: `ReturnType<<T = unknown>(x: T) => number>`), `+` and `-` (mapped-type modifiers, negative literals), `?`
-// and `:` (conditional and optional types), `=>` (function types), and `/` or `*` in a comment left in raw text.
-function EXPRESSION_ONLY_OPERATOR(src, k) {
+// `&&`, `||`, `??`: no type syntax holds one at any depth. A single `&`, `|` or `?` is an intersection, a union or a
+// conditional/optional type.
+function LOGICAL_OPERATOR(src, k) {
   const c = src[k];
   return (c === '&' || c === '|' || c === '?') && (src[k - 1] === c || src[k + 1] === c);
+}
+
+// Operators no type holds at the outer level of type arguments (see matchingTypeArgumentOpen). `=` is one only when it
+// is not the `=` of an arrow (`=>`); `-` is not in the set, since a negative literal type is written `-1`.
+function OUTER_EXPRESSION_OPERATOR(src, k) {
+  const c = src[k];
+  if (c === '+' || c === '*' || c === '/' || c === '%' || c === '!' || c === ':') return true;
+  return c === '=' && src[k + 1] !== '>';
 }
 
 // Type names that take no type arguments: `as number <` can only be a comparison.

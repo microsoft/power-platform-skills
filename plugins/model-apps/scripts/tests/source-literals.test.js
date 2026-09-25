@@ -704,6 +704,18 @@ test('cast type arguments reach their `as` through intersections and unions, and
   assert.equal(endsMidStatement(`${d}export default () => total satisfies "n/a" | NonNullable<number> / count /`), true);
   assert.equal(findElisionMarker(`${d}export default function Page() {\n  const avg = total satisfies "n/a" | NonNullable<number> / count; // TODO: render chart\n  return null;\n}`),
     'a TODO/FIXME comment', 'the comment after a division is a comment, not a regex');
+  // `+`, `:` and the like are an expression's at the outer level of a would-be type-argument span. Taking them for type
+  // syntax paired `start < anchor + padding` in one property with `end > /}/` in the next, across the `,` and the
+  // `:` between, and the page read as unbalanced.
+  const siblings = 'const start = 1, anchor = 4, padding = 1, end = 9;\nconst text = "value }";\nconst bounds = {\n  startsBefore: start < anchor + padding,\n  endsAfter: end > /}/.exec(text)!.index,\n};\nexport default () => <p>{String(bounds.endsAfter)}</p>;';
+  assert.equal(hasUnbalancedBrackets(siblings), false);
+  assert.equal(endsMidStatement(siblings), false);
+  const siblingsNav = 'const start = 1, anchor = 4, end = 9;\nconst text = "value }";\nconst marker = `${({ a: start < anchor, b: end > /}/.exec(text)!.index }).b ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default () => null;';
+  assert.deepEqual(navReferencedKeys(siblingsNav), ['details']);
+  // A `<` inside a group the `>` is outside of closes nothing there: `({ a: lo < hi }).a > /}/` compares twice,
+  // although the `<` follows a property's `:`.
+  const grouped = 'const lo = 0, hi = 2;\nconst marker = `${({ a: lo < hi }).a > /}/.source.length ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default () => null;';
+  assert.deepEqual(navReferencedKeys(grouped), ['details']);
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {
