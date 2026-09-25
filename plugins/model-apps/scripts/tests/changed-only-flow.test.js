@@ -633,6 +633,32 @@ test('run: the no-identity fallback invalidates an existing baseline before it b
   } finally { rm(busy); }
 });
 
+// A build that sees the workspace change under it cannot vouch for a baseline another build blessed meanwhile: it may
+// have overwritten what that baseline certifies since. The snapshot it finds is made ineligible, so the next run
+// cannot noop on it.
+test('run: a build that saw the workspace change under it leaves no eligible baseline behind', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const blessedInside = async (dir) => {
+    const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+    assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
+    assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: the inner build blessed a fresh baseline');
+  };
+  for (const [what, seed, outerIdentity] of [
+    ['a no-identity build', () => {}, async () => null],
+    ['a full build whose baseline write is refused', () => {}, async () => FRESH],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const build = async () => { await blessedInside(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+      await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: outerIdentity }) });
+      assert.strictEqual(store.readSnapshot(dir).eligible, false, `${what}: the baseline blessed meanwhile is no longer eligible`);
+      const next = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+      assert.notStrictEqual(next.noop, true, `${what}: the next run does not noop on it`);
+    } finally { rm(dir); }
+  }
+});
+
 test('dropBaselineClaim removes only the placeholder it was given', () => {
   const dir = ws();
   try {

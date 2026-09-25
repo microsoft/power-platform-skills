@@ -260,6 +260,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     if (genOf(store.readSnapshot(ws)) !== before) {
       const msg = 'changed-only: the workspace changed while this build ran (a teardown or another build ran alongside it), so what it built may already be partly deleted — re-run the build once that has finished';
       log(`✗ ${msg}`);
+      distrustWorkspace(ws, log);
       return { ...r, ok: false, errors: [...((r && r.errors) || []), msg], changedOnly: { decision: 'full', reason: 'the workspace changed during the build' } };
     }
     if (claimed) {
@@ -317,7 +318,10 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     if (r && r.ok && !r.dryRun && r.verify && r.verify.ok) {
       const refreshed = assembleFastSnapshot({ snapshot, annotatedSpec, created: r.created, pageKeys: decision.pageKeys, generation: snap.newGeneration() });
       const cas = store.casWriteSnapshot(ws, refreshed, inv.generation);
-      if (!cas.ok) log(`▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (${cas.reason}) — the next run will do a full build`);
+      if (!cas.ok) {
+        log(`▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (${cas.reason}) — the next run will do a full build`);
+        distrustWorkspace(ws, log);
+      }
       else log('✓ changed-only: fast apply verified; snapshot re-blessed eligible');
     } else if (r && r.ok && !r.dryRun) {
       log('▸ changed-only: fast apply completed but page verify did not pass — snapshot left invalidated (next run will full-build)');
@@ -366,10 +370,27 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     if (!live.appId) { const relive = await deps.resolveLiveIdentity(); if (relive) liveForWrite = relive; }
     const env = assembleBaselineSnapshot({ annotatedSpec, created: r.created, live: liveForWrite, prior: snapshot, appPreExisted, sampleDataApplied: !!opts.sampleData });
     const wrote = store.casWriteSnapshot(ws, env, expectedGen);
-    if (!wrote.ok) log(`▸ changed-only: full apply succeeded but the snapshot was not persisted (${wrote.reason})`);
+    if (!wrote.ok) {
+      log(`▸ changed-only: full apply succeeded but the snapshot was not persisted (${wrote.reason})`);
+      distrustWorkspace(ws, log);
+    }
     else log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
   }
   return { ...r, changedOnly: decision };
+}
+
+// A run that finds the workspace changed under it (its generation moved while it built, or its baseline write was
+// refused) cannot tell what the other writer recorded from what this run changed after it. A baseline another build
+// blessed meanwhile would certify a state this run may since have overwritten, and a later run would noop on it. So an
+// ELIGIBLE snapshot found there is made ineligible, and the next run builds in full. The invalidate is fenced to the
+// generation just read, so a writer landing after that read is not overwritten, and it keeps the snapshot's
+// tombstone, debt and teardown list. An ineligible snapshot (a tombstone, a claim, an invalidated one) certifies
+// nothing and is left as it is. Best-effort: the run is already reporting the conflict.
+function distrustWorkspace(ws, log) {
+  const now = store.readSnapshot(ws);
+  if (!now || now.eligible !== true) return;
+  const inv = store.invalidateSnapshot(ws, { expectedGeneration: now.generation || null });
+  if (!inv.ok) log(`▸ changed-only: could not invalidate the baseline another run left (${inv.reason}) — run the next build without --changed-only`);
 }
 
 // Force a FULL-phase apply: changed-only decides its own phases, so it must ignore any --stage/--only/etc.
