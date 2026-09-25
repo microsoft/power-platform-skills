@@ -78,29 +78,38 @@ function isPropertyName(src, s) {
 
 // Heuristic for the ambiguous `>` token in dependency-free TSX scanning. The raw shapes this protects:
 //   total as NonNullable< number > / count    `>` closes a cast type argument; `/` is division
+//   export default Page<string>               `>` closes a generic instantiation; EOF is complete
+//   type Rows = Record<string, Array<number>> `>` closes a type-alias RHS; EOF is complete
 //   export default () => <Icon />             `>` closes JSX; EOF is complete
 //   export default () => count >              `>` is a relational operator; EOF is truncated
 //   count<limit ? () => /re/ : () => /none/   the `>` in `=>` is not an angle close
 function greaterThanEndsOperand(src, close) {
   if (src[close - 1] === '=') return false;
-  return greaterThanClosesCastTypeArguments(src, close) || greaterThanClosesJsxTag(src, close);
+  return greaterThanClosesTypeArguments(src, close) || greaterThanClosesJsxTag(src, close);
 }
 
-function greaterThanClosesCastTypeArguments(src, close) {
-  let depth = 0;
-  for (let k = close; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
+function greaterThanClosesTypeArguments(src, close) {
+  const open = matchingTypeArgumentOpen(src, close);
+  if (open === -1) return false;
+  return typeArgumentOpenFollowsCastOrAnnotation(src, open) || typeArgumentOpenFollowsIdentifier(src, open);
+}
+
+function matchingTypeArgumentOpen(src, close) {
+  let depth = 1;
+  for (let k = close - 1; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
     const c = src[k];
-    if (c === '>') depth += 1;
-    else if (c === '=' && src[k + 1] === '>') return false;
+    // Function types are valid inside type arguments:
+    //   ReturnType<() => number>
+    // The arrow's `>` is not an angle close and must not change the balance.
+    if (c === '>' && src[k - 1] !== '=') depth += 1;
     else if (c === '<') {
       depth -= 1;
-      if (depth !== 0) continue;
-      return typeArgumentOpenFollowsCastOrAnnotation(src, k);
-    } else if (c === '\n' || c === ';') {
-      return false;
+      if (depth === 0) return k;
+    } else if (c === ';' && depth === 1) {
+      return -1;
     }
   }
-  return false;
+  return -1;
 }
 
 function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
@@ -109,6 +118,16 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
   while (p >= 0 && /[\w$.\]]/.test(src[p])) p -= 1;
   const before = prevWordOrPunct(src, p + 1);
   return before === 'as' || before === 'satisfies' || before === ':';
+}
+
+function typeArgumentOpenFollowsIdentifier(src, open) {
+  // Generic instantiation and type-alias RHS shapes put `<` immediately after the type name:
+  //   export default Page<string>
+  //   type Rows = Record<string, Array<number>>
+  // A relational chain with spacing (`a < b > c`) is not this shape, so its final `>` remains an
+  // operator. The no-whitespace requirement is deliberate; it keeps expression comparisons from
+  // becoming "generic" just because the right operand happens to look like a type name.
+  return /[\p{ID_Continue}$\])]/u.test(src[open - 1] || '');
 }
 
 function prevWordOrPunct(src, before) {
@@ -318,7 +337,7 @@ function blankLiterals(code, opts) {
 // as the start of a regex that swallowed the closing `}`, and the apostrophe in `${<p>it's</p>}` as a
 // string. Either way the template never ended, and the page's `export default` vanished with it.
 // Otherwise it returns src.length.
-function lexInto(src, out, start, { onComment = null, onRegexEnd = null, untilCloseBrace = false, onEnd = null } = {}) {
+function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTagEnd = null, untilCloseBrace = false, onEnd = null } = {}) {
   const blank = (from, to) => {
     for (let k = Math.max(0, from); k < to && k < src.length; k += 1) if (src[k] !== '\n') out[k] = ' ';
   };
@@ -494,6 +513,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, untilCl
       }
       if (c === '{') { enterJsxExpr('jsxTag'); i += 1; continue; }
       if (c === '/' && n === '>') {                 // self-closing: no text run follows
+        if (onJsxTagEnd) onJsxTagEnd(i + 1);
         mode = jsxDepth > 0 ? 'jsxText' : 'code';
         i += 2;
         continue;
@@ -505,6 +525,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, untilCl
       if (c === '<') { angleDepth += 1; i += 1; continue; }
       if (c === '>') {
         if (angleDepth > 0) { angleDepth -= 1; i += 1; continue; }
+        if (onJsxTagEnd) onJsxTagEnd(i);
         jsxDepth += 1;
         mode = 'jsxText';
         i += 1;
@@ -520,6 +541,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, untilCl
       const end = src.indexOf('>', i);
       const stop = end === -1 ? src.length : end + 1;
       if (end === -1) unterminated = true;
+      else if (onJsxTagEnd) onJsxTagEnd(end);
       jsxDepth = Math.max(0, jsxDepth - 1);
       mode = jsxDepth > 0 ? 'jsxText' : 'code';
       i = stop;
@@ -901,15 +923,16 @@ function endsMidStatement(code) {
   const src = String(code || '');
   const out = src.split('');
   const regexEnds = new Set();
+  const jsxTagEnds = new Set();
   let open = false;
-  lexInto(src, out, 0, { onRegexEnd: (index) => regexEnds.add(index), onEnd: (end) => { open = end.open; } });
+  lexInto(src, out, 0, { onRegexEnd: (index) => regexEnds.add(index), onJsxTagEnd: (index) => jsxTagEnds.add(index), onEnd: (end) => { open = end.open; } });
   const bare = out.join('');
-  return open || DANGLING_TAIL.test(bare) || hasDanglingFinalOperator(out, regexEnds);
+  return open || DANGLING_TAIL.test(bare) || hasDanglingFinalOperator(out, regexEnds, jsxTagEnds);
 }
 
-function hasDanglingFinalOperator(out, regexEnds) {
+function hasDanglingFinalOperator(out, regexEnds, jsxTagEnds) {
   const { ch, index } = prevSignificant(out, out.length);
-  if (ch === '>') return !greaterThanEndsOperand(out, index);
+  if (ch === '>') return !jsxTagEnds.has(index) && !greaterThanEndsOperand(out, index);
   if (ch === '/') return !regexEnds.has(index);
   if (ch === '!') return expressionPosition(out, index);
   return false;
@@ -977,12 +1000,71 @@ function bareEllipsisElidesCode(mask) {
   const line = /^[ 	]*(\.\.\.|…)[ 	]*$/gm;
   let m;
   while ((m = line.exec(mask)) !== null) {
-    const prev = prevSignificant(mask, m.index).ch;
     let k = line.lastIndex;
     while (k < mask.length && /\s/.test(mask[k])) k += 1;
-    if (!['[', '(', ','].includes(prev) || k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
+    if (!ellipsisContextAllowsOperand(mask, m.index) || k >= mask.length || /[}\])>,]/.test(mask[k]) || ellipsisFollowedByStatement(mask, k)) return true;
   }
   return false;
+}
+
+function ellipsisContextAllowsOperand(mask, index) {
+  const context = innermostDelimiter(mask, index);
+  if (!context) return false;
+  if (context.ch === '[') return true;
+  if (context.ch === '{') return braceAllowsBareEllipsis(mask, context.index);
+  if (context.ch === '(') return parenAllowsBareEllipsis(mask, context.index, index);
+  return false;
+}
+
+function innermostDelimiter(mask, end) {
+  const stack = [];
+  const pairs = { ')': '(', ']': '[', '}': '{' };
+  for (let k = 0; k < end; k += 1) {
+    const c = mask[k];
+    if (c === '(' || c === '[' || c === '{') stack.push({ ch: c, index: k });
+    else if (pairs[c]) {
+      for (let j = stack.length - 1; j >= 0; j -= 1) {
+        if (stack[j].ch === pairs[c]) { stack.length = j; break; }
+      }
+    }
+  }
+  return stack[stack.length - 1] || null;
+}
+
+function braceAllowsBareEllipsis(mask, open) {
+  // A bare-line `...` is valid inside object literals and binding patterns:
+  //   const copy = { ... base }
+  //   const { a, ... rest } = row
+  // but the same raw line inside a statement block is an elision placeholder:
+  //   function GeneratedComponent() { ... renderRows(); }
+  const before = prevSignificant(mask, open);
+  if (before.ch === '=' || before.ch === ':' || before.ch === '(' || before.ch === '[' || before.ch === ',') return true;
+  const { word } = wordBefore(mask, open);
+  return word === 'const' || word === 'let' || word === 'var' || word === 'return';
+}
+
+function parenAllowsBareEllipsis(mask, open, index) {
+  // Calls and arrow-parameter lists allow multiline spread/rest:
+  //   fn( ... args )
+  //   (... args) => args.length
+  // A grouping expression after an arrow does not:
+  //   () => ( ... renderRows() )
+  const before = prevSignificant(mask, open).ch;
+  if (/[\p{ID_Continue}$\])}]/u.test(before)) return true;
+  const close = matchingParenAfter(mask, open, index);
+  if (close === -1) return false;
+  let k = close + 1;
+  while (k < mask.length && /\s/.test(mask[k])) k += 1;
+  return mask[k] === '=' && mask[k + 1] === '>';
+}
+
+function matchingParenAfter(mask, open, from) {
+  let depth = 1;
+  for (let k = Math.max(open + 1, from); k < mask.length; k += 1) {
+    if (mask[k] === '(') depth += 1;
+    else if (mask[k] === ')' && --depth === 0) return k;
+  }
+  return -1;
 }
 
 function ellipsisFollowedByStatement(mask, k) {

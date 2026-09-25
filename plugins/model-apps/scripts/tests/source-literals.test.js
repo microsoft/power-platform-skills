@@ -11,6 +11,32 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition } = require('../lib/source-literals.js');
 
+// The TypeScript parser the lexer's review snippets are checked against. The plugin ships dependency-free, so a
+// checkout has none: point TYPESCRIPT_ORACLE_PATH at a `typescript` package to run that check, skipped otherwise.
+function loadTypescriptOracle() {
+  const at = process.env.TYPESCRIPT_ORACLE_PATH;
+  if (!at) return null;
+  try {
+    return require(at);
+  } catch {
+    return null;
+  }
+}
+
+function parseDiagnosticMessages(ts, code) {
+  return ts.createSourceFile('snippet.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    .parseDiagnostics
+    .map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'));
+}
+
+function assertTsParses(ts, code, label) {
+  assert.deepEqual(parseDiagnosticMessages(ts, code), [], label);
+}
+
+function assertTsRejects(ts, code, pattern, label) {
+  assert.match(parseDiagnosticMessages(ts, code).join('\n'), pattern, label);
+}
+
 test('blanks comments, strings and template bodies while preserving offsets', () => {
   const src = 'const a = "hi"; // note\nconst b = `t${x}`; /* c */ const d = 1;';
   const out = blankLiterals(src);
@@ -561,6 +587,123 @@ test('findElisionMarker distinguishes legal multiline spread from elision in exe
     'export default GeneratedComponent;',
   ].join('\n');
   assert.match(findElisionMarker(executableTemplateBody) || '', /bare `\.\.\.` line/);
+});
+
+test('TypeScript parser oracle documents lexer review snippets and adversarial neighbours', (t) => {
+  const oracle = loadTypescriptOracle();
+  if (!oracle) {
+    t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+    return;
+  }
+  const valid = {
+    'multiline object spread after {': [
+      'const base = { title: "Ready" };',
+      'const copy = {',
+      '  ...',
+      '  base',
+      '};',
+      'const GeneratedComponent = () => null;',
+      'export default GeneratedComponent;',
+    ].join('\n'),
+    'generic instantiation default export at EOF': 'function Page<T>() { return null; }\nexport default Page<string>',
+    'type alias with nested type arguments at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Record<string, Array<number>>',
+    'multiline cast type arguments before division in a template': [
+      'const total = 12, count = 2;',
+      'const label = `${total as NonNullable<',
+      '  number',
+      '> / count}/month`;',
+      'const GeneratedComponent = () => null;',
+      'export default GeneratedComponent;',
+    ].join('\n'),
+    'function type inside type arguments before division in a template': 'const total = 12, count = 2;\nconst label = `${total as ReturnType<() => number> / count}/month`;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+    'self-closing JSX callback at EOF': 'import { Input } from "@fluentui/react-components";\nexport default () => <Input onChange={() => console.log("changed")} />',
+    'TSX generic arrow with comma': 'const f = <T,>(x: T) => x;\nexport default f;',
+    'relational chain a < b > c': 'const x = a < b > c;\nexport default x;',
+    'nested type arguments before division': 'const total = 12, count = 2;\nconst label = `${total as Record<string, Array<number>> / count}/month`;\nexport default label;',
+    'regex after statement-head paren': 'const value = 1;\nif (ready) /x/.test(value);\nexport default value;',
+    'regex after return keyword': 'function f(){ return /x/; }\nexport default f;',
+    'call spread split across lines': 'const y = fn(\n  ...\n  args\n);\nexport default y;',
+    'array spread split across lines': 'const y = [\n  ...\n  rows\n];\nexport default y;',
+    'arrow rest params': 'const f = (...args) => args.length;\nexport default f;',
+    'object rest destructuring': 'const { a, ...rest } = o;\nexport default rest;',
+    'non-null assertion at EOF': 'const x = y!;\nexport default x!',
+    'non-null assertion before division at EOF': 'const z = x! / y;\nexport default z',
+    'self-closing JSX with relational attribute at EOF': 'const x = 2;\nexport default () => <A b={x > 1} />',
+    'self-closing JSX with block callback at EOF': 'export default () => <A b={() => { console.log("x"); }} />',
+  };
+  for (const [label, code] of Object.entries(valid)) assertTsParses(oracle, code, label);
+  assertTsRejects(oracle, 'const GeneratedComponent = () => (\n  ...\n  renderRows()\n);\nexport default GeneratedComponent;', /Expression expected|Declaration or statement expected/, 'grouping parens do not allow spread');
+  assertTsRejects(oracle, 'export default function GeneratedComponent() {\n  ...\n  renderRows();\n  return null;\n}', /Declaration or statement expected/, 'block elision is not TypeScript');
+  assertTsRejects(oracle, 'const x = a >', /Expression expected/, 'dangling relational greater-than is not TypeScript');
+});
+
+test('findElisionMarker follows parser-valid spread and rest contexts only', () => {
+  const accepted = {
+    'object spread after object literal open': [
+      'const base = { title: "Ready" };',
+      'const copy = {',
+      '  ...',
+      '  base',
+      '};',
+      'const GeneratedComponent = () => null;',
+      'export default GeneratedComponent;',
+    ].join('\n'),
+    'object rest destructuring': 'const { a, ...rest } = o;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+    'array spread': 'const rows = [1, 2];\nconst copy = [\n  ...\n  rows\n];\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+    'call spread': 'const args = [1, 2];\nconst copy = fn(\n  ...\n  args\n);\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+    'arrow rest params': 'const f = (\n  ...\n  args\n) => args.length;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+  };
+  for (const [label, code] of Object.entries(accepted)) assert.equal(findElisionMarker(code), null, label);
+  const rejected = {
+    'block elision': 'export default function GeneratedComponent() {\n  ...\n  renderRows();\n  return null;\n}',
+    'grouping parens do not allow spread': 'const GeneratedComponent = () => (\n  ...\n  renderRows()\n);\nexport default GeneratedComponent;',
+  };
+  for (const [label, code] of Object.entries(rejected)) assert.match(findElisionMarker(code) || '', /bare `\.\.\.` line/, label);
+});
+
+test('endsMidStatement accepts parser-complete generic and type tails but rejects dangling relational operators', () => {
+  const complete = {
+    'generic instantiation default export at EOF': 'function Page<T>() { return null; }\nexport default Page<string>',
+    'type alias with nested type arguments at EOF': 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\ntype Rows = Record<string, Array<number>>',
+    'nested type arguments before division in a template': 'const total = 12, count = 2;\nconst label = `${total as Record<string, Array<number>> / count}/month`;\nexport default label;',
+    'non-null assertion at EOF': 'const x = y!;\nexport default x!',
+    'non-null assertion before division at EOF': 'const z = x! / y;\nexport default z',
+  };
+  for (const [label, code] of Object.entries(complete)) assert.equal(endsMidStatement(code), false, label);
+  assert.equal(endsMidStatement('const x = a >'), true, 'dangling relational greater-than still needs a right operand');
+  assert.equal(endsMidStatement('const x = a < b > c'), false, 'a complete relational chain is an operand');
+});
+
+test('template expression slash classification handles multiline and nested type arguments', () => {
+  for (const [label, code] of Object.entries({
+    'multiline type arguments before division': [
+      'const total = 12, count = 2;',
+      'const label = `${total as NonNullable<',
+      '  number',
+      '> / count}/month`;',
+      'const GeneratedComponent = () => null;',
+      'export default GeneratedComponent;',
+    ].join('\n'),
+    'function type arrow inside type arguments before division': 'const total = 12, count = 2;\nconst label = `${total as ReturnType<() => number> / count}/month`;\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;',
+    'regex after statement-head paren': 'const value = 1;\nif (ready) /x/.test(value);\nexport default value;',
+    'regex after return keyword': 'function f(){ return /x/; }\nexport default f;',
+  })) {
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(hasUnbalancedBrackets(code), false, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
+});
+
+test('endsMidStatement accepts self-closing JSX EOF tags using recorded tag closes', () => {
+  for (const [label, code] of Object.entries({
+    'callback attribute': 'import { Input } from "@fluentui/react-components";\nexport default () => <Input onChange={() => console.log("changed")} />',
+    'relational expression attribute': 'const x = 2;\nexport default () => <A b={x > 1} />',
+    'block callback attribute containing a semicolon': 'export default () => <A b={() => { console.log("x"); }} />',
+  })) {
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(hasUnbalancedBrackets(code), false, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
 });
 
 test('every committed .tsx the repo ships is accepted (false-positive corpus)', () => {
