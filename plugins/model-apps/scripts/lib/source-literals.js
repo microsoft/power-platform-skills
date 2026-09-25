@@ -117,9 +117,10 @@ function matchingTypeArgumentOpen(src, close) {
   return -1;
 }
 
-// Type names that take no type arguments: `as number <` can only be a comparison.
+// Type names that take no type arguments: `as number <` can only be a comparison. `this`, `true` and `false` are
+// types too, and take none either.
 const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined', 'null', 'number', 'string',
-  'boolean', 'bigint', 'symbol', 'object']);
+  'boolean', 'bigint', 'symbol', 'object', 'this', 'true', 'false']);
 
 // Is the `<` at `open` the start of type arguments in a cast or annotation? The type they belong to may be one
 // constituent of an intersection or union, so the walk back steps over the others to reach `as`/`satisfies`/`:`:
@@ -132,34 +133,62 @@ const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined',
 function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
   const skipSpace = (i) => { while (i >= 0 && /\s/.test(src[i])) i -= 1; return i; };
   const skipName = (i) => { while (i >= 0 && /[\w$.\]\[]/.test(src[i])) i -= 1; return i; };
-  let end = skipSpace(open - 1);
-  let p = skipName(end);
-  // Char by char, not `slice`: `src` may be the lexer's partly blanked output ARRAY (see expressionPosition).
-  let name = '';
-  for (let k = p + 1; k <= end; k += 1) name += src[k];
-  if (p === end || PRIMITIVE_TYPES.has(name)) return false;
-  while (open - p <= LOOKAHEAD) {
-    const q = skipSpace(p);
-    const op = src[q];
-    if (!((op === '&' || op === '|') && src[q - 1] !== op)) break;
-    let r = skipSpace(q - 1);
+  const wordEndingAt = (e) => { let s = e; while (s >= 0 && /[\w$]/.test(src[s])) s -= 1; let w = ''; for (let k = s + 1; k <= e; k += 1) w += src[k]; return { s, w }; };
+  // Steps back over one constituent that ends at `r`: a name (qualified or indexed, `Row[Key]`), a literal, either with
+  // its own closed type arguments, or a string literal. Returns the index before it, or null.
+  const skipConstituent = (r) => {
     if (src[r] === '"' || src[r] === "'") {
       const quote = src[r];
       let k = r - 1;
       while (k >= 0 && !(src[k] === quote && src[k - 1] !== '\\')) k -= 1;
-      if (k < 0) return false;
-      p = k - 1;
-      continue;
+      return k < 0 ? null : k - 1;
     }
     if (src[r] === '>') {
       const o = matchingTypeArgumentOpen(src, r);
-      if (o === -1) return false;
+      if (o === -1) return null;
       r = skipSpace(o - 1);
     }
-    const e = r;
-    r = skipName(r);
-    if (r === e) return false;
-    p = r;
+    const s = skipName(r);
+    return s === r ? null : s;
+  };
+  // The head, the name the `<` belongs to. TypeScript attaches type arguments only to a plain (qualified) type name on
+  // the same line as the `<`. An indexed type (`Row[Key] <`), a literal (`0 | 1 <`), a primitive or `this`, or a line
+  // break before the `<` (`as Count` then `< high` on the next line) makes that `<` a comparison.
+  let end = open - 1;
+  while (end >= 0 && (src[end] === ' ' || src[end] === '\t')) end -= 1;
+  let p = end;
+  while (p >= 0 && /[\w$.]/.test(src[p])) p -= 1;
+  // Char by char, not `slice`: `src` may be the lexer's partly blanked output ARRAY (see expressionPosition).
+  let name = '';
+  for (let k = p + 1; k <= end; k += 1) name += src[k];
+  if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(name) || PRIMITIVE_TYPES.has(name)) return false;
+  while (open - p <= LOOKAHEAD) {
+    const q = skipSpace(p);
+    const op = src[q];
+    if ((op === '&' || op === '|') && src[q - 1] !== op) {
+      const r = skipConstituent(skipSpace(q - 1));
+      if (r === null) return false;
+      p = r;
+      continue;
+    }
+    // A conditional type's false branch: `as V extends U ? 0 : NonNullable<V> / count`. Step back over the true branch,
+    // its `?`, the extends type and `extends` itself, to the checked type. A ternary or an object property has no
+    // `extends` before its `?`, so the walk refuses it here.
+    if (op === ':' && src[q - 1] !== ':') {
+      let r = skipConstituent(skipSpace(q - 1));
+      if (r === null) return false;
+      r = skipSpace(r);
+      if (src[r] !== '?' || src[r - 1] === '?') return false;
+      r = skipConstituent(skipSpace(r - 1));
+      if (r === null) return false;
+      const { s, w } = wordEndingAt(skipSpace(r));
+      if (w !== 'extends') return false;
+      r = skipConstituent(skipSpace(s));
+      if (r === null) return false;
+      p = r;
+      continue;
+    }
+    break;
   }
   // Only a cast. A `:` looked like an annotation's, but no valid code puts a division directly after an annotation's
   // type (`const x: Foo<T> / 2` is no TypeScript), and every `:` it matched was an object property's, a ternary's or a

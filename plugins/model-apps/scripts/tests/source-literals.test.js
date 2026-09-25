@@ -729,6 +729,28 @@ test('cast type arguments reach their `as` through intersections and unions, and
   const conditional = `${d}const label = \`\${total as ReturnType<() => number extends number ? number : never> / count}\`;\nexport default () => null;`;
   assert.equal(hasDefaultExport(conditional), true);
   assert.equal(endsMidStatement(conditional), false);
+  // TypeScript attaches type arguments only to a plain type name on the same line as the `<`. After an indexed type,
+  // a literal, or a line break, the `<` is a comparison.
+  const cmp = 'const low = 1, high = 4, count = 9, text = "value }";\n';
+  for (const [label, code] of Object.entries({
+    'an indexed type before `<`': `type Row = { qty: number };\ntype Key = "qty";\n${cmp}const allowed = low as Row[Key] < high && count > /}/.exec(text)!.index;\nexport default () => <p>{String(allowed)}</p>;`,
+    'a literal type before `<`': `${cmp}const allowed = low as 0 | 1 < high && count > /}/.exec(text)!.index;\nexport default () => <p>{String(allowed)}</p>;`,
+    'a line break before `<`': `type Count = number;\n${cmp}const allowed = low as Count\n  < high && count > /}/.exec(text)!.index;\nexport default () => <p>{String(allowed)}</p>;`,
+    'a CRLF line break before `<`': `type Count = number;\r\n${cmp.replace('\n', '\r\n')}const allowed = low as Count\r\n  < high && count > /}/.exec(text)!.index;\r\nexport default () => <p>{String(allowed)}</p>;`,
+  })) {
+    assert.equal(hasUnbalancedBrackets(code), false, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
+  assert.deepEqual(navReferencedKeys(`type Row = { qty: number };\ntype Key = "qty";\n${cmp}const m = \`\${low as Row[Key] < high && count > /}/.exec(text)!.index ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}\`;\nexport default () => null;`), ['details']);
+  // An indexed type is still a constituent before the head: `Row[Key] & Brand<"x">` casts.
+  const indexedEarlier = `type Row = { qty: number };\ntype Key = "qty";\ntype Brand<T> = { __b: T };\n${d}const label = \`\${total as Row[Key] & Brand<"x"> / count}\`;\nexport default () => null;`;
+  assert.equal(endsMidStatement(indexedEarlier), false);
+  assert.equal(hasDefaultExport(indexedEarlier), true);
+  // A cast whose type is itself conditional: the walk steps back over `extends … ? … :` to the `as`.
+  const direct = `type Value = number | undefined;\n${d}const label = \`\${total as Value extends undefined ? 0 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`;
+  assert.equal(hasDefaultExport(direct), true);
+  assert.equal(endsMidStatement(direct), false);
+  assert.equal(endsMidStatement(`type Value = number | undefined;\n${d}export default () => total as Value extends undefined ? 0 : NonNullable<Value> / count /`), true);
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {
