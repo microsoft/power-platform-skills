@@ -659,6 +659,112 @@ test('run: a build that saw the workspace change under it leaves no eligible bas
   }
 });
 
+// A fresh-app build that has built and verified still holds the generation its baseline write will CAS against, and
+// its snapshot is ineligible until then. Distrust that skipped an ineligible snapshot left that generation standing,
+// and the paused build then blessed a state the other build had since changed. Distrust rotates it.
+test('run: a build paused before its baseline write cannot bless it after another build distrusted the workspace', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    let signalPaused;
+    const paused = new Promise((res) => { signalPaused = res; });
+    let release;
+    const gate = new Promise((res) => { release = res; });
+    let calls = 0;
+    const innerDeps = baseDeps(dir, {
+      buildModelApp: stubBuild([]),
+      readContent: readFor('v1'),
+      // The second lookup is the one a fresh build makes after its build, just before its baseline CAS.
+      resolveLiveIdentity: async () => { calls += 1; if (calls === 2) { signalPaused(); await gate; } return FRESH; },
+    });
+    let inner = null;
+    const outerBuild = async () => {
+      inner = flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+      await paused;
+      return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+    };
+    const outer = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: outerBuild, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(outer.ok, false, 'the older build saw the newer one');
+    release();
+    await inner;
+    assert.notStrictEqual(store.readSnapshot(dir).eligible, true, 'the paused build could not bless its baseline');
+  } finally { rm(dir); }
+});
+
+// A build that fails verification, or halts, has still changed the environment. Its way out skipped the conflict check,
+// and a baseline another build blessed while it ran stayed eligible.
+test('run: a build that fails or throws still distrusts a baseline another build blessed while it ran', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, finish, outerIdentity] of [
+    ['a full build whose verify fails', () => ({ ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: false } }), async () => FRESH],
+    ['a full build that throws', () => { throw new Error('build halted'); }, async () => FRESH],
+    ['a no-identity build that throws', () => { throw new Error('build halted'); }, async () => null],
+  ]) {
+    const dir = ws();
+    try {
+      const build = async () => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
+        assert.strictEqual(store.readSnapshot(dir).eligible, true, `${what}: precondition: the inner build blessed a baseline`);
+        return finish();
+      };
+      let threw = null;
+      try {
+        await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: outerIdentity }) });
+      } catch (e) { threw = e; }
+      if (/throws/.test(what)) assert.match(String(threw && threw.message), /build halted/, `${what}: the original error goes on`);
+      assert.strictEqual(store.readSnapshot(dir).eligible, false, `${what}: the baseline blessed meanwhile is no longer eligible`);
+    } finally { rm(dir); }
+  }
+});
+
+// A writer can also land after the build returns but before the baseline write: a fresh-app build looks its identity up
+// again in between. Its refused CAS distrusts what that writer left, too.
+test('run: a baseline blessed between a build and its own baseline write is distrusted', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    let calls = 0;
+    const resolve = async () => {
+      calls += 1;
+      if (calls === 2) {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
+        assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: blessed between the build and the write');
+      }
+      return FRESH;
+    };
+    await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
+    assert.ok(calls >= 2, 'the fresh build looked its identity up again before writing');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false);
+  } finally { rm(dir); }
+});
+
+// A writer can land between distrust's read and its invalidate (the fenced invalidate is then refused). What it left is
+// read again and invalidated in turn, rather than left eligible.
+test('distrustWorkspace invalidates a baseline that landed between its read and its invalidate', (t) => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-first');
+    const realInvalidate = store.invalidateSnapshot;
+    let calls = 0;
+    t.mock.method(store, 'invalidateSnapshot', (d, o) => {
+      calls += 1;
+      if (calls === 1) {
+        seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-landed');
+        return realInvalidate(d, o);
+      }
+      return realInvalidate(d, o);
+    });
+    flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(calls, 2, 'the refused invalidate is retried');
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, false, 'the baseline that landed is invalidated too');
+    assert.notStrictEqual(disk.generation, 'g-landed', 'and its generation rotated');
+  } finally { rm(dir); }
+});
+
 test('dropBaselineClaim removes only the placeholder it was given', () => {
   const dir = ws();
   try {
