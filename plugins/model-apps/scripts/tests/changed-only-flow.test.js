@@ -512,6 +512,38 @@ test('run: the no-identity fallback refuses when the workspace changed during id
   }
 });
 
+// A teardown that begins after that re-read, while the build runs, is not fenced by it, and this path writes no
+// baseline whose CAS could be refused. The workspace is read again when the build returns, and a moved generation
+// fails the run: what the build made may already be partly deleted.
+test('run: the no-identity fallback fails when the workspace changed while the build ran', async () => {
+  for (const [what, seed, during] of [
+    ['a teardown began', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.tombstoneSnapshot(dir)],
+    ['a teardown began on a workspace with no snapshot', () => {}, (dir) => store.tombstoneSnapshot(dir)],
+    ['another build invalidated it', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.invalidateSnapshot(dir, { expectedGeneration: store.readSnapshot(dir).generation })],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const record = [];
+      const build = async (spec, opts) => { record.push(opts.phases); during(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+      assert.strictEqual(record.length, 1, `${what}: the build ran`);
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/, what);
+      assert.strictEqual(r.changedOnly.reason, 'the workspace changed during the build', what);
+    } finally { rm(dir); }
+  }
+  // CONTROL: nothing changes the workspace during the build — the full build's result stands.
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.changedOnly, { decision: 'full', reason: 'no live identity' });
+  } finally { rm(dir); }
+});
+
 // A tombstone no teardown still holds — one that failed, or a day old — does not block: the build runs, and
 // the tombstone's debt keeps its baseline ineligible, as it always did.
 test('run: a tombstone no teardown still holds only makes the baseline ineligible', async () => {

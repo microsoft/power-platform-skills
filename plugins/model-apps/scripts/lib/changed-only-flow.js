@@ -211,15 +211,27 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // and the build would recreate what the teardown is deleting. So the workspace is read again, and the build
   // refused when the snapshot's generation moved: a teardown's tombstone rotates it (on a workspace with no
   // snapshot too, where it creates one), and so does another build's invalidate.
+  //
+  // A teardown that begins AFTER that re-read, while the build is reading or writing, is not fenced by it. The
+  // other branches notice one at the end, when their baseline CAS is refused; this one has no CAS to refuse. So
+  // the workspace is read once more when the build returns: a generation that moved means a teardown or another
+  // build ran alongside this one, so what this build made may already be partly deleted, and the run fails
+  // rather than report a success nothing can vouch for.
   if (!live) {
     const genOf = (s) => (s && s.generation) || null;
-    if (genOf(store.readSnapshot(ws)) !== genOf(snapshot)) {
+    const before = genOf(store.readSnapshot(ws));
+    if (before !== genOf(snapshot)) {
       const msg = 'changed-only: the workspace changed while the live identity was being resolved (a teardown or another build started) — re-run the build once it has finished';
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: { decision: 'full', reason: 'the workspace changed during identity discovery' } };
     }
     log('▸ changed-only: could not resolve live identity (WhoAmI/app discovery) — running a normal full build');
     const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);
+    if (genOf(store.readSnapshot(ws)) !== before) {
+      const msg = 'changed-only: the workspace changed while this build ran (a teardown or another build ran alongside it), so what it built may already be partly deleted — re-run the build once that has finished';
+      log(`✗ ${msg}`);
+      return { ...r, ok: false, errors: [...((r && r.errors) || []), msg], changedOnly: { decision: 'full', reason: 'the workspace changed during the build' } };
+    }
     return { ...r, changedOnly: { decision: 'full', reason: 'no live identity' } };
   }
 
