@@ -204,7 +204,8 @@ downloads that round-trip Choice columns.
   plotted one table's chart over another table's view. Chart identity now includes its table; a tile
   whose view name exists on several tables must say which with `entity`, and verify checks that each
   chart tile's chart and view belong to the tile's table — on the published dashboard: one with
-  unpublished changes, or a workspace copy holding unpushed edits, is reported unverified.
+  unpublished changes is reported unverified, and the tiles are read into a throwaway workspace, never
+  through the build's copy, which may hold unpushed edits.
 - **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
   ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
   the other from the nav. A download withholds such a pair and says why, and it withholds a dashboard

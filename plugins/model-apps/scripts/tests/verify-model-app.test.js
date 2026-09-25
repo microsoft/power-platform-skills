@@ -804,7 +804,6 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
   const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
   for (const [what, opts, detail] of [
     ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
-    ['unpushed edits in the workspace copy', { dirty: true }, /the workspace copy of dashboard dash-1 holds edits that were never pushed/],
     ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
     ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
   ]) {
@@ -812,15 +811,20 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
     assert.strictEqual(chk.present, false, what);
     assert.match(chk.detail, detail, what);
   }
-  // A dirty copy is refused BEFORE the fetch: the fetch resets the copy, and must never discard unpushed edits.
-  fetches.length = 0;
-  await check(sdkWith({ dirty: true }));
-  assert.deepStrictEqual(fetches, [], 'nothing fetched over unpushed edits');
-  // CONTROL: published, with nothing pending — the tiles are read from a fresh fetch, and checked.
-  fetches.length = 0;
+  // CONTROL: published, with nothing pending — the tiles are read and checked.
   const ok = await check(sdkWith());
   assert.strictEqual(ok.present, true, ok.detail);
-  assert.deepStrictEqual(fetches, [{ overwrite: true }], 'a fresh read, not the SDK cache');
+  // With an isolated reader the tiles come from IT — a throwaway workspace — and never from the build's copy, which
+  // may hold unpushed edits (the main SDK here would answer cross-wired tiles and is never asked), and it is disposed.
+  const main = sdkWith();
+  main.fetchArtifact = async () => { throw new Error('the build workspace must not be read for tiles'); };
+  main.getArtifact = async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_customer' } }] });
+  const iso = sdkWith();
+  let disposed = 0;
+  const isolated = await verifySpec(spec, readerFor(main, 'new_supportdesk', { isolatedReader: async () => ({ sdk: iso, dispose: () => { disposed += 1; } }) }));
+  const chk = isolated.checks.find((c) => c.kind === 'dashboard');
+  assert.strictEqual(chk.present, true, chk.detail);
+  assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
 });
 
 test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {

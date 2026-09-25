@@ -62,6 +62,22 @@ function writeSnapshotAtomic(workspaceDir, envelope) {
   }
 }
 
+// Create `file` holding `text` exclusively ('wx' — one writer wins), and remove it again when the write itself
+// fails. writeFileSync with 'wx' creates the file BEFORE it writes, so a write that failed (ENOSPC) left an empty
+// lock or claim behind — and a claim is removed only by its creator (acquireLease), so every later attempt then
+// refused. Throws what open or write threw; EEXIST means another writer holds the file.
+function createExclusive(file, text) {
+  const fd = fs.openSync(file, 'wx');
+  try {
+    fs.writeSync(fd, text);
+  } catch (e) {
+    try { fs.closeSync(fd); } catch { /* best-effort */ }
+    try { fs.rmSync(file, { force: true }); } catch { /* best-effort: it is empty, and names itself (acquireLease) */ }
+    throw e;
+  }
+  fs.closeSync(fd);
+}
+
 // Is `pid` a live process? Best-effort: process.kill(pid, 0) throws ESRCH when the pid is gone, EPERM when
 // it exists but we lack permission (still alive). pid reuse can FALSELY report a dead holder alive, which
 // keeps its lease held (see acquireLease): every write then fails closed, never unsafely.
@@ -85,7 +101,7 @@ function acquireLease(workspaceDir, deps = {}) {
   const lp = leasePath(workspaceDir);
   const token = JSON.stringify({ pid, at: now(), rnd: Math.random().toString(36).slice(2) });
   const tryCreate = () => {
-    try { fs.writeFileSync(lp, token, { flag: 'wx' }); return { ok: true, path: lp, token }; }
+    try { createExclusive(lp, token); return { ok: true, path: lp, token }; }
     catch (e) { return { ok: false, code: e && e.code, error: e }; }
   };
   let r = tryCreate();
@@ -134,7 +150,7 @@ function acquireLease(workspaceDir, deps = {}) {
   // stale. Overwriting and reading back alone let two reclaimers each read their own token back before the
   // other's write landed, and both held the lease.
   const claim = `${lp}.reclaim`;
-  try { fs.writeFileSync(claim, token, { flag: 'wx' }); } catch (e) {
+  try { createExclusive(claim, token); } catch (e) {
     if (!(e && e.code === 'EEXIST')) return { ok: false, reason: `stale lease reclaim failed: ${e && e.message}` };
     // Another writer is reclaiming right now — or crashed doing so. A claim is abandoned by the rule the lock
     // itself follows (above): once its claimer's pid is dead, or, for one with no readable token, once it is
@@ -355,7 +371,10 @@ function tombstoneSnapshot(workspaceDir, deps = {}) {
         createdDir = plainPath(mkdir(workspaceDir, { recursive: true })) || null;
         break;
       } catch (e) {
-        if (!(e && e.code === 'ENOENT') || attempt >= MKDIR_ATTEMPTS) throw e;
+        if (!(e && e.code === 'ENOENT')) throw e;
+        // Retries only buy time: a folder that kept vanishing is no proof that none can exist, so running out of
+        // them fails closed — a teardown with no fence while a build recreates the folder is what they exist to stop.
+        if (attempt >= MKDIR_ATTEMPTS) return { ok: false, reason: `tombstone failed: the workspace at ${workspaceDir} kept vanishing while it was being prepared (ENOENT) — another teardown may be clearing it, or the path cannot exist; re-run, or pass another --workspace` };
       }
     }
   } catch (e) {
@@ -528,8 +547,8 @@ function clearWorkspace(target, deps = {}) {
     // refuses the clear, and none can start while the folder is moved. A claim that moved WITH the folder was
     // later deleted by its reclaimer by path — in a folder recreated there, another writer's live claim. Ours
     // moves with the folder and goes with it.
-    try { fs.writeFileSync(claim, lease.token, { flag: 'wx' }); } catch (e) {
-      return { ok: false, reason: e && e.code === 'EEXIST' ? 'a reclaim of its lease is in progress' : `its lease could not be reserved (${(e && e.code) || e})` };
+    try { createExclusive(claim, lease.token); } catch (e) {
+      return { ok: false, reason: e && e.code === 'EEXIST' ? `a reclaim of its lease is in progress — if no build or teardown of this workspace is running, delete ${claim} and re-run` : `its lease could not be reserved (${(e && e.code) || e})` };
     }
     reserved = true;
     if (typeof deps.beforeRename === 'function') deps.beforeRename();

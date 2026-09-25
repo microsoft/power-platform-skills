@@ -36,7 +36,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
-const { readerFor } = require('./verify-model-app.js');
+const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
@@ -696,7 +696,7 @@ async function main() {
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, isolatedReader: isolatedReaderFor(env) }), verifyOpts),
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

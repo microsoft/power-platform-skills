@@ -575,7 +575,7 @@ test('clearWorkspace refuses while a reclaim of the lease is in progress, and le
     fs.writeFileSync(claim, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'reclaimer' }));
     const busy = store.clearWorkspace(d);
     assert.strictEqual(busy.ok, false);
-    assert.match(busy.reason, /a reclaim of its lease is in progress/);
+    assert.match(busy.reason, /a reclaim of its lease is in progress — if no build or teardown of this workspace is running, delete .*\.reclaim and re-run/);
     assert.ok(fs.existsSync(d), 'nothing moved');
     assert.strictEqual(JSON.parse(fs.readFileSync(claim, 'utf8')).rnd, 'reclaimer', 'the reclaimer\u2019s claim is untouched');
     assert.ok(!fs.existsSync(store.leasePath(d)), 'and the clear released its lease');
@@ -586,6 +586,33 @@ test('clearWorkspace refuses while a reclaim of the lease is in progress, and le
     assert.ok(cleared.ok, JSON.stringify(cleared));
     assert.strictEqual(during, true, 'the claim is reserved while the folder moves');
     assert.ok(!fs.existsSync(d));
+  } finally { rm(base); }
+});
+
+// writeFileSync with 'wx' creates the file BEFORE it writes: a write that failed (ENOSPC) left an empty claim, which
+// only its creator may remove — so every later clear refused. The claim is created, then written, and removed again
+// when the write fails.
+test('a reservation whose write fails leaves no claim behind, and the next clear succeeds', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-clear-enospc-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    fs.mkdirSync(d);
+    const claim = `${store.leasePath(d)}.reclaim`;
+    const realWrite = fs.writeSync;
+    // The lease is written first, the claim second: fail the claim's write.
+    let writes = 0;
+    const mock = t.mock.method(fs, 'writeSync', (fd, ...rest) => {
+      writes += 1;
+      if (writes === 2) throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
+      return realWrite(fd, ...rest);
+    });
+    const failed = store.clearWorkspace(d);
+    mock.mock.restore();
+    assert.strictEqual(failed.ok, false, JSON.stringify(failed));
+    assert.match(failed.reason, /its lease could not be reserved \(ENOSPC\)/);
+    assert.ok(!fs.existsSync(claim), 'the empty claim is removed again');
+    assert.ok(!fs.existsSync(store.leasePath(d)), 'and the lease released');
+    assert.ok(store.clearWorkspace(d).ok, 'so the next clear is not blocked');
   } finally { rm(base); }
 });
 
@@ -601,12 +628,13 @@ test('tombstoneSnapshot retries a mkdir that fails with ENOENT, and fences the f
     assert.ok(tomb.ok && tomb.teardownId, JSON.stringify(tomb));
     assert.strictEqual(calls, 2);
     assert.ok(store.readSnapshot(d), 'the fence is written');
-    // A path that truly cannot exist keeps failing the same way: then there is no workspace to fence.
+    // A folder that keeps vanishing is no proof that none can exist: running out of retries fails closed, never an
+    // unfenced teardown.
     let tries = 0;
-    const never = () => { tries += 1; throw Object.assign(new Error('no such drive'), { code: 'ENOENT' }); };
+    const never = () => { tries += 1; throw Object.assign(new Error('gone again'), { code: 'ENOENT' }); };
     const none = store.tombstoneSnapshot(path.join(base, 'nowhere', '.maker-workspace'), { mkdirSync: never });
-    assert.ok(none.ok && !none.teardownId, JSON.stringify(none));
-    assert.match(none.reason, /no workspace can exist/);
+    assert.strictEqual(none.ok, false, JSON.stringify(none));
+    assert.match(none.reason, /kept vanishing while it was being prepared \(ENOENT\)/);
     assert.ok(tries > 1, 'retried before concluding');
   } finally { rm(base); }
 });

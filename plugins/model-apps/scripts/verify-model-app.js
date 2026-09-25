@@ -10,6 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
@@ -18,6 +19,25 @@ const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
+
+// A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
+// verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
+// one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
+// concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
+// cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
+// the first one's cache.
+function isolatedReaderFor(env) {
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
+    try {
+      const sdk = await makeProvision(env, dir);
+      return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
+    } catch (e) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      throw e;
+    }
+  };
+}
 
 async function makeProvision(env, workspaceDir) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
@@ -258,18 +278,13 @@ function readerFor(sdk, appUnique, opts) {
     // keeps a copy holding unpushed edits while the server has not moved — so a fix saved in Maker but not
     // published, or never pushed at all, passed while users still saw the broken dashboard. The deserializer
     // is kept (download reads tiles through it, and a second FormXML parser would drift from it), and the
-    // read is refused unless it IS the published dashboard: the copy carries no unpushed edits, and the
-    // server's draft FormXML is the published row's — both before AND after the fetch the tiles come from.
-    // Checked only after it, a draft the fetch had cached and a maker then discarded passed, while the
-    // published dashboard was broken throughout. The fetch resets the (clean) copy, so the SDK's short-lived
-    // artifact cache cannot hand back an older read either.
+    // read is refused unless it IS the published dashboard: the server's draft FormXML is the published row's —
+    // both before AND after the fetch the tiles come from (checked only after it, a draft the fetch had cached
+    // and a maker then discarded passed, while the published dashboard was broken throughout). The fetch goes into
+    // a throwaway workspace (opts.isolatedReader — isolatedReaderFor), never the build's, whose copy may hold
+    // unpushed edits or be written by another process mid-read. Callers without one (tests) read through `sdk`.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
     dashboardComponents: async (dashboardId) => {
-      // Checked FIRST: the fetch below resets the copy to the server's, which must never discard unpushed edits.
-      const listed = (await sdk.listArtifacts('dashboard')).find((a) => a && a.id === dashboardId);
-      if (listed && listed.isDirty) {
-        throw new Error(`the workspace copy of dashboard ${dashboardId} holds edits that were never pushed, so it is not what is deployed — rebuild, or delete the workspace, then verify`);
-      }
       const publishedXml = async () => {
         const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
         const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
@@ -281,8 +296,14 @@ function readerFor(sdk, appUnique, opts) {
         return row.formxml;
       };
       const before = await publishedXml();
-      await sdk.fetchArtifact('dashboard', dashboardId, { overwrite: true });
-      const art = await sdk.getArtifact('dashboard', dashboardId);
+      const reader = opts.isolatedReader ? await opts.isolatedReader() : { sdk, dispose: () => {} };
+      let art;
+      try {
+        await reader.sdk.fetchArtifact('dashboard', dashboardId);
+        art = await reader.sdk.getArtifact('dashboard', dashboardId);
+      } finally {
+        reader.dispose();
+      }
       if ((await publishedXml()) !== before) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
       // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
       // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
@@ -425,7 +446,7 @@ async function main() {
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   const sdk = await makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env) }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
@@ -440,4 +461,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor };
