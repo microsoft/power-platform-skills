@@ -51,6 +51,11 @@ const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <gu
 // outside the working directory included. The skill checks each name before it writes (SKILL.md Phase 6); this is
 // the check that holds when that step was skipped: the upload stops, and says the linked file may have been
 // changed. Returns null for a plain file, and for a path that is not there (the read or pac reports that).
+//
+// Scope: both checks close a link left in the folder BEFORE the run, such as one shipped in a cloned repository. A
+// process racing the skill to plant one between its check and its write is out of their reach. Such a process
+// already holds the user's rights over the whole working directory (its pages, plan and manifest), and no check
+// inside the skill can stop it.
 function notPlainFile(abs) {
   let st;
   try { st = fs.lstatSync(abs); } catch (e) {
