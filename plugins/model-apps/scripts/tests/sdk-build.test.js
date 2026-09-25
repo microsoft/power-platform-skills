@@ -864,6 +864,46 @@ test('#583 the finalizer push halts precisely over an unpublished header change,
   assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
 });
 
+// #583 review: a copy an earlier run left holding unpushed edits went out with the next push of the app, whatever
+// that run asked for — a routing description the spec left out was overwritten with the earlier run's, and a
+// wanted one read as already set. Every run that pushes the app refuses such a copy before it applies anything.
+test('#583 a build that pushes the app refuses a copy holding an earlier run\u2019s unpushed edits, before applying anything', async () => {
+  for (const spec of [makeSpec(), routingSpec()]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, dirtyApp: true });
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: fullPhases, genpageCli: noPages }), (e) => {
+      assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
+      assert.match(e.message, /holds edits an earlier run did not push/);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing pushed');
+    assert.strictEqual(appCalls(calls, 'updateElement').length + appCalls(calls, 'addElement').length, 0, 'nothing applied');
+  }
+  // …and so does an app-shell run of a page-less app, whose sitemap push would carry them.
+  const pageLess = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: pageLess.sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-copy-unpushed-edits');
+  assert.strictEqual(appCalls(pageLess.calls, 'updateElement', (c) => c.args[2] === '/siteMap').length, 0);
+  // CONTROL: a clean copy builds, with the one finalizer push.
+  const clean = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk: clean.sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  assert.strictEqual(appCalls(clean.calls, 'pushArtifact').length, 1);
+});
+
+// A failed push of the app resets the copy even when it carried no header change: the edits are projected from
+// the spec and the re-run re-applies them, so a failure no longer leaves a copy the next run must refuse. A
+// concurrent edit keeps it — that copy is what stops a blind re-run from overwriting the other edit.
+test('#583 a failed app push resets the workspace copy, header change or not — except a concurrent edit', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'ECONNRESET' });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset');
+  // …and a failure the SDK RETURNS by value, with a code that is no concurrent edit.
+  const returned = mockSdk({ artifactsExist: true, appPushResult: { saved: false, error: Object.assign(new Error('sitemap target not found'), { code: 'SITEMAP_TARGET_NOT_FOUND' }) } });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: returned.sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(returned.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'a returned failure resets it too');
+  const conflict = mockSdk({ artifactsExist: true, appPushResult: SITEMAP_412 });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: conflict.sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(conflict.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, 'a concurrent edit keeps it');
+});
+
 test('#583 a never-published app\u2019s THROWN refusal halts the same way, after resetting the copy', async () => {
   for (const phases of [appShellPhases, fullPhases]) {
     const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
@@ -882,9 +922,11 @@ test('#583 a never-published app\u2019s THROWN refusal halts the same way, after
 // A push that carried the routing change and failed for any reason but a concurrent edit left that change
 // unrecorded in the workspace copy — where the re-run's plain fetch refuses it once the server moves, and
 // where applyAppAiDescription (which reads the copy) mistakes it for "already set". So the copy is reset
-// before the error propagates — unchanged. Without a routing change nothing is touched.
-test('#583 any other thrown push error propagates unchanged, and resets the copy only when it carried the routing change', async () => {
-  for (const [what, spec, resets] of [['with a routing change', routingSpec(), 1], ['without one', makeSpec(), 0]]) {
+// before the error propagates — unchanged. Without a routing change it is reset too: the sitemap edit it holds
+// is projected from the spec as well, and a copy left holding it would be refused by the next run that pushes
+// the app (refuseUnpushedAppCopy).
+test('#583 any other thrown push error propagates unchanged, and resets the copy, routing change or not', async () => {
+  for (const [what, spec, resets] of [['with a routing change', routingSpec(), 1], ['without one', makeSpec(), 1]]) {
     const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
     sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
     await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {

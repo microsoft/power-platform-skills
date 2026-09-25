@@ -489,11 +489,25 @@ test('a stale lock is reclaimed by one writer only, and never once it has change
     assert.deepStrictEqual([busy.ok, busy.reason], [false, 'lease being reclaimed by another writer']);
     assert.strictEqual(fs.readFileSync(lp, 'utf8'), stale);
     assert.ok(fs.existsSync(claim), 'a young claim is not removed');
-    // A claim older than the staleness window was abandoned: it is removed, and the next attempt reclaims.
+    // A claim older than the staleness window was abandoned — yet no writer but its creator removes it: removing
+    // it was a read and then a delete, and a second reclaimer's live claim could be the one deleted, so both held
+    // the lease. Every attempt fails closed and names the file to delete, and the claim and lock stay as they are.
     const old = new Date(Date.now() - store.LEASE_STALE_MS - 60000);
     fs.utimesSync(claim, old, old);
-    assert.strictEqual(reclaim().ok, false);
-    assert.ok(!fs.existsSync(claim), 'the abandoned claim is removed');
+    for (const attempt of [reclaim(), reclaim()]) {
+      assert.strictEqual(attempt.ok, false);
+      assert.match(attempt.reason, /the reclaim was abandoned \(its claim is older than the staleness window\); if no build or teardown of this workspace is running, delete .*\.reclaim and re-run/);
+    }
+    assert.strictEqual(fs.readFileSync(claim, 'utf8'), 'another writer', 'the abandoned claim is left for the operator');
+    assert.strictEqual(fs.readFileSync(lp, 'utf8'), stale, 'and so is the lock');
+    // …and one whose claimer's pid is gone, likewise.
+    fs.writeFileSync(claim, JSON.stringify({ pid: 424242, at: Date.now(), rnd: 'x' }));
+    const dead = reclaim();
+    assert.strictEqual(dead.ok, false);
+    assert.match(dead.reason, /its claimer, pid 424242, is gone/);
+    assert.ok(fs.existsSync(claim));
+    // Once the operator deletes it, the next attempt reclaims.
+    fs.rmSync(claim);
     const won = reclaim();
     assert.deepStrictEqual([won.ok, won.reclaimed], [true, true]);
     assert.ok(!fs.existsSync(claim), 'and a reclaim leaves no claim behind');
@@ -513,6 +527,63 @@ test('a stale lock is reclaimed by one writer only, and never once it has change
     assert.strictEqual(fs.readFileSync(lp, 'utf8'), stale, 'the lock is not overwritten');
     assert.ok(!fs.existsSync(claim));
   } finally { rm(d); }
+});
+
+// --clear-workspace used to remove the folder in place, after the release: a second teardown's tombstone written
+// in between went with it, and a changed-only build could then bless a baseline while that teardown was still
+// deleting. The clear holds the lease, refuses a snapshot written since, and moves the folder aside in one step.
+test('clearWorkspace removes the folder under its lease, never a snapshot written since, and never in place', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-clear-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'manifest.json'), '{}');
+    // A second teardown's tombstone, written after this teardown's release: refused, and kept.
+    assert.ok(store.tombstoneSnapshot(d).ok);
+    const kept = store.clearWorkspace(d);
+    assert.strictEqual(kept.ok, false);
+    assert.match(kept.reason, /a changed-only snapshot was written to it after this teardown finished/);
+    assert.ok(store.readSnapshot(d), 'the fence is still there');
+    fs.rmSync(store.snapshotPath(d));
+    // A lease another live writer holds: refused, and nothing removed.
+    fs.writeFileSync(store.leasePath(d), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'other' }));
+    const busy = store.clearWorkspace(d);
+    assert.strictEqual(busy.ok, false);
+    assert.match(busy.reason, /the workspace is in use/);
+    assert.ok(fs.existsSync(path.join(d, 'manifest.json')));
+    fs.rmSync(store.leasePath(d));
+    // While the clear holds the lease, a teardown arriving cannot fence the folder: it is refused, never lost.
+    let during = null;
+    const cleared = store.clearWorkspace(d, { beforeRename: () => { during = store.tombstoneSnapshot(d, { attempts: 1, sleep: () => {} }); } });
+    assert.ok(during && during.ok === false, `a teardown arriving mid-clear is refused: ${JSON.stringify(during)}`);
+    assert.ok(cleared.ok, JSON.stringify(cleared));
+    assert.ok(!fs.existsSync(d), 'the folder is gone');
+    assert.deepStrictEqual(fs.readdirSync(base), [], 'and nothing is left beside it');
+    // The path is free for whoever comes next.
+    assert.ok(store.tombstoneSnapshot(d).ok);
+  } finally { rm(base); }
+});
+
+// The folder is moved aside BEFORE anything is deleted, so a delete that fails leaves the path free, not a half-
+// deleted workspace — and names what is left, instead of a stack trace.
+test('clearWorkspace moves the folder aside first, and names what a failed delete leaves', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-clear-busy-'));
+  try {
+    const d = path.join(base, '.maker-workspace');
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'manifest.json'), '{}');
+    const realRm = fs.rmSync;
+    const rmMock = t.mock.method(fs, 'rmSync', (p, ...rest) => {
+      if (String(p).includes('.cleared-')) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return realRm(p, ...rest);
+    });
+    const r = store.clearWorkspace(d);
+    rmMock.mock.restore();
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.ok(!fs.existsSync(d), 'the workspace path is free');
+    assert.match(r.reason, /its contents were moved to .*\.cleared-.*, which could not be deleted \(EBUSY\); delete it by hand/);
+    assert.ok(fs.existsSync(r.leftover), 'the moved folder is where the reason says');
+  } finally { rm(base); }
 });
 
 // A running teardown refreshes its entry, and an entry counts only while it keeps being seen: a KILLED
@@ -593,8 +664,9 @@ test('acquireLease re-takes a lock that vanished meanwhile exclusively, never by
 
 // The reclaim CLAIM follows the lock's own rule: a claimer that is alive keeps it however old it is — one
 // paused mid-reclaim lost it to age, a second writer reclaimed, and both held the lease — and a dead
-// claimer's is removed at once. A claim with no readable token is still aged by its file.
-test('a reclaim claim is abandoned only when its claimer is dead', () => {
+// claimer's is abandoned. An abandoned claim is left for the operator, never removed by another writer: that
+// removal was a read and then a delete, and it could take a second reclaimer's live claim.
+test('a reclaim claim is abandoned only when its claimer is dead, and then left for the operator', () => {
   const d = ws();
   try {
     const lp = store.leasePath(d);
@@ -609,8 +681,12 @@ test('a reclaim claim is abandoned only when its claimer is dead', () => {
     assert.match(busy.reason, /^lease being reclaimed by another writer/);
     assert.ok(busy.reason.includes(`delete ${claim} and re-run`), `an old one says which file to delete: ${busy.reason}`);
     assert.ok(fs.existsSync(claim), 'a live claimer keeps its claim, however old');
-    assert.strictEqual(attempt([]).ok, false);
-    assert.ok(!fs.existsSync(claim), 'a dead claimer\u2019s claim is removed');
+    const gone = attempt([]);
+    assert.strictEqual(gone.ok, false);
+    assert.match(gone.reason, /the reclaim was abandoned \(its claimer, pid 4242, is gone\)/);
+    assert.ok(gone.reason.includes(`delete ${claim} and re-run`), gone.reason);
+    assert.ok(fs.existsSync(claim), 'a dead claimer\u2019s claim is left for the operator');
+    fs.rmSync(claim);
     const won = attempt([]);
     assert.deepStrictEqual([won.ok, won.reclaimed], [true, true]);
     store.releaseLease(won);

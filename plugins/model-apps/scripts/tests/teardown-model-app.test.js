@@ -251,6 +251,8 @@ function loadTeardownCli({
   // What releasing the changed-only tombstone answers: deleted (the ordinary case), or left in place
   // because another teardown of the workspace is still running.
   releaseResult = { ok: true, deleted: true },
+  // What the lease-held clear answers.
+  clearResult = { ok: true },
 }) {
   const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
@@ -333,6 +335,7 @@ function loadTeardownCli({
         deleteSnapshot: (workspaceDir) => events.push({ type: 'deleteSnapshot', workspaceDir }),
         releaseTombstone: (workspaceDir, teardownId, deps) => { events.push({ type: 'releaseTombstone', workspaceDir, teardownId, keep: !!(deps && deps.keep) }); return releaseResult; },
         beatTeardown: (workspaceDir, teardownId) => { events.push({ type: 'beatTeardown', workspaceDir, teardownId }); return { ok: true }; },
+        clearWorkspace: (target) => { events.push({ type: 'clearWorkspace', target }); return clearResult; },
         TEARDOWN_BEAT_MS: 60000,
       };
     }
@@ -406,7 +409,8 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   await harness.main();
   const emitIndex = harness.events.findIndex((e) => e.type === 'emitResult');
   const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
-  const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === workspaceDir);
+  const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'clearWorkspace' && e.target === workspaceDir);
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'never removed in place, outside the lease');
 
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
@@ -445,7 +449,7 @@ test('teardown CLI does not delete a workspace the safety guard refuses', async 
 
   assert.ok(harness.events.some((e) => e.type === 'checkWorkspaceClearable' && e.dir === workspaceDir),
     'the guard must be consulted before any delete');
-  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir),
+  assert.ok(!harness.events.some((e) => (e.type === 'rmSync' && e.dir === workspaceDir) || e.type === 'clearWorkspace'),
     'a refused workspace must NOT be removed');
   const err = harness.stderr.join('');
   assert.match(err, /skipped --clear-workspace/, 'the refusal must be reported, not silent');
@@ -477,13 +481,42 @@ test('teardown CLI skips --clear-workspace while the workspace still holds anoth
 
   await harness.main();
 
-  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'the fence is not deleted');
+  assert.ok(!harness.events.some((e) => (e.type === 'rmSync' && e.dir === workspaceDir) || e.type === 'clearWorkspace'), 'the fence is not deleted');
   assert.ok(!harness.events.some((e) => e.type === 'checkWorkspaceClearable'), 'the clear is not even considered');
   const err = harness.stderr.join('');
   assert.match(err, /the changed-only snapshot stays tombstoned: 1 other teardown\(s\) of this workspace are still running\. The last of them to finish removes it\./);
   assert.match(err, /skipped --clear-workspace: the workspace still holds the changed-only fence/);
   const emitted = harness.events.find((e) => e.type === 'emitResult');
   assert.strictEqual(emitted.ok, true, 'the teardown itself succeeded');
+});
+
+// The clear runs under the workspace's lease and refuses a snapshot written since this teardown's release —
+// another teardown's tombstone. Removing the folder in place deleted it. The teardown itself still succeeded.
+test('teardown CLI skips --clear-workspace when a fence appeared after its release', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\refenced';
+  const harness = loadTeardownCli({
+    clearResult: { ok: false, reason: 'a changed-only snapshot was written to it after this teardown finished — another teardown or build of it is running' },
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(harness.events.some((e) => e.type === 'clearWorkspace' && e.target === workspaceDir));
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'nothing removed in place');
+  const err = harness.stderr.join('');
+  assert.match(err, /skipped --clear-workspace: a changed-only snapshot was written to it after this teardown finished/);
+  assert.doesNotMatch(err, /cleared workspace/);
+  assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, true, 'the teardown itself succeeded');
 });
 
 // A release that FAILED (a held lease, a busy file) leaves the tombstone in place — safe, since a

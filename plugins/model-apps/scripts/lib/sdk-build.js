@@ -1082,42 +1082,53 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 // #583: push an app artifact whose header this run may have changed (the routing description). A refusal
 // that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
 // else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
-// FAILED push which carried a header change first resets the workspace copy (discardUnrecordedHeader).
+// FAILED push first resets the workspace copy (discardUnrecordedEdits).
 async function pushAppHeader(provision, appId, name, headerChanged) {
   let pushed;
   try {
     pushed = await provision.pushArtifact('app', appId);
   } catch (e) {
-    if (headerChanged) {
-      await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
-      await discardUnrecordedHeader(provision, appId, e, true);
-    }
+    if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
+    await discardUnrecordedEdits(provision, appId, e, true);
     throw e;
   }
-  if (headerChanged) {
-    await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
-    if (pushFailed(pushed)) await discardUnrecordedHeader(provision, appId, pushed.error, false);
-  }
+  if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+  if (pushFailed(pushed)) await discardUnrecordedEdits(provision, appId, pushed.error, false);
   return pushed;
 }
 
-// #583: after a push that carried this run's header change FAILED, reset the workspace copy to the
-// server's. The edit was never recorded, and a copy still holding it hurts the re-run twice: its plain
-// fetch refuses to discard the unpushed edit (LOCAL_EDITS_WOULD_BE_LOST) once the server has moved, and
-// applyAppAiDescription compares against that local copy, so the pending change reads as "already set"
-// and the re-run's push goes out as a header-less one — losing the precise halt above if it is refused.
-// The edits are projected from the spec, so the re-run re-applies them and nothing is lost.
+// #583: after a push of the app FAILED, reset the workspace copy to the server's. Its edits were never
+// recorded, and a copy still holding them hurts the re-run: its plain fetch refuses to discard them
+// (LOCAL_EDITS_WOULD_BE_LOST) once the server has moved; the next run that pushes the app refuses such a
+// copy outright (refuseUnpushedAppCopy); and applyAppAiDescription would compare against it, so a pending
+// routing description read as "already set". The edits are projected from the spec, so the re-run
+// re-applies them and nothing is lost. (Only a push that carried a header change used to reset; a failed
+// sitemap-only push left the copy holding its edits.)
 //
 // A concurrent edit is the one failure that KEEPS the copy: a VERSION_CONFLICT, or a returned failure
 // with no code at all (the bare 412 requireSuccessfulPush reads the same way). There the remedy is a
 // fresh download, and the unrecorded copy is what makes a blind re-run stop instead of overwriting the
 // other edit. Best-effort: a reset that fails leaves the copy exactly as it was before this existed.
-async function discardUnrecordedHeader(provision, appId, error, thrown) {
+async function discardUnrecordedEdits(provision, appId, error, thrown) {
   const code = error && error.code;
   if (code === 'VERSION_CONFLICT' || (!thrown && !code)) return;
   try {
     await provision.fetchArtifact('app', appId, { overwrite: true });
   } catch { /* see above */ }
+}
+
+// #583 review: an app copy an earlier run left holding unpushed edits — a build interrupted between its edit
+// and its push, say — goes out with the next push of the app, whatever that run asked for. A plain fetch
+// keeps such a copy while the server has not moved, and the SDK serializes every field that differs from
+// its stored server copy: a routing description the spec leaves out ("leave the deployed one alone") was
+// overwritten with the earlier run's, a wanted one read as already set (so its push skipped the
+// unpublished-header halt), and a stale sitemap rewrite was replayed, detaching live pages with no gate. So
+// a run that will push the app refuses such a copy before it applies anything.
+async function refuseUnpushedAppCopy(provision, appId, name) {
+  const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === appId);
+  if (listed && listed.isDirty) {
+    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. Delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+  }
 }
 
 // A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
@@ -3778,6 +3789,13 @@ async function runSdkBuild(spec, opts = {}) {
       if (existingId) {
         appWasExisting = true;
         await provision.fetchArtifact('app', existingId);
+        // Refused here, before anything is applied, whenever this run pushes the app: the finalizer (every
+        // pages-phase run that rewrites the sitemap), or the app-shell pushes below (refuseUnpushedAppCopy).
+        const routingSet = typeof (spec.app && spec.app.aiDescription) === 'string' && !!spec.app.aiDescription.trim();
+        const pushesApp = has('pages')
+          ? !(opts.changedOnly && opts.changedOnly.skipSitemapFinalize)
+          : (!appHasPageSubareas(spec) || routingSet);
+        if (pushesApp) await refuseUnpushedAppCopy(provision, existingId, def.name);
         // #583: the routing description rides an app push this run ALREADY makes — never a second push from
         // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
         // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
@@ -3825,17 +3843,10 @@ async function runSdkBuild(spec, opts = {}) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
           // needs its own push. That push re-sends the workspace copy's sitemap, which the SDK validates —
-          // and which is the live one only while the copy is CLEAN: a plain fetch returns a copy holding
-          // edits an earlier run could not push (a failed sitemap rewrite) unchanged, as long as the server
-          // has not moved past it. Pushing that replayed the stale rewrite, detaching live pages with no
-          // gate and no --allow-destructive. So a dirty copy is refused here, before anything is applied —
-          // and before the routing description is compared, not only when it needs a push: the copy's value
-          // may be this very edit, left unpushed by the earlier run, and "unchanged" against the copy would
-          // then skip the push the server still needs while the build reported success.
-          const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === existingId);
-          if (listed && listed.isDirty) {
-            throw new BuildHalt(`app ${def.name}: the workspace copy holds edits an earlier run did not push, and pushing the routing description would send them too. Run the build with the pages phase, or delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
-          }
+          // and which is the live one only because a copy holding an earlier run's unpushed edits was
+          // refused above (refuseUnpushedAppCopy): replaying a stale sitemap rewrite detached live pages
+          // with no gate and no --allow-destructive, and the copy's routing description may be this very
+          // edit, left unpushed, so "unchanged" against it would skip the push the server still needs.
           if (await applyAppAiDescription(provision, spec, existingId)) {
             requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);

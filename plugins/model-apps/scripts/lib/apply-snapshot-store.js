@@ -139,22 +139,27 @@ function acquireLease(workspaceDir, deps = {}) {
     // Another writer is reclaiming right now — or crashed doing so. A claim is abandoned by the rule the lock
     // itself follows (above): once its claimer's pid is dead, or, for one with no readable token, once it is
     // older than the staleness window. Age alone let a claimer paused mid-reclaim lose its claim to a second
-    // reclaimer, and both then held the lease. An abandoned claim is removed — only while it still holds what
-    // was judged — so the next attempt can reclaim; this one fails closed.
-    // An old claim a live claimer still holds says which file to delete, as an old lease does (above): its
-    // claimer may have crashed and its pid been reused.
+    // reclaimer, and both then held the lease.
+    //
+    // An abandoned claim is NOT removed: it says which file to delete, as an old lease does (above). Removing
+    // it is a read and then a delete, and nothing in the filesystem makes "delete it only while it is still
+    // that one" a single step — so two writers could both judge it abandoned, the second delete it, claim and
+    // pause mid-reclaim, and the first's delete then took the SECOND writer's live claim; the first claimed
+    // again, and both held the lease. Only the writer that created a claim ever removes it (below), which
+    // keeps it exclusive. A claimer crashing inside the few file operations a reclaim takes is rare; two
+    // holders of one lease are no price for sparing that.
     let hint = '';
     try {
       const claimRaw = fs.readFileSync(claim, 'utf8');
       let owner = null;
       try { owner = JSON.parse(claimRaw); } catch { owner = null; }
       const claimAge = Date.now() - fs.statSync(claim).mtimeMs;
-      const abandoned = owner && typeof owner.pid === 'number' && typeof owner.at === 'number'
-        ? !isAlive(owner.pid)
-        : claimAge > staleMs;
-      if (abandoned && fs.readFileSync(claim, 'utf8') === claimRaw) fs.rmSync(claim, { force: true });
-      else if (!abandoned && claimAge > staleMs) hint = ` — claimed for ${Math.round(claimAge / 60000)} min; if no build or teardown of this workspace is running, delete ${claim} and re-run`;
-    } catch { /* best-effort: a claim that vanished meanwhile needs no removing */ }
+      const named = !!owner && typeof owner.pid === 'number' && typeof owner.at === 'number';
+      const abandoned = named ? !isAlive(owner.pid) : claimAge > staleMs;
+      const remedy = `if no build or teardown of this workspace is running, delete ${claim} and re-run`;
+      if (abandoned) hint = ` — the reclaim was abandoned (${named ? `its claimer, pid ${owner.pid}, is gone` : 'its claim is older than the staleness window'}); ${remedy}`;
+      else if (claimAge > staleMs) hint = ` — claimed for ${Math.round(claimAge / 60000)} min; ${remedy}`;
+    } catch { /* best-effort: a claim that vanished meanwhile needs no hint */ }
     return { ok: false, reason: `lease being reclaimed by another writer${hint}` };
   }
   try {
@@ -172,7 +177,8 @@ function acquireLease(workspaceDir, deps = {}) {
     try { if (fs.readFileSync(lp, 'utf8') === token) fs.rmSync(lp, { force: true }); } catch { /* best-effort */ }
     return { ok: false, reason: `stale lease reclaim failed: ${e.message}` };
   } finally {
-    try { fs.rmSync(claim, { force: true }); } catch { /* best-effort: an abandoned claim ages out (above) */ }
+    // Ours: only the writer that created a claim removes it. One left behind names itself as the file to delete (above).
+    try { fs.rmSync(claim, { force: true }); } catch { /* best-effort */ }
   }
 }
 
@@ -483,6 +489,43 @@ function releaseTombstone(workspaceDir, teardownId, deps = {}) {
   }
 }
 
+// --clear-workspace, after a clean teardown: remove the workspace folder — only while holding its lease, and
+// only when no snapshot is in it. This teardown's release already deleted its own, so one there now was
+// written since: another teardown's tombstone or a build's first baseline, and deleting the folder deleted
+// that fence. The folder is RENAMED aside under the lease and only then deleted. A recursive delete is many
+// steps, and removing the folder in place, after the release — as the CLI used to — left a window in which a
+// second teardown's fresh tombstone went with it; a rename is one step, and afterwards the path is simply
+// absent, for whoever comes next to start afresh (the lock went with the folder). A rename refused — a file
+// held open on Windows, say — clears nothing. `target` is the folder checkWorkspaceClearable approved;
+// `deps.beforeRename` is a test seam, called under the lease just before the rename. Returns
+// { ok, reason?, leftover? }.
+function clearWorkspace(target, deps = {}) {
+  let lease;
+  try { lease = acquireLease(target, deps); } catch (e) { return { ok: false, reason: `the workspace lease could not be taken (${e.message})` }; }
+  if (!lease.ok) return { ok: false, reason: `the workspace is in use (${lease.reason})` };
+  let aside = null;
+  try {
+    if (fs.existsSync(snapshotPath(target))) {
+      return { ok: false, reason: 'a changed-only snapshot was written to it after this teardown finished — another teardown or build of it is running' };
+    }
+    if (typeof deps.beforeRename === 'function') deps.beforeRename();
+    const candidate = `${target}.cleared-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    fs.renameSync(target, candidate);
+    aside = candidate;
+  } catch (e) {
+    return { ok: false, reason: `it could not be moved aside (${(e && e.code) || (e && e.message) || e})` };
+  } finally {
+    // Once moved, the lock went with the folder: nothing is left here to release.
+    if (!aside) releaseLease(lease);
+  }
+  try {
+    fs.rmSync(aside, { recursive: true, force: true });
+  } catch (e) {
+    return { ok: true, leftover: aside, reason: `its contents were moved to ${aside}, which could not be deleted (${(e && e.code) || e}); delete it by hand` };
+  }
+  return { ok: true };
+}
+
 module.exports = {
   SNAPSHOT_FILE,
   LEASE_FILE,
@@ -503,6 +546,7 @@ module.exports = {
   plainPath,
   deleteSnapshot,
   releaseTombstone,
+  clearWorkspace,
   teardownsInFlight,
   beatTeardown,
   TEARDOWN_BEAT_MS,

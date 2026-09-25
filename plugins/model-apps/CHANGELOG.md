@@ -17,7 +17,9 @@ downloads that round-trip Choice columns.
   It is written to the platform's `appmodule.aiappdescription` at create, and on an existing app when
   it differs. A download carries it back, and `--verify` checks it. Leave it out and the build never
   touches the deployed value. If the app has an unpublished change in Maker, the build halts and tells
-  you to publish first, rather than failing with a remedy that cannot work.
+  you to publish first, rather than failing with a remedy that cannot work. A workspace copy of the app
+  holding an earlier run's unpushed edits — an interrupted build, say — is refused before anything is
+  applied, rather than pushed along with this run's changes, and a failed push of the app resets it.
 - **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
   **Deliberately out of scope** beside the traceability table. Documentary only.
 - **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell
@@ -201,7 +203,8 @@ downloads that round-trip Choice columns.
 - **Same-named charts on different tables no longer cross-wire a dashboard tile** ([#586]). A tile
   plotted one table's chart over another table's view. Chart identity now includes its table; a tile
   whose view name exists on several tables must say which with `entity`, and verify checks that each
-  chart tile's chart and view belong to the tile's table.
+  chart tile's chart and view belong to the tile's table — on the published dashboard: one with
+  unpublished changes, or a workspace copy holding unpushed edits, is reported unverified.
 - **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
   ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
   the other from the nav. A download withholds such a pair and says why, and it withholds a dashboard
@@ -234,7 +237,9 @@ downloads that round-trip Choice columns.
   The workspace lease that guards the fence is never taken from a holder that is still alive, however
   long it has held it: one paused mid-write, on a machine that slept, would otherwise commit its stale
   view over the fence when it resumed. An old lease names the file to delete if its holder's pid was
-  reused by another process.
+  reused by another process, and so does a reclaim of it abandoned by a crash: it is never removed by
+  another writer, which let two writers hold the lease. `--clear-workspace` clears under the same lease,
+  and only when no fence has appeared since the teardown finished.
 - **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
   already kept its tables: a download flags all three `existing: true`. Deleting a relationship
   removed its lookup column — and that column's data — from a table teardown kept.

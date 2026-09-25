@@ -748,7 +748,9 @@ test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unver
     const sdk = {
       findTables: async () => [],
       findColumns: async () => [],
-      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1' }] : []),
+      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1', formxml: '<form/>' }] : []),
+      listArtifacts: async () => [],
+      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>' } }) },
       fetchArtifact: async () => {},
       getArtifact: async () => art,
       fetchEntityMetadata: async () => ({ Relationships: [] }),
@@ -764,17 +766,61 @@ test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unver
   }
 });
 
+// verify checks what users see: the PUBLISHED dashboard. The SDK's read is the unpublished draft, and verify runs
+// in the build's workspace, whose copy can hold unpushed edits — so a fix saved but not published, or never
+// pushed, passed while users still saw the broken dashboard. Either is now unverified.
+test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200 } = {}) => ({
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set) => {
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async (type) => (type === 'dashboard' ? [{ type, id: 'dash-1', isDirty: dirty }] : []),
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      return { status: draftStatus, body: { formxml: draftXml } };
+    } },
+    fetchArtifact: async () => {},
+    getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
+      TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  });
+  const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
+  for (const [what, opts, detail] of [
+    ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
+    ['unpushed edits in the workspace copy', { dirty: true }, /the workspace copy of dashboard dash-1 holds edits that were never pushed/],
+    ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
+  ]) {
+    const chk = await check(sdkWith(opts));
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, detail, what);
+  }
+  // CONTROL: published, with nothing pending — the tiles are read and checked.
+  const ok = await check(sdkWith());
+  assert.strictEqual(ok.present, true, ok.detail);
+});
+
 test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
   const calls = [];
   const sdk = {
     findTables: async () => [],
     findColumns: async () => [],
     queryRecords: async (set, opts) => {
-      if (set === 'systemform') return [{ formid: 'dash-1' }];
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
       if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_customer' }];
       if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
       return [];
     },
+    listArtifacts: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>' } }) },
     fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
     getArtifact: async (type, id) => {
       calls.push(['getArtifact', type, id]);

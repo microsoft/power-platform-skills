@@ -229,11 +229,15 @@ async function main() {
       const clearable = r.snapshotKept
         ? { ok: false, reason: `the workspace still holds the changed-only fence (${r.snapshotKept}); clear it once that is done` }
         : checkWorkspaceClearable(workspaceDir);
-      if (clearable.ok) {
-        fs.rmSync(clearable.target, { recursive: true, force: true });
-        process.stderr.write(`\ncleared workspace ${clearable.target}\n`);
+      //
+      // The clear itself runs under the workspace's lease, and only while no snapshot has appeared since this
+      // teardown's release — another teardown's tombstone, say, which removing the folder in place after the
+      // release deleted (apply-snapshot-store.js clearWorkspace).
+      const cleared = clearable.ok ? snapStore.clearWorkspace(clearable.target) : clearable;
+      if (cleared.ok) {
+        process.stderr.write(`\ncleared workspace ${clearable.target}${cleared.leftover ? ` (${cleared.reason})` : ''}\n`);
       } else {
-        process.stderr.write(`\nskipped --clear-workspace: ${clearable.reason}\n`);
+        process.stderr.write(`\nskipped --clear-workspace: ${cleared.reason}\n`);
       }
     }
   } catch (err) {

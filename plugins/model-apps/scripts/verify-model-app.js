@@ -252,8 +252,28 @@ function readerFor(sdk, appUnique, opts) {
     // tile's TargetEntityType / ViewId / VisualizationId exactly as a rebuild would, instead of
     // regex-parsing FormXML a second way. Errors propagate: verify reports unreadable tiles as
     // unverified, never as correct.
+    //
+    // What is checked must be what users see: the PUBLISHED dashboard. The SDK's dashboard read is the
+    // unpublished draft (RetrieveUnpublished), and verify runs in the build's workspace, where a plain fetch
+    // keeps a copy holding unpushed edits while the server has not moved — so a fix saved in Maker but not
+    // published, or never pushed at all, passed while users still saw the broken dashboard. The deserializer
+    // is kept (download reads tiles through it, and a second FormXML parser would drift from it), and the
+    // read is refused unless it IS the published dashboard: the copy carries no unpushed edits, and the
+    // server's draft FormXML is the published row's.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
     dashboardComponents: async (dashboardId) => {
       await sdk.fetchArtifact('dashboard', dashboardId);
+      const listed = (await sdk.listArtifacts('dashboard')).find((a) => a && a.id === dashboardId);
+      if (listed && listed.isDirty) {
+        throw new Error(`the workspace copy of dashboard ${dashboardId} holds edits that were never pushed, so it is not what is deployed — rebuild, or delete the workspace, then verify`);
+      }
+      const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
+      const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
+      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+      if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
+      const draftXml = draft.body && draft.body.formxml;
+      if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
+      if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
       const art = await sdk.getArtifact('dashboard', dashboardId);
       // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
       // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
