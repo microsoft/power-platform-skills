@@ -716,6 +716,19 @@ test('cast type arguments reach their `as` through intersections and unions, and
   // although the `<` follows a property's `:`.
   const grouped = 'const lo = 0, hi = 2;\nconst marker = `${({ a: lo < hi }).a > /}/.source.length ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default () => null;';
   assert.deepEqual(navReferencedKeys(grouped), ['details']);
+  // Only a cast gives type-argument context. A `:` was taken for an annotation's, but a division never follows an
+  // annotation's type, and each `:` matched was a ternary's, a property's or a case clause's.
+  const ternary = 'const skipStart = false, start = 1, anchor = 4, padding = 1, end = 9;\nconst text = "value }";\nconst checks = [\n  skipStart ? true : start < Math.max(anchor + padding, 0),\n  end > /}/.exec(text)!.index,\n];\nexport default () => <p>{checks.every(Boolean) ? "match" : "no match"}</p>;';
+  assert.equal(hasUnbalancedBrackets(ternary), false);
+  assert.equal(endsMidStatement(ternary), false);
+  const ternaryNav = 'const skip = false, start = 1, anchor = 4, end = 9;\nconst text = "value }";\nconst marker = `${[skip ? true : start < Math.max(anchor, 0), end > /}/.exec(text)!.index][1] ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default () => null;';
+  assert.deepEqual(navReferencedKeys(ternaryNav), ['details']);
+  const callArgs = 'const f = (a: boolean, b: boolean) => a && b;\nconst start = 1, anchor = 4, end = 9, text = "v }";\nconst r = f(start < Math.max(anchor, 0), end > /}/.exec(text)!.index);\nexport default () => <p>{String(r)}</p>;';
+  assert.equal(hasUnbalancedBrackets(callArgs), false);
+  // A conditional type's `:` at the outer level of a cast's type arguments is type syntax.
+  const conditional = `${d}const label = \`\${total as ReturnType<() => number extends number ? number : never> / count}\`;\nexport default () => null;`;
+  assert.equal(hasDefaultExport(conditional), true);
+  assert.equal(endsMidStatement(conditional), false);
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {

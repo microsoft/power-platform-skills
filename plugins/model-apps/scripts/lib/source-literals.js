@@ -84,8 +84,8 @@ function isPropertyName(src, s) {
 //
 // Dependency-free text cannot safely tell a generic instantiation or type-alias tail from a
 // relational expression in all TSX contexts. So expression classification is intentionally narrow:
-// `/` after `>` divides only when `>` closes type arguments in a cast/annotation context (`as`,
-// `satisfies`, or `: Foo<Bar>`). EOF handling is even stricter below: a final `>` completes only
+// `/` after `>` divides only when `>` closes a cast's type arguments (`as Foo<Bar>`, `satisfies
+// Foo<Bar>`). EOF handling is even stricter below: a final `>` completes only
 // when the lexer recorded it as a JSX tag close, and a final type-argument list needs `;`.
 function greaterThanEndsOperand(src, close) {
   if (src[close - 1] === '=') return false;
@@ -98,53 +98,23 @@ function greaterThanClosesTypeArguments(src, close) {
   return typeArgumentOpenFollowsCastOrAnnotation(src, open);
 }
 
-// The `<` that a type-argument `>` at `close` closes, or -1 when the span between them cannot be type arguments.
-// Scanned backward with two depths: `depth` counts angle brackets, `nest` the (), {} and [] groups inside the span.
-// Operators are judged by where they sit:
-//   - `&&`, `||` and `??` hold no type anywhere: `lo as number < hi && count > /}/` is two comparisons;
-//   - `+`, `*`, `/`, `%`, `!`, `:` and a bare `=` hold no type at the OUTER level, outside every nested group. There
-//     they are an expression's: `{ a: start < anchor + padding, b: end > /}/.exec(t) }` is two properties. Nested,
-//     they are type syntax: a type parameter's default in `ReturnType<<T = unknown>(x: T) => number>`, a mapped-type
-//     modifier in `(x: { +readonly [K in "v"]: number }) => number`, an annotation in `(a: number) => void`;
-//   - a `<` that sits inside a group the `>` is outside of (`(a < b) > c`) closes nothing here.
-// Function types are valid inside type arguments (`ReturnType<() => number>`): the arrow's `>` is not an angle close.
+// The `<` that a type-argument `>` at `close` closes, by angle depth, or -1. Function types are valid inside type
+// arguments (`ReturnType<() => number>`): the arrow's `>` is not an angle close. The span is not judged here. Only a
+// cast gives type-argument context (typeArgumentOpenFollowsCastOrAnnotation), and after `as` or `satisfies`
+// TypeScript parses a type, where `Name<` is always type arguments, so no valid code puts an expression there.
 function matchingTypeArgumentOpen(src, close) {
   let depth = 1;
-  let nest = 0;
   for (let k = close - 1; k >= 0 && close - k <= LOOKAHEAD; k -= 1) {
     const c = src[k];
-    if (c === ')' || c === '}' || c === ']') { nest += 1; continue; }
-    if (c === '(' || c === '{' || c === '[') {
-      if (nest === 0) return -1;
-      nest -= 1;
-      continue;
-    }
     if (c === '>' && src[k - 1] !== '=') depth += 1;
     else if (c === '<') {
       depth -= 1;
-      if (depth === 0) return nest === 0 ? k : -1;
+      if (depth === 0) return k;
     } else if (c === ';' && depth === 1) {
-      return -1;
-    } else if (LOGICAL_OPERATOR(src, k) || (depth === 1 && nest === 0 && OUTER_EXPRESSION_OPERATOR(src, k))) {
       return -1;
     }
   }
   return -1;
-}
-
-// `&&`, `||`, `??`: no type syntax holds one at any depth. A single `&`, `|` or `?` is an intersection, a union or a
-// conditional/optional type.
-function LOGICAL_OPERATOR(src, k) {
-  const c = src[k];
-  return (c === '&' || c === '|' || c === '?') && (src[k - 1] === c || src[k + 1] === c);
-}
-
-// Operators no type holds at the outer level of type arguments (see matchingTypeArgumentOpen). `=` is one only when it
-// is not the `=` of an arrow (`=>`); `-` is not in the set, since a negative literal type is written `-1`.
-function OUTER_EXPRESSION_OPERATOR(src, k) {
-  const c = src[k];
-  if (c === '+' || c === '*' || c === '/' || c === '%' || c === '!' || c === ':') return true;
-  return c === '=' && src[k + 1] !== '>';
 }
 
 // Type names that take no type arguments: `as number <` can only be a comparison.
@@ -191,8 +161,12 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     if (r === e) return false;
     p = r;
   }
+  // Only a cast. A `:` looked like an annotation's, but no valid code puts a division directly after an annotation's
+  // type (`const x: Foo<T> / 2` is no TypeScript), and every `:` it matched was an object property's, a ternary's or a
+  // case clause's: `{ a: start < anchor + padding, b: end > /}/ }`, `[c ? t : start < Math.max(x, 0), end > /}/]`.
+  // After `as` or `satisfies`, TypeScript itself parses a type, so `Name<` there IS type arguments.
   const before = prevWordOrPunct(src, p + 1);
-  return before === 'as' || before === 'satisfies' || before === ':';
+  return before === 'as' || before === 'satisfies';
 }
 
 
