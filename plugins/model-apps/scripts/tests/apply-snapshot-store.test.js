@@ -640,18 +640,28 @@ test('a lock whose write fails is left in place for the tokenless-lock rule, nev
 test('createExclusive writes the whole text even when the OS takes it one byte at a time', (t) => {
   const d = ws();
   try {
-    const file = path.join(d, 'claim');
     const text = JSON.stringify({ pid: 4242, at: 1, rnd: 'abcdef' });
+    // A Buffer goes through writeFileSync's own loop over fs.writeSync, which the mock splits. A string does not:
+    // newer Node writes a UTF-8 string natively, whole, without calling fs.writeSync — checked separately below.
+    const bytes = Buffer.from(text, 'utf8');
+    const split = path.join(d, 'split');
     const realWriteSync = fs.writeSync;
+    let calls = 0;
     t.mock.method(fs, 'writeSync', (fd, data, ...rest) => {
+      calls += 1;
       const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
       const offset = typeof data === 'string' ? 0 : (rest[0] || 0);
       return realWriteSync(fd, buf, offset, 1);
     });
-    store.createExclusive(file, text);
+    store.createExclusive(split, bytes);
+    const writes = calls;
     t.mock.restoreAll();
+    assert.strictEqual(writes, bytes.length, 'each byte went through its own write');
+    assert.strictEqual(fs.readFileSync(split, 'utf8'), text);
+    // The string every caller passes is written whole too, and a second create is still refused.
+    const file = path.join(d, 'claim');
+    store.createExclusive(file, text);
     assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
-    // Still exclusive: a second create of the same file is refused, and leaves the first one's text.
     assert.throws(() => store.createExclusive(file, 'other'), { code: 'EEXIST' });
     assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
   } finally { rm(d); }
