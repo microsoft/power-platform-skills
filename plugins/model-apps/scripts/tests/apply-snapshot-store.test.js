@@ -634,6 +634,29 @@ test('a lock whose write fails is left in place for the tokenless-lock rule, nev
   } finally { rm(d); }
 });
 
+// One writeSync may write only part of its text (a full disk, a signal): a claim cut short that way read as having
+// no token, so another writer judged its claimer by age instead of by pid. The whole text lands however the OS
+// splits the write.
+test('createExclusive writes the whole text even when the OS takes it one byte at a time', (t) => {
+  const d = ws();
+  try {
+    const file = path.join(d, 'claim');
+    const text = JSON.stringify({ pid: 4242, at: 1, rnd: 'abcdef' });
+    const realWriteSync = fs.writeSync;
+    t.mock.method(fs, 'writeSync', (fd, data, ...rest) => {
+      const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+      const offset = typeof data === 'string' ? 0 : (rest[0] || 0);
+      return realWriteSync(fd, buf, offset, 1);
+    });
+    store.createExclusive(file, text);
+    t.mock.restoreAll();
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
+    // Still exclusive: a second create of the same file is refused, and leaves the first one's text.
+    assert.throws(() => store.createExclusive(file, 'other'), { code: 'EEXIST' });
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
+  } finally { rm(d); }
+});
+
 // A folder renamed away between mkdir's own steps surfaced as ENOENT from a folder that had existed, and read as
 // "no workspace can exist here": the teardown then ran with no fence. An ENOENT is retried.
 test('tombstoneSnapshot retries a mkdir that fails with ENOENT, and fences the folder it then makes', () => {

@@ -586,6 +586,7 @@ module.exports = {
   readSnapshot,
   writeSnapshotAtomic,
   processAlive,
+  createExclusive,
   acquireLease,
   releaseLease,
   casWriteSnapshot,
