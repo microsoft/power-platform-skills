@@ -323,13 +323,17 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     // generation (inv.generation), which the invalidate wrote; a concurrent writer that bumped it again is
     // detected and this re-bless is refused.
     if (r && r.ok && !r.dryRun && r.verify && r.verify.ok && moved) {
-      log('▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (the workspace changed while it ran) — the next run will do a full build');
+      return conflictResult(r, decision, 'fast apply', log);
     } else if (r && r.ok && !r.dryRun && r.verify && r.verify.ok) {
       const refreshed = assembleFastSnapshot({ snapshot, annotatedSpec, created: r.created, pageKeys: decision.pageKeys, generation: snap.newGeneration() });
       const cas = store.casWriteSnapshot(ws, refreshed, inv.generation);
       if (!cas.ok) {
+        // Read before distrust rotates it: a generation that is no longer ours means another writer landed. A lease
+        // held for a moment (its own write) leaves ours in place, and the run's result stands.
+        const conflicted = generationOnDisk(ws) !== inv.generation;
         log(`▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (${cas.reason}) — the next run will do a full build`);
         distrustWorkspace(ws, log);
+        if (conflicted) return conflictResult(r, decision, 'fast apply', log);
       }
       else log('✓ changed-only: fast apply verified; snapshot re-blessed eligible');
     } else if (r && r.ok && !r.dryRun) {
@@ -373,7 +377,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   }
   const { r, moved } = await buildHolding(ws, expectedGen, log, () => deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps));
   if (r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && moved) {
-    log('▸ changed-only: full apply succeeded but the snapshot was not persisted (the workspace changed while it ran) — the next run will do a full build');
+    return conflictResult(r, decision, 'build', log);
   } else if (r && r.ok && !r.dryRun && (!r.verify || r.verify.ok)) {
     // Re-resolve identity so a fresh baseline records the now-created appId (the app did not exist before
     // this build). created.app already carries it, so this is belt-and-suspenders.
@@ -382,12 +386,25 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     const env = assembleBaselineSnapshot({ annotatedSpec, created: r.created, live: liveForWrite, prior: snapshot, appPreExisted, sampleDataApplied: !!opts.sampleData });
     const wrote = store.casWriteSnapshot(ws, env, expectedGen);
     if (!wrote.ok) {
+      const conflicted = generationOnDisk(ws) !== expectedGen;
       log(`▸ changed-only: full apply succeeded but the snapshot was not persisted (${wrote.reason})`);
       distrustWorkspace(ws, log);
+      if (conflicted) return conflictResult(r, decision, 'build', log);
     }
     else log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
   }
   return { ...r, changedOnly: decision };
+}
+
+const generationOnDisk = (ws) => ((store.readSnapshot(ws) || {}).generation) || null;
+
+// A run that another writer overlapped reports FAILURE, whatever its own build returned: a teardown may have deleted
+// part of what it built, another build may have overwritten it, and no baseline records it. The caller re-runs once
+// the other writer has finished, as the no-identity branch already said.
+function conflictResult(r, decision, what, log) {
+  const msg = `changed-only: the workspace changed while this ${what} ran (a teardown or another build ran alongside it), so no baseline records it and what it wrote may already be partly deleted or overwritten — re-run the build once that has finished`;
+  log(`✗ ${msg}`);
+  return { ...r, ok: false, errors: [...((r && r.errors) || []), msg], changedOnly: decision };
 }
 
 // Run one build while holding generation `held`, the one this run's claim or invalidate wrote. On EVERY way out —

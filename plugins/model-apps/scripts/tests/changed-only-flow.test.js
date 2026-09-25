@@ -389,6 +389,9 @@ for (const [path_, spec, content] of [
       assert.strictEqual(r.changedOnly.decision, path_.toLowerCase());
       const disk = store.readSnapshot(dir);
       assert.ok(snap.isTombstoned(disk) && disk.eligible === false, `the tombstone must survive the re-bless; got ${JSON.stringify({ eligible: disk && disk.eligible, debt: disk && disk.debt })}`);
+      // And the run fails: what it built may already be deleted, and no baseline records it.
+      assert.strictEqual(r.ok, false);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this (fast apply|build) ran/);
     } finally { rm(dir); }
   });
 }
@@ -734,9 +737,25 @@ test('run: a baseline blessed between a build and its own baseline write is dist
       }
       return FRESH;
     };
-    await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
     assert.ok(calls >= 2, 'the fresh build looked its identity up again before writing');
     assert.strictEqual(store.readSnapshot(dir).eligible, false);
+    assert.strictEqual(r.ok, false, 'the refused write was a conflict, so the run fails');
+    assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/);
+  } finally { rm(dir); }
+});
+
+// A write refused only because another writer held the lease for a moment is no conflict: the generation is still
+// this run's, and the build's result stands.
+test('run: a baseline write refused by a busy lease leaves the result standing', async (t) => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    t.mock.method(store, 'casWriteSnapshot', () => ({ ok: false, reason: 'snapshot lease unavailable (held)' }));
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+    t.mock.restoreAll();
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.notStrictEqual(store.readSnapshot(dir).eligible, true, 'and nothing is blessed');
   } finally { rm(dir); }
 });
 
