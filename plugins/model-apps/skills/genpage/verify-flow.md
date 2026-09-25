@@ -106,17 +106,11 @@ Omitting `--data-sources` here is safe: the page's existing table bindings are
 read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
 to change the bindings, or `--clear-data-sources` to remove them deliberately.
 
-```powershell
-$wd = '<working-dir>'
-$prompt = @'
-Fix sort handler on Name column; correct accidental DataGrid type prop
-'@
-foreach ($f in 'prompt.txt', 'agent-message.txt') {
-  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
-}
-Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Value $prompt -Encoding UTF8 -NoNewline
-Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value 'Phase 7.5 fix re-deploy' -Encoding UTF8 -NoNewline
+Check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with your
+file-writing tool — `prompt.txt` holding the fix delta and `agent-message.txt` holding
+`Phase 7.5 fix re-deploy` — and deploy:
 
+```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
   --env '<org-url>' `
   --app-id '<app-id>' `

@@ -350,6 +350,41 @@ test('a repeated delimiter row cannot turn a page row into a header and hide it'
   assert.deepEqual(pageFilesFromPlan(plan([...header, a, b])), ['approved.tsx', '../outside.tsx']);
 });
 
+// Markdown makes a table's outer pipes optional: a row written without its leading pipe was skipped, and its page with
+// it — both gates passed a plan whose `../outside.tsx` a reader would still take for a page. And a header with two File
+// columns was read by its first.
+test('a row without its outer pipes is read, and a table with two File columns is refused', () => {
+  const plan = (pages) => ['# Genpage Plan', '## User Requirements', 'Build two pages.', '## Pages', ...pages,
+    '## Entity Creation Required', 'None.'].join('\n');
+  const header = ['| Page | File | Purpose | Entities |', '|---|---|---|---|'];
+  const a = '| A | approved.tsx | Overview | mock data |';
+  assert.deepEqual(pageFilesFromPlan(plan([...header, a, 'B | ../outside.tsx | Details | mock data |'])),
+    ['approved.tsx', '../outside.tsx'], 'a row with no leading pipe is a row');
+  assert.deepEqual(pageFilesFromPlan(plan([...header, a, 'B | b.tsx | Details | mock data'])), ['approved.tsx', 'b.tsx'],
+    'nor a trailing one');
+  // A whole table written without outer pipes is a table.
+  assert.deepEqual(pageFilesFromPlan(plan(['Page | File | Purpose', '--- | --- | ---', 'A | a.tsx | x'])), ['a.tsx']);
+  // An escaped pipe is text, not a row: prose that shows one changes nothing.
+  assert.deepEqual(pageFilesFromPlan(plan([...header, a, '', 'Pages are split with \\| in the nav.'])), ['approved.tsx']);
+  const two = plan(['| Page | File | File |', '|---|---|---|', '| A | approved.tsx | ../outside.tsx |']);
+  assert.deepEqual(pagesTables(two), { tables: [['approved.tsx']], unreadable: true });
+  assert.equal(pageFilesFromPlan(two), null);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-files-pipes-'));
+  try {
+    const p = path.join(dir, 'genpage-plan.md');
+    fs.writeFileSync(p, plan([...header, a, 'B | ../outside.tsx | Details | mock data |']));
+    const res = checkPageFiles({ planPath: p });
+    assert.equal(res.exit, 3, JSON.stringify(res.result));
+    assert.deepEqual(res.result.files, ['approved.tsx', '../outside.tsx']);
+    fs.writeFileSync(p, two);
+    const dup = checkPageFiles({ planPath: p });
+    assert.equal(dup.exit, 1);
+    assert.match(dup.result.error, /or two File columns/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The skill's commands put page paths in double quotes, and some in none, and the orchestrator substitutes the name
 // as text: `$(Join-Path .. outside).tsx` passed every rule, and PowerShell expanded it inside the quotes — the
 // dispatch stamp landed outside the working directory. A `;` or a space in an unquoted argument ends it.

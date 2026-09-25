@@ -81,7 +81,9 @@ included (`'Bob''s app'`); in bash close, escape and reopen (`'Bob'\''s app'`). 
 (`"Revenue $100"` arrived as `Revenue `) and never leave one bare (`D:\Work Projects\…` became two arguments). A value
 holding a double quote `"` is not put on a command line at all — Windows PowerShell 5.1 drops it and can split the
 argument there — so ask for an app or solution name without one. Free text (a prompt, an agent message, a page's
-display name) never goes on a command line: it is written to a file and passed by path (Phase 6).
+display name) never goes into a shell command at all, however it is quoted: even a single-quoted here-string ends at a
+line that begins with `'@`, and the rest of that line runs. Write it with your file-writing tool and pass the path
+(Phase 6).
 
 ### Phase 0: Create Working Directory
 
@@ -893,33 +895,28 @@ Was it quote wrapped? No, be sure to wrap values that contain spaces.
 …for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
 
 **Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
-paths. The display name is the maker's text too: substituted into `--name "<name>"`, PowerShell expanded `$(…)` in
+paths. The display name is the maker's text too: substituted into a double-quoted `--name` value, PowerShell expanded `$(…)` in
 it before the script ran, and `Revenue $100` arrived as `Revenue `. Pass it with `--name-file`, never `--name`.
-Hold each text in a single-quoted here-string — nothing in one is expanded or needs escaping; only a line that
-begins with `'@` would end it early — and **check that no name is a link before writing**: a write through a link or
-hard link left at one of these names rewrites the file it points to, outside the working directory included.
-`genpage-upload.js` refuses such an input too, but only after the write:
+
+**Write these files with your file-writing tool (Write), never with a shell command.** No quoting makes the maker's
+text safe inside a command: a single-quoted here-string ends at a line that begins with `'@` (or `‘@`, `’@`), and the
+rest of that line runs. First check that none of the names is a link — a write through a link or hard link left at
+one of them rewrites the file it points to, outside the working directory included — and clear the files an earlier
+deploy left, so the tool writes each one fresh. This step carries no text:
 
 ```powershell
 $wd = '<working-dir>'
-$prompt = @'
-<the prompt, verbatim>
-'@
-$agentMessage = @'
-<the agent message>
-'@
-$pageName = @'
-<the page's display name>
-'@
 foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
-  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) {
-    throw "$f in $wd is a link or hard link, not a file this skill wrote: remove it and re-run"
-  }
+  $at = Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue
+  if ($at -and ($at.LinkType -or $at.PSIsContainer)) { throw "$f in $wd is a link or a folder, not a file this skill wrote: remove it and re-run" }
+  if ($at) { Remove-Item -LiteralPath $at.FullName -Force }
 }
-Set-Content -LiteralPath (Join-Path $wd 'prompt.txt')        -Value $prompt       -Encoding UTF8 -NoNewline
-Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value $agentMessage -Encoding UTF8 -NoNewline
-Set-Content -LiteralPath (Join-Path $wd 'page-name.txt')     -Value $pageName     -Encoding UTF8 -NoNewline
 ```
+
+Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
+agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
+trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
+folder, but only after the write.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
@@ -1016,16 +1013,11 @@ phase substitutes the real GUIDs.
    "Prompt semantics" rule in Phase 6, this is an **update**, so the prompt
    describes the delta only — not the original page description:
 
-   ```powershell
-   $wd = '<working-dir>'
-   foreach ($f in 'prompt.txt', 'agent-message.txt') {
-     if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
-   }
-   Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Encoding UTF8 -NoNewline `
-     -Value 'Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)'
-   Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Encoding UTF8 -NoNewline `
-     -Value 'Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6'
+   Check and clear the two names as in Phase 6, then write them with the file tool: `prompt.txt` holding
+   `Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)` and `agent-message.txt`
+   holding `Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6`. Then:
 
+   ```powershell
    node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
      --env '<org-url>' `
      --app-id '<app-id>' `

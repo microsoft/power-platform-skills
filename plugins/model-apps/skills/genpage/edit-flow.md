@@ -375,24 +375,13 @@ Custom API binding rules for edit deploy (identical matrix, `--actions` for
 - **Remove every Custom API:** write `[]` to `actions.json` and pass `--actions` so pac
   clears `config.json.actionBindings`.
 
-```powershell
-# The edit request is arbitrary user text, and a downloaded prompt is a multi-line
-# conversation transcript. Both go to pac BY FILE via scripts/genpage-upload.js, never on a
-# command line, so quotes/newlines/metacharacters cannot be reinterpreted by the shell. Each is
-# held in a single-quoted here-string, and neither name is written through a link (SKILL.md Phase 6).
-$wd = '<working-dir>'
-$editRequest = @'
-<the edit request: only the changes>
-'@
-$changeSummary = @'
-<the change summary>
-'@
-foreach ($f in 'prompt.txt', 'agent-message.txt') {
-  if ((Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue).LinkType) { throw "$f in $wd is a link or hard link: remove it and re-run" }
-}
-Set-Content -LiteralPath (Join-Path $wd 'prompt.txt') -Value $editRequest -Encoding UTF8 -NoNewline
-Set-Content -LiteralPath (Join-Path $wd 'agent-message.txt') -Value $changeSummary -Encoding UTF8 -NoNewline
+The edit request is arbitrary user text, and a downloaded prompt is a multi-line conversation
+transcript. Both go to pac BY FILE via `scripts/genpage-upload.js`, never through a shell command:
+check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with
+your file-writing tool — `prompt.txt` holding the edit request (only the changes) and
+`agent-message.txt` the change summary. Then:
 
+```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
   --env '<org-url>' `
   --app-id '<app-id>' `

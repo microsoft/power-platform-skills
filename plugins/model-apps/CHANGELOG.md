@@ -238,11 +238,13 @@ downloads that round-trip Choice columns.
   `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.
 - **`/genpage` single-quotes every value it fills into a command.** A working directory with a space in its
   path became two arguments, and a `$` in an app or solution name was expanded; the skill now states the rule
-  once, and every command template follows it.
-- **The upload's input files are never written or read through a link.** `/genpage` checks the prompt,
-  agent-message and page-name files before writing them, and `genpage-upload.js` refuses any of its input files —
-  those three, `--connectors` and `--actions` — that is a link, a hard link or a folder, since a write through
-  one rewrites the file it points to.
+  once, every command template follows it, and a test fails when one drifts back.
+- **The maker's text never passes through a shell, and the upload's input files never through a link.**
+  `/genpage` writes the prompt, agent-message and page-name files with its file tool, not a shell command — even a
+  single-quoted here-string ends at a line that begins with `'@`, and the rest of that line runs — after checking
+  that none of those names is a link. `genpage-upload.js` refuses any of its input files (those three,
+  `--connectors`, `--actions`) that is a link, a hard link or a folder, since a write through one rewrites the file
+  it points to.
 - **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
   `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
   names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
@@ -253,9 +255,10 @@ downloads that round-trip Choice columns.
   or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
   table naming files — one quoted in the requirements, fenced, quoted or not, and each table counted on its own,
   however many share a heading — halts too, instead of only the
-  first being checked. So does a Pages section with any other table row beside its File table: a
+  first being checked. So does a Pages section with any other table row beside its File table (a
   delimiter row repeated under a page row had made that row a header, and its page vanished from
-  both checks. `/app-builder` writes its page plan only as a plain file in the working
+  both checks) or a table with two File columns; a row written without its outer pipes is read like
+  any other. `/app-builder` writes its page plan only as a plain file in the working
   directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
   `--out`). The same rule covers the
   pages `/app-builder` generates — which now

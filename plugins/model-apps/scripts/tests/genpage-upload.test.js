@@ -17,7 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const { main } = require('../genpage-upload.js');
+const { main, notPlainFile } = require('../genpage-upload.js');
 const { buildPacInvocation, makeGenpageCli } = require('../lib/genpage-cli.js');
 
 const dirs = [];
@@ -231,6 +231,15 @@ test('a prompt, agent-message, name, connectors or actions file that is a link o
   assert.strictEqual(s.ok, false);
   assert.match(s.payload.error, /^--prompt-file .*sym-prompt\.txt is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to/);
   assert.strictEqual(viaLink.calls.length, 0);
+});
+
+// Fail closed: an input that cannot be inspected is not one proven to be a plain file. A missing one is left to the
+// read, which says it could not be read.
+test('an input file that cannot be inspected is refused; a missing one is left to the read', (t) => {
+  const d = tmp();
+  assert.strictEqual(notPlainFile(path.join(d, 'absent.txt')), null);
+  t.mock.method(fs, 'lstatSync', () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); });
+  assert.match(notPlainFile(path.join(d, 'prompt.txt')), /prompt\.txt could not be inspected \(EPERM\)/);
 });
 
 test('a downloaded conversation transcript survives an update by file', async () => {

@@ -322,7 +322,10 @@ function pageFilesFromPlan(plan, opts = {}) {
  *       | B | ../outside.tsx | Details |    <- read as the header of a second table, which has no File column
  *       |---|---|---|
  *   - a delimiter row among a table's own rows (a second one under its header).
- * An escaped pipe (`\|`) inside a cell is not a column boundary.
+ * A table with more than one File column is unreadable too: which one names the page is a guess. A row is any
+ * line with an unescaped `|` — Markdown makes a table's outer pipes optional, and a row written without its
+ * leading one (`B | ../outside.tsx | Details |`) is still a row to a reader, so it is read or refused like any
+ * other. An escaped pipe (`\|`) inside a cell is not a column boundary.
  *
  * A section is not judged by its first table: a `| Page | Purpose |` table ahead of the `| Page | File |` one
  * hid it, and a Pages table quoted elsewhere then passed as the plan's only one.
@@ -357,18 +360,19 @@ function pagesTables(plan, opts = {}) {
     if (!heading.test(bare(line))) return;
     const rows = [];
     for (let i = start + 1; i < lines.length && !/^#{1,6}\s/.test(bare(lines[i])); i += 1) {
-      if (bare(lines[i]).startsWith('|')) rows.push(bare(lines[i]));
+      if (/(?:^|[^\\])\|/.test(bare(lines[i]))) rows.push(bare(lines[i]));
     }
     const starts = [];
     for (let k = 0; k + 1 < rows.length; k += 1) if (!isDelimiter(rows[k]) && isDelimiter(rows[k + 1])) starts.push(k);
     const parsed = starts.map((k, n) => ({
-      col: cells(rows[k]).map((h) => h.toLowerCase()).indexOf('file'),
+      cols: cells(rows[k]).map((h, c) => (h.toLowerCase() === 'file' ? c : -1)).filter((c) => c !== -1),
       body: rows.slice(k + 2, n + 1 < starts.length ? starts[n + 1] : rows.length),
     }));
-    const named = parsed.filter((t) => t.col !== -1);
+    const named = parsed.filter((t) => t.cols.length);
     if (!named.length) return;
-    if (starts[0] > 0 || named.length < parsed.length || named.some((t) => t.body.some(isDelimiter))) unreadable = true;
-    tables.push(...named.map((t) => t.body.map((row) => cells(row)[t.col] || '')));
+    if (starts[0] > 0 || named.length < parsed.length
+      || named.some((t) => t.cols.length > 1 || t.body.some(isDelimiter))) unreadable = true;
+    tables.push(...named.map((t) => t.body.map((row) => cells(row)[t.cols[0]] || '')));
   });
   return { tables, unreadable };
 }
