@@ -121,14 +121,13 @@ function matchingTypeArgumentOpen(src, close) {
   return -1;
 }
 
-// `&&`, `||`, `??`, `+`, `*`, `/`, `%`, `!`, and `=` outside `=>`: expression operators that never appear inside
-// type arguments. A single `&` or `|` (intersection, union), `?` and `:` (conditional and optional types), `-`
-// (negative literal types) and `=>` (function types) all can, so they are not in this set.
+// `&&`, `||` and `??`: the operators no type syntax can hold, so a `<…>` span containing one is a comparison. Every
+// other operator character appears in some type: a single `&` or `|` (intersection, union), `=` (a type parameter's
+// default: `ReturnType<<T = unknown>(x: T) => number>`), `+` and `-` (mapped-type modifiers, negative literals), `?`
+// and `:` (conditional and optional types), `=>` (function types), and `/` or `*` in a comment left in raw text.
 function EXPRESSION_ONLY_OPERATOR(src, k) {
   const c = src[k];
-  if ((c === '&' || c === '|' || c === '?') && (src[k - 1] === c || src[k + 1] === c)) return true;
-  if (c === '+' || c === '*' || c === '/' || c === '%' || c === '!') return true;
-  return c === '=' && src[k + 1] !== '>';
+  return (c === '&' || c === '|' || c === '?') && (src[k - 1] === c || src[k + 1] === c);
 }
 
 // Type names that take no type arguments: `as number <` can only be a comparison.
@@ -139,8 +138,10 @@ const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined',
 // constituent of an intersection or union, so the walk back steps over the others to reach `as`/`satisfies`/`:`:
 //   total as number & Brand<"USD"> / count     `Brand<…>` is part of the cast; `/` is division
 //   value as A | B.C<D> / n                    the same with a union and a qualified name
-// Each constituent is a (qualified) name, optionally with its own closed type arguments. Anything else ends the
-// walk and the `<` is not taken for type arguments — the conservative reading for the division check.
+//   total satisfies "n/a" | NonNullable<number> / count    a string-literal constituent
+// Each constituent is a (qualified) name, optionally with its own closed type arguments, or a string literal (its
+// quotes are kept when the lexer blanks it). Anything else ends the walk and the `<` is not taken for type
+// arguments. The walk is bounded by distance, like the other scans here, not by a count of constituents.
 function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
   const skipSpace = (i) => { while (i >= 0 && /\s/.test(src[i])) i -= 1; return i; };
   const skipName = (i) => { while (i >= 0 && /[\w$.\]\[]/.test(src[i])) i -= 1; return i; };
@@ -150,11 +151,19 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
   let name = '';
   for (let k = p + 1; k <= end; k += 1) name += src[k];
   if (p === end || PRIMITIVE_TYPES.has(name)) return false;
-  for (let guard = 0; guard < 16; guard += 1) {
+  while (open - p <= LOOKAHEAD) {
     const q = skipSpace(p);
     const op = src[q];
     if (!((op === '&' || op === '|') && src[q - 1] !== op)) break;
     let r = skipSpace(q - 1);
+    if (src[r] === '"' || src[r] === "'") {
+      const quote = src[r];
+      let k = r - 1;
+      while (k >= 0 && !(src[k] === quote && src[k - 1] !== '\\')) k -= 1;
+      if (k < 0) return false;
+      p = k - 1;
+      continue;
+    }
     if (src[r] === '>') {
       const o = matchingTypeArgumentOpen(src, r);
       if (o === -1) return false;

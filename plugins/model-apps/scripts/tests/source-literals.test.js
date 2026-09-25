@@ -688,6 +688,22 @@ test('cast type arguments reach their `as` through intersections and unions, and
   assert.equal(endsMidStatement(property), false);
   const propertyNav = 'const lo = 0, hi = 2, count = 3;\nconst marker = `${({ ok: lo < hi && count > /}/.source.length }).ok ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}`;\nexport default function Page() { return null; }';
   assert.deepEqual(navReferencedKeys(propertyNav), ['details']);
+  // `=` (a type parameter's default) and `+` (a mapped-type modifier) are type syntax too, so only `&&`, `||` and
+  // `??` end a type-argument match; a string-literal constituent is stepped over; and the walk has no count limit.
+  const d = 'const total = 12, count = 2;\n';
+  const union = Array.from({ length: 17 }, (_, i) => `T${i}`);
+  for (const [label, code] of Object.entries({
+    'a type parameter default in a cast': `${d}const label = \`\${total as ReturnType<<T = unknown>(x: T) => number> / count}/month\`;\nexport default () => <p>{label}</p>;`,
+    'a mapped-type modifier in a cast': `${d}const label = \`\${total as ReturnType<(x: { +readonly [K in "v"]: number }) => number> / count}/month\`;\nexport default () => <p>{label}</p>;`,
+    'eighteen union constituents': `${union.map((n) => `type ${n} = number;`).join('\n')}\ntype Z<Q> = Q;\n${d}const v = \`\${total as ${union.join(' | ')} | Z<number> / count}\`;\nexport default () => null;`,
+  })) {
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(endsMidStatement(code), false, label);
+  }
+  assert.equal(endsMidStatement(`${d}export default () => total as ReturnType<<T = unknown>(x: T) => number> / count /`), true);
+  assert.equal(endsMidStatement(`${d}export default () => total satisfies "n/a" | NonNullable<number> / count /`), true);
+  assert.equal(findElisionMarker(`${d}export default function Page() {\n  const avg = total satisfies "n/a" | NonNullable<number> / count; // TODO: render chart\n  return null;\n}`),
+    'a TODO/FIXME comment', 'the comment after a division is a comment, not a regex');
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {
