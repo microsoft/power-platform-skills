@@ -286,9 +286,18 @@ function readerFor(sdk, appUnique, opts) {
     // and a maker then discarded passed, while the published dashboard was broken throughout). The fetch goes into
     // a throwaway workspace (opts.isolatedReader — isolatedReaderFor), never the build's, whose copy may hold
     // unpushed edits or be written by another process mid-read. Callers without one (tests) read through `sdk`.
+    //
+    // Equal FormXML before and after does not prove the fetch between them read it: a draft saved and then put
+    // back (A, then B, then A again) leaves both checks reading A while the fetch read B, and B's tiles passed. So
+    // each check also takes the draft's `@odata.etag`, which RetrieveUnpublished returns in the body and which
+    // moves on every write to the draft, even one that restores its content (live-measured; the SDK guards its own
+    // form writes on the same token). The same token before and after means nothing was written in between, so
+    // the fetch read the document both checks compared with the published row. A read with no token is refused,
+    // like one with no FormXML.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
+    // and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
     dashboardComponents: async (dashboardId) => {
-      const publishedXml = async () => {
+      const publishedDashboard = async () => {
         const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
         const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
         // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
@@ -296,9 +305,11 @@ function readerFor(sdk, appUnique, opts) {
         const draftXml = draft.body && draft.body.formxml;
         if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
         if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
-        return row.formxml;
+        const version = draft.body['@odata.etag'];
+        if (typeof version !== 'string' || version === '') throw new Error(`the version of dashboard ${dashboardId} could not be read`);
+        return { xml: row.formxml, version };
       };
-      const before = await publishedXml();
+      const before = await publishedDashboard();
       const reader = opts.isolatedReader ? await opts.isolatedReader() : { sdk, dispose: () => {} };
       let art;
       try {
@@ -307,7 +318,8 @@ function readerFor(sdk, appUnique, opts) {
       } finally {
         reader.dispose();
       }
-      if ((await publishedXml()) !== before) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
+      const after = await publishedDashboard();
+      if (after.xml !== before.xml || after.version !== before.version) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
       // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
       // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
       // has no tiles, as download-model-app.js reads it.

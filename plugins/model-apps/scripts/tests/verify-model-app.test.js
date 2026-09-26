@@ -750,7 +750,7 @@ test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unver
       findColumns: async () => [],
       queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1', formxml: '<form/>' }] : []),
       listArtifacts: async () => [],
-      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>' } }) },
+      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
       fetchArtifact: async () => {},
       getArtifact: async () => art,
       fetchEntityMetadata: async () => ({ Relationships: [] }),
@@ -768,20 +768,23 @@ test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unver
 
 // verify checks what users see: the PUBLISHED dashboard. The SDK's read is the unpublished draft, and verify runs
 // in the build's workspace, whose copy can hold unpushed edits — so a fix saved but not published, or never
-// pushed, passed while users still saw the broken dashboard. Either is now unverified.
+// pushed, passed while users still saw the broken dashboard. Either is now unverified. So is a draft saved and put
+// back while the tiles were read: that leaves the FormXML as it was, but not the draft's token.
 test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
   const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
     dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
   const fetches = [];
-  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read.
-  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null } = {}) => {
+  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read. `laterVersion` is
+  // the draft's token then: a draft saved and put back leaves the FormXML as it was, but not its token.
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null, version = 'W/"1"', laterVersion = null } = {}) => {
     let reads = 0;
     const xml = () => (later && reads > 2 ? later : '<form/>');
     return {
     findTables: async () => [],
     findColumns: async () => [],
     queryRecords: async (set, o) => {
-      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml() }]; }
+      // The published row carries its own token, which a write to the draft does not move.
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml(), '@odata.etag': 'W/"9"' }]; }
       if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
       if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
       if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
@@ -791,7 +794,8 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
     dataverse: { get: async (url) => {
       assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
       reads += 1;
-      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml } };
+      const token = laterVersion && reads > 2 ? laterVersion : version;
+      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml, ...(token === null ? {} : { '@odata.etag': token }) } };
     } },
     fetchArtifact: async (type, id, o) => { fetches.push(o); },
     getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
@@ -806,6 +810,8 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
     ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
     ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
     ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft saved and put back while it was read', { laterVersion: 'W/"3"' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft read with no version', { version: null }, /the version of dashboard dash-1 could not be read/],
   ]) {
     const chk = await check(sdkWith(opts));
     assert.strictEqual(chk.present, false, what);
@@ -858,7 +864,7 @@ test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify th
       return [];
     },
     listArtifacts: async () => [],
-    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>' } }) },
+    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
     fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
     getArtifact: async (type, id) => {
       calls.push(['getArtifact', type, id]);
