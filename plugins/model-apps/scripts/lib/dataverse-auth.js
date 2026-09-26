@@ -417,26 +417,6 @@ function requiredLevel(level = 'None') {
 }
 
 /**
- * Discovers the publisher prefix for the default solution in this env.
- * Falls back to "new" if the query fails.
- * @param {string} envUrl
- * @returns {Promise<string>}
- */
-async function getDefaultPublisherPrefix(envUrl) {
-  try {
-    const res = await dataverseRequest(
-      envUrl,
-      'GET',
-      "solutions?$select=uniquename&$filter=uniquename eq 'Default'&$expand=publisherid($select=customizationprefix)&$top=1"
-    );
-    const prefix = res?.data?.value?.[0]?.publisherid?.customizationprefix;
-    return prefix || 'new';
-  } catch {
-    return 'new';
-  }
-}
-
-/**
  * The set of LCIDs this organization actually has provisioned.
  *
  * `RetrieveProvisionedLanguages` is an unbound OData *function*, so it is not something the maker SDK
@@ -711,7 +691,6 @@ module.exports = {
   ensureOk,
   label,
   requiredLevel,
-  getDefaultPublisherPrefix,
   readProvisionedLanguages,
   readOrgLanguageCode,
   parseArgs,
