@@ -3070,6 +3070,16 @@ test('form reconcile: authorized removals prune only fields approved when the ru
   assert.ok(warnings.some((w) => /new_manual/.test(w) && /not among the removals authorized when this run started/.test(w)), 'the kept field is reported');
 });
 
+test('form reconcile: authorized-removal form ids are normalized before fencing', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['{FORM-EXISTING}', new Set(['new_tier'])]]) });
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0']);
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_manual' }]);
+});
+
 test('form reconcile: an empty authorized set keeps mid-run fields on a form seen by the gate', async () => {
   const spec = makeSpec();
   spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
