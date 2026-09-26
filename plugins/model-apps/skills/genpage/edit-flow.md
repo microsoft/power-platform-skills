@@ -403,6 +403,11 @@ Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when Custom API bindings are unchanged.
 
+An update without `--name`/`--name-file` gives the page its **sitemap title** as its name (measured:
+a page renamed with `--name-file` reverted to the title on the next update that omitted it). An edit
+that does not rename the page can omit it. To rename a page, pass `--name-file` on this update, and
+tell the user its navigation title is the app's sitemap entry and is not changed by the upload.
+
 ## Edit Phase 7: Verify (Optional)
 
 Offer browser verification via `AskUserQuestion` (same flow as Phase 7 in the create flow — see SKILL.md).

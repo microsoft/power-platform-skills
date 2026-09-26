@@ -101,6 +101,9 @@ function parsePageId(out) {
 // (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID.
 // Returns [{ pageId, name }]. NOTE (live-confirmed): pac lists only pages reachable from the app SITEMAP —
 // a headless nav-target page (declared in pages[] but not an appShell subarea) is NOT returned here.
+// With --app-id, `name` is the page's SITEMAP TITLE, not the page record's own name (measured: after an
+// update renamed the page with --name, the app-scoped listing still showed the subarea title), so a
+// listed name is never evidence of what the page itself is called.
 function parseList(out) {
   const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
   const rowRe = new RegExp(`^\\s*(${GUID})\\b`);
