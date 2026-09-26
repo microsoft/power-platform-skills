@@ -2758,8 +2758,18 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
+      const fenced = opts.authorizedFormRemovals instanceof Map && opts.authorizedFormRemovals.has(formId);
+      const authorized = fenced ? opts.authorizedFormRemovals.get(formId) : null;
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
+        if (fenced && (!authorized || !authorized.has(logical))) {
+          // The preflight gate records the exact live field list the maker approved before this run.
+          // If a later form read sees more fields, deleting them would exceed that approval (another
+          // maker may have added the field while this build was starting), so keep the field and make
+          // the skipped destructive change visible on the build result.
+          reportLayoutSkip(`form ${def.name}: kept field '${logical}' because it was not among the removals authorized when this run started. Another maker may have added it; re-run to review it.`);
+          continue;
+        }
         const pruneForm = await provision.getArtifact('form', formId) || {};
         const loc = findFieldCellLocation(pruneForm, logical);
         // Pruning can empty a section too, so it feeds the vacated set on the same terms as a move.

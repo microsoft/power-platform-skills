@@ -3059,6 +3059,46 @@ test('form reconcile: an explicit layout still prunes BY DEFAULT (prune:false is
   assert.ok(find(calls, 'removeElement').length > 0, 'default explicit-layout pruning regressed');
 });
 
+test('form reconcile: authorized removals prune only fields approved when the run started', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set(['new_tier'])]]), warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0']);
+  assert.ok(warnings.some((w) => /new_manual/.test(w) && /not among the removals authorized when this run started/.test(w)), 'the kept field is reported');
+});
+
+test('form reconcile: an empty authorized set keeps mid-run fields on a form seen by the gate', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set()]]), warn: (m) => warnings.push(m) });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'newly appeared field is fenced off');
+  assert.ok(warnings.some((w) => /new_manual/.test(w)), 'kept field is reported');
+});
+
+test('form reconcile: a form absent from the authorized-removals map prunes as before', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.ok(find(calls, 'removeElement').length > 0, 'forms outside the map keep legacy pruning behavior');
+});
+
+test('form reconcile: no authorized-removals map prunes as before', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.ok(find(calls, 'removeElement').length > 0, 'legacy behavior remains when the gate did not supply a fence');
+});
+
 test('form build: a BigInt column is never added to a form by the auto layout', async () => {
   const spec = makeSpec();
   spec.entities[0].columns.push({ schemaName: 'new_tracking', displayName: 'Tracking', type: 'BigInt' });

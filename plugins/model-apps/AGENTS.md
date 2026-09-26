@@ -138,7 +138,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `updateElement('/siteMap')`, a dashboard tile is `addElement('/components')`. Form reconcile adds the
   spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
-  never duplicates a control. Every push routes through `requireSuccessfulPush` (a 412 version conflict
+  never duplicates a control. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  when it refuses form-field or sitemap removals; a later `--allow-destructive` run may remove only that
+  recorded set, consumes the file after success, keeps it after failure, and fails closed if the file is
+  unreadable. If live state contains a new removal, the build halts, lists only that new removal, refreshes
+  the record, and the engine keeps any field that appears during the run rather than pruning beyond the
+  preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict
   halts the build for a fresh download instead of silently dropping the edit) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
