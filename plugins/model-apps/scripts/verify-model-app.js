@@ -244,9 +244,9 @@ function readerFor(sdk, appUnique, opts) {
     // feature and reports the read failure as a not-present check, which is the fail-closed direction —
     // a verify that cannot prove a feature is in effect must not claim it is.
     retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
-    // formDefaultState(entity, formId): the selected Main form's actual default flag. The identity
-    // check in verify-spec proves the form row exists; this separate read proves the platform state
-    // that chooses which form opens by default. Errors propagate to verify-spec as a fail-closed
+    // formDefaultState(entity, formId): a Main form's actual default flag. The identity
+    // check in verify-spec proves the form row exists; this separate read proves both the selected
+    // default and any spec-declared sibling that must no longer hold the default slot. Errors propagate as a fail-closed
     // finding, because a missing proof is not evidence that promotion succeeded.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
     formDefaultState: async (_entity, formId) => {
