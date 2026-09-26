@@ -109,7 +109,7 @@ function specFor({ columns, fields, forms = null }) {
   const spec = {
     solution: { uniqueName: 'LayoutProbe', displayName: 'Layout Probe', publisherPrefix: 'new' },
     app: { name: 'Layout Probe' },
-    entities: [{ schemaName: 'new_project', displayName: 'Project', primaryAttribute: { schemaName: 'new_a', displayName: 'A' }, columns: ['b', 'c', 'd'].map((f) => ({ schemaName: `new_${f}`, displayName: f.toUpperCase(), type: 'Text' })) }],
+    entities: [{ schemaName: 'new_project', displayName: 'Project', primaryAttribute: { schemaName: 'new_a', displayName: 'A' }, columns: ['b', 'c', 'd', 'e', 'f'].map((f) => ({ schemaName: `new_${f}`, displayName: f.toUpperCase(), type: 'Text' })) }],
     views: [], charts: [],
     forms: forms || [{ entity: 'new_project', name: 'Probe', formType: 'Main', layout: 'explicit', tabs: [{ name: 'probe', label: 'Probe', sections: [{ name: 'fields', label: 'Fields', columns, fields }] }] }],
     appShell: { areas: [{ label: 'Main', groups: [{ label: 'Work', subAreas: [{ entity: 'new_project', title: 'Projects' }] }] }] },
@@ -173,6 +173,37 @@ test('form layout row occupancy: new fields after a trailing span choose rows wi
   for (const f of ['new_a', 'new_b', 'new_c', 'new_d']) {
     assert.ok(section.rows.flatMap((r) => r.cells || []).some((c) => c.control && c.control.fieldName === f), `${f} exists`);
   }
+});
+
+test('form layout row occupancy: pre-existing overflow does not force new-field placement to a new row', async () => {
+  const spec = specFor({ columns: 2, fields: ['new_a', 'new_b', 'new_c', 'new_d', 'new_e'] });
+  const { section } = await runTwice(spec, existingForm(2, [[cell('a'), cell('b'), cell('c')], [cell('d')]]));
+
+  assert.deepStrictEqual(section.rows.map((r) => (r.cells || []).map((c) => c.control && c.control.fieldName)),
+    [['new_a', 'new_b', 'new_c'], ['new_d', 'new_e']],
+    'the unrelated row-1 overflow must not stop placement from using the roomy last row');
+});
+
+test('form layout row occupancy: a too-wide new field can use an empty row despite an unrelated overflow', async () => {
+  const spec = specFor({ columns: 2, fields: ['new_a', 'new_b', 'new_c', { name: 'new_e', colspan: 4 }] });
+  const { section } = await runTwice(spec, existingForm(2, [[cell('a'), cell('b'), cell('c')], []]));
+
+  const eRow = section.rows.find((r) => (r.cells || []).some((c) => c.control && c.control.fieldName === 'new_e'));
+  assert.ok(eRow, 'the new field must be placed');
+  assert.strictEqual(section.rows.indexOf(eRow), 1, 'the existing empty last row accepts the clamped wide cell');
+});
+
+test('form layout row occupancy: a safe span change is not skipped because another row already overflows', async () => {
+  const spec = specFor({ columns: 3, fields: ['new_a', { name: 'new_b', colspan: 2 }, 'new_c', 'new_d', 'new_e', 'new_f'] });
+  const { section, second } = await runTwice(spec, existingForm(3, [
+    [cell('a', { rowspan: 2 })],
+    [cell('b')],
+    [cell('c'), cell('d'), cell('e'), cell('f')],
+  ]));
+
+  const b = section.rows.flatMap((r) => r.cells || []).find((c) => c.control && c.control.fieldName === 'new_b');
+  assert.strictEqual(Number(b.colspan) || 1, 2, "row 2 uses one reserved column plus b's two columns, which fits grid 3");
+  assert.deepStrictEqual(second.skipped.layout, [], 'the unrelated row-3 overflow must not make the safe span change look unsafe');
 });
 
 test('default Main form promotion demotes only declared sibling defaults', async () => {
