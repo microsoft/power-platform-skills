@@ -337,6 +337,7 @@ async function buildModelApp(spec, opts, deps) {
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   let authorizedFormRemovals;
+  let authorizedSitemapRemovals;
   let currentDestructiveApproval;
 
   // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
@@ -378,6 +379,13 @@ async function buildModelApp(spec, opts, deps) {
     const allowDestructive = opts.allowDestructive === true;
     let state;
     let discoveryError = null;
+    const priorApproval = allowDestructive && opts.workspaceDir ? readApprovalRecord(opts.workspaceDir) : { exists: false };
+    if (priorApproval.error) {
+      const msg = `${priorApproval.file} could not be read as a destructive approval record — delete it or re-run without --allow-destructive to see the list again.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-unreadable', detail: priorApproval.file, ...counts });
+      return { ok: false, errors: [msg] };
+    }
     try {
       state = deps.discoverOpDiffState
         ? await deps.discoverOpDiffState(spec, deps.provisionSdk)
@@ -390,6 +398,12 @@ async function buildModelApp(spec, opts, deps) {
     // the environment is unhealthy, letting an unattended-collision overwrite or a form/sitemap removal
     // slip through (design §11 — "can't verify safety ⇒ refuse", not "⇒ proceed"). Re-running usually
     // clears a transient read failure; --allow-destructive is the explicit escape hatch.
+    if (discoveryError && priorApproval.exists) {
+      const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — live removals cannot be compared with the approved list in ${DESTRUCTIVE_APPROVAL_FILE}. Re-run to retry before writing.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-compare-failed', detail: String((discoveryError && discoveryError.message) || discoveryError), ...counts });
+      return { ok: false, errors: [msg] };
+    }
     if (discoveryError && !allowDestructive) {
       const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — refusing to write without verifying the apply is non-destructive. Re-run to retry, or pass --allow-destructive to proceed without the check.`;
       log(`\n✗ ${msg}`);
@@ -421,6 +435,7 @@ async function buildModelApp(spec, opts, deps) {
       authorizedFormRemovals = authorizedFormRemovalMap(state, removals);
       const currentApproval = removalRecordFromOps(removals);
       currentDestructiveApproval = currentApproval;
+      if (state.sitemap) authorizedSitemapRemovals = new Set(currentApproval.sitemapRemovals);
       if (removals.length && !allowDestructive) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
@@ -439,15 +454,8 @@ async function buildModelApp(spec, opts, deps) {
         return { ok: false, errors: [msg] };
       }
       if (allowDestructive && opts.workspaceDir) {
-        const prior = readApprovalRecord(opts.workspaceDir);
-        if (prior.error) {
-          const msg = `${prior.file} could not be read as a destructive approval record — delete it or re-run without --allow-destructive to see the list again.`;
-          log(`\n✗ ${msg}`);
-          if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-unreadable', detail: prior.file, ...counts });
-          return { ok: false, errors: [msg] };
-        }
-        if (prior.exists) {
-          const newlyUnapproved = findNewlyUnapprovedRemovals(currentApproval, prior.record);
+        if (priorApproval.exists) {
+          const newlyUnapproved = findNewlyUnapprovedRemovals(currentApproval, priorApproval.record);
           if (newlyUnapproved.length) {
             try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not refresh ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
             const lines = newlyUnapproved.map((o) => `  • ${o.label} — ${formatNewRemovalDetail(o)}`);
@@ -456,6 +464,11 @@ async function buildModelApp(spec, opts, deps) {
             if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops-new', detail: newlyUnapproved.map((o) => o.kind).join(','), ...counts });
             return { ok: false, errors: [msg] };
           }
+        }
+        if (removals.length) {
+          // Persist the gate-time list BEFORE the first mutation. If the engine later keeps a new
+          // field and then fails, the next approved run must still be bound to what this run saw.
+          try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
         }
       }
     }
@@ -493,6 +506,7 @@ async function buildModelApp(spec, opts, deps) {
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         authorizedFormRemovals,
+        authorizedSitemapRemovals,
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         emit,
@@ -606,6 +620,8 @@ async function buildModelApp(spec, opts, deps) {
   }
   if (opts.apply && r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && opts.workspaceDir) {
     const kept = (((r.skipped || {}).unauthorizedRemovals) || []);
+    const active = opts.phases || PHASES;
+    const ranRemovalPhases = active.includes('forms') && active.includes('app-shell') && !(opts.changedOnly && opts.changedOnly.fastApply);
     if (kept.length) {
       const record = currentDestructiveApproval || { formRemovals: {}, sitemapRemovals: [] };
       try {
@@ -615,7 +631,7 @@ async function buildModelApp(spec, opts, deps) {
       } catch (err) {
         log(`\n⚠ kept unauthorized form removal(s), but could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
       }
-    } else {
+    } else if (ranRemovalPhases) {
       try { deleteApprovalRecord(opts.workspaceDir); } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
     }
   }
