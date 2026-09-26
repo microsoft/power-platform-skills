@@ -5,7 +5,74 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.9.0
+## [Unreleased] — 2.10.0
+
+Connector authoring loses its feature flag, `--allow-destructive` stops removing more than a maker
+was shown, and the findings of a deep retest that still reproduced are fixed.
+
+### Changed
+
+- **The `connectors` feature flag is removed.** Connector authoring shipped GA and on by default for a
+  release with no rollback needed, so the flag, `GENPAGE_ENABLE_CONNECTORS` and every probe of it are
+  gone. `custom-api` and `custom-telemetry` are unchanged, and an unknown flag now stays off even when
+  a matching env var is set.
+- **The auth preflight overlaps its CLI cold starts.** `check-auth` runs `pac org who` alongside the
+  `az` probes (every probe is asynchronous, and a pending pac probe is cancelled on an early exit), calls `az --version` only to explain a failed `az account show`, and fetches the WhoAmI
+  token while pac runs (measured on Windows: 24–32 s before, 16–19 s after). Scripts also reuse one
+  `az` token per process instead of starting the CLI for every request, and replace it on a 401.
+
+### Fixed
+
+- **`--allow-destructive` removes only what a maker was shown.** A refused apply records the removals
+  it listed (`.maker-workspace/destructive-approval.json`). The approved re-run halts, naming only the
+  new ones, if a form or the sitemap would now lose anything else: a field another maker added in the
+  meantime, or a spec edit. During a run, a field that appears is kept and reported, and a sitemap
+  rewrite that would drop a target added since the approval halts before the push. The record
+  survives failures, retries and partial (`--stage data`) runs, and an unreadable record, or a failed
+  preflight read while one exists, stops the run instead of widening the authority.
+- **`prune: false` forms are no longer reported as removing fields**, and no longer make an apply
+  demand `--allow-destructive` for removals that never happen.
+- **Switching a table's default Main form clears the old default.** Both forms used to stay default
+  while `--verify` passed. The other spec-declared Main forms are now demoted, and verify fails while
+  one still holds the flag.
+- **Row-spanning cells count wherever the build fits a layout.** Narrowing a grid, widening a cell
+  and placing a new field now count the columns a span above still reserves, exactly as verify does,
+  so the build no longer writes a layout verify rejects.
+- **A `/genpage` update must name the page's own app.** A real page id with another app's id, or a
+  nonexistent one, succeeded and renamed the page and attached its tables to that app. The wrapper
+  now proves the page is in the app (unpublished pages included) before downloading or uploading.
+- **Non-ASCII text survives the wire.** A Dataverse response or a hook payload split mid-character
+  across chunks turned Japanese, emoji and accented text into U+FFFD. Both are now decoded whole, and
+  the hooks still honour `MODEL_APPS_DISABLE_HOOKS` before touching anything.
+- **pac on Windows**: a backslash before a quote, including the quotes `%` escaping adds, no longer
+  swallows the next argument. A listing that repeats a page id, a "no pages could be retrieved"
+  warning, and a page id followed by a Unicode letter are no longer taken as authoritative.
+- **Quoted navigation keys** (`{"pageType":"generative","pageId":"PAGEREF_x"}`) are resolved and
+  counted like bare ones, and a string or name followed by `:` inside a value is no longer read as
+  the key. A navigation call whose target a later spread or computed key could replace
+  (`{ …, pageId: "PAGEREF_x", ...options }`) is now refused like any other dynamic target, and a
+  duplicated key counts where it takes effect: the last one.
+- **Downloads**: a malformed page `dataSources` is refused like an unreadable page config instead of
+  becoming unbound or a string, a page prompt keeps its exact text, and component and solution reads
+  page through instead of stopping at 1,000 rows.
+- **The version check no longer fetches your project's repository.** It ran its git commands in the
+  current directory, your project, so every skill start fetched your `origin`, and it compared
+  against a repository without the plugin, so the notice could never fire.
+
+### Removed
+
+- Dead helpers (`persistSnapshot`, `hasDebt`, `listDebt`, `getDefaultPublisherPrefix`), and the copies
+  of shared helpers: the non-field control set, OData escaping, SHA-256, and the page structural
+  gate, now one module for both skills.
+
+### Documentation
+
+- The skill no longer says BPF security-role grants are rejected. It states per artifact what a
+  rebuild re-applies to an existing form, view, chart, command or dashboard, and what `--verify` can
+  prove: a removed view column is not caught. A page's connector and Custom API bindings survive only
+  a same-environment rebuild.
+
+## [2.9.0]
 
 A dry run that says what an apply would really do, sample data that can express a hierarchy, and
 downloads that round-trip Choice columns.
