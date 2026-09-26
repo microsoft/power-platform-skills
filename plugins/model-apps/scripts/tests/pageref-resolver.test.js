@@ -102,6 +102,17 @@ test('extractNavTargets ignores bare pageId identifiers in a ternary value and u
   assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
 });
 
+test('a ternary decoy AFTER the real key is not read as a later, overriding key', () => {
+  // The last occurrence of a key takes effect, so a decoy that followed the real key and was taken for
+  // a key would silently win. Only a boundary rule keeps it out: a key must follow `{` or `,`.
+  for (const decoy of ['c ? "pageId" : "PAGEREF_wrong"', 'c ? pageId : other']) {
+    const code = `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", label: ${decoy} });`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target.key, 'detail', decoy);
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"', decoy);
+  }
+});
+
 test('extractNavTargets matches keys after comments, newlines, and spreads', () => {
   const cases = [
     '{ /* note */ "pageId": "PAGEREF_detail", pageType: "generative" }',
