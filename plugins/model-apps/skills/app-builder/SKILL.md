@@ -73,9 +73,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   the platform rejects one without, so use a Boolean flag for a manual check-off). Reach for one when
   the user describes work moving through **phases** — "triage →
   investigate → resolve", "lead → qualify → close". Author it `Active` (the default) or the stage bar
-  does not appear at all. v1 is single-entity and linear: cross-entity stages, branching, stage
-  actions and security-role grants are **rejected** by the spec gate, so offer Maker for those rather
-  than writing them into the spec.
+  does not appear at all. Who may run a flow is `securityRoles: { "personas": [...] }` (Active flows
+  only). v1 is single-entity and linear: cross-entity stages, branching and stage actions are
+  **rejected** by the spec gate, so offer Maker for those rather than writing them into the spec.
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
@@ -624,7 +624,7 @@ child view id. Each step emits `[n/total]`.
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
   (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
   assignment, and both of those ship. Also out of scope: the BPF knobs the spec gate rejects
-  (cross-entity stages, branching, stage actions, security-role grants).
+  (cross-entity stages, branching, stage actions).
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound
     `CreateProcessWithWfomJson` member — the same one the modern business-rule designer uses — and

@@ -213,15 +213,19 @@ apart deliberately.
   (by logical name) and **halts** naming whichever owns it, instead of letting the create fail with a
   platform error about a table the author never mentioned. It runs only on the create path, never on
   reuse, and is best-effort — a diagnostic must never be the thing that breaks a build.
-- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
-  stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
-  flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as
-  something other than what was authored. The allow-list shape matters: the SDK's normalizers copy a
-  fixed key set and discard the rest, so a stage `branch` or a step's `fieldLogicalName` (instead of
-  `field`) would otherwise pass validation and deploy bound to nothing. `securityRoles` needs role ids
-  and belongs to the `security` phase (a BPF's grants are privileges on the backing table that
-  activation creates) — tracked in
-  [#513](https://github.com/microsoft/power-platform-skills/issues/513).
+- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching
+  and stage actions; the spec gate **rejects** those keys — as an allow-list at flow, stage *and* step
+  level — rather than ignoring them, so a flow never quietly deploys as something other than what was
+  authored. The allow-list shape matters: the SDK's normalizers copy a fixed key set and discard the
+  rest, so a stage `branch` or a step's `fieldLogicalName` (instead of `field`) would otherwise pass
+  validation and deploy bound to nothing.
+- **Who may run a flow** — `securityRoles: { "personas": [...] }` (#513). A flow's grants are
+  `create/read/write/delete` privileges on the backing table that activation creates, so they are
+  applied in the `security` phase once both the flow and the personas' roles exist, against the
+  flow's deployed `uniquename` read back rather than derived. `verify-model-app` proves each persona
+  holds them (`bpf-roles`) and fails closed when the backing table cannot be read. Rejected: an empty
+  `personas` list, the form-only keys `everyone`/`fallbackForm`/`order`, and grants on a Draft flow
+  (there is no backing table until activation).
 - **Live-verified**: build (11 created, verify 8/8), rebuild (flow reused, solution component
   re-added), and teardown (exit 0, with an independent query confirming both the workflow row and its
   activation-created backing table are gone). An invalid spec is refused pre-flight with no writes.
