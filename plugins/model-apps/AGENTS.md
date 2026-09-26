@@ -609,7 +609,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Feature flags (connectors=ga/on, custom-api, custom-telemetry)
+feature-flags.json             ← Feature flags (custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -752,7 +752,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 | `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
@@ -785,14 +785,15 @@ revert. Once a release has shipped with the flag on and no rollback was needed, 
 a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
 about at every call site.
 
-`connectors` is in that window now: **GA, shipping `true`, gate retained as a rollback
-switch, scheduled for removal in the next release.**
+Connector authoring is GA and no longer has a feature flag. The remaining flags are
+`custom-api` and `custom-telemetry`; both currently ship **OFF** while their dependencies
+finish rolling out.
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
   it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CONNECTORS=0` to roll connectors back) → committed
+  `GENPAGE_ENABLE_CUSTOM_API=1` for a single run) → committed
   `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
@@ -801,19 +802,19 @@ switch, scheduled for removal in the next release.**
   flag's lifecycle **status** (experimental / in-progress / ga), effective state +
   source (env/file/default), summary, how to enable, plus config-validation warnings.
   Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
-  (the committed `feature-flags.json` carries only the on/off value).
-- **Script backstop:** connector entrypoints call the shared
-  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
-  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
-  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
-  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
+  (the committed `feature-flags.json` carries only the on/off value). Unknown flags
+  are disabled even when a matching env var is set.
+- **Script backstop:** Custom API entrypoints call the shared
+  `exitIfCustomApiDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-custom-apis.js`. Connector scripts have no feature-flag
+  backstop because connector authoring is GA.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
 
 **Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
-shared helper.** The currently-gated features gate at the same five places, so the rule is stated
-once here and only the per-feature specifics are tabled below:
+shared helper.** Gate a feature at the same five places, so the rule is stated once here and
+only the per-feature specifics are tabled below:
 
 1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
    never gate inline.
@@ -825,21 +826,20 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `connectors` | `custom-api` | `custom-telemetry` |
-|---|---|---|---|
-| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
-| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
-| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
-| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
-| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
+| | `custom-api` | `custom-telemetry` |
+|---|---|---|
+| **Owner agent** | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
 the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
-difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
-binding table both yield `none`, because the page-builder only needs to know how many bindings it
-may call — which keeps the dispatch stable when the flag is eventually removed.
+difference: that value is the **binding count**, not a flag state. An empty binding table yields
+`none`, because the page-builder only needs to know how many bindings it may call.
 
 `custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
@@ -848,10 +848,8 @@ produces the dispatch line. It also carries a second gate the other flags do not
 when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
 asked to measure or track something. `enabled` is permission, not instruction.
 
-All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
+The two remaining flags currently ship **OFF**, each waiting on cross-repo dependencies:
 
-- **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
-  authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
 - **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
   plus the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb to
   persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.

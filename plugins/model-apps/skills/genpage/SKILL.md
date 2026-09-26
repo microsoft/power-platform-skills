@@ -563,32 +563,19 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-**Re-probe the rollback gate here — do not rely on the plan content alone.** Connectors
-are GA and the flag ships ON, so this normally passes; it exists so a plan authored
-while the feature was on cannot deploy connectors after it has been turned off:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-```
-
-**If it prints `disabled`:** the outcome is `Connectors: none` **regardless of what the
-plan's `## Connector Bindings` section says**. Skip the rest of this phase — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload. (Backstop:
-`list-connections.js` / `create-connection-reference.js` also fail closed with exit 3.)
-
-**If it prints `enabled`:** read the plan's `## Connector Bindings` section and treat it
-as bindings **only when it contains an actual binding table** (a `| Logical Name | …`
-header with at least one data row). If the section is `No connector bindings.`, empty,
-missing, or malformed, the page has no connectors: skip this phase entirely — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload.
+Read the plan's `## Connector Bindings` section and treat it as bindings **only when
+it contains an actual binding table** (a `| Logical Name | …` header with at least
+one data row). If the section is `No connector bindings.`, empty, missing, or
+malformed, the page has no connectors: skip this phase entirely — do not create or
+pass `connectors.json`, and do not add `--connectors` on upload.
 
 **Carry this decision into code generation.** The outcome is `Connectors: <n>
 binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
 it verbatim in every page-builder dispatch — otherwise the generated page could call
 a connector this run never binds, and the page fails at runtime instead of simply
-omitting the feature. Note the dispatch value is the **binding count**, not the flag
-state: a disabled gate and an empty binding table both produce `none`, because the
-page-builder only ever needs to know how many bindings it may call.
+omitting the feature. The dispatch value is the **binding count**, not a flag state:
+an empty binding table produces `none`, because the page-builder only ever needs to
+know how many bindings it may call.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
@@ -712,11 +699,10 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. Only when the Phase 4.5 probe printed `enabled` **and** the plan's
-   `## Connector Bindings` section contains an **actual binding table** (a
-   `| Logical Name | …` header with at least one data row), also read
-   `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
-   sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
+3. Only when the plan's `## Connector Bindings` section contains an **actual
+   binding table** (a `| Logical Name | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
+   `No connector bindings.` sentinel or an empty/missing/malformed section as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
 3b. Only when the Phase 4.6 probe printed `enabled` **and** the plan's
    `## Custom API Bindings` section contains an **actual binding table** (a
@@ -789,7 +775,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
-- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 outcome, verbatim
+- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 binding-count outcome, verbatim
 - **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`

@@ -8,13 +8,10 @@ const { spawnSync } = require('node:child_process');
 const libPath = path.join(__dirname, '..', 'lib', 'feature-flags.js');
 const {
   isEnabled,
-  isConnectorsEnabled,
   isCustomApiEnabled,
-  connectorsDisabledMessage,
   customApiDisabledMessage,
   envVarName,
   parseBool,
-  exitIfConnectorsDisabled,
   exitIfCustomApiDisabled,
   describe,
   validateFlags,
@@ -24,21 +21,19 @@ const {
 
 // --- Default OFF (fail-closed) ---------------------------------------------
 
-test('connectors is GA and ships ON, with the rollback switch still working', () => {
-  // connectors was flipped to true rather than removed, so the gate survives one release as a
-  // rollback path. Pin BOTH halves: shipping ON (a regression to false silently disables a GA
-  // feature for every user) and still gate-able (if the switch stopped working there would be no
-  // way back short of a revert, which is the whole reason the flag was kept).
+test('connectors flag is retired and unknown fail-closed', () => {
   const json = JSON.parse(
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
   );
-  assert.equal(json.connectors, true, 'feature-flags.json must ship connectors: true');
-  assert.equal(isConnectorsEnabled({ env: {} }), true);
-  assert.equal(FLAGS.connectors.status, 'ga');
-  // The rollback path: an env override must still be able to turn it off.
-  assert.equal(isEnabled('connectors', { env: { GENPAGE_ENABLE_CONNECTORS: '0' } }), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(json, 'connectors'), false);
+  assert.equal(KNOWN_FLAGS.includes('connectors'), false);
+  assert.equal(isEnabled('connectors', { env: { GENPAGE_ENABLE_CONNECTORS: '1' } }), false);
+  assert.match(validateFlags({ connectors: true })[0], /unknown flag/i);
+  const lib = require(libPath);
+  for (const removed of ['isConnectorsEnabled', 'exitIfConnectorsDisabled', 'connectorsDisabledMessage']) {
+    assert.equal(lib[removed], undefined, `${removed} must stay removed after connector GA`);
+  }
 });
-
 test('custom-api flag is OFF by default (no env override)', () => {
   // Same fail-closed contract every gated feature relies on: an empty env falls through to the
   // committed feature-flags.json, which ships custom-api:false until the runtime stack is GA in PROD.
@@ -110,20 +105,6 @@ test('customApiDisabledMessage explains how to enable', () => {
 
 // --- Committed config actually ships OFF ------------------------------------
 
-test('the retired connectors flag is gone from every surface', () => {
-  // Intentionally inverted from its original form: connectors is GA but the gate was KEPT for one
-  // release as a rollback switch, so the flag, its helpers and its catalog entry must all still
-  // exist. When the follow-up change removes them, flip these assertions back.
-  assert.ok(KNOWN_FLAGS.includes('connectors'), 'connectors stays in the catalog until the gate is removed');
-  const lib = require(libPath);
-  for (const present of ['isConnectorsEnabled', 'exitIfConnectorsDisabled', 'connectorsDisabledMessage']) {
-    assert.equal(typeof lib[present], 'function', `${present} must still be exported while the gate exists`);
-  }
-  // And it must NOT be an unknown key — a leftover value the validator rejects would mean the
-  // committed file and the catalog had drifted apart.
-  assert.deepEqual(validateFlags({ connectors: true }), []);
-});
-
 test('committed feature-flags.json ships custom-api: false', () => {
   const json = JSON.parse(
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
@@ -164,35 +145,7 @@ test('CLI without a flag name exits 2 with usage', () => {
   assert.match(res.stderr, /Usage:/);
 });
 
-// --- exitIfConnectorsDisabled / exitIfCustomApiDisabled (DRY gate helpers) --
-
-test('exitIfConnectorsDisabled exits 3 and writes the message when OFF', () => {
-  let exitCode = null;
-  let written = '';
-  exitIfConnectorsDisabled({
-    env: { GENPAGE_ENABLE_CONNECTORS: '0' },
-    exit: (c) => { exitCode = c; },
-    write: (s) => { written += s; },
-  });
-  assert.equal(exitCode, 3);
-  assert.match(written, /disabled/i);
-});
-
-test('exitIfConnectorsDisabled is a no-op in the shipped (ON) configuration', () => {
-  let exitCalled = false;
-  exitIfConnectorsDisabled({
-    env: {},
-    exit: () => { exitCalled = true; },
-    write: () => {},
-  });
-  assert.equal(exitCalled, false, 'connectors ships ON, so the gate must not fire by default');
-});
-
-test('connectorsDisabledMessage explains that it was explicitly turned off', () => {
-  const m = connectorsDisabledMessage();
-  assert.match(m, /GENPAGE_ENABLE_CONNECTORS/);
-  assert.match(m, /feature-flags\.json/);
-});
+// --- exitIfCustomApiDisabled (DRY gate helper) -------------------------------
 
 test('exitIfCustomApiDisabled exits 3 and writes the message when OFF', () => {
   let exitCode = null;
