@@ -50,12 +50,12 @@ Use `AskUserQuestion` to gather bug details. `AskUserQuestion` supports 1-4 ques
 
 **Call 3** — Environment details:
 
-Use `AskUserQuestion` with a single question: **"We recommend including environment details (OS, Claude Code version, PAC CLI version) to help maintainers reproduce and debug the issue faster. Include them?"** (header: "Environment") — Options: "Yes, auto-collect them" (recommended), "No, skip".
+Use `AskUserQuestion` with a single question: **"We recommend including environment details (OS, Claude Code version, Power Apps CLI version) to help maintainers reproduce and debug the issue faster. Include them?"** (header: "Environment") — Options: "Yes, auto-collect them" (recommended), "No, skip".
 
 - If **yes**: Auto-collect the following by running shell commands:
   - **OS**: Detect the user's OS name and version using an appropriate command for their platform.
   - **Claude Code version**: Run `claude --version`
-  - **PAC CLI version**: Run `pac help` and extract the version from the output
+  - **Power Apps CLI version**: Resolve the locally installed CLI from the code app project root using [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md), then run `$PA --version`. If the CLI is not installed, report that explicitly.
   - Present the collected details to the user.
 - If **no**: Skip environment fields.
 
