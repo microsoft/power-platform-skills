@@ -10,6 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
@@ -19,9 +20,31 @@ const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 
-async function makeProvision(env, workspaceDir) {
+// A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
+// verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
+// one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
+// concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
+// cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
+// the first one's cache. The HTTP client — and with it the Azure CLI token — is shared: `opts.httpClient` (the
+// run's own), else one made on the first read. A client per read ran `az account get-access-token` once per
+// dashboard. `opts.makeClient` is a test seam.
+function isolatedReaderFor(env, opts = {}) {
+  let client = opts.httpClient || null;
+  const makeClient = opts.makeClient || createAzHttpClient;
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
+    try {
+      const sdk = await makeProvision(env, dir, client || (client = makeClient(env)));
+      return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
+    } catch (e) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      throw e;
+    }
+  };
+}
+
+async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
   fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
@@ -247,6 +270,64 @@ function readerFor(sdk, appUnique, opts) {
       const row = rows && rows[0];
       return (row && row.formxml) || null;
     },
+    // dashboardComponents(dashboardId): the deployed dashboard's tiles, parsed by the SDK's own
+    // dashboard deserializer — the path download already reads them through — so verify sees each
+    // tile's TargetEntityType / ViewId / VisualizationId exactly as a rebuild would, instead of
+    // regex-parsing FormXML a second way. Errors propagate: verify reports unreadable tiles as
+    // unverified, never as correct.
+    //
+    // What is checked must be what users see: the PUBLISHED dashboard. The SDK's dashboard read is the
+    // unpublished draft (RetrieveUnpublished), and verify runs in the build's workspace, where a plain fetch
+    // keeps a copy holding unpushed edits while the server has not moved — so a fix saved in Maker but not
+    // published, or never pushed at all, passed while users still saw the broken dashboard. The deserializer
+    // is kept (download reads tiles through it, and a second FormXML parser would drift from it), and the
+    // read is refused unless it IS the published dashboard: the server's draft FormXML is the published row's —
+    // both before AND after the fetch the tiles come from (checked only after it, a draft the fetch had cached
+    // and a maker then discarded passed, while the published dashboard was broken throughout). The fetch goes into
+    // a throwaway workspace (opts.isolatedReader — isolatedReaderFor), never the build's, whose copy may hold
+    // unpushed edits or be written by another process mid-read. Callers without one (tests) read through `sdk`.
+    //
+    // Equal FormXML before and after does not prove the fetch between them read it: a draft saved and then put
+    // back (A, then B, then A again) leaves both checks reading A while the fetch read B, and B's tiles passed. So
+    // each check also takes the draft's `@odata.etag`, which RetrieveUnpublished returns in the body and which
+    // moves on every write to the draft, even one that restores its content (live-measured; the SDK guards its own
+    // form writes on the same token). The same token before and after means nothing was written in between, so
+    // the fetch read the document both checks compared with the published row. A read with no token is refused,
+    // like one with no FormXML.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
+    // and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+    dashboardComponents: async (dashboardId) => {
+      const publishedDashboard = async () => {
+        const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
+        const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
+        // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+        if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
+        const draftXml = draft.body && draft.body.formxml;
+        if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
+        if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
+        const version = draft.body['@odata.etag'];
+        if (typeof version !== 'string' || version === '') throw new Error(`the version of dashboard ${dashboardId} could not be read`);
+        return { xml: row.formxml, version };
+      };
+      const before = await publishedDashboard();
+      const reader = opts.isolatedReader ? await opts.isolatedReader() : { sdk, dispose: () => {} };
+      let art;
+      try {
+        await reader.sdk.fetchArtifact('dashboard', dashboardId);
+        art = await reader.sdk.getArtifact('dashboard', dashboardId);
+      } finally {
+        reader.dispose();
+      }
+      const after = await publishedDashboard();
+      if (after.xml !== before.xml || after.version !== before.version) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
+      // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
+      // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
+      // has no tiles, as download-model-app.js reads it.
+      if (!art || (art.components !== undefined && !Array.isArray(art.components))) {
+        throw new Error(`the SDK returned ${art ? 'a malformed component list' : 'no artifact'} for dashboard ${dashboardId}`);
+      }
+      return art.components || [];
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
@@ -378,9 +459,10 @@ async function main() {
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const sdk = await makeProvision(env, workspaceDir);
+  const httpClient = createAzHttpClient(env);
+  const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
@@ -395,4 +477,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor };

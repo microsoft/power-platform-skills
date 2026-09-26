@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 
 // Arrange field cells into `columns` cells-per-row.
@@ -691,6 +691,11 @@ function compileFormIntent(spec, formSpec, opts) {
     // combination, but `compileFormIntent` is called directly too, so the flag states what actually
     // happened rather than what was asked for.
     __explicitLayout: Array.isArray(formSpec.tabs),
+    // The section names the author declared (see `authoredSectionNames`), so the engine's reconcile
+    // skips the same containers verify skips. An array, because the compiled def is plain data.
+    __authoredSectionNames: [...authoredSectionNames(formSpec)],
+    // …and the subset the author NAMED, which the engine's sweep reads to word its report.
+    __namedSectionNames: [...authoredSectionNames(formSpec, { named: true })],
     // Ordering anchors: { <logical>: <anchorLogical> }. Consumed by the engine's reconcile, which
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).
@@ -844,7 +849,9 @@ function findFieldCellLocation(formJson, logical) {
 // The search is form-wide rather than scoped to the expected tab on purpose: section names are
 // unique per form in Dataverse, and a section a maker dragged to another tab is still THAT section.
 // Scoping the lookup to the tab the spec now names would miss it and create a duplicate beside it.
-function findSectionLocation(formJson, sectionName) {
+// `accept`, when given, filters the candidates: an authored section must never resolve to an
+// engine-owned host that happens to share its name (sdk-build.js, the form topology pass).
+function findSectionLocation(formJson, sectionName, accept) {
   const want = String(sectionName || '').toLowerCase();
   if (!want) return null;
   const tabs = formJson.tabs || [];
@@ -854,6 +861,7 @@ function findSectionLocation(formJson, sectionName) {
       const sections = cols[ci].sections || [];
       for (let si = 0; si < sections.length; si++) {
         if (String(sections[si].name || '').toLowerCase() !== want) continue;
+        if (accept && !accept(sections[si])) continue;
         const pointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
         return { pointer, rowsPointer: pointer + '/rows', tabIndex: ti, columnIndex: ci, sectionIndex: si, section: sections[si] };
       }

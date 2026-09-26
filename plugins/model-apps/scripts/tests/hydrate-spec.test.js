@@ -471,3 +471,22 @@ test('directEntry is defaulted ONLY where it is missing and actually required', 
   assert.strictEqual(spec2.pages.find((p) => p.key === 'detail').directEntry, undefined,
     'the default tracks the validation condition exactly, not the mere presence of pageInput');
 });
+
+// #583: the routing description round-trips when the deployed app has one. When it has none the field
+// stays ABSENT — never `""` — because the build writes only a field the spec sets, so a download can
+// never plant an empty value that a rebuild would then use to blank a platform-written description.
+test('#583 hydrateSpec carries app.aiDescription only when the deployed app has one', async () => {
+  const read = deployedRead();
+  const app = await read.app();
+  const withRouting = { ...read, app: async () => ({ ...app, aiDescription: 'Route order work here.' }) };
+  assert.strictEqual((await hydrateSpec(withRouting)).app.aiDescription, 'Route order work here.');
+  assert.ok(!('aiDescription' in (await hydrateSpec(deployedRead())).app));
+  const blank = { ...read, app: async () => ({ ...app, aiDescription: '' }) };
+  assert.ok(!('aiDescription' in (await hydrateSpec(blank)).app), 'an empty value is omitted, not emitted as ""');
+  // Whitespace-only is non-empty to the SDK, which sets the key; emitting it would fail the whole
+  // download, because validation refuses a blank routing description.
+  for (const ws of [' ', '\n', ' \t\r\n ']) {
+    const white = { ...read, app: async () => ({ ...app, aiDescription: ws }) };
+    assert.ok(!('aiDescription' in (await hydrateSpec(white)).app), `whitespace-only ${JSON.stringify(ws)} is omitted`);
+  }
+});

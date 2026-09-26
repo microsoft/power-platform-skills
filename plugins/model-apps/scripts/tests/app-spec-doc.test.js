@@ -107,6 +107,16 @@ function unescapedPipeCount(row) {
   return n;
 }
 
+test('the routing description is shown beside the tile text, and only when the spec sets one (#583)', () => {
+  const spec = realisticSpec();
+  assert.ok(!renderAppSpecDoc(spec, {}).includes('Routing description'));
+  spec.app.aiDescription = 'Support work. Prefer My Tickets for your own assigned items.';
+  const md = renderAppSpecDoc(spec, {});
+  const at = md.indexOf('**Routing description:** Support work. Prefer My Tickets for your own assigned items.');
+  assert.ok(at > md.indexOf(spec.app.description), 'after the tile description');
+  assert.ok(at < md.indexOf('## Environment'), 'in the overview, before the first section');
+});
+
 test('renders every expected section heading in document order', () => {
   const md = renderAppSpecDoc(realisticSpec(), { envUrl: 'https://x.crm.dynamics.com' });
   const expected = [

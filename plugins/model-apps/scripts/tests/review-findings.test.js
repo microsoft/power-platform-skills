@@ -288,10 +288,11 @@ test('#6a readDescriptionInventory RECORDS a per-class read failure', async () =
     },
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
-  const inv = await readDescriptionInventory(sdk, APP, null);
+  const inv = await readDescriptionInventory(sdk, APP, null, new Set(['contoso_status']));
   // `globalChoices` is now reported too: the stub answers that metadata read with a 404, and a
   // non-2xx is no longer coerced to an empty list. Before, it read as "this environment has no
-  // global choices" — a positive claim made from a failed read.
+  // global choices" — a positive claim made from a failed read. (A column binding `contoso_status`
+  // puts a set in scope, so the read is actually made; with nothing in scope it is skipped.)
   assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['forms', 'globalChoices'], JSON.stringify(inv.incomplete));
   assert.match(inv.incomplete.find((i) => i.kind === 'forms').reason, /403/);
   // The class that DID read is still present — one failed query must not blank the others.
@@ -308,17 +309,19 @@ test('#6a3 a non-2xx global-choice read is UNKNOWN, not "this environment has no
   // `notRoundTrippedSummary` started reporting global choices: a class it omits reads as absent.
   const { readDescriptionInventory } = require('../download-model-app.js');
   const base = { queryRecords: async () => [] };
+  // A column binding `contoso_status` puts one set in scope, so the metadata read is actually made.
+  const bound = new Set(['contoso_status']);
   for (const [label, get] of [
     ['non-2xx', async () => ({ status: 403, headers: {}, body: {} })],
     ['malformed body', async () => ({ status: 200, headers: {}, body: { notValue: 1 } })],
     ['throws', async () => { throw new Error('socket hang up'); }],
   ]) {
-    const inv = await readDescriptionInventory({ ...base, dataverse: { get } }, null, null);
+    const inv = await readDescriptionInventory({ ...base, dataverse: { get } }, null, null, bound);
     assert.ok((inv.incomplete || []).some((i) => i.kind === 'globalChoices'),
       `${label}: expected globalChoices to be recorded as unknown, got ${JSON.stringify(inv.incomplete)}`);
   }
   // And a GOOD read records nothing.
-  const ok = await readDescriptionInventory({ ...base, dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [{ Name: 'contoso_status' }] } }) } }, null, null);
+  const ok = await readDescriptionInventory({ ...base, dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [{ Name: 'contoso_status' }] } }) } }, null, null, bound);
   assert.ok(!(ok.incomplete || []).some((i) => i.kind === 'globalChoices'));
   assert.deepStrictEqual((ok.globalChoices || []).map((g) => g.name), ['contoso_status']);
 });
@@ -389,7 +392,7 @@ test('#6a2 an unreadable app-component list marks EVERY class unknown', async ()
     queryRecords: async () => { throw new Error('HTTP 500'); },
     dataverse: { get: async () => ({ status: 500, headers: {}, body: {} }) },
   };
-  const inv = await readDescriptionInventory(sdk, '11111111-1111-1111-1111-111111111111', null);
+  const inv = await readDescriptionInventory(sdk, '11111111-1111-1111-1111-111111111111', null, new Set(['contoso_status']));
   assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['charts', 'forms', 'globalChoices', 'views']);
 });
 

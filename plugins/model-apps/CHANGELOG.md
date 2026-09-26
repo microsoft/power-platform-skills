@@ -12,6 +12,14 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **`app.aiDescription` — a routing description for agents** ([#583]). The text an orchestrator reads
+  to choose between sibling apps over the same tables, kept apart from the tile's `app.description`.
+  It is written to the platform's `appmodule.aiappdescription` at create, and on an existing app when
+  it differs. A download carries it back, and `--verify` checks it. Leave it out and the build never
+  touches the deployed value. If the app has an unpublished change in Maker, the build halts and tells
+  you to publish first, rather than failing with a remedy that cannot work. A workspace copy of the app
+  holding an earlier run's unpushed edits — an interrupted build, say — is refused before anything is
+  applied, rather than pushed along with this run's changes, and a failed push of the app resets it.
 - **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
   **Deliberately out of scope** beside the traceability table. Documentary only.
 - **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell
@@ -29,6 +37,17 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A named form section moves to the tab the spec puts it in.** A section found elsewhere on the
+  deployed form — dragged in Maker, or moved in the spec — used to be updated where it stood, so the
+  build succeeded, the section stayed in the old tab, and `--verify` failed the form. It is now moved
+  (the same section, fields and all), and a neighbour with the same label can no longer take it over.
+  A section of yours that shares its name with the engine's own host (`section_notes`) never takes
+  the timeline or a sub-grid host — by name, label or position, and even after a maker added a field to
+  the host: it gets a section of its own. With notes on, the timeline no longer takes over a
+  `section_notes` of yours, or a section a maker added, either — their fields stay put, and an existing
+  form gets its timeline too — and a section you declared with no fields keeps its name even after a
+  maker puts a web resource or sub-grid in it. An emptied copy of a section you named like a generated
+  one (`section_1_0`) is no longer reported with advice to give it a name.
 - **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
   anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
   summary read as authoritative — and a truncated-but-authoritative listing is what drives a
@@ -181,6 +200,66 @@ downloads that round-trip Choice columns.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
   that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
   first.
+- **Same-named charts on different tables no longer cross-wire a dashboard tile** ([#586]). A tile
+  plotted one table's chart over another table's view. Chart identity now includes its table; a tile
+  whose view name exists on several tables must say which with `entity`, and verify checks that each
+  chart tile's chart and view belong to the tile's table — on the published dashboard: one with
+  unpublished changes is reported unverified, and the tiles are read into a throwaway workspace, never
+  through the build's copy, which may hold unpushed edits. A draft saved and put back while the tiles are
+  read is caught too, by the draft's version rather than its content.
+- **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
+  ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
+  the other from the nav. A download withholds such a pair and says why, and it withholds a dashboard
+  whose name cannot be read rather than naming it after its sitemap title.
+- **A dashboard belongs to the app through the app's solution** ([#586]). A name can also match another
+  app's dashboard, and teardown used to delete every match. It now deletes only the dashboards the app's
+  solution holds, none when the spec has no real solution to ask, and keeps the solution while any step
+  failed — a solution it could not read counts as one — so a re-run can still tell. When several
+  match, the build reuses the solution's own or halts instead of reusing an arbitrary one, and verify
+  checks that same one — including the sitemap entry that opens it, which took the first match and
+  failed a correctly wired app. A dashboard the build cannot add to its solution is removed again
+  rather than left outside it; if that fails too, the build halts naming it and does not auto-retry,
+  since a retry would reuse it outside the solution. A lone match outside the solution is still reused
+  (a downloaded app's dashboard may never have joined the solution that holds the app), and the build
+  now warns that nothing proves it is this app's rather than another app's namesake.
+- **A Choice written as a label, its translation, or its number is one sample-data key** ([#586]). The
+  loader always saw them that way; the spec gate compared them as written, so a duplicate passed it
+  and the seed then failed after tables and forms had deployed. A Choice column with no `schemaName`
+  on a table with sample data is now reported by name instead of crashing validation.
+- **A download reports only the app's own global choices as not round-tripped** ([#586]) — the ones
+  its solution owns or its columns bind — instead of every unmanaged option set in the environment.
+- **A teardown fences any `--changed-only` run already in flight** ([#587]). Its tombstone kept the
+  snapshot's generation, so a run that had read the snapshot first could re-bless it over the
+  tombstone. A first build, which has no snapshot yet, is fenced too: it claims one before it builds,
+  and a teardown tombstones even a workspace with none. When two teardowns of one workspace overlap,
+  the fence stays until the last of them finishes, a `--changed-only` build waits while one is still
+  running — and a build that cannot resolve its live identity also refuses when one began while it was
+  looking — and `--clear-workspace` leaves a workspace that still holds the fence. Teardown now also
+  **refuses to delete anything when it cannot write that fence**, instead of warning and carrying on.
+  The workspace lease that guards the fence is never taken from a holder that is still alive, however
+  long it has held it: one paused mid-write, on a machine that slept, would otherwise commit its stale
+  view over the fence when it resumed. An old lease names the file to delete if its holder's pid was
+  reused by another process, and so does a reclaim of it abandoned by a crash: it is never removed by
+  another writer, which let two writers hold the lease. `--clear-workspace` clears under the same lease,
+  and only when no fence has appeared since the teardown finished. A build that another build or a
+  teardown ran alongside fails, and makes whatever snapshot it then finds ineligible; when even that is
+  refused, because the other writer holds the lease or the snapshot cannot be read, the refusal is
+  recorded beside the snapshot and the next `--changed-only` run builds in full.
+- **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
+  already kept its tables: a download flags all three `existing: true`. Deleting a relationship
+  removed its lookup column — and that column's data — from a table teardown kept.
+- **An app in several unmanaged solutions downloads the same way every time** ([#587]). The spec keeps
+  `Default` and names the candidates in `solutionCandidates` — never whichever row the server happened
+  to return first, which teardown would then delete. Its business rules and option sets are still
+  reported across all of them, and a membership that cannot be read is reported as unknown. When the
+  candidates' publishers do not share one prefix, or the solutions or a publisher cannot be read — the
+  one solution's included — the spec's publisher prefix is not guessed from the app name: it stays the
+  unverified `new`, relationships keep their deployed names, and the download says to set it.
+- **The teardown summary no longer calls every skip "not found".** Steps kept on purpose and steps
+  never attempted after a failed app delete are counted as what they are.
+- **A failure after the app is already deleted no longer strands the rest of the teardown.** The SDK
+  tidies its local copy after the remote delete; when that step failed, teardown stopped as though
+  the app still existed. It now asks the platform, and carries on when the app is gone.
 
 ### Changed
 
@@ -207,7 +286,10 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585
+[#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 
