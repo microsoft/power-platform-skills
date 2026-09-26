@@ -1647,14 +1647,34 @@ function normalizeFormId(value) {
   return String(value || '').trim().replace(/^\{+|\}+$/g, '').toLowerCase();
 }
 
-function authorizedFormRemovalEntry(map, formId) {
-  if (!(map instanceof Map)) return { fenced: false, authorized: null };
+function authorizedFormRemovalEntry(map, formId, createdThisRun) {
+  if (!(map instanceof Map)) return { fenced: false, authorized: null, normalizedFormId: normalizeFormId(formId) };
   const normalized = normalizeFormId(formId);
   if (map.has(normalized)) return { fenced: true, authorized: map.get(normalized), normalizedFormId: normalized };
   for (const [key, value] of map) {
     if (normalizeFormId(key) === normalized) return { fenced: true, authorized: value, normalizedFormId: normalized };
   }
-  return { fenced: false, authorized: null, normalizedFormId: normalized };
+  if (createdThisRun && createdThisRun.has(normalized)) return { fenced: false, authorized: null, normalizedFormId: normalized };
+  return { fenced: true, authorized: new Set(), normalizedFormId: normalized };
+}
+
+function sitemapTargetsForFence(container) {
+  // Use the destructive-op classifier's target vocabulary so the preflight record and the engine fence
+  // cannot drift (entity:<logical>, url:<url>). Required lazily to avoid a module-load cycle: op-diff
+  // reaches sdk-build through sdk-teardown, while this helper runs only after sdk-build is initialized.
+  return require('./op-diff.js').sitemapTargets(container);
+}
+
+async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, authorized, phase) {
+  if (!(authorized instanceof Set)) return;
+  await provision.fetchArtifact('app', appId, { overwrite: true });
+  const live = await provision.getArtifact('app', appId) || {};
+  const want = new Set(sitemapTargetsForFence(nextSiteMap || {}));
+  const dropped = sitemapTargetsForFence(live.siteMap || {}).filter((target) => !want.has(target));
+  const unauthorized = dropped.filter((target) => !authorized.has(target));
+  if (unauthorized.length) {
+    throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true });
+  }
 }
 
 async function runSdkBuild(spec, opts = {}) {
@@ -1694,6 +1714,7 @@ async function runSdkBuild(spec, opts = {}) {
     };
   }
 
+  const createdFormsThisRun = new Set();
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
@@ -2772,7 +2793,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
-      const { fenced, authorized, normalizedFormId } = authorizedFormRemovalEntry(opts.authorizedFormRemovals, formId);
+      const { fenced, authorized, normalizedFormId } = authorizedFormRemovalEntry(opts.authorizedFormRemovals, formId, createdFormsThisRun);
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
         if (fenced && (!authorized || !authorized.has(logical))) {
@@ -3018,6 +3039,7 @@ async function runSdkBuild(spec, opts = {}) {
     let id;
     if (type === 'form') {
       id = await createFormShell(def);
+      createdFormsThisRun.add(normalizeFormId(id));
       await addSubgrids(id, def.__subgrids);
     } else {
       id = (await provision.createArtifact(type, def)).id;
@@ -3914,6 +3936,7 @@ async function runSdkBuild(spec, opts = {}) {
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
+          await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
           requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
@@ -3926,6 +3949,8 @@ async function runSdkBuild(spec, opts = {}) {
           // refused above (refuseUnpushedAppCopy): replaying a stale sitemap rewrite detached live pages
           // with no gate and no --allow-destructive, and the copy's routing description may be this very
           // edit, left unpushed, so "unchanged" against it would skip the push the server still needs.
+          const current = await provision.getArtifact('app', existingId) || {};
+          await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
           if (await applyAppAiDescription(provision, spec, existingId)) {
             requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
@@ -4196,6 +4221,7 @@ async function runSdkBuild(spec, opts = {}) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
+          await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
           await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
           // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
           // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.

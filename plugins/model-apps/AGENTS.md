@@ -139,11 +139,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
   never duplicates a control. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
-  when it refuses form-field or sitemap removals; a later `--allow-destructive` run may remove only that
-  recorded set, consumes the file after success only when no field was kept by the fence, keeps it after failure, and fails closed if the file is
-  unreadable. If live state contains a new removal, the build halts, lists only that new removal, refreshes
-  the record, and the engine keeps any field that appears during the run rather than pruning beyond the
-  preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict
+  when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
+  retries and later failures stay bound to that gate-time list. A later `--allow-destructive` run may
+  remove only that recorded set; the record is consumed only after a successful run that included both
+  removal phases (`forms` and `app-shell`) and kept no field, and is otherwise kept on failure, partial
+  runs, changed-only runs, or when the fence kept a field. The gate fails closed if the record is
+  unreadable or if discovery fails while a record exists, because live removals cannot be compared with
+  the approved list. If live state contains a new removal, the build halts, lists only that new removal,
+  refreshes the record, and the engine keeps any field or sitemap target that appears during the run
+  rather than pruning beyond the preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict
   halts the build for a fresh download instead of silently dropping the edit) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view

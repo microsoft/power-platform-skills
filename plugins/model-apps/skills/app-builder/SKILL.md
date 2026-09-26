@@ -460,9 +460,12 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
   overwriting an existing app in unattended mode, and allows explicit-layout form-field removals or
   sitemap-target drops; also authorizes DETACHING a `pages-removed` page's nav subarea (the page
   record is left deployed — it is not deleted). For form and sitemap removals, the authority covers
-  the removals the last refusal listed; if live state would lose anything more, the apply halts,
-  lists only the newly destructive removals, and records that new list for review. A field that
-  appears during a run is kept and reported, never removed. For `teardown --apply`: **required** — all deletes
+  the removals the last refusal or approved run recorded; if live state would lose anything more,
+  the apply halts, lists only the newly destructive removals, and records that new list for review.
+  A field or sitemap target that appears during a run is kept or halted before push, never removed
+  unseen. The record is consumed only after a full successful build that ran the removal phases and
+  kept nothing; it is kept on failures, partial runs, changed-only runs, unreadable records, and
+  failed discovery. For `teardown --apply`: **required** — all deletes
   are destructive by construction, so teardown without this flag halts before touching anything.
 - **Pages-phase safety HALTs.** The build halts on identity or safety violations rather than
   proceeding with potentially wrong state. Surface the HALT reason and follow the recovery hint:

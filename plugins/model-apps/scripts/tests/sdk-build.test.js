@@ -1599,6 +1599,21 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+test('app-shell: a live sitemap target absent from the gate approval halts before the app push', async () => {
+  const spec = makeSpec();
+  const existingSitemap = { areas: [{ groups: [{ subAreas: [
+    { entity: 'new_customer', title: 'Customers' },
+    { entity: 'new_ticket', title: 'Tickets' },
+    { entity: 'new_late', title: 'Late table' },
+  ] }] }] };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap });
+  await assert.rejects(
+    runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'], authorizedSitemapRemovals: new Set(['entity:new_ticket']) }),
+    (err) => err && /entity:new_late/.test(err.message) && /appeared after the run's approval/.test(err.message)
+  );
+  assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'app'), 'the app is not pushed after an unapproved sitemap removal appears');
+});
+
 // Descriptions must survive the BUILD, not just the def builder. A def-builder unit test cannot see
 // a phase that constructs its own createArtifact payload inline and forgets to forward the field —
 // which is exactly what both of these did before they were wired.
@@ -3091,13 +3106,23 @@ test('form reconcile: an empty authorized set keeps mid-run fields on a form see
   assert.ok(warnings.some((w) => /new_manual/.test(w)), 'kept field is reported');
 });
 
-test('form reconcile: a form absent from the authorized-removals map prunes as before', async () => {
+test('form reconcile: a supplied authorized-removals map fences forms absent from it', async () => {
   const spec = makeSpec();
   spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
     tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
-  assert.ok(find(calls, 'removeElement').length > 0, 'forms outside the map keep legacy pruning behavior');
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'forms outside a supplied map are fenced with an empty approval set');
+});
+
+test('form reconcile: a supplied map fences a form id absent from the gate snapshot', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_late'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'a form absent from the gate-time map is fenced with an empty set');
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_late' }]);
 });
 
 test('form reconcile: no authorized-removals map prunes as before', async () => {
