@@ -355,7 +355,7 @@ For ad-hoc verification or assertions the Layer 2 runner currently skips, grep t
 | `Xrm.Navigation.navigateTo` | If navigation is used, must appear (literal or via `xrm?.Navigation?.navigateTo` alias) |
 | Unsized icons | `grep -E '\w+(16\|20\|24\|28\|32)(Regular\|Filled)\b'` should return nothing |
 | try-catch on dataApi | Each `await dataApi\.` must be inside a try block |
-| No placeholders | `grep -E '(TODO\|FIXME\|\.\.\..*$)'` should not match in function bodies |
+| No placeholders | `node plugins/model-apps/scripts/genpage-worker-output.js --file <page>.tsx` — its elision check is the Layer 2 rule. A bare `grep -E '(TODO\|FIXME\|\.\.\.)'` over-matches spreads, `'TODO'` status values and "Loading…" |
 | FormattedValue for lookups | Any `_xxx_value` in a select must be paired with a FormattedValue access |
 | `createTableColumn` import | If `<DataGrid>` is used, must import `createTableColumn` |
 

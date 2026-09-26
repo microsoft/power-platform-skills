@@ -13,6 +13,9 @@
 
 'use strict';
 
+const path = require('node:path');
+const { pageFileProblems } = require('../../../../plugins/model-apps/scripts/lib/page-file-targets.js');
+
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
 
@@ -145,6 +148,7 @@ const REQUIRED_PLAN_SECTIONS = [
   'Entity Creation Required',
   'Existing Entities',
   'Connector Bindings',
+  'Custom API Bindings',
   'Design Preferences',
   'Relevant Samples',
   'Per-Page Specifications',
@@ -228,6 +232,27 @@ function parseMarkdownRows(sectionText, requiredColumns) {
     rows.push(row);
   }
   return rows;
+}
+
+function workingDirectoryOf(plan) {
+  const section = planSection(plan, 'Working Directory');
+  return section ? section.split(/\r?\n/)[0].trim() : '';
+}
+
+function validatePageFileTargets(pageRows, workingDir, errors) {
+  // The rule is the plugin's own (page-file-targets.js), so this validator, /app-builder's plan
+  // projection and /genpage's pre-dispatch gate cannot disagree about a page filename.
+  const files = pageRows.map((row) => String(row.file || '').trim());
+  const byFile = new Map(pageRows.map((row) => [String(row.file || '').trim(), row]));
+  const problems = pageFileProblems(files, { workingDir: workingDir ? path.resolve(workingDir) : process.cwd() });
+  for (const problem of problems) {
+    const row = byFile.get(problem.file) || {};
+    if (problem.code === 'collision') {
+      errors.push(schemaError('duplicate-page-file', `page files ${problem.message}`, { section: 'Pages', page: row.page, file: problem.file }));
+    } else {
+      errors.push(schemaError('invalid-page-file', `page "${row.page}": ${problem.message}`, { section: 'Pages', page: row.page, file: problem.file }));
+    }
+  }
 }
 
 function parsePerPageBlocks(sectionText) {
@@ -318,10 +343,14 @@ function validateGenpagePlanSchema(plan) {
   const observed = sections
     .map((section) => section.title)
     .filter((title) => REQUIRED_PLAN_SECTIONS.includes(title) || OPTIONAL_PLAN_SECTIONS.has(title));
+  // Solution Packaging is optional and sits between Custom API Bindings and Design Preferences, as in
+  // references/plan-schema.md. Split at that point by NAME: an index goes stale the moment a required
+  // section is added before it — which is exactly how Custom API Bindings ended up expected after it.
+  const packagingAt = REQUIRED_PLAN_SECTIONS.indexOf('Design Preferences');
   const expected = [
-    ...REQUIRED_PLAN_SECTIONS.slice(0, 8),
+    ...REQUIRED_PLAN_SECTIONS.slice(0, packagingAt),
     ...(observed.includes('Solution Packaging') ? ['Solution Packaging'] : []),
-    ...REQUIRED_PLAN_SECTIONS.slice(8),
+    ...REQUIRED_PLAN_SECTIONS.slice(packagingAt),
   ];
   const comparable = observed.filter((title) => expected.includes(title));
   if (comparable.join('\n') !== expected.filter((title) => comparable.includes(title)).join('\n')) {
@@ -336,6 +365,7 @@ function validateGenpagePlanSchema(plan) {
   if (pagesSection && pageRows.length === 0) {
     errors.push(schemaError('missing-pages-table', '## Pages must contain a table with Page, File, Purpose, and Entities columns', { section: 'Pages' }));
   }
+  if (pageRows.length) validatePageFileTargets(pageRows, workingDirectoryOf(plan), errors);
 
   const entitySection = byTitle.get('Entity Creation Required');
   if (entitySection) validateEntityCreationSection(entitySection.content, errors);
@@ -348,23 +378,20 @@ function validateGenpagePlanSchema(plan) {
     }
   }
 
-  // `## Custom API Bindings` is spec'd as always-present: plan-schema.md:212 gives it the same
-  // "Exact literal ... when empty" sentinel rule as `## Connector Bindings` at :211, and :213
-  // reserves "Opt-in" for `## Solution Packaging` alone — which is why OPTIONAL_PLAN_SECTIONS
-  // contains only that one section. (The "opt-in, unlike the always-present ## Connector Bindings"
-  // sentence at :158-160 sits inside the Solution Packaging block and describes IT, not this
-  // section.) In practice though, 0 of the 12 fixture plans emit `## Custom API Bindings` and
-  // REQUIRED_PLAN_SECTIONS omits it, so requiring it here would fail every existing plan. This
-  // check is therefore conditional until the fixtures catch up with the spec — a deliberate
-  // accommodation of a spec-vs-reality divergence, not a statement that the section is optional.
-  // Without it the Custom API half had no enforcement at all: the sentinel was stated but never
-  // checked, so a prompt regression leaking a `----- BEGIN/END ... -----` delimiter into this
-  // section scored green, while the identical regression in the connector half fails loudly.
   const customApiSection = byTitle.get('Custom API Bindings');
   if (customApiSection) {
     const body = customApiSection.content.trim();
-    if (body !== 'No custom API bindings.' && !findMarkdownTable(body, ['Name', 'Kind', 'Bound Entity'])) {
+    const rows = parseMarkdownRows(body, ['Name', 'Kind', 'Bound Entity', 'Display Name', 'Parameters (name: kind)']);
+    if (body !== 'No custom API bindings.' && rows.length === 0) {
       errors.push(schemaError('missing-customapi-table', '## Custom API Bindings must be the exact no-bindings sentinel or the Custom API binding table', { section: 'Custom API Bindings' }));
+    } else {
+      for (const row of rows) {
+        const kind = row.kind || '';
+        if (!row.name || !/^(Action|Function)$/i.test(kind) || !row['bound entity'] || !row['display name']) {
+          errors.push(schemaError('missing-customapi-table', '## Custom API Bindings rows must include Name, Kind (Action or Function), Bound Entity, Display Name, and Parameters (name: kind)', { section: 'Custom API Bindings' }));
+          break;
+        }
+      }
     }
   }
 
@@ -993,7 +1020,7 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.entityCreationLog || fixture.workflowLog;
     if (!log) return fail('no entity-creation-log.md or workflow-log.md');
-    
+
     // Check legacy flow: old-script calls must have --solution
     const legacyMatches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
     const offenders = [];
@@ -1001,7 +1028,7 @@ PHASE_EXPECTATIONS.set(
       if (!/--solution\b/.test(m[2])) offenders.push(m[1]);
     }
     if (offenders.length > 0) return fail(`${offenders.length} call(s) missing --solution: ${offenders.slice(0,3).join(', ')}`);
-    
+
     // Check new flow: provision-entities.js must have Solution: declared in plan or log
     // Check for provision-entities.js in both workflowLog and entityCreationLog
     const usesNewFlow = /\bprovision-entities\.js\b/.test(fixture.workflowLog || '') || /\bprovision-entities\.js\b/.test(fixture.entityCreationLog || '');
@@ -1013,10 +1040,10 @@ PHASE_EXPECTATIONS.set(
       const hasSolution = (planEnv && solutionPattern.test(planEnv)) || (logEnv && solutionPattern.test(logEnv));
       if (!hasSolution) return fail('provision-entities.js used but no Solution: declaration in ## Environment');
     }
-    
+
     // Skip if no entity provisioning detected
     if (legacyMatches.length === 0 && !usesNewFlow) return skip('no entity provisioning detected');
-    
+
     return pass();
   }
 );

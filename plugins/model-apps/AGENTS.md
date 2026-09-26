@@ -622,6 +622,9 @@ scripts/
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
+  genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
@@ -635,6 +638,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
@@ -824,7 +828,27 @@ All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
-backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper.
+backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper. It also
+backs the navigation oracle (`pageref-resolver.js`), which finds each call AND parses its object
+in the lexer's mask — executable code inside a template's `${…}` is visible, template text and
+string bodies are not — and reads each value from the source at the same offsets, so one lexer
+drives both. It also backs the worker-output gate
+(`genpage-worker-output.js`), and `findElisionMarker` — the one "was code elided?" rule the
+worker gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
+a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
+as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
+code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
+scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
+`!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
+head, after which a statement starts. Each of those rules was once broken, and each break refused
+a complete page as truncated or hid a navigation call. `hasDefaultExport` also needs the export
+itself to be complete (a function or class reaches its body; a bare name is one the module
+declares or imports, not a token that merely appears — the `as` of `import * as React` is not a
+binding), because a write cut inside its export line balances; any complete `export default` will
+do, for overloads. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
+lexer reports when a file stops inside a string, template, comment or JSX element, and a file
+may not end on a token that needs more (`a +`, `React.`, `=>`). Both gates run all three checks.
 
 Judge changes to it by **both** error directions, and weight them correctly:
 - a false **accept** promotes prose as a page, and promotion is sticky — the page is then
@@ -836,7 +860,10 @@ Judge changes to it by **both** error directions, and weight them correctly:
 committed `.tsx` in `samples/` and `evals/model-apps/genpage/fixtures/` (enumerated via
 `git ls-files`, so it does not race the transient fixture dirs `capture-fixture.test.js`
 creates). Two lexer bugs were invisible to hand-written cases and caught only by that
-corpus — keep it, and add to it rather than around it.
+corpus — keep it, and add to it rather than around it. The worker-output gate
+(`genpage-worker-output.test.js`) and the icon hook (`validate-icon-imports.test.js`, samples
+only) run the same kind of corpus: every committed page must pass them, because a false reject
+there throws away a good page or blocks a pattern the page builder was told to copy.
 
 Residual limits, accepted deliberately:
 - **`<` disambiguation is structural, not semantic.** A generic arrow is recognised by its

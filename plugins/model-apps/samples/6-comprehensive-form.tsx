@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Checkbox, Combobox, Field, Input, makeStyles, Option, Radio, RadioGroup, Slider, SpinButton, Switch, Textarea, tokens, Button, Text, Caption1, Subtitle1, Body1, MessageBar, useId as useFluentId, mergeClasses } from "@fluentui/react-components";
 import { DatePicker } from "@fluentui/react-datepicker-compat";
 import { TimePicker } from "@fluentui/react-timepicker-compat";
-import { CheckmarkCircle20Filled, ErrorCircle20Filled } from "@fluentui/react-icons";
+import { CheckmarkCircleFilled, ErrorCircleFilled } from "@fluentui/react-icons";
 
 const useStyles = makeStyles({
     container: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXL, padding: tokens.spacingHorizontalM, maxWidth: "800px", margin: "0 auto", width: "100%", boxSizing: "border-box", height: '100%', overflowY: 'auto', "@media (max-width: 768px)": { padding: tokens.spacingHorizontalS, gap: tokens.spacingVerticalL }, "@media (max-width: 480px)": { padding: tokens.spacingHorizontalXS } },
@@ -88,7 +88,7 @@ const GeneratedComponent: React.FC = () => {
                 <Subtitle1 as="h1" block>User Information Form</Subtitle1>
                 <Body1 style={{ color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXS }} block>Please fill out all required fields. Fields marked with * are mandatory.</Body1>
             </header>
-            {submitMessage && <div className={styles.messageContainer}><MessageBar intent={submitMessage.type === "success" ? "success" : "error"} icon={submitMessage.type === "success" ? <CheckmarkCircle20Filled /> : <ErrorCircle20Filled />}>{submitMessage.content}</MessageBar></div>}
+            {submitMessage && <div className={styles.messageContainer}><MessageBar intent={submitMessage.type === "success" ? "success" : "error"} icon={submitMessage.type === "success" ? <CheckmarkCircleFilled /> : <ErrorCircleFilled />}>{submitMessage.content}</MessageBar></div>}
             <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} noValidate aria-label="User information form">
                 <FormSection title="Basic Information" description="Tell us about yourself" titleId={basicInfoTitleId} descriptionId={basicInfoDescId}>
                     <div className={mergeClasses(styles.formGrid, styles.twoColumnGrid)}>

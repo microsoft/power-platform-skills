@@ -72,6 +72,8 @@ No entity creation required — all entities already exist.
 None
 ## Connector Bindings
 No connector bindings.
+## Custom API Bindings
+No custom API bindings.
 ## Design Preferences
 - Styling: clean
 - Features: mock dashboard

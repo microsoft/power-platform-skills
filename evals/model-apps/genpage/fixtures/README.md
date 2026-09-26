@@ -78,7 +78,7 @@ regeneration:
 ## Current state
 
 This directory ships with 10 fixtures — 6 synthetic (hand-built, v2.2-compliant)
-and 4 real captures (3 from claude-sonnet-4-6 sessions under the v2.2 plugin):
+and 4 real captures (3 from sessions under the v2.2 plugin):
 
 | Fixture | Eval | Source | State | Shape covered |
 |---------|-----:|--------|-------|---------------|
@@ -89,9 +89,9 @@ and 4 real captures (3 from claude-sonnet-4-6 sessions under the v2.2 plugin):
 | `5-kanban-task-board/` | 5 | Real capture (2026-05-21, pre-v2.2-spec) | mostly green | Native HTML5 DnD on `task` entity — Layer 2 fully green; Layer 1 pre-spec workflow-log gaps |
 | `7-job-candidates-new-entities/` | 7 | Synthetic | green | New entities + lookup + choice column + sample data + solution selection |
 | `11-recruitment-multi-page/` | 11 | Synthetic | green | Multi-page (3 pages), parallel page-builder dispatch, PAGEREF cross-nav, Phase 6.5 resolution |
-| `11-recruitment-pages-real/` | 11 | Real capture (2026-05-21, v2.2-spec) | **green** | Same shape as synthetic — first real capture validated under tightened spec |
+| `11-recruitment-pages-real/` | 11 | Real capture (2026-05-21, v2.2-spec) | red (Custom API section only) | Same shape as synthetic — first real capture validated under tightened spec; predates the enforced `## Custom API Bindings` section (see below) |
 | `13-contact-localization/` | 13 | Synthetic | green | Localization (en-US / ar-SA / fr-FR), RTL, logical CSS properties |
-| `15-support-tickets-real/` | 15 | Real capture (2026-05-26, v2.2-spec) | **green** | New entity + choice columns + sample data + check-auth retry flow |
+| `15-support-tickets-real/` | 15 | Real capture (2026-05-26, v2.2-spec) | red (Custom API section only) | New entity + choice columns + sample data + check-auth retry flow; predates the enforced `## Custom API Bindings` section (see below) |
 
 **Synthetic fixtures** are hand-built to be v2.2-compliant — they exercise
 the relevant code paths and serve as green-path regression tests for the
@@ -99,8 +99,10 @@ runners. All Layer 1 + Layer 2 assertions pass or skip.
 
 **Real captures** validate the runners against actual `/genpage` output:
 
-- The two **green real captures** (eval 11, eval 15) were captured after the
-  v2.2 planner-spec tightening landed. Both layers exit 0 against them.
+- The two real captures for eval 11 and eval 15 were captured after the
+  v2.2 planner-spec tightening landed, and both layers exited 0 against
+  them until the `## Custom API Bindings` section was enforced; that one
+  Layer 1 check is now their only failure.
 - The two **red real captures** (eval 2, eval 5) were captured before the
   spec tightening propagated to the agent's session. They have known
   workflow-log compactness gaps documented in their fixture READMEs; they
@@ -108,4 +110,18 @@ runners. All Layer 1 + Layer 2 assertions pass or skip.
 
 The mix gives a green-path regression test (synthetic) + a drift-detection
 example (red real captures) + proof-of-life that the v2.2 spec produces
-green output (green real captures).
+passing output (the eval 11 and 15 captures, which pass everything except
+the later-enforced Custom API section).
+
+**Captured plans predate `## Custom API Bindings` enforcement.**
+`references/plan-schema.md` has always required that section, but the
+Layer 1 validator only started enforcing it with [#585], after every
+fixture here was made. The synthetic and authored plans gained the exact
+no-bindings sentinel (`No custom API bindings.`, before
+`## Design Preferences`) — none of those pages calls a Custom API. The four
+**real captures were deliberately not edited**: a capture is evidence of
+what the planner produced, and rewriting it to match today's schema would
+falsify it (the same rule the upload-transport assertions follow). Each now
+also fails that one Layer 1 check; re-capturing clears it.
+
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585

@@ -106,20 +106,19 @@ Omitting `--data-sources` here is safe: the page's existing table bindings are
 read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
 to change the bindings, or `--clear-data-sources` to remove them deliberately.
 
-```powershell
-Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
-  -Value "Fix sort handler on Name column; correct accidental DataGrid type prop"
-Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
-  -Value "Phase 7.5 fix re-deploy"
+Check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with your
+file-writing tool — `prompt.txt` holding the fix delta and `agent-message.txt` holding
+`Phase 7.5 fix re-deploy` — and deploy:
 
+```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file "<working-dir>/<file>.tsx" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 **Common Playwright issues:**

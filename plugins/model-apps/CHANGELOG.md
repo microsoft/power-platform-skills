@@ -178,6 +178,95 @@ downloads that round-trip Choice columns.
   keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
   still commit, and a re-send could only be refused as a false version conflict. Activating a
   business process flow on a newly created table can take longer than the old 60 s.
+- **`/genpage` runs only the plan you approved** ([#585]). An edit plan is read as an edit, by its file name,
+  and the approval preview by its own Current State block and the written plan by its own File Being Edited
+  section, so a Pages table or an edit section quoted from the page's prompt cannot make an edit of another
+  page pass. A plan left over from an earlier run is
+  quarantined before the planner writes, and the new file must build exactly the pages the approved
+  plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
+  A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included), or a
+  hard link at either file, is refused rather than written through, and an overlong or conflicting page
+  id is refused, not truncated to a valid-looking one. An edit's target is the page the preview's own
+  File line names, so neither a path quoted from the page's prompt nor another file in its folder
+  (`page.tsx.bak`) can stand in for it.
+- **A truncated page is caught before deploy** ([#585]). Every page — each parallel worker's, and one
+  written inline — is checked for a complete default export, balanced brackets and elided code
+  (`// TODO`, `// ...`, "omitted for brevity"). A write cut off where every bracket still balances
+  fails too: inside its own export line (`export default function Page(props)` with no body),
+  inside JSX, a string or a comment, or right after an operator — in `/app-builder`'s page promotion
+  as well. A failing worker page is rebuilt inline, and an inline page that still fails halts.
+  "Loading…" in a label is UI copy, not elision.
+- **A missing `## Custom API Bindings` section halts instead of meaning "none"** ([#585]). Only the
+  exact `No custom API bindings.` sentinel says a page has none, so a broken plan can no longer drop
+  an approved binding. A plan made while `custom-api` was on halts too once the flag is off, instead
+  of generating Custom API calls that deploy with no bindings.
+- **Solution packaging checks every connection reference before changing anything** ([#585]). A
+  missing reference used to fail after the app and pages had already been added to the solution.
+- **Connections without both ids are no longer offered for binding** ([#585]). A listing where no row
+  has a connection and a connector id is an error, not "no connections" — in every table layout PAC
+  prints, including a connection row that matches none of its columns.
+- **Right-to-left layout follows PAC's RTL column** ([#585]), not a list of six Arabic and Hebrew
+  LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
+- **Re-running the manifest generator with a new feature no longer reports success over a stale
+  `package.json`** ([#585]). A missing package fails with the fix, and `/genpage` halts there for you
+  to merge it or rerun with `--force`; a version you changed is kept and reported as `versionDrift`. A
+  manifest saved with a UTF-8 byte-order mark (Windows PowerShell's default) is read as usual.
+- **The code-generation rules list exactly the packages the page installs** ([#585]), and a test
+  fails when they drift from the dependency map. Three libraries the rules offered but the package
+  never installed are gone from the list.
+- **Icons are verified however they are imported** ([#585]). A namespace, default, `require` or
+  dynamic `import()` of `@fluentui/react-icons` is blocked — in any quote style, anywhere on a line,
+  combined with a named import, or with a trailing comma or import options — since only named
+  imports can be checked.
+  A shipped sample that used two unverified sized icons is fixed, and every sample must now pass.
+- **Navigation checks read code, not prose** ([#588]). A `navigateTo` in help text no longer counts
+  as a link, and one inside a template's `${…}` is no longer invisible to the portability check. An
+  emoji in a comment or a template, or a regex holding `/*`, `//` or a backtick
+  (`u.replace(/\/*$/, "")`), no longer hides every call after it — which had left a placeholder link
+  unresolved in the deployed page while verification passed.
+- **A complete page is no longer rejected as truncated** ([#585]). `/app-builder`'s page promotion
+  read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
+  a comment right before JSX or a regex, and a `/` after a property named like a keyword
+  (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
+  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines, and the
+  name they belong to one part of a union, an intersection or a conditional type's false branch), and a
+  file that ends in a member export such as `export default pages.Home` or a self-closing element
+  with a callback prop. Two shapes the text alone cannot tell from a cut-off page are refused on
+  purpose, and the page rules tell workers to avoid them: a line holding only `...` is always a
+  placeholder, even where TypeScript would read a spread of the next line, and a file whose last
+  statement ends in type arguments (`export default Page<string>`, a `type` alias) needs its `;`.
+  The same checks back `/genpage`'s new gate.
+- **A page's display name reaches the upload by file** ([#588]). `genpage-upload.js` takes `--name-file`, and
+  `/genpage` writes the name to a file as it does the prompt: substituted into `--name "<name>"`, a shell expanded
+  `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.
+- **`/genpage` single-quotes every value it fills into a command.** A working directory with a space in its
+  path became two arguments, and a `$` in an app or solution name was expanded; the skill now states the rule
+  once, every command template follows it, and a test fails when one drifts back.
+- **The maker's text never passes through a shell, and the upload's input files never through a link.**
+  `/genpage` writes the prompt, agent-message and page-name files with its file tool, not a shell command — even a
+  single-quoted here-string ends at a line that begins with `'@`, and the rest of that line runs — after checking
+  that none of those names is a link. `genpage-upload.js` refuses any of its input files (those three,
+  `--connectors`, `--actions`) that is a link, a hard link or a folder, since a write through one rewrites the file
+  it points to.
+- **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
+  `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
+  names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
+  a trailing dot), a name that is not a `.tsx` page (`package.json`), a page path that is itself a link
+  or not a regular file, a folder that links outside the working directory or cannot be read, and
+  names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
+  already there) halt the build, as does a new page that is an already-built one reached through a link
+  or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
+  table naming files — one quoted in the requirements, fenced, quoted or not, and each table counted on its own,
+  however many share a heading — halts too, instead of only the
+  first being checked. So does a Pages section with any other table row beside its File table (a
+  delimiter row repeated under a page row had made that row a header, and its page vanished from
+  both checks) or a table with two File columns; a row written without its outer pipes is read like
+  any other. `/app-builder` writes its page plan only as a plain file in the working
+  directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
+  `--out`). The same rule covers the
+  pages `/app-builder` generates — which now
+  runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
+  cannot be read fails its check instead of crashing it.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
   that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
   first.
@@ -207,7 +296,10 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585
+[#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 

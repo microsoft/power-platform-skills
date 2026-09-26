@@ -25,24 +25,42 @@ Comprehensive rules for generating generative page code. Read this file during c
 17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
 18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
 19. **All hooks above every early return — no conditional hook calls**: Detail/record pages crash with **minified React error #310** ("rendered more/fewer hooks than the previous render") on the *first* open of a record, then work on the second click. Cause: a hook — usually a `useMemo` deriving chart points or display rows from loaded data — sits *below* a loading/empty early return (`if (data.loading) return <Spinner/>`). On the first render data is still loading, the component early-returns and never reaches that `useMemo` (fewer hooks); when data arrives it renders past the return and calls the extra hook → the hook count differs between renders → #310. The "works the second time" intermittency (the cached render skips the loading branch) is the signature of this bug. **Fix:** place every `useMemo`/`useState`/`useEffect`/`useCallback` **above all early returns**, and make derived memos tolerate not-yet-loaded data (read from an always-initialized value, e.g. `data.rows ?? []`). Early returns are fine — they just must come *after* the last hook call. This is the React rules of hooks: never call a hook below a conditional `return`.
+20. **Never put `...` alone on a line**: Write the spread/rest token and its operand together (`...rows`, not `...` followed by `rows` on the next line).
+21. **End final type-argument statements with `;`**: If the file's last statement ends in a type argument list (`Page<string>`, `Array<Row>`), terminate it with a semicolon.
 
 ---
 
 ## Supported Libraries
 
-Only these libraries are available. Do NOT use any other library.
+Only the generated `package.json` dependencies below are available. Do NOT use
+any other library. `scripts/lib/supported-dependencies.js` is the source of
+truth for names, versions, and feature gates; this example is validated against
+that module by `scripts/tests/supported-dependencies-docs.test.js`.
 
+```json
+{
+  "dependencies": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "2.0.326",
+    "d3": "^7.8.5",
+    "@fluentui/react-datepicker-compat": "^0.4.50",
+    "@fluentui/react-timepicker-compat": "^0.2.40"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/react": "^17.0.80",
+    "@types/react-dom": "^17.0.25",
+    "@types/d3": "^7.4.3"
+  }
+}
 ```
-"react": "^17.0.2"
-"uuid": "^9.0.1"
-"@fluentui/react-icons": "^2.0.292"
-"@fluentui/react-calendar-compat": "^0.2.2"
-"@fluentui/react-components": "^9.46.4"
-"@fluentui/react-datepicker-compat": "^0.5.0"
-"@fluentui/react-timepicker-compat": "^0.3.0"
-"@fluentui/react-theme": "^9.1.24"
-"d3": "^7.9.0"
-```
+
+Feature-gated packages are installed only when the generator receives the
+matching flag: `charts` adds `d3` and `@types/d3`, `datepicker` adds
+`@fluentui/react-datepicker-compat`, and `timepicker` adds
+`@fluentui/react-timepicker-compat`.
 
 **CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` and TimePicker from `@fluentui/react-timepicker-compat` (NOT from `@fluentui/react-components`)
 
@@ -605,7 +623,7 @@ required patterns and the binding contract.
 
 ### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
 
-When the plan's `## Custom API Bindings` is non-empty, the page may invoke Dataverse
+When the plan's `## Custom API Bindings` contains a binding table, the page may invoke Dataverse
 **Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
 API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
 (read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the

@@ -22,7 +22,7 @@ const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dat
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
 const { navReferencedKeys, navMalformedRefs, navTargetParity } = require('./lib/pageref-resolver.js');
-const { hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
+const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
 
 // A generated page must be a real React module. We deliberately do NOT typecheck here (the plugin
 // ships with no dependencies, so there is no TS parser to call, and typechecking is the build's
@@ -30,8 +30,8 @@ const { hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-litera
 // truncated write, or prose returned instead of code.
 //
 // Every check runs over literal-blanked source (see lib/source-literals.js). A substring search —
-// even one over pageref-resolver's stripNonCode, which deliberately PRESERVES ordinary string
-// bodies — accepted prose that merely MENTIONS an export:
+// even one over a copy that deliberately PRESERVES ordinary string bodies — accepted prose that
+// merely MENTIONS an export:
 //   /* export default */                                -> promoted
 //   const prose = "export default GeneratedComponent";   -> promoted
 // Promotion is sticky (the page is then marked implemented and skipped on the next run), so a
@@ -45,9 +45,18 @@ function structuralProblems(code) {
   if (hasUnbalancedBrackets(code)) {
     out.push('unbalanced brackets — the file looks truncated');
   }
-  // A worker that answers in prose usually still opens a fence; a real .tsx never contains one.
-  // Both CommonMark fence markers count.
-  if (/^\s*(```|~~~)/m.test(code)) out.push('contains a markdown code fence — the worker returned prose, not a module');
+  // A cut that leaves every bracket balanced: inside JSX, a template or a comment, or after `a +`.
+  if (endsMidStatement(code)) out.push('stops mid-statement — the file looks truncated');
+  // A worker that answers in prose usually still opens a fence; a real .tsx never has one in CODE.
+  // Both CommonMark fence markers count. On the blanked source, as genpage-worker-output.js checks it: a
+  // fence inside a template literal (a page rendering markdown help) is data, and refusing it here made the
+  // two gates disagree about the same page.
+  if (/^\s*(```|~~~)/m.test(blankLiterals(code))) out.push('contains a markdown code fence — the worker returned prose, not a module');
+  // Elided code — `// TODO: …`, `// ...`, "omitted for brevity" — the same shared rule the worker gate and
+  // Layer 2 apply. Promotion checked only the structure, so a page that elided its body was promoted and
+  // went on through /app-builder.
+  const elision = findElisionMarker(code);
+  if (elision) out.push(`contains ${elision} — the page is incomplete`);
   return out;
 }
 
