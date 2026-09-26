@@ -665,7 +665,10 @@ why they need naming here at all.
   selection is order-independent either way (it is applied once, after every form exists, rather than
   each form racing to promote itself). A promotion the environment refuses is reported as a warning
   and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
-  can no longer record a default it did not actually set.
+  can no longer record a default it did not actually set. Moving the default to another form **clears**
+  it on the table's other spec-declared Main forms (measured: setting the flag on one form does not
+  clear it on another, so both stayed default), and `--verify` fails while any of them still holds
+  it. Forms the spec does not declare, and their activation state, are never touched.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -740,16 +743,18 @@ declared after a spanning one would land in the reserved slot. Every stock Datav
 
 This is a **compiler limitation, not a platform one.** Positioning a field beside a vertical span
 requires emitting an empty *spacer* cell to occupy the reserved slot, which the SDK serializes
-correctly; the compiler does not emit one yet. The restriction can be lifted once it does — tracked
-in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
+correctly; the compiler does not emit one yet. The restriction can be lifted once it does.
 
 A **deployed** `rowspan` — one a maker added by hand, which the authored restriction above cannot
 prevent — can make the rows of a section positionally meaningful in the same way: once any cell
 **follows** a row-spanning cell, re-flowing the section by reading order could move that cell into
-the reserved slot. In such a section the build therefore never re-flows. Narrowing its grid is
-applied only when every row already fits the new width; otherwise the section **keeps its current
-grid** and the refusal is reported. A span change that would overflow a row there is skipped (and
-reported), rather than applied without the re-flow. Likewise a `rowspan` is never **raised** on a
+the reserved slot. In such a section the build therefore never re-flows. Every fit below counts a
+row's own cells **plus** the columns a row-spanning cell above still reserves in it — the same rule
+`--verify` applies, so the build never writes a layout verify rejects. Narrowing the grid is applied
+only when every row already fits the new width that way; otherwise the section **keeps its current
+grid** and the refusal is reported. A span change that would overflow the rows its cell occupies is
+skipped (and reported), rather than applied without the re-flow. A field added to the section goes
+into the last row if it fits there, otherwise into the first new row with room. Likewise a `rowspan` is never **raised** on a
 deployed cell that other cells follow, even when its row still fits: the build keeps a field where
 the form already has it, so the field you list last is not necessarily last on the form. A section
 whose row spans are all **trailing** — stock Main forms put `rowspan` on the last cell — re-flows
