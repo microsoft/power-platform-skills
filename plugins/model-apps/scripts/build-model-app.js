@@ -14,7 +14,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
@@ -213,8 +213,10 @@ function normalizeApprovalRecord(value) {
   const formRemovals = {};
   for (const [formId, entry] of Object.entries(value.formRemovals)) {
     if (!entry || !Array.isArray(entry.fields)) return null;
-    formRemovals[formId] = {
-      label: typeof entry.label === 'string' ? entry.label : formId,
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) return null;
+    formRemovals[normalizedFormId] = {
+      label: typeof entry.label === 'string' ? entry.label : normalizedFormId,
       fields: entry.fields.map((f) => String(f).toLowerCase()),
     };
   }
@@ -264,7 +266,8 @@ function removalRecordFromOps(removals) {
   const sitemap = [];
   for (const op of removals || []) {
     if (op.kind === 'form-field-removal') {
-      const formId = String(op.formId || '');
+      const formId = normalizeFormId(op.formId);
+      if (!formId) continue;
       if (!byForm.has(formId)) byForm.set(formId, { formId, label: op.label, fields: [] });
       byForm.get(formId).fields.push(...(op.fields || []));
     } else if (op.kind === 'sitemap-removal') {
@@ -284,12 +287,13 @@ function removalRecordFromOps(removals) {
 function authorizedFormRemovalMap(state, removals) {
   const map = new Map();
   for (const f of (state && state.forms) || []) {
-    if (f && f.formId && f.def && f.def.__explicitLayout && f.def.__prune !== false) map.set(String(f.formId), new Set());
+    if (f && f.formId && f.def && f.def.__explicitLayout && f.def.__prune !== false) map.set(normalizeFormId(f.formId), new Set());
   }
   for (const [formId, entry] of Object.entries(removalRecordFromOps(removals).formRemovals)) {
-    if (!formId) continue;
-    if (!map.has(formId)) map.set(formId, new Set());
-    for (const field of entry.fields || []) map.get(formId).add(field);
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) continue;
+    if (!map.has(normalizedFormId)) map.set(normalizedFormId, new Set());
+    for (const field of entry.fields || []) map.get(normalizedFormId).add(field);
   }
   return map;
 }
@@ -298,7 +302,8 @@ function findNewlyUnapprovedRemovals(current, approved) {
   const approvedSitemap = new Set(approved.sitemapRemovals || []);
   const newOps = [];
   for (const [formId, entry] of Object.entries(current.formRemovals || {})) {
-    const approvedEntry = (approved.formRemovals || {})[formId];
+    const normalizedFormId = normalizeFormId(formId);
+    const approvedEntry = (approved.formRemovals || {})[normalizedFormId];
     const ok = new Set((approvedEntry && approvedEntry.fields) || []);
     const fields = (entry.fields || []).filter((field) => !ok.has(field));
     if (fields.length) newOps.push({ kind: 'form-field-removal', label: entry.label, fields });
@@ -332,6 +337,7 @@ async function buildModelApp(spec, opts, deps) {
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   let authorizedFormRemovals;
+  let currentDestructiveApproval;
 
   // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
@@ -414,6 +420,7 @@ async function buildModelApp(spec, opts, deps) {
       const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal');
       authorizedFormRemovals = authorizedFormRemovalMap(state, removals);
       const currentApproval = removalRecordFromOps(removals);
+      currentDestructiveApproval = currentApproval;
       if (removals.length && !allowDestructive) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
@@ -598,7 +605,19 @@ async function buildModelApp(spec, opts, deps) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
   if (opts.apply && r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && opts.workspaceDir) {
-    try { deleteApprovalRecord(opts.workspaceDir); } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+    const kept = (((r.skipped || {}).unauthorizedRemovals) || []);
+    if (kept.length) {
+      const record = currentDestructiveApproval || { formRemovals: {}, sitemapRemovals: [] };
+      try {
+        writeApprovalRecord(opts.workspaceDir, record);
+        const names = kept.map((x) => `${x.form || x.formId || 'form'}:${x.field}`).join(', ');
+        log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was left for review, so the next run will ask about them before removing anything.`);
+      } catch (err) {
+        log(`\n⚠ kept unauthorized form removal(s), but could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
+      }
+    } else {
+      try { deleteApprovalRecord(opts.workspaceDir); } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+    }
   }
   // Attach non-blocking validation advisories to the result JSON so programmatic callers see them too
   // (they were already narrated via `log` above). Never overrides an error result's shape.

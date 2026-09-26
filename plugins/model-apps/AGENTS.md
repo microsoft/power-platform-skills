@@ -140,7 +140,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
   never duplicates a control. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
   when it refuses form-field or sitemap removals; a later `--allow-destructive` run may remove only that
-  recorded set, consumes the file after success, keeps it after failure, and fails closed if the file is
+  recorded set, consumes the file after success only when no field was kept by the fence, keeps it after failure, and fails closed if the file is
   unreadable. If live state contains a new removal, the build halts, lists only that new removal, refreshes
   the record, and the engine keeps any field that appears during the run rather than pruning beyond the
   preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict

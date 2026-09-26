@@ -1643,6 +1643,20 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
 }
 
 // --- orchestrator ----------------------------------------------------------------------
+function normalizeFormId(value) {
+  return String(value || '').trim().replace(/^\{+|\}+$/g, '').toLowerCase();
+}
+
+function authorizedFormRemovalEntry(map, formId) {
+  if (!(map instanceof Map)) return { fenced: false, authorized: null };
+  const normalized = normalizeFormId(formId);
+  if (map.has(normalized)) return { fenced: true, authorized: map.get(normalized), normalizedFormId: normalized };
+  for (const [key, value] of map) {
+    if (normalizeFormId(key) === normalized) return { fenced: true, authorized: value, normalizedFormId: normalized };
+  }
+  return { fenced: false, authorized: null, normalizedFormId: normalized };
+}
+
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
@@ -1680,7 +1694,7 @@ async function runSdkBuild(spec, opts = {}) {
     };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -2758,8 +2772,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
-      const fenced = opts.authorizedFormRemovals instanceof Map && opts.authorizedFormRemovals.has(formId);
-      const authorized = fenced ? opts.authorizedFormRemovals.get(formId) : null;
+      const { fenced, authorized, normalizedFormId } = authorizedFormRemovalEntry(opts.authorizedFormRemovals, formId);
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
         if (fenced && (!authorized || !authorized.has(logical))) {
@@ -2767,6 +2780,7 @@ async function runSdkBuild(spec, opts = {}) {
           // If a later form read sees more fields, deleting them would exceed that approval (another
           // maker may have added the field while this build was starting), so keep the field and make
           // the skipped destructive change visible on the build result.
+          result.skipped.unauthorizedRemovals.push({ formId: normalizedFormId, form: def.name, field: logical });
           reportLayoutSkip(`form ${def.name}: kept field '${logical}' because it was not among the removals authorized when this run started. Another maker may have added it; re-run to review it.`);
           continue;
         }
@@ -4901,4 +4915,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

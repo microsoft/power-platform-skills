@@ -513,6 +513,62 @@ test('destructive gate: --allow-destructive without a record proceeds but still 
   }
 });
 
+test('destructive gate: a successful apply that kept an unauthorized field preserves a prior approval record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-field-prior-record');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    const logs = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => approvedState,
+      log: (m) => logs.push(m),
+      runBuild: async () => ({ ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } }),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+    assert.ok(logs.some((l) => /new_midrun/.test(l) && /next run will ask/.test(l)), 'log names the kept field and next review');
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'next run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'only the kept field is newly listed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful blanket apply that kept an unauthorized field creates an approval record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-field-blanket');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => approvedState,
+      runBuild: async () => ({ ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } }),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'next run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'the kept field is shown before it can be removed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
 test('destructive gate: --allow-destructive lets the same build proceed', async () => {
   const { sdk, calls } = mockSdk();
   const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
