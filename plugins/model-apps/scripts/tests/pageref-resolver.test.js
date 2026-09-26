@@ -26,7 +26,7 @@ test('extractNavTargets classifies a canonical PAGEREF nav pageId (structural �
   assert.strictEqual(t[0].key, 'detail');
 });
 
-test('extractNavTargets IGNORES a decoy "PAGEREF_" string that is NOT a nav pageId (C1 oracle)', () => {
+test('extractNavTargets IGNORES a decoy "PAGEREF_" string that is NOT a nav pageId', () => {
   const code = `const label = "PAGEREF_detail"; // decoy, not navigation\n${NAV('"PAGEREF_gallery"')}`;
   const t = extractNavTargets(code);
   assert.strictEqual(t.length, 1, 'only the real nav call site counts');
@@ -52,14 +52,14 @@ test('extractNavTargets handles pageId BEFORE pageType and a nested data:{} obje
   assert.strictEqual(t[0].key, 'detail', 'the top-level pageId is the target — a PAGEREF-looking string inside data:{} is NOT');
 });
 
-// ─── Comment and template-literal stripping (addendum Crit 1) ────────────────
+// ─── Comment and template-literal stripping ──────────────────────────────────
 //
 // A navigateTo inside a comment or template literal is NOT a real call site.  The
 // stripping pass blanks those regions (same-length space substitution) before the
 // NAV_CALL regex runs, so an in-comment or in-template navigateTo is invisible to
-// the oracle.  These three tests are REQUIRED by the Plan-3 implementer addendum.
+// the oracle.
 
-test('extractNavTargets IGNORES a navigateTo inside a // line comment (addendum Crit 1)', () => {
+test('extractNavTargets IGNORES a navigateTo inside a // line comment', () => {
   const real = NAV('"PAGEREF_real"');
   const code = `// ${NAV('"PAGEREF_commented"')}\n${real}`;
   const t = extractNavTargets(code);
@@ -68,7 +68,7 @@ test('extractNavTargets IGNORES a navigateTo inside a // line comment (addendum 
   assert.deepStrictEqual(navReferencedKeys(code), ['real'], 'the commented navigateTo is not a referenced key');
 });
 
-test('extractNavTargets IGNORES a navigateTo inside a /* */ block comment (addendum Crit 1)', () => {
+test('extractNavTargets IGNORES a navigateTo inside a /* */ block comment', () => {
   const real = NAV('"PAGEREF_real"');
   const code = `/* ${NAV('"PAGEREF_block"')} */\n${real}`;
   const t = extractNavTargets(code);
@@ -77,7 +77,7 @@ test('extractNavTargets IGNORES a navigateTo inside a /* */ block comment (adden
   assert.deepStrictEqual(navReferencedKeys(code), ['real'], 'the block-commented navigateTo is not a referenced key');
 });
 
-test('extractNavTargets IGNORES a navigateTo inside a backtick template literal (addendum Crit 1)', () => {
+test('extractNavTargets IGNORES a navigateTo inside a backtick template literal', () => {
   const real = NAV('"PAGEREF_real"');
   // The backtick string contains the navigateTo as template-literal TEXT, not a real call.
   // eslint-disable-next-line no-template-curly-in-string
@@ -88,15 +88,118 @@ test('extractNavTargets IGNORES a navigateTo inside a backtick template literal 
   assert.deepStrictEqual(navReferencedKeys(code), ['real'], 'the template-literal navigateTo is not a referenced key');
 });
 
+test('extractNavTargets IGNORES navigateTo prose inside ordinary quoted strings', () => {
+  const code = [
+    'const help = \'navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" })\';',
+    'const label = "Use Xrm.Navigation.navigateTo({ pageType: \\"generative\\", pageId: \\"PAGEREF_gallery\\" }) from a button.";'
+  ].join('\n');
+  assert.deepStrictEqual(extractNavTargets(code), [], 'ordinary string text is inert and must not satisfy navigation parity');
+  assert.deepStrictEqual(navReferencedKeys(code), [], 'declared edges cannot be satisfied by help text');
+});
+
+test('extractNavTargets ignores navigateTo text inside regex literals after arrows', () => {
+  const code = 'const pattern = count<limit ? () => /navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" })/ : () => /none/;';
+  assert.deepStrictEqual(navReferencedKeys(code), []);
+  const { deployment, unresolved } = resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('x'), code);
+});
+
+test('extractNavTargets does not join separate template substitutions into a fake navigateTo call', () => {
+  const code = 'const hint = `${Xrm.Navigation.navigateTo} is a function; input: ${({ pageType: "generative", pageId: "PAGEREF_detail" })}`;';
+  assert.deepStrictEqual(navReferencedKeys(code), []);
+  const { deployment, unresolved } = resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('x'), code);
+});
+
+test('extractNavTargets INSPECTS executable template expressions while ignoring template text', () => {
+  const guid = '11111111-2222-3333-4444-555555555555';
+  const code = [
+    'const textOnly = `navigateTo({ pageType: "generative", pageId: "PAGEREF_text" })`;',
+    'const rendered = `${Xrm.Navigation.navigateTo({',
+    '  pageType: "generative",',
+    `  pageId: "${guid}"`,
+    '})}`;',
+  ].join('\n');
+  const t = extractNavTargets(code);
+  assert.strictEqual(t.length, 1, 'template text is inert, but JavaScript inside ${...} is executable');
+  assert.strictEqual(t[0].kind, 'literal');
+  assert.strictEqual(t[0].pageId, guid);
+  assert.deepStrictEqual(navReferencedKeys(code), [], 'hard-coded targets inside ${...} must still fail portability parity');
+});
+
+test('extractNavTargets finds real navigateTo calls in TSX-shaped executable positions', () => {
+  const code = [
+    'const arrow = () => Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_arrow" });',
+    'export default function P(){',
+    '  return <button onClick={() => Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_attr" })}>',
+    '    {`${Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_template" })}`}',
+    '  </button>;',
+    '}',
+  ].join('\n');
+  assert.deepStrictEqual(navReferencedKeys(code), ['arrow', 'attr', 'template']);
+});
+
+// The shapes inside `${...}` the expression scanner must tell apart. Inert text in a string, a regex
+// or a comment inside an expression must not count, and a `}` inside one must not end the expression
+// early — that would expose the rest of the template TEXT as code. Nested templates recurse: their
+// own text is inert, their own expressions are executable.
+test('extractNavTargets handles strings, regexes, comments and nested templates inside ${...}', () => {
+  const call = (key) => `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_${key}" })`;
+  const cases = [
+    ['a string holding the call text', '`${"' + 'navigateTo({ pageType: \\"generative\\", pageId: \\"PAGEREF_str\\" })' + '"}`', []],
+    ['a regex holding the call text', '`${/navigateTo\\({ pageId: "PAGEREF_re" }\\)/.source}`', []],
+    ['a block comment holding the call', '`${/* ' + call('cmt') + ' */ label}`', []],
+    ['a line comment, then a real call', '`${// ' + call('line') + '\n' + call('after') + '}`', ['after']],
+    ['a "}" inside a string does not end the expression', '`${"}" + ' + call('brace') + '} tail navigateTo({ pageType: "generative", pageId: "PAGEREF_tail" })`', ['brace']],
+    ['a "}" inside a comment does not end the expression', '`${/* first line\n } */ ' + call('cmtbrace') + '} tail navigateTo({ pageType: "generative", pageId: "PAGEREF_tail2" })`', ['cmtbrace']],
+    ['a nested template: text inert, expression live', '`outer ${`inner ' + call('innertext').replace('Xrm.Navigation.', '') + ' ${' + call('nested') + '}`}`', ['nested']],
+    ['an escaped backtick in template text', '`a \\` b ' + call('esc').replace('Xrm.Navigation.', '') + '`', []],
+    // The everyday shape: an interpolated template (a className, a label) and then a real call. The
+    // expression must end at its own `}` — run it to the end of the file and the template's closing
+    // backtick opens a phantom template that hides every call after it.
+    ['a real call after an interpolated template', 'const label = `Hello ${name}`;\n' + call('after'), ['after']],
+    // Call sites and objects come from the lexer's mask, values from the source at the same offsets,
+    // so the two must agree on every offset. An emoji is two UTF-16 units; split by code point, one
+    // blanked in a comment shortened a copy by one and the next call was looked for one character off.
+    ['a call after an emoji in a comment', call('first') + ';\n// 📌 pinned\n' + call('second'), ['first', 'second']],
+    ['a call after an emoji in template text', call('first') + ';\nconst banner = `🔥 ${count} hot leads`;\n' + call('second'), ['first', 'second']],
+    ['a call after a nested template with braces in its text', call('first') + ';\nconst j = `[${rows.map((r) => `{"id":"${r.id}"}`).join(",")}]`;\n' + call('second'), ['first', 'second']],
+    // The `/` of `</span>` inside `${…}`, and the `/` after `counts.new` or `closed!`, divide or
+    // close a tag; read as a regex opener, each hid every call after it.
+    ['a call after JSX inside a template expression', call('first') + ';\nconst t = `${<span>Save</span>}`;\n' + call('second'), ['first', 'second']],
+    ['a call after a keyword-named property divided', call('first') + ';\nconst el = <Text>{counts.new / total}</Text>;\n' + call('second'), ['first', 'second']],
+    ['a call after a non-null assertion divided', call('first') + ';\nconst el = <Text>{closed! / total}</Text>;\n' + call('second'), ['first', 'second']],
+    // A regex holding `/*`, `//` or a backtick is a regex. A copy that knew no regexes opened a
+    // comment or a template there, blanked every later call, and left its PAGEREF unresolved.
+    ['a call after a regex holding /*', call('first') + ';\nconst clean = (u: string) => u.replace(/\\/*$/, "");\n' + call('second'), ['first', 'second']],
+    ['a call after a regex holding a backtick', call('first') + ';\nconst unquote = (s: string) => s.replace(/`/g, "");\n' + call('second'), ['first', 'second']],
+    ['a call on the line of a regex holding //', call('first') + ';\nconst u = x.replace(/\\/\\//g, "/"); ' + call('second'), ['first', 'second']],
+    ['a "}" in a regex inside the call object', 'Xrm.Navigation.navigateTo({ pageType: "generative", data: { re: /}/ }, pageId: "PAGEREF_inside" });', ['inside']],
+  ];
+  for (const [what, code, keys] of cases) {
+    assert.deepStrictEqual(navReferencedKeys(code), keys, what);
+  }
+});
+
+// Truncated worker output ends mid-template or mid-expression. That must not throw, and a real call
+// before the truncation must still be found; nothing after it is code.
+test('extractNavTargets survives a template or ${...} left open at end of file', () => {
+  const call = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_before" });';
+  assert.deepStrictEqual(navReferencedKeys(`${call}\nconst t = \`unterminated navigateTo({ pageId: "PAGEREF_x" })`), ['before']);
+  assert.deepStrictEqual(navReferencedKeys(`${call}\nconst t = \`\${foo(`), ['before']);
+});
+
 // ─── navMalformedRefs ─────────────────────────────────────────────────────────
 
-test('navMalformedRefs flags a single-quoted PAGEREF_ used as a nav pageId (C4 grammar)', () => {
+test('navMalformedRefs flags a single-quoted PAGEREF_ used as a nav pageId', () => {
   const code = "Xrm.Navigation.navigateTo({ pageType: 'generative', pageId: 'PAGEREF_detail' });";
   assert.deepStrictEqual(navMalformedRefs(code), ['PAGEREF_detail']);
   assert.deepStrictEqual(navReferencedKeys(code), [], 'a malformed ref is NOT a valid canonical reference');
 });
 
-test('navMalformedRefs flags a backtick-quoted PAGEREF_ used as a nav pageId (C4 — backtick cannot be resolved)', () => {
+test('navMalformedRefs flags a backtick-quoted PAGEREF_ used as a nav pageId (a backtick cannot be resolved)', () => {
   // A backtick-quoted PAGEREF cannot be substituted by the resolver (only the canonical
   // double-quoted token is substitutable), so it is malformed and must HALT.
   const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: `PAGEREF_detail` });';
@@ -106,7 +209,7 @@ test('navMalformedRefs flags a backtick-quoted PAGEREF_ used as a nav pageId (C4
 
 // ─── navReferencedKeys + navTargetParity ─────────────────────────────────────
 
-test('navReferencedKeys returns [] for a literal GUID pageId; parity flags declared edge as unreferenced (M3)', () => {
+test('navReferencedKeys returns [] for a literal GUID pageId; parity flags declared edge as unreferenced', () => {
   // A deployed/stale GUID in the source is not a canonical PAGEREF, so it is not a referenced
   // key and parity correctly reports the declared edge as unreferenced.
   const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "5d29d8ce-1111-2222-3333-444455556666" });';
@@ -118,7 +221,7 @@ test('navReferencedKeys returns [] for a literal GUID pageId; parity flags decla
   );
 });
 
-test('extractNavTargets classifies a "a" + "b" concat pageId as dynamic, not literal (M4)', () => {
+test('extractNavTargets classifies a "a" + "b" concat pageId as dynamic, not literal', () => {
   // A string concat is not a single literal — the tightened QUOTED regex excludes cross-quote spans
   // and topLevelValue detects the trailing '+' and widens the span to the full expression.
   const code = NAV('"a" + "b"');

@@ -20,7 +20,7 @@ const fs = require('node:fs');
 // re-implemented: it is a pure lexer over TSX text, not part of the thing this harness judges, and
 // two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
 // never ship, so reaching into the plugin directory here is in-repo only.
-const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { blankLiterals, findElisionMarker } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -240,14 +240,11 @@ ASSERTIONS.set(
 ASSERTIONS.set(
   'Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies',
   ({ files }) => {
-    const offender = files.find((f) => {
-      if (/\b(TODO|FIXME)\b/.test(f.content)) return true;
-      if (/\/\/\s*\.\.\./.test(f.content)) return true;
-      if (/\/\*\s*\.\.\.\s*\*\//.test(f.content)) return true;
-      if (/^\s*\.\.\.\s*(\/\/.*)?$/m.test(f.content)) return true;
-      return false;
-    });
-    return offender ? fail(`${offender.name}: contains TODO/FIXME or ellipsis placeholder`) : pass();
+    // The same rule the plugin's worker-output gate applies (findElisionMarker), so an eval and the
+    // runtime cannot disagree about one file. It looks in comments and bare lines only: "Loading…" in
+    // a label is UI copy, not an elided function body.
+    const offender = files.find((f) => findElisionMarker(f.content));
+    return offender ? fail(`${offender.name}: contains ${findElisionMarker(offender.content)}`) : pass();
   }
 );
 

@@ -1,6 +1,9 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   WORKFLOW_ASSERTIONS,
@@ -61,6 +64,9 @@ account
 
 ## Connector Bindings
 No connector bindings.
+
+## Custom API Bindings
+No custom API bindings.
 
 ## Design Preferences
 - Styling: Clean
@@ -667,31 +673,115 @@ for (const prose of [
   });
 }
 
-// Omitting the section must stay valid — this guards against the obvious wrong fix of adding it to
-// REQUIRED_PLAN_SECTIONS. plan-schema.md:212 does spec the section as always-present, but 0 of the
-// 12 fixture plans emit it, so requiring it would fail 12/12 rather than catch a real defect.
-test('a plan without a Custom API Bindings section is still valid', () => {
+test('validateGenpagePlanSchema: missing Custom API Bindings section fails closed', () => {
+  const plan = validPlan().replace(/\n## Custom API Bindings\nNo custom API bindings\.\n/, '\n');
+  const errors = validateGenpagePlanSchema(plan);
+  assert.ok(
+    errors.some((error) => error.code === 'missing-section' && error.section === 'Custom API Bindings'),
+    `expected missing Custom API Bindings section, got ${JSON.stringify(errors)}`
+  );
+});
+
+test('Custom API Bindings section accepts the exact sentinel', () => {
   const errors = validateGenpagePlanSchema(validPlan());
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
 });
 
-test('an opt-in Custom API Bindings section accepts the exact sentinel', () => {
-  const plan = `${validPlan()}\n\n## Custom API Bindings\nNo custom API bindings.\n`;
-  const errors = validateGenpagePlanSchema(plan);
-  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
+// references/plan-schema.md orders Connector Bindings → Custom API Bindings → Solution Packaging →
+// Design Preferences. The order check split the required list at a fixed index, so adding Custom API
+// Bindings to it made a schema-conformant plan WITH Solution Packaging fail as out of order.
+test('a plan with Solution Packaging in plan-schema.md order passes the order check, and the reverse fails', () => {
+  const packaging = '## Solution Packaging\n- Solution: ContosoApp\n\n';
+  const conformant = validPlan().replace('## Design Preferences', `${packaging}## Design Preferences`);
+  assert.deepEqual(validateGenpagePlanSchema(conformant).filter((e) => e.code === 'section-order'), []);
+  const swapped = validPlan()
+    .replace('## Custom API Bindings\nNo custom API bindings.\n\n', '')
+    .replace('## Design Preferences', `${packaging}## Custom API Bindings\nNo custom API bindings.\n\n## Design Preferences`);
+  assert.ok(validateGenpagePlanSchema(swapped).some((e) => e.code === 'section-order'), 'Solution Packaging before Custom API Bindings is out of order');
 });
 
 // The Custom API mirror of the connector delimiter leak. If the planner prompt regresses and the
 // planner copies the `----- BEGIN/END CUSTOM API BINDINGS -----` framing into the plan, the body
 // is no longer the exact sentinel and must be rejected — previously nothing checked this half.
 test('a leaked prompt delimiter in Custom API Bindings is rejected', () => {
-  const plan = `${validPlan()}\n\n## Custom API Bindings\n----- BEGIN CUSTOM API BINDINGS -----\nNo custom API bindings.\n----- END CUSTOM API BINDINGS -----\n`;
+  const plan = validPlan().replace(
+    '## Custom API Bindings\nNo custom API bindings.',
+    '## Custom API Bindings\n----- BEGIN CUSTOM API BINDINGS -----\nNo custom API bindings.\n----- END CUSTOM API BINDINGS -----'
+  );
   const errors = validateGenpagePlanSchema(plan);
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 1);
 });
 
 test('a populated Custom API Bindings table is accepted', () => {
-  const plan = `${validPlan()}\n\n## Custom API Bindings\n| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |\n|------|------|--------------|--------------|-------------------------|\n| new_ApproveOrder | Action | salesorder | Approve Order | Comment: String |\n`;
+  const plan = validPlan().replace(
+    '## Custom API Bindings\nNo custom API bindings.',
+    '## Custom API Bindings\n| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |\n|------|------|--------------|--------------|-------------------------|\n| new_ApproveOrder | Action | salesorder | Approve Order | Comment: String |'
+  );
   const errors = validateGenpagePlanSchema(plan);
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
+});
+
+test('a Custom API Bindings table missing required schema columns is rejected', () => {
+  const plan = validPlan().replace(
+    '## Custom API Bindings\nNo custom API bindings.',
+    '## Custom API Bindings\n| Name | Kind | Bound Entity |\n|------|------|--------------|\n| new_ApproveOrder | Action | salesorder |'
+  );
+  const errors = validateGenpagePlanSchema(plan);
+  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 1);
+});
+
+test('validateGenpagePlanSchema: page file paths must stay inside the working directory', () => {
+  for (const [file, codePattern] of [
+    ['..\\outside.tsx', /separator|traversal|escape|absolute/i],
+    ['../outside.tsx', /traversal|escape|outside/i],
+    ['C:\\temp\\outside.tsx', /absolute|escape/i],
+  ]) {
+    const plan = validPlan().replace('account-overview.tsx', file);
+    const errors = validateGenpagePlanSchema(plan);
+    assert.ok(
+      errors.some((error) => error.code === 'invalid-page-file' && codePattern.test(error.message)),
+      `expected invalid-page-file for ${file}, got ${JSON.stringify(errors)}`
+    );
+  }
+});
+
+test('validateGenpagePlanSchema: page file parent realpath must stay inside the working directory', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-outside-'));
+  const link = path.join(root, 'linked');
+  t.after(() => {
+    fs.rmSync(link, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  try {
+    fs.symlinkSync(outside, link, 'junction');
+  } catch (error) {
+    t.skip(`cannot create directory link on this host: ${error.message}`);
+    return;
+  }
+
+  const plan = validPlan()
+    .replace('D:\\work\\account-page', root)
+    .replace('account-overview.tsx', 'linked/page.tsx');
+  const errors = validateGenpagePlanSchema(plan);
+  assert.ok(
+    errors.some((error) => error.code === 'invalid-page-file' && /outside|realpath|working directory/i.test(error.message)),
+    `expected invalid-page-file for symlink parent escape, got ${JSON.stringify(errors)}`
+  );
+});
+
+test('validateGenpagePlanSchema: page files cannot collide by normalized case-insensitive identity', () => {
+  const plan = validPlan().replace(
+    '| Account Overview | account-overview.tsx | Show account highlights | account |',
+    '| Account Overview | Page.tsx | Show account highlights | account |\n| Account Details | page.tsx | Show account details | account |'
+  ).replace(
+    '### Account Overview',
+    '### Account Overview\n- **File:** Page.tsx\n- **Purpose:** Show account highlights\n- **Entities:** account\n- **Needs caching:** true\n- **Key Features:** Search and summary cards\n- **Components:** Card, Button\n- **Layout:** Responsive grid\n- **Data Binding:** queryTable("account")\n- **Interactions:** Search box filters cards\n\n### Account Details'
+  );
+  const errors = validateGenpagePlanSchema(plan);
+  assert.ok(
+    errors.some((error) => error.code === 'duplicate-page-file' && /Page\.tsx|page\.tsx/i.test(error.message)),
+    `expected duplicate-page-file, got ${JSON.stringify(errors)}`
+  );
 });
