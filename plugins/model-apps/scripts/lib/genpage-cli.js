@@ -291,10 +291,12 @@ function makeGenpageCli(env, deps = {}) {
   //                                       UNRECOGNIZED/INCOMPLETE output (count mismatch, blank,
   //                                       help banner, unnamed page) — never masquerade as empty.
   // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
-  async function enumeratePages(appId) {
+  async function enumeratePages(appId, options = {}) {
     let lastErr = '';
     for (let i = 0; i < attempts; i += 1) {
-      const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+      const args = ['model', 'genpage', 'list', '--environment', env, '--app-id', appId];
+      if (options && options.includeUnpublished === true) args.push('--include-unpublished');
+      const r = await run(args);
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
@@ -504,6 +506,9 @@ function makeGenpageCli(env, deps = {}) {
     },
     enumerate({ appId }) {
       return enumeratePages(appId);
+    },
+    enumeratePages(appId, options) {
+      return enumeratePages(appId, options);
     },
     enumerateEnv() {
       return enumerateEnv();

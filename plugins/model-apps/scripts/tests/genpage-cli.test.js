@@ -1039,3 +1039,17 @@ test('a deterministic-looking error on a CREATE that landed is still adopted and
   assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
   assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
 });
+
+
+test('enumeratePages can include unpublished app-scoped pages without changing the default enumerate call', async () => {
+  const seen = [];
+  const run = async (args) => { seen.push(args); return { status: 0, stdout: LIST_ONE, stderr: '' }; };
+  const cli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+  await cli.enumerate({ appId: 'app-1' });
+  await cli.enumeratePages('app-1', { includeUnpublished: true });
+
+  assert.ok(seen[0].includes('--app-id') && seen[0].includes('app-1'), 'default enumerate stays app-scoped');
+  assert.ok(!seen[0].includes('--include-unpublished'), 'default enumerate call is unchanged for existing callers');
+  assert.ok(seen[1].includes('--app-id') && seen[1].includes('app-1'), 'option still combines with --app-id');
+  assert.ok(seen[1].includes('--include-unpublished'), 'the requested option reaches pac argv');
+});
