@@ -119,35 +119,52 @@ const { loadCli } = require('./helpers/cli-harness.js');
 const ENVURL = 'https://contoso.crm.dynamics.com';
 
 // runQuiet() shells out via execFileSync and treats a throw as "absent". These stubs therefore
-// model each CLI as either returning stdout or throwing, exactly as a missing binary would.
-function makeExec({ azVersion = 'azure-cli 2.60.0', azUser = 'maker@contoso.com', pacOrg = null }) {
+// model each CLI as either returning stdout or throwing, exactly as a missing binary would — and a
+// missing binary fails EVERY invocation, not only `--version`. Each call is recorded in order.
+function makeExec({ azVersion = 'azure-cli 2.60.0', azUser = 'maker@contoso.com' }, calls) {
   return (cmd, args) => {
     const argv = (args || []).join(' ');
-    if (cmd === 'az' && argv.includes('--version')) {
-      if (azVersion === null) throw new Error('spawn az ENOENT');
-      return azVersion;
-    }
+    calls.push(`${cmd} ${argv}`);
+    if (cmd === 'az' && azVersion === null) throw new Error('spawn az ENOENT');
+    if (cmd === 'az' && argv.includes('--version')) return azVersion;
     if (cmd === 'az' && argv.includes('account show')) {
       if (azUser === null) throw new Error('Please run az login');
       return azUser;
-    }
-    if (cmd === 'pac' && argv.includes('org who')) {
-      if (pacOrg === null) throw new Error('spawn pac ENOENT');
-      return pacOrg;
     }
     throw new Error(`unexpected command: ${cmd} ${argv}`);
   };
 }
 
+// `pac org who` runs through the async execFile so its cold start overlaps the az probes. The
+// callback is deferred with setImmediate, like a real child that exits while the synchronous az
+// calls hold the event loop.
+function makeExecFile({ pacOrg = null }, calls) {
+  return (cmd, args, _opts, cb) => {
+    calls.push(`start ${cmd} ${(args || []).join(' ')}`);
+    setImmediate(() => {
+      calls.push(`done ${cmd}`);
+      if (cmd !== 'pac' || pacOrg === null) cb(new Error(`spawn ${cmd} ENOENT`), '', '');
+      else cb(null, pacOrg, '');
+    });
+    return { stdin: { end() {} } };
+  };
+}
+
 async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
+  const calls = [];
   const cli = loadCli(scriptPath, {
     argv,
     requires: {
-      'child_process': { execFileSync: makeExec(exec) },
+      'child_process': { execFileSync: makeExec(exec, calls), execFile: makeExecFile(exec, calls) },
       './lib/dataverse-auth': {
         parseArgs: require('../lib/dataverse-auth.js').parseArgs,
         validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        getAuthToken: (url) => {
+          calls.push(`token ${url}`);
+          return 'token-value';
+        },
         dataverseRequest: async () => {
+          calls.push('whoami');
           if (whoAmIThrows) throw new Error(whoAmIThrows);
           return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
         },
@@ -160,20 +177,52 @@ async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
   } catch (e) {
     if (e.exitCode === undefined) throw e;
   }
-  return JSON.parse(cli.stdoutText());
+  const result = JSON.parse(cli.stdoutText());
+  // Non-enumerable, so assertions on the emitted payload never see it.
+  Object.defineProperty(result, 'calls', { value: calls });
+  return result;
 }
 
-test('a missing az CLI blocks with az_missing before anything else is probed', async () => {
+test('a missing az CLI blocks with az_missing, and no token or WhoAmI is attempted', async () => {
   const r = await run({ argv: ['--env', ENVURL], exec: { azVersion: null } });
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'az_missing');
   assert.match(r.message, /aka\.ms\/azure-cli/);
+  assert.ok(!r.calls.some((c) => c.startsWith('token ') || c === 'whoami'), r.calls.join(' | '));
 });
 
 test('az installed but logged out blocks with az_not_logged_in', async () => {
   const r = await run({ argv: ['--env', ENVURL], exec: { azUser: null } });
   assert.equal(r.blocker, 'az_not_logged_in');
   assert.match(r.message, /az login/);
+  // `az --version` is what tells "logged out" apart from "not installed".
+  assert.ok(r.calls.includes('az --version'), r.calls.join(' | '));
+});
+
+test('a working az login costs ONE az call before WhoAmI: `az --version` only classifies a failure', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.calls.filter((c) => c.startsWith('az ')), ['az account show --query user.name -o tsv']);
+});
+
+test('pac org who starts before the az probes, and the WhoAmI token is warmed while it runs', async () => {
+  // Measured cold starts on Windows: pac org who ~7 s, each az call ~3-5 s. Run one after another the
+  // preflight cost ~19 s at the start of every run; overlapped it costs about the slower branch.
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.calls, [
+    'start pac org who',
+    'az account show --query user.name -o tsv',
+    `token ${ENVURL}`,
+    'done pac',
+    'whoami',
+  ]);
+});
+
+test('without --env the token is not warmed early, because the env URL comes from pac', async () => {
+  const r = await run({ exec: { pacOrg: `Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n` } });
+  assert.equal(r.ok, true);
+  assert.ok(!r.calls.some((c) => c.startsWith('token ')), r.calls.join(' | '));
 });
 
 test('a missing pac login is a WARNING for the app-builder path, not a blocker', async () => {
