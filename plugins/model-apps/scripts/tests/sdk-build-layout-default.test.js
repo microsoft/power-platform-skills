@@ -238,3 +238,83 @@ test('default Main form promotion failure skips sibling demotion', async () => {
   assert.ok(warnings.some((w) => /could not make form the default/.test(w)), JSON.stringify(warnings));
   assert.ok(!calls.some((c) => c.name === 'updateRecord' && c.args[1] === 'form-ops' && c.args[2].isdefault === false), 'no demotion after failed promote');
 });
+
+// --- Rows a removal leaves empty -------------------------------------------------------------------
+// An empty <row/> renders as a blank line, so a row a pruned or moved field leaves holding nothing is
+// removed. A row still holding a slot reserved by a row-spanning cell above is NOT empty, and a row
+// that was already empty before this run is not this run's to remove.
+
+const rowShape = (section) => (section.rows || []).map((r) => ((r && r.cells) || []).map((c) => {
+  const fn = c.control && c.control.fieldName ? c.control.fieldName.replace(/^new_/, '') : 'spacer';
+  return (Number(c.rowspan) || 1) > 1 ? `${fn} rs${c.rowspan}` : fn;
+}));
+const rowRemovals = (calls) => calls.filter((c) => c.name === 'removeElement' && /\/rows\/\d+$/.test(c.args[2]));
+
+for (const [name, columns, rows, fields, wantShape, wantRowRemovals] of [
+  ['pruning the only field in a row removes the row', 2,
+    [[cell('a'), cell('b')], [cell('c')], [cell('d')]], ['new_a', 'new_b', 'new_c'], [['a', 'b'], ['c']], 1],
+  ['pruning two fields in adjacent rows removes both rows', 4,
+    [[cell('a', { rowspan: 2 })], [cell('b'), cell('c')], [cell('d')], [cell('e')]], ['new_a', 'new_b', 'new_c'], [['a rs2'], ['b', 'c']], 2],
+  ['an emptied row a span above still reserves is kept', 4,
+    [[cell('a', { rowspan: 2 })], [cell('d')], [cell('b'), cell('c')]], ['new_a', 'new_b', 'new_c'], [['a rs2'], [], ['b', 'c']], 0],
+  ['pruning a spanning field removes the rows its span left empty', 2,
+    [[cell('a'), cell('b')], [cell('d', { rowspan: 2 })], []], ['new_a', 'new_b'], [['a', 'b']], 2],
+  ['a row that was already empty is left alone', 2,
+    [[cell('a'), cell('b')], [], [cell('c')]], ['new_a', 'new_b'], [['a', 'b'], []], 1],
+]) {
+  test(`form rows after a prune: ${name}`, async () => {
+    const spec = specFor({ columns, fields });
+    const { section, calls } = await runTwice(spec, existingForm(columns, rows));
+    assert.deepStrictEqual(rowShape(section), wantShape);
+    // Both applies ran: the second finds nothing left to remove.
+    assert.strictEqual(rowRemovals(calls).length, wantRowRemovals, JSON.stringify(rowRemovals(calls).map((c) => c.args[2])));
+    assertFits(section);
+  });
+}
+
+// The move paths (`fieldOptions[x].after`) remove a row they empty too, and must keep one a span above
+// still reserves: deleting it pulled every row beneath it up under the span.
+function movedSpec(fields) {
+  return specFor({ columns: 2, fields, forms: [{ entity: 'new_project', name: 'Probe', formType: 'Main', layout: 'explicit', prune: false,
+    fieldOptions: { new_c: { after: 'new_d' } },
+    tabs: [{ name: 'probe', label: 'Probe', sections: [{ name: 'fields', label: 'Fields', columns: 2, fields }] }] }] });
+}
+
+test('form rows after a move: a row the moved field emptied is removed', async () => {
+  const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a'), cell('b')], [cell('c')], [cell('d'), cell('e')]]));
+  assert.deepStrictEqual(rowShape(section), [['a', 'b'], ['d', 'c', 'e']]);
+});
+
+test('form rows after a move: an emptied row a span above still reserves is kept', async () => {
+  const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a', { rowspan: 2 }), cell('b')], [cell('c')], [cell('d'), cell('e')]]));
+  assert.deepStrictEqual(rowShape(section), [['a rs2', 'b'], [], ['d', 'c', 'e']]);
+});
+
+test('form rows after a move: a moved spanning field frees the rows its span covered', async () => {
+  // Row 2 holds nothing but c's reserved slot. Once c leaves, both of its rows are blank.
+  const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a'), cell('b')], [cell('c', { rowspan: 2 })], [], [cell('d'), cell('e')]]));
+  assert.deepStrictEqual(rowShape(section), [['a', 'b'], ['d', 'c rs2', 'e']]);
+});
+
+// The other move path: a field the layout puts in ANOTHER section is relocated there, and the rows it
+// leaves behind in its old section go the same way.
+function relocatedSpec() {
+  return specFor({ columns: 2, fields: [], forms: [{ entity: 'new_project', name: 'Probe', formType: 'Main', layout: 'explicit',
+    tabs: [{ name: 'probe', label: 'Probe', sections: [
+      { name: 'fields', label: 'Fields', columns: 2, fields: ['new_a', 'new_b'] },
+      { name: 'other', label: 'Other', columns: 1, fields: ['new_c'] },
+    ] }] }] });
+}
+const namedSection = (form, name) => form.tabs.flatMap((t) => t.columns.flatMap((c) => c.sections)).find((s) => s.name === name);
+
+for (const [name, rows, wantShape] of [
+  ['the row it emptied is removed', [[cell('a'), cell('b')], [cell('c')]], [['a', 'b']]],
+  ['a spanning field frees the rows its span covered', [[cell('a'), cell('b')], [cell('c', { rowspan: 2 })], []], [['a', 'b']]],
+  ['an emptied row a span above still reserves is kept', [[cell('a', { rowspan: 2 }), cell('b')], [cell('c')]], [['a rs2', 'b'], []]],
+]) {
+  test(`form rows after a relocation: ${name}`, async () => {
+    const { form } = await runTwice(relocatedSpec(), existingForm(2, rows));
+    assert.deepStrictEqual(rowShape(namedSection(form, 'fields')), wantShape);
+    assert.deepStrictEqual(rowShape(namedSection(form, 'other')).flat().map((c) => c.split(' ')[0]), ['c'], 'the field did move');
+  });
+}

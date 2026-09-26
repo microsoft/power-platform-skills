@@ -38,6 +38,9 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
 - **Row-spanning cells count wherever the build fits a layout.** Narrowing a grid, widening a cell
   and placing a new field now count the columns a span above still reserves, exactly as verify does,
   so the build no longer writes a layout verify rejects.
+- **Removing a field no longer leaves an empty form row.** A pruned field's row stayed behind with no
+  cells and rendered as a blank line; it is now removed. A row that a span from above still reserves
+  is kept, by moves too, which used to delete it and pull the rows beneath up under the span.
 - **A `/genpage` update must name the page's own app.** A real page id with another app's id, or a
   nonexistent one, succeeded and renamed the page and attached its tables to that app. The wrapper
   now proves the page is in the app (unpublished pages included) before downloading or uploading.

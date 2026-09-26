@@ -809,7 +809,10 @@ below.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
-reorder a subset without re-declaring every other field.
+reorder a subset without re-declaring every other field. A row that a removed or moved field leaves
+holding nothing goes with it, so no blank line is left behind. The exceptions are a row that a
+row-spanning cell above still reserves, which stays because the span occupies it, and a row that was
+already empty, which is left as it is.
 
 ### Per-field control options — `readOnly`, `hidden`, `after`
 

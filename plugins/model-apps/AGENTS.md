@@ -138,7 +138,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `updateElement('/siteMap')`, a dashboard tile is `addElement('/components')`. Form reconcile adds the
   spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
-  never duplicates a control. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  never duplicates a control. A row that a pruned or moved cell leaves holding nothing is removed too
+  (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
+  a row-spanning cell above still reserves is kept, and so is a row that was already empty. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
   when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
   retries and later failures stay bound to that gate-time list. A later `--allow-destructive` run may
   remove only that recorded set; the record is consumed only after a successful run that included both

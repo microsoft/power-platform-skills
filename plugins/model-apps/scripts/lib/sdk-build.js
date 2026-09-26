@@ -78,7 +78,7 @@ const {
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
-const { rowOccupancy, fitsGrid } = require('./form-occupancy.js');
+const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1967,17 +1967,23 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
-  // Resolve a `/tabs/T/columns/C/sections/S/rows/R` pointer to the row object. Deliberately narrow —
-  // it exists only so the reconcile can tell whether a cell move emptied the row it came from.
-  const jsonPointerRow = (formJson, pointer) => {
-    const t = String(pointer).split('/').filter(Boolean);
-    // ['tabs', T, 'columns', C, 'sections', S, 'rows', R]
-    if (t.length !== 8 || t[0] !== 'tabs' || t[2] !== 'columns' || t[4] !== 'sections' || t[6] !== 'rows') return null;
-    const tab = (formJson.tabs || [])[Number(t[1])];
-    const col = tab && (tab.columns || [])[Number(t[3])];
-    const sec = col && (col.sections || [])[Number(t[5])];
-    return (sec && (sec.rows || [])[Number(t[7])]) || null;
+  // Remove the rows a cell's departure left holding nothing: its own row, and the rows its row-span
+  // covered. An empty `<row/>` renders as a blank line, and one would accumulate per pruned or
+  // relocated field. `strandedRows` keeps a row that a row-spanning cell above still reserves (it is
+  // occupied, not empty) and never looks at a row this departure did not touch, so an empty row that
+  // was already on the form stays. Shared by the prune pass and both move paths.
+  const removeStrandedRows = async (formId, sectionPointer, rowIndex, span) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, sectionPointer);
+    if (!section) return;
+    // Bottom-up, so each removal leaves the earlier indexes valid without a re-read.
+    for (const i of strandedRows(section.rows || [], rowIndex, span)) {
+      await provision.removeElement('form', formId, `${sectionPointer}/rows/${i}`);
+    }
   };
+  // The departing cell's rowspan, read BEFORE it leaves: once it is gone, the rows it covered can only
+  // be found from this number.
+  const departingSpan = (form, location) => Number((cellAt(form, location) || {}).rowspan) || 1;
 
   // Move each anchored field so it immediately follows its anchor (`fieldOptions[x].after`).
   //
@@ -2049,17 +2055,12 @@ async function runSdkBuild(spec, opts = {}) {
 
       let index = to.cellIndex + 1;
       if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
+      const span = departingSpan(form, from);
       await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });
-      // Moving the only cell out of a row leaves an empty `<row/>`, which renders as a blank line and
-      // would accumulate one per anchored field. Row indices are unchanged by a cell move (cells
-      // move between rows; the row count does not change), so the source row is still where it was.
-      if (from.rowCellCount === 1 && from.rowPointer !== to.rowPointer) {
-        const after = await provision.getArtifact('form', formId) || {};
-        const stranded = jsonPointerRow(after, from.rowPointer);
-        if (stranded && (stranded.cells || []).length === 0) {
-          await provision.removeElement('form', formId, from.rowPointer);
-        }
-      }
+      // The rows the move left holding nothing go (see removeStrandedRows). Row indices are unchanged
+      // by a cell move (cells move between rows; the row count does not change), so the source rows
+      // are still where they were.
+      if (from.rowPointer !== to.rowPointer) await removeStrandedRows(formId, from.sectionPointer, from.rowIndex, span);
     }
   };
 
@@ -2714,17 +2715,11 @@ async function runSdkBuild(spec, opts = {}) {
     if (!from || !liveTarget) return;
     const row = ((sectionAt(form, liveTarget) || {}).rows || [])[rowIndex];
     if (!row) return;
+    const span = departingSpan(form, from);
     await provision.moveElement('form', formId, from.cellPointer, liveTarget + '/rows/' + rowIndex + '/cells', { index: (row.cells || []).length });
-    // Moving the only cell out of a row leaves an empty `<row/>` that renders as a blank line and
-    // would accumulate one per relocated field. Row indices are unchanged by a cell move, so the
-    // source row is still where it was.
-    if (from.rowCellCount === 1) {
-      const after = await provision.getArtifact('form', formId) || {};
-      const stranded = jsonPointerRow(after, from.rowPointer);
-      if (stranded && (stranded.cells || []).length === 0) {
-        await provision.removeElement('form', formId, from.rowPointer);
-      }
-    }
+    // The rows the move left holding nothing go (see removeStrandedRows). Row indices are unchanged by
+    // a cell move, so the source rows are still where they were.
+    await removeStrandedRows(formId, from.sectionPointer, from.rowIndex, span);
 
     // Converge the span NOW, in the destination, so it is clamped and packed against the section the
     // cell actually landed in rather than the one it left. Re-resolve the location: the move (and a
@@ -2813,7 +2808,14 @@ async function runSdkBuild(spec, opts = {}) {
           if (sec && sec.name) vacatedSections.add(String(sec.name).toLowerCase());
         }
         const ptr = loc ? loc.cellPointer : findFieldCellPointer(pruneForm, logical);
-        if (ptr) await provision.removeElement('form', formId, ptr);
+        if (ptr) {
+          // Read the span first: getArtifact can hand back the live artifact, so the cell is gone from
+          // `pruneForm` once removeElement returns.
+          const span = loc ? departingSpan(pruneForm, loc) : 1;
+          await provision.removeElement('form', formId, ptr);
+          // Pruning a field must not leave a blank line where it was (see removeStrandedRows).
+          if (loc) await removeStrandedRows(formId, loc.sectionPointer, loc.rowIndex, span);
+        }
       }
     }
     // Reclaim a section the layout VACATED (#581). A generated section name encodes position
