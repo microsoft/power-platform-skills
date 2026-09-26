@@ -1,4 +1,10 @@
 'use strict';
+// One FormXML row-occupancy model shared by build and verify. Row-spanning cells reserve
+// capacity in later rows, and the build must make the same calculation verify enforces so it
+// never writes a layout that verify rejects. Raw shape in a two-column section:
+//   rows: [a rowspan=2] / [b, c]
+//   row 2: own 2 + reserved 1 (a) = 3 columns
+
 
 function cellWidth(cell) {
   return Number(cell && cell.colspan) || 1;
