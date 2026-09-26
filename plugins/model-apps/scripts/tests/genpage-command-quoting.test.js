@@ -19,22 +19,35 @@ const FILES = ['SKILL.md', 'edit-flow.md', 'verify-flow.md'];
 //   - every inline code span, anywhere else (a ```markdown log format included), that starts like a command:
 //     `--flag …`, `node …`, `pac …`, or a lowercase command word followed by a flag, a placeholder, a quote, a `$` or
 //     a path (`mkdir -p <folder-name>`, `upload --page-id <id>`). JSON examples (`{ "intent": "<need>" }`), a
-//     `key: value` snippet and prose (`Replaced PAGEREF_<name> tokens`) are not commands.
+//     `key: value` snippet and prose (`Replaced PAGEREF_<name> tokens`) are not commands. A span that wraps onto the
+//     next source line, as soft-wrapped prose and quotes do, is read whole (a quote's `>` dropped), and the line it
+//     wrapped onto is not read again on its own.
+const INLINE_COMMAND = /`((?:--|node |pac |[a-z][\w.-]*\s+[-<'"$./\\])[^`]*)`/g;
 function commandText(text) {
   const out = [];
+  const lines = text.split(/\r?\n/);
+  const unquote = (l) => l.replace(/^\s*>\s?/, '');
   let fence = null;
   let hereString = false;
-  text.split(/\r?\n/).forEach((line, i) => {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     const open = /^\s*```(\w*)/.exec(line);
-    if (open) { fence = fence === null ? (open[1] || 'plain') : null; hereString = false; return; }
+    if (open) { fence = fence === null ? (open[1] || 'plain') : null; hereString = false; continue; }
     if (fence !== null && /^(powershell|pwsh|bash|sh)$/.test(fence)) {
-      if (hereString) { if (/^\s*'@/.test(line)) hereString = false; return; }
+      if (hereString) { if (/^\s*'@/.test(line)) hereString = false; continue; }
       if (/@'\s*$/.test(line)) hereString = true;
       if (!/^\s*#/.test(line)) out.push({ n: i + 1, code: line });
-      return;
+      continue;
     }
-    for (const m of line.matchAll(/`((?:--|node |pac |[a-z][\w.-]*\s+[-<'"$./\\])[^`]*)`/g)) out.push({ n: i + 1, code: m[1] });
-  });
+    let joined = line;
+    let k = i;
+    while ((joined.split('`').length - 1) % 2 === 1 && k + 1 < lines.length && k - i < 3 && lines[k + 1].trim() && !/^\s*```/.test(lines[k + 1])) {
+      k += 1;
+      joined += ` ${unquote(lines[k]).trim()}`;
+    }
+    for (const m of joined.matchAll(INLINE_COMMAND)) out.push({ n: i + 1, code: m[1] });
+    i = k;
+  }
   return out;
 }
 
@@ -80,6 +93,8 @@ test('the command-text reader sees what it guards', () => {
     '```',
     'Prose `--connectors "<working-dir>/c.json"` and a JSON example `{ "intent": "<need>" }`.',
     'Make it: `mkdir -p <folder-name>`, then `upload --page-id \'<id>\'`; not commands: `pageId: "PAGEREF_<x>"`, `Replaced PAGEREF_<name> tokens`.',
+    '> names come from `pac model genpage list',
+    '> --app-id <id>`. Never guess them, and `pac model list` too.',
     '```markdown',
     "- Command: `node x.js --env '<org-url>'`",
     '```',
@@ -92,6 +107,8 @@ test('the command-text reader sees what it guards', () => {
     '--connectors "<working-dir>/c.json"',
     'mkdir -p <folder-name>',
     "upload --page-id '<id>'",
+    'pac model genpage list --app-id <id>',
+    'pac model list',
     "node x.js --env '<org-url>'",
   ]);
 });

@@ -6,7 +6,7 @@ to `genpage-edit-planner`, then applies the edit inline.
 
 > **⚠️ CRITICAL — do NOT hallucinate app or page names.** App names and page
 > names are discovered by running `pac model list` and `pac model genpage list
-> --app-id <id>`. Never guess them from the repo, the conversation context,
+> --app-id '<id>'`. Never guess them from the repo, the conversation context,
 > sample app names, or anywhere else. Always run the commands first, then
 > present what the commands returned to the user.
 
