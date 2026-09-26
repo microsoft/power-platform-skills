@@ -32,8 +32,8 @@
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
-const { execFileSync } = require('child_process');
-const { dataverseRequest, parseArgs, validateFlags } = require('./lib/dataverse-auth');
+const { execFileSync, execFile } = require('child_process');
+const { dataverseRequest, getAuthToken, parseArgs, validateFlags } = require('./lib/dataverse-auth');
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
@@ -66,6 +66,26 @@ function runQuiet(cmd, args) {
   } catch {
     return null;
   }
+}
+
+// The same contract as runQuiet (trimmed stdout, or null on any failure), but the child runs in the
+// background, so a slow CLI overlaps the synchronous probes that follow instead of adding to them.
+function runQuietAsync(cmd, args) {
+  return new Promise((resolve) => {
+    try {
+      const child = execFile(cmd, args, {
+        encoding: 'utf8',
+        timeout: 15000,
+        windowsHide: true,
+        shell: process.platform === 'win32',
+      }, (error, stdout) => resolve(error ? null : String(stdout || '').trim()));
+      // execFile always opens a stdin pipe; close it, matching runQuiet's 'ignore', so a CLI that
+      // checks stdin can never wait on it.
+      if (child && child.stdin) child.stdin.end();
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 function emit(payload) {
@@ -111,18 +131,24 @@ async function main() {
   const requirePac = argv.includes('--require-pac');
   const warnings = [];
 
-  // 1) az presence + login
-  const azVersion = runQuiet('az', ['--version']);
-  if (azVersion == null) {
-    return emit(
-      buildResult({
-        blocker: 'az_missing',
-        message: 'Azure CLI (`az`) is not installed. Install it from https://aka.ms/azure-cli and run `az login`.',
-      })
-    );
-  }
+  // Every probe below is a cold CLI start. Measured on Windows: `pac org who` ~7 s, and each `az`
+  // call ~3-5 s. Run one after another (az --version, az account show, pac, then az again for the
+  // WhoAmI token), the preflight cost ~19 s at the start of every /genpage and /app-builder run.
+  // pac needs nothing from az, so it is started FIRST and runs while the az probes hold this process.
+  const pacOrgPending = runQuietAsync('pac', ['org', 'who']);
+
+  // 1) az login. `az account show` answers "installed?" and "logged in?" together on the happy path,
+  //    so `az --version` runs only to tell those two failures apart.
   const azUser = runQuiet('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv']);
   if (!azUser) {
+    if (runQuiet('az', ['--version']) == null) {
+      return emit(
+        buildResult({
+          blocker: 'az_missing',
+          message: 'Azure CLI (`az`) is not installed. Install it from https://aka.ms/azure-cli and run `az login`.',
+        })
+      );
+    }
     return emit(
       buildResult({
         blocker: 'az_not_logged_in',
@@ -131,8 +157,15 @@ async function main() {
     );
   }
 
+  // Acquire the WhoAmI token while pac is still running. getAuthToken memoizes per process, so the
+  // dataverseRequest below reuses it instead of paying another az cold start after pac returns. A
+  // failure here is not reported: WhoAmI acquires again and reports it with the right blocker.
+  if (envUrl) {
+    try { getAuthToken(envUrl); } catch { /* reported by WhoAmI */ }
+  }
+
   // 2) pac user + env URL (best-effort — pac is NOT required for the Dataverse build path)
-  const pacOrg = runQuiet('pac', ['org', 'who']);
+  const pacOrg = await pacOrgPending;
   let pacUser = null;
   if (pacOrg) {
     const m = pacOrg.match(/Connected as\s+([^\s\r\n]+)/i);
