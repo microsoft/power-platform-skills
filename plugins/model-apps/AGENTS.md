@@ -701,7 +701,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)

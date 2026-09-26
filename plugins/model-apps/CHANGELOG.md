@@ -241,7 +241,10 @@ downloads that round-trip Choice columns.
   view over the fence when it resumed. An old lease names the file to delete if its holder's pid was
   reused by another process, and so does a reclaim of it abandoned by a crash: it is never removed by
   another writer, which let two writers hold the lease. `--clear-workspace` clears under the same lease,
-  and only when no fence has appeared since the teardown finished.
+  and only when no fence has appeared since the teardown finished. A build that another build or a
+  teardown ran alongside fails, and makes whatever snapshot it then finds ineligible; when even that is
+  refused, because the other writer holds the lease or the snapshot cannot be read, the refusal is
+  recorded beside the snapshot and the next `--changed-only` run builds in full.
 - **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
   already kept its tables: a download flags all three `existing: true`. Deleting a relationship
   removed its lookup column — and that column's data — from a table teardown kept.

@@ -109,6 +109,16 @@ test('decide: identity mismatch -> full (gate blocks)', () => {
   assert.match(d.reason, /orgId/);
 });
 
+test('decide: a distrust marker forces a full build, even on an eligible snapshot with nothing changed', () => {
+  const prior = annotate(baseSpec(), 'v1');
+  const env = seedFromPrior(prior);
+  const cur = annotate(baseSpec(), 'v1');
+  assert.strictEqual(flow.decideChangedOnly({ annotatedSpec: cur, snapshot: env, live: LIVE }).decision, 'noop', 'control: nothing changed');
+  const d = flow.decideChangedOnly({ annotatedSpec: cur, snapshot: env, live: LIVE, distrust: { names: ['apply-snapshot.distrust.x.json'], reason: 'snapshot lease unavailable (held)' } });
+  assert.strictEqual(d.decision, 'full');
+  assert.match(d.reason, /could not invalidate the snapshot \(snapshot lease unavailable \(held\)\)/);
+});
+
 test('decide: ineligible (debt-carrying) snapshot -> full even for a page edit', () => {
   const prior = annotate(baseSpec(), 'v1');
   const env = snap.makeEnvelope(LIVE, { generation: 'g' });
@@ -788,6 +798,61 @@ test('run: a busy-lease refusal whose lease turns out to be another writer\'s fa
   }
 });
 
+// When distrust cannot land at all (every invalidate refused, the lease held by a live writer), the run fails, but the
+// snapshot that writer leaves can read eligible, and the next run would noop on it. So distrust records the refusal
+// beside the snapshot, outside the lease: the next run builds in full, and its landed baseline clears the marker.
+test('run: a distrust that cannot land leaves a marker, and the next run builds in full and clears it', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, finish] of [
+    ['a build that throws', () => { throw new Error('build halted'); }],
+    ['a build that returns', () => ({ ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } })],
+  ]) {
+    const dir = ws();
+    try {
+      const build = async () => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
+        // Another live writer holds the lease, so no invalidate this run's distrust tries can land.
+        fs.writeFileSync(store.leasePath(dir), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+        return finish();
+      };
+      let threw = null;
+      let r = null;
+      try {
+        r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      } catch (e) { threw = e; }
+      if (/throws/.test(what)) assert.match(String(threw && threw.message), /build halted/, `${what}: the original error goes on`);
+      else assert.strictEqual(r.ok, false, `${what}: the overlapped run fails`);
+      assert.strictEqual(store.readSnapshot(dir).eligible, true, `${what}: precondition: the other writer's baseline stayed eligible`);
+      assert.ok(store.readDistrust(dir), `${what}: the refusal is recorded`);
+      fs.rmSync(store.leasePath(dir), { force: true });
+      // Nothing changed since that eligible baseline, which alone would be a noop; the marker makes it a full build.
+      let built = 0;
+      const record = [];
+      const next = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: async (...a) => { built += 1; return stubBuild(record)(...a); }, readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+      assert.strictEqual(next.ok, true, `${what}: ${JSON.stringify(next.errors)}`);
+      assert.strictEqual(built, 1, `${what}: the next run builds`);
+      assert.strictEqual(record[0].phases, undefined, `${what}: in full`);
+      assert.match(next.changedOnly.reason, /could not invalidate the snapshot/, `${what}: because of the marker`);
+      assert.strictEqual(store.readDistrust(dir), null, `${what}: its landed baseline clears the marker`);
+    } finally { rm(dir); }
+  }
+});
+
+// A full build clears only the marker it read when it started. One written while it built is another run's, which
+// found the workspace changed under it, and this build's baseline cannot vouch for what that run did.
+test('run: a full build clears the distrust marker it read, and leaves one written while it built', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-seeded');
+    assert.strictEqual(store.markDistrusted(dir, { reason: 'before' }).ok, true);
+    const during = async (...a) => { store.markDistrusted(dir, { reason: 'during' }); return stubBuild([])(...a); };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: during, readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual((store.readDistrust(dir) || {}).reason, 'during', 'the marker written during the build stays');
+  } finally { rm(dir); }
+});
+
 // A writer can land between distrust's read and its invalidate (the fenced invalidate is then refused). What it left is
 // read again and invalidated in turn, rather than left eligible.
 test('distrustWorkspace invalidates a baseline that landed between its read and its invalidate', (t) => {
@@ -811,6 +876,35 @@ test('distrustWorkspace invalidates a baseline that landed between its read and 
     assert.strictEqual(disk.eligible, false, 'the baseline that landed is invalidated too');
     assert.notStrictEqual(disk.generation, 'g-landed', 'and its generation rotated');
   } finally { rm(dir); }
+});
+
+// readSnapshot answers null for an absent snapshot and for one it could not read alike. A snapshot that exists but reads
+// as nothing, a transient read error, may still be another writer's eligible baseline, readable again by the next run,
+// so distrust reads it again, and records the refusal if it never reads. Only a snapshot that is provably absent leaves
+// nothing to distrust.
+test('distrustWorkspace does not take a snapshot it cannot read for an absent one', (t) => {
+  const dir = ws();
+  const empty = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-first');
+    const realRead = store.readSnapshot;
+    let failures = 1;
+    t.mock.method(store, 'readSnapshot', (d) => (failures-- > 0 ? null : realRead(d)));
+    const once = flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(once.resolved, true, 'a read that recovers is retried');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false, 'and the baseline is invalidated');
+    assert.strictEqual(store.readDistrust(dir), null, 'with no marker needed');
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-second');
+    t.mock.method(store, 'readSnapshot', () => null);
+    const never = flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(never.resolved, false, 'a snapshot that never reads is not an absent one');
+    assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: it stayed as the other writer left it');
+    assert.match(store.readDistrust(dir).reason, /exists but could not be read/, 'so the refusal is recorded');
+    assert.deepStrictEqual(flow.distrustWorkspace(empty, () => {}), { foreign: false, resolved: true }, 'CONTROL: an absent snapshot');
+    assert.strictEqual(store.readDistrust(empty), null, 'leaves nothing to record');
+  } finally { t.mock.restoreAll(); rm(dir); rm(empty); }
 });
 
 test('dropBaselineClaim removes only the placeholder it was given', () => {

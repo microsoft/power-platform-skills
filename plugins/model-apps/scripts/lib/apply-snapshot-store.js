@@ -38,6 +38,16 @@ function readSnapshot(workspaceDir) {
   catch { return null; }
 }
 
+// Is there provably NO snapshot file? readSnapshot answers null for an absent file and for one it could not read or
+// parse alike, and a caller that must not trust a snapshot it cannot see (distrustWorkspace) needs the difference: only
+// ENOENT (or ENOTDIR, a workspace path that is not a folder) proves absence; any other outcome, the file present
+// included, does not.
+function snapshotAbsent(workspaceDir) {
+  try { fs.lstatSync(snapshotPath(workspaceDir)); return false; } catch (e) {
+    return !!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'));
+  }
+}
+
 // Atomic write. The temp file MUST be in the same directory as the target — rename() is only atomic
 // within a single filesystem, and a workspace-local temp guarantees that. fsync the fd before rename so
 // the bytes are durable, not just in the page cache. A crash leaves EITHER the prior snapshot or the new
@@ -499,6 +509,74 @@ function deleteSnapshot(workspaceDir) {
   catch (e) { return { ok: false, reason: `delete failed: ${e.message}` }; }
 }
 
+// A run that found the workspace changed under it and could not invalidate the snapshot there (every attempt refused,
+// the lease held by a live writer: distrustWorkspace, changed-only-flow.js) records that HERE, beside the snapshot and
+// outside the lease. The lease is exactly what it could not get, and whatever that writer puts in the snapshot next,
+// an eligible baseline say, certifies a state this run may since have changed. The next --changed-only run finds a
+// marker and builds in full, however eligible the snapshot reads (decideChangedOnly); a full build that lands its own
+// baseline deletes the markers it found when it started (clearDistrust), and the last teardown deletes them all with
+// the snapshot (releaseTombstone).
+//
+// One file per refusal, `apply-snapshot.distrust.<id>.json`, never a shared one: a marker is then only ever created or
+// deleted, never moved, rewritten or put back. A single shared marker had to be moved aside to be cleared safely, and
+// while it was aside a concurrent run saw no marker at all (and saw none for good if putting it back failed); putting
+// back an older marker over a newer one also let an earlier run clear the newer refusal. Written temp then rename, so a
+// reader sees a whole marker or none: the temp name ends `.tmp`, and a reader lists `.json` names only.
+const DISTRUST_PREFIX = 'apply-snapshot.distrust.';
+const DISTRUST_SUFFIX = '.json';
+const isDistrustMarker = (name) => typeof name === 'string' && name.startsWith(DISTRUST_PREFIX) && name.endsWith(DISTRUST_SUFFIX)
+  && !/[\\/]/.test(name);
+// Returns { ok, reason? }.
+function markDistrusted(workspaceDir, { reason } = {}) {
+  const id = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const target = path.join(workspaceDir, `${DISTRUST_PREFIX}${id}${DISTRUST_SUFFIX}`);
+  const tmp = `${target}.tmp`;
+  try {
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ id, reason: reason || null, pid: process.pid, at: new Date().toISOString() }));
+    fs.renameSync(tmp, target);
+    return { ok: true };
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort cleanup of the temp */ }
+    return { ok: false, reason: e.message };
+  }
+}
+
+// The workspace's distrust markers as { names, reason }, or null when there are none. `names` is what this run will
+// clear, and only that (clearDistrust). A marker that cannot be read or parsed still counts (fail closed): a marker
+// nobody can read has not said the workspace is trusted again. A folder that cannot be listed counts too, with no
+// names, so nothing is cleared.
+function readDistrust(workspaceDir) {
+  let names;
+  try { names = fs.readdirSync(workspaceDir).filter(isDistrustMarker).sort(); } catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    return { names: [], reason: `the workspace could not be listed for distrust markers (${(e && e.code) || e})` };
+  }
+  if (!names.length) return null;
+  let reason = null;
+  for (const name of names) {
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(workspaceDir, name), 'utf8'));
+      if (m && typeof m.reason === 'string' && m.reason) { reason = m.reason; break; }
+    } catch { /* unreadable: it still counts */ }
+  }
+  return { names, reason: reason || 'no readable reason recorded' };
+}
+
+// Delete the markers a run found when it started (`names`, from readDistrust), and only those: a marker written since
+// is another run's, which found the workspace changed under IT, and this run's baseline cannot vouch for what that run
+// did. Each is deleted by its own name, so no other marker is ever out of place. Returns { ok, cleared, reason? }; a
+// marker that cannot be deleted stays, and the next run builds in full again.
+function clearDistrust(workspaceDir, names) {
+  let cleared = 0;
+  const failed = [];
+  for (const name of Array.isArray(names) ? names : []) {
+    if (!isDistrustMarker(name)) continue;
+    try { fs.rmSync(path.join(workspaceDir, name), { force: true }); cleared += 1; } catch (e) { failed.push(`${name} (${(e && e.code) || e})`); }
+  }
+  return failed.length ? { ok: false, cleared, reason: `could not delete ${failed.join(', ')}` } : { ok: true, cleared };
+}
+
 // End a teardown's hold on the snapshot. tombstoneSnapshot lists every teardown in flight, and every
 // teardown that has FINISHED drops its entry here, under the lease — a finished teardown is no longer in
 // flight, and an entry left behind read as one still running whenever its pid was alive (reused, slow to
@@ -546,6 +624,8 @@ function releaseTombstone(workspaceDir, teardownId, deps = {}) {
       return { ok: true, deleted: false, left: true, reason: `${others.length} other teardown(s) of this workspace are still running` };
     }
     fs.rmSync(snapshotPath(workspaceDir), { force: true });
+    // Distrust markers go with it: they say a snapshot here cannot be trusted, and the app it described is gone.
+    for (const name of fs.readdirSync(workspaceDir).filter(isDistrustMarker)) fs.rmSync(path.join(workspaceDir, name), { force: true });
     return { ok: true, deleted: true };
   } catch (e) {
     return { ok: false, deleted: false, reason: `release failed: ${e.message}` };
@@ -607,10 +687,13 @@ function clearWorkspace(target, deps = {}) {
 module.exports = {
   SNAPSHOT_FILE,
   LEASE_FILE,
+  DISTRUST_PREFIX,
+  DISTRUST_SUFFIX,
   LEASE_STALE_MS,
   snapshotPath,
   leasePath,
   readSnapshot,
+  snapshotAbsent,
   writeSnapshotAtomic,
   processAlive,
   createExclusive,
@@ -625,6 +708,9 @@ module.exports = {
   removeCreatedDir,
   plainPath,
   deleteSnapshot,
+  markDistrusted,
+  readDistrust,
+  clearDistrust,
   releaseTombstone,
   clearWorkspace,
   teardownsInFlight,

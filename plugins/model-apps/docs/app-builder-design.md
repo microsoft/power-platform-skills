@@ -621,6 +621,18 @@ ONLY after effective success (apply+verify).
   abandoned only once its claimer is dead, and a re-check of the lock); a reclaim that fails after its
   write releases what it wrote. An old lease whose holder's pid is alive names the file to delete, in case
   that pid was reused.
+- **overlap**: a `--changed-only` run whose generation moved while it built, or whose baseline write
+  another writer refused, reports failure whatever its build returned, and **invalidates** whatever
+  snapshot it then finds (fenced to the generation it read, retried briefly): a baseline another writer
+  blessed meanwhile would certify a state this run may since have changed. When every attempt is refused,
+  the lease held by a live writer or a snapshot there that cannot be read (only a provably absent one
+  leaves nothing to distrust), the refusal is recorded in a **distrust marker**
+  (`<workspace>/apply-snapshot.distrust.<id>.json`, one file per refusal), written beside the snapshot and
+  outside the lease. The next `--changed-only` run builds in full however eligible the snapshot reads; a
+  full build that lands its baseline deletes the markers it found at its start, by name, never one written
+  since; the last clean teardown deletes them all with the snapshot. An unreadable marker still counts. A
+  marker is only ever created or deleted, never moved or rewritten, so a concurrent reader always sees
+  every other run's.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

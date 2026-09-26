@@ -976,3 +976,81 @@ test('invalidate BUMPS the generation (fencing) and returns it; eligible stays f
     assert.strictEqual(store.casWriteSnapshot(d, eligible('g2'), inv.generation).ok, true);
   } finally { rm(d); }
 });
+
+// Each refusal is its own marker file, and a run clears only the markers it found when it started: one written since is
+// another run's, and stays, whatever is cleared around it.
+test('clearDistrust deletes only the markers it was given, and markers written since stay', () => {
+  const d = ws();
+  try {
+    assert.strictEqual(store.readDistrust(d), null, 'none yet');
+    assert.strictEqual(store.markDistrusted(d, { reason: 'first' }).ok, true);
+    const a = store.readDistrust(d);
+    assert.deepStrictEqual([a.names.length, a.reason], [1, 'first']);
+    assert.strictEqual(store.markDistrusted(d, { reason: 'second' }).ok, true);
+    const b = store.readDistrust(d);
+    assert.strictEqual(b.names.length, 2, 'every refusal is its own marker');
+    assert.strictEqual(store.markDistrusted(d, { reason: 'third' }).ok, true);
+    assert.strictEqual(store.clearDistrust(d, a.names).ok, true);
+    assert.strictEqual(store.readDistrust(d).names.length, 2, 'the markers written since stay');
+    // A run that found the first two clears those; the third, written after it looked, stays.
+    assert.strictEqual(store.clearDistrust(d, b.names).ok, true);
+    const last = store.readDistrust(d);
+    assert.deepStrictEqual([last.names.length, last.reason], [1, 'third']);
+    assert.strictEqual(store.clearDistrust(d, last.names).ok, true);
+    assert.strictEqual(store.readDistrust(d), null);
+    assert.deepStrictEqual(fs.readdirSync(d), [], 'and nothing is left behind');
+  } finally { rm(d); }
+});
+
+// A concurrent reader never sees the workspace without a marker while another run's marker exists: a clear deletes its
+// own markers by name, and moves nothing.
+test('while a run clears its markers, a marker another run wrote stays visible throughout', (t) => {
+  const d = ws();
+  try {
+    store.markDistrusted(d, { reason: 'mine' });
+    const mine = store.readDistrust(d).names;
+    store.markDistrusted(d, { reason: 'theirs' });
+    const theirs = store.readDistrust(d).names.filter((n) => !mine.includes(n));
+    const realRm = fs.rmSync;
+    const seen = [];
+    t.mock.method(fs, 'rmSync', (p, o) => { seen.push(store.readDistrust(d)); const r = realRm(p, o); seen.push(store.readDistrust(d)); return r; });
+    store.clearDistrust(d, mine);
+    t.mock.restoreAll();
+    assert.ok(seen.length >= 2, 'the clear deleted something');
+    for (const s of seen) assert.ok(s && theirs.every((n) => s.names.includes(n)), 'the other marker is never out of sight');
+    assert.deepStrictEqual(store.readDistrust(d).names, theirs);
+  } finally { t.mock.restoreAll(); rm(d); }
+});
+
+// A marker nobody can read has not said the workspace is trusted again, so it counts; a half-written one is no marker
+// yet; either is deleted by its name.
+test('readDistrust counts an unreadable marker, ignores a temp one, and clearDistrust deletes it by name', () => {
+  const d = ws();
+  try {
+    fs.writeFileSync(path.join(d, `${store.DISTRUST_PREFIX}half${store.DISTRUST_SUFFIX}.tmp`), '{"reason":"half-written"}');
+    assert.strictEqual(store.readDistrust(d), null, 'a temp file is no marker');
+    fs.writeFileSync(path.join(d, `${store.DISTRUST_PREFIX}corrupt${store.DISTRUST_SUFFIX}`), 'not json');
+    const seen = store.readDistrust(d);
+    assert.ok(seen, 'it counts');
+    assert.strictEqual(seen.reason, 'no readable reason recorded');
+    assert.strictEqual(store.clearDistrust(d, seen.names).ok, true);
+    assert.strictEqual(store.readDistrust(d), null);
+  } finally { rm(d); }
+});
+
+// The last clean teardown deletes the marker with the snapshot, since the app it distrusted is gone; a teardown that
+// keeps its tombstone keeps the marker too.
+test('releaseTombstone deletes the distrust marker with the snapshot, and keeps it with a kept tombstone', () => {
+  for (const [what, keep] of [['a clean last release', false], ['a kept release', true]]) {
+    const d = ws();
+    try {
+      store.writeSnapshotAtomic(d, eligible('g1'));
+      assert.strictEqual(store.markDistrusted(d, { reason: 'x' }).ok, true);
+      const tomb = store.tombstoneSnapshot(d);
+      assert.ok(tomb.ok, what);
+      const rel = store.releaseTombstone(d, tomb.teardownId, keep ? { keep: true } : {});
+      assert.strictEqual(rel.ok, true, what);
+      assert.strictEqual(store.readDistrust(d) === null, !keep, what);
+    } finally { rm(d); }
+  }
+});

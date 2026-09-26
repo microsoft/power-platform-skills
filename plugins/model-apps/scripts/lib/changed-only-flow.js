@@ -30,9 +30,10 @@ const { odataLit } = require('./odata.js');
 
 // ---- PURE decision ------------------------------------------------------------------------------------
 
-// Decide fast vs full vs noop from the annotated spec, the persisted snapshot, and the live identity.
+// Decide fast vs full vs noop from the annotated spec, the persisted snapshot, and the live identity. `distrust` is the
+// workspace's distrust markers (store.readDistrust), or null.
 // Returns { decision:'fast'|'full'|'noop', reason, classify, pageKeys?, gateReason }.
-function decideChangedOnly({ annotatedSpec, snapshot, live }) {
+function decideChangedOnly({ annotatedSpec, snapshot, live, distrust = null }) {
   const prior = snapshot ? snapshot.priorSpec : null;
   const classify = classifyChanges(annotatedSpec, prior);
   const gate = snap.isFastPathEligible(snapshot, live);
@@ -40,6 +41,11 @@ function decideChangedOnly({ annotatedSpec, snapshot, live }) {
   // No prior snapshot → this run establishes the changed-only baseline via a full build.
   if (!snapshot) {
     return { decision: 'full', reason: 'no snapshot — establishing the changed-only baseline via a full build', classify, gateReason: 'no snapshot' };
+  }
+  // An earlier run found the workspace changed under it and could not invalidate the snapshot it found (distrustWorkspace
+  // below): that snapshot may certify a state the run since changed, so however eligible it reads, it is not trusted.
+  if (distrust) {
+    return { decision: 'full', reason: `full build — an earlier run found the workspace changed under it and could not invalidate the snapshot (${distrust.reason})`, classify, gateReason: 'distrusted' };
   }
   // Snapshot exists but is not fast-eligible (identity mismatch / tombstoned / invalidated / carries
   // debt) → full build (fail-closed). The full build then re-persists the snapshot (with sticky debt).
@@ -187,6 +193,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   const annotate = (s) => annotateContentHashes(s, deps.readContent);
   const annotatedSpec = annotate(spec);
   const snapshot = store.readSnapshot(ws);
+  const distrust = store.readDistrust(ws);
   // A teardown still running lists itself on the tombstone it wrote (apply-snapshot-store.js
   // tombstoneSnapshot), and a build now would recreate what it is deleting — the fenced invalidate below
   // would let it, the tombstone's generation being the very one this run read. So the run waits for it,
@@ -288,7 +295,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // recoverable direction.
   const appPreExisted = live.appIdKnown === false ? true : !!live.appId;
 
-  let decision = decideChangedOnly({ annotatedSpec, snapshot, live });
+  let decision = decideChangedOnly({ annotatedSpec, snapshot, live, distrust });
   // Sample-data guard (Sol #11): the baseline records whether --sample-data was applied. If THIS run asks
   // for sample data but the eligible baseline did not seed it, a fast/noop would never seed the rows —
   // force a full build so the sample-data phase runs.
@@ -392,7 +399,15 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       const seen = distrustWorkspace(ws, log, expectedGen);
       if (conflicted || seen.foreign || !seen.resolved) return conflictResult(r, decision, 'build', log);
     }
-    else log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
+    else {
+      log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
+      // This full build ran over whatever the markers distrusted, and its baseline landed on the generation it held, so
+      // the markers it found have done their job. One another run wrote since is left in place (clearDistrust).
+      if (distrust) {
+        const cleared = store.clearDistrust(ws, distrust.names);
+        if (!cleared.ok) log(`▸ changed-only: a distrust marker could not be cleared (${cleared.reason}); the next run builds in full again`);
+      }
+    }
   }
   return { ...r, changedOnly: decision };
 }
@@ -439,7 +454,10 @@ async function buildHolding(ws, held, log, build) {
 // Returns what it saw, for a caller still deciding whether it was overlapped at all (a baseline write refused by a
 // busy lease): `foreign` when any generation it read was not `held`, the one the caller's run holds. That lease may
 // have been an older build's, about to rotate the generation, and the flag read before this call cannot see that.
-// `resolved` is false when the invalidate never landed; the caller fails closed on that too.
+// `resolved` is false when the invalidate never landed; the caller fails closed on that too. And since the snapshot
+// then stays as the lease's holder leaves it, possibly eligible, the refusal is recorded beside it, outside the lease
+// (store.markDistrusted): the next --changed-only run builds in full whatever it reads, on every way out of this run,
+// a thrown build included.
 const DISTRUST_ATTEMPTS = 4;
 function distrustWorkspace(ws, log, held) {
   let reason = '';
@@ -448,14 +466,22 @@ function distrustWorkspace(ws, log, held) {
     const now = store.readSnapshot(ws);
     const generation = (now && now.generation) || null;
     if (held !== undefined && generation !== held) foreign = true;
-    if (!now) return { foreign, resolved: true };
-    const inv = store.invalidateSnapshot(ws, { expectedGeneration: generation });
-    if (inv.ok) return { foreign, resolved: true };
-    reason = inv.reason;
+    if (!now) {
+      // Only a snapshot that is provably absent leaves nothing to distrust. One that exists but reads as nothing (a
+      // transient read error, a file mid-replace) may be the other writer's eligible baseline, readable again by the
+      // next run, so it is a refusal like any other: read again, and recorded if it never reads.
+      if (store.snapshotAbsent(ws)) return { foreign, resolved: true };
+      reason = 'the snapshot exists but could not be read';
+    } else {
+      const inv = store.invalidateSnapshot(ws, { expectedGeneration: generation });
+      if (inv.ok) return { foreign, resolved: true };
+      reason = inv.reason;
+    }
     // A lease another writer holds for a moment (its own snapshot write) is waited out briefly.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
-  log(`▸ changed-only: could not invalidate the snapshot another run left (${reason}) — run the next build without --changed-only`);
+  const marked = store.markDistrusted(ws, { reason });
+  log(`▸ changed-only: could not invalidate the snapshot another run left (${reason}) — ${marked.ok ? 'recorded beside it, so the next --changed-only build runs in full' : `and could not record that either (${marked.reason}): run the next build without --changed-only`}`);
   return { foreign, resolved: false };
 }
 
