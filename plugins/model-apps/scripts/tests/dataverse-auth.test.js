@@ -182,6 +182,24 @@ test('getAuthToken does not cache a null token result', () => {
   assert.equal(calls, 2);
 });
 
+test('getAuthTokenAsync is served from a memo that getAuthToken filled', async () => {
+  // The other direction of sharing: check-auth warms the memo asynchronously, but a synchronous caller
+  // may have filled it first, and the async path must then not start the CLI again.
+  const { getAuthToken, getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  let asyncCalls = 0;
+  const exec = () => 'SYNC\n';
+  const execFile = (_file, _args, _opts, cb) => { asyncCalls += 1; setImmediate(() => cb(null, 'ASYNC\n')); };
+  const url = 'https://fabrikam.crm5.dynamics.com';
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'SYNC');
+    assert.equal(await getAuthTokenAsync(url, { execFile }), 'SYNC');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(asyncCalls, 0);
+});
 test('getAuthTokenAsync shares the token memo with getAuthToken and honors fresh replacement', async () => {
   const { getAuthToken, getAuthTokenAsync } = require('../lib/dataverse-auth.js');
   const calls = [];
