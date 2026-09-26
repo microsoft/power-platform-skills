@@ -787,13 +787,15 @@ test('a cast\'s type arguments reach its `as` or `satisfies` through unions, int
     assert.equal(endsMidStatement(code), false, `a leading union after \`${keyword}\``);
   }
   // `as` and `satisfies` are contextual keywords, so each may name a type. With type arguments of its own, or before
-  // `?`, `:` or `extends`, such a name is a constituent, never the cast keyword; so is a member named so (`E.as`).
+  // `?`, `:` or `extends`, such a name is a constituent, never the cast keyword; so is one within a longer name, a
+  // member (`E.as`) or an index (`Row[as | Key]`).
   for (const [label, [alias, type]] of Object.entries({
     'a generic named `satisfies`': ['type satisfies<T> = T;\n', 'satisfies<number> & NonNullable<Value>'],
     'a generic named `as`': ['type as<T> = T;\n', 'as<number> | NonNullable<Value>'],
     'a constraint named `satisfies`': ['type satisfies = undefined;\n', 'Value extends satisfies ? 0 : NonNullable<Value>'],
     'a checked type named `as`': ['type as = number | undefined;\n', 'as extends undefined ? 0 : NonNullable<Value>'],
     'a true branch named `as`': ['type as = 0;\n', 'Value extends undefined ? as : NonNullable<Value>'],
+    'an index named `as`': ['type as = "price";\ntype Key = "qty";\ntype Row = { price: number; qty: number };\n', 'Row[as | Key] & NonNullable<Value>'],
   })) {
     const code = `${alias}${vd}const label = \`\${total as ${type} / count}/month\`;\nexport default () => <p>{label}</p>;`;
     assert.equal(hasDefaultExport(code), true, label);
@@ -803,6 +805,12 @@ test('a cast\'s type arguments reach its `as` or `satisfies` through unions, int
   const member = 'enum E { as, b }\ntype Z<Q> = Q;\ntype T = E.as | Z<number>\n/}/.test("a}") && console.log(1);\nexport default () => null;';
   assert.equal(hasUnbalancedBrackets(member), false, 'a member named `as`');
   assert.equal(endsMidStatement(member), false, 'a member named `as`');
+  const index = 'type as = "price";\ntype Key = "qty";\ntype Row = { price: number; qty: number };\ntype Z<T> = T;\ntype Price = Row[as | Key] & Z<number>\n/}/.test("}");\nexport default () => <p>Ready</p>;';
+  assert.equal(hasUnbalancedBrackets(index), false, 'an index named `as`');
+  assert.equal(endsMidStatement(index), false, 'an index named `as`');
+  const tuple = 'type as = "price";\ntype Key = "qty";\ntype Z<T> = T;\ntype Pair = [as | Key] & Z<number>\n/}/.test("}");\nexport default () => <p>Ready</p>;';
+  assert.equal(hasUnbalancedBrackets(tuple), false, 'a tuple led by a type named `as`');
+  assert.equal(endsMidStatement(tuple), false, 'a tuple led by a type named `as`');
   // A leading operator decides nothing by itself: after `)` it is an expression's `|`, and the `/` starts a regex.
   const notCast = `${vd}const bits = (count) | total < count || count > /}/.exec("a}")!.index;\nexport default () => null;`;
   assert.equal(hasUnbalancedBrackets(notCast), false);

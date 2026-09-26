@@ -161,13 +161,16 @@ function typeArgumentOpenFollowsCast(src, open) {
   // Steps back from a union or intersection operator at `q` over the constituent before it. When the operator leads its
   // type there is none, and it returns the index before the operator. It leads after a non-name (`? | 0`, `: | A`), and
   // after a bare `as`, `satisfies` or `extends` (`as | A`, `extends | 0 | 1`): only there are those words keywords.
-  // `as` and `satisfies` are contextual, so with type arguments of its own (`satisfies<T>`), or before `?`, `:` or
-  // `extends`, the word names a type. A type or variable named `as` or `satisfies` with no type arguments, right before
-  // `|` or `&`, is read as the keyword.
+  // `as` and `satisfies` are contextual, so with type arguments of its own (`satisfies<T>`), within a longer name
+  // (`E.as`, `Row[as | Key]`), or before `?`, `:` or `extends`, the word names a type. The name is taken whole, as
+  // `skipConstituent` reads it, so only a word standing alone is a keyword. A type or variable named `as` or
+  // `satisfies` with no type arguments, standing alone right before `|` or `&`, is read as the keyword.
   const skipBeforeOperator = (q) => {
     const b = skipSpace(q - 1);
-    const { s, w } = wordEndingAt(b);
-    if (src[s] !== '.' && (w === 'as' || w === 'satisfies' || w === 'extends')) return q - 1;
+    const s = skipName(b);
+    let word = '';
+    for (let k = s + 1; k <= b; k += 1) word += src[k];
+    if (word === 'as' || word === 'satisfies' || word === 'extends') return q - 1;
     const t = skipConstituent(b);
     return t === null ? q - 1 : t;
   };
