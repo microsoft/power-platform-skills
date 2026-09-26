@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const {
   compareSemver,
@@ -97,6 +97,19 @@ function git(cwd, ...args) {
   });
 }
 
+// On Windows, spell a folder with its 8.3 short name when it has one (C:\Users\RUNNER~1\...). The
+// GitHub Windows runner's temp directory is spelled that way while git reports the long name, which is
+// how the version check once pointed outside its own repository; spelling it short here reproduces that
+// on any Windows machine, not only on the runner.
+function shortPathOnWindows(p) {
+  if (process.platform !== 'win32') return p;
+  // A shell string, not an argv array: Node would escape the inner quotes and cmd would read them
+  // literally, so `for` would echo a mangled path instead of the short name.
+  const r = spawnSync(`for %I in ("${p}") do @echo %~sI`, { shell: true, encoding: 'utf8' });
+  const out = String(r.stdout || '').trim();
+  return out && fs.existsSync(out) ? out : p;
+}
+
 function writePluginManifest(pluginDir, version) {
   fs.mkdirSync(path.join(pluginDir, '.plugin'), { recursive: true });
   fs.writeFileSync(path.join(pluginDir, '.plugin', 'plugin.json'), JSON.stringify({ name: 'model-apps', version }));
@@ -124,7 +137,7 @@ function runScript(scriptPath, cwd) {
 }
 
 test('check-version compares against the PLUGIN clone, not the git repo it is run from', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'check-version-e2e-'));
+  const tmp = shortPathOnWindows(fs.mkdtempSync(path.join(os.tmpdir(), 'check-version-e2e-')));
   try {
     // The plugin's own repository: origin/main publishes 1.1.0 after this clone was taken at 1.0.0.
     git(tmp, 'init', '-q', '--bare', 'origin.git');
