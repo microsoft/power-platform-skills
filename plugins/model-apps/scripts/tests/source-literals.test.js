@@ -660,11 +660,12 @@ test('navigation regex after relational greater-than remains visible', () => {
 // walks back over the others to the `as`: missing it read `/ count}/` as a regex, and the page lost its default
 // export. And angle brackets around an expression operator are comparisons even after a cast — pairing them as type
 // arguments hid a navigation call. Every expectation matches TypeScript's parser.
-test('cast type arguments reach their `as` through intersections and unions, and never span an expression operator', () => {
+test('a cast\'s type arguments reach its `as` or `satisfies` through unions, intersections and conditional types, and never span an expression operator', () => {
   const brand = 'type Brand<T> = { readonly __brand: T };\nconst total = 12, count = 2;\n';
   const complete = {
     'intersection cast before division': `${brand}const label = \`\${total as number & Brand<"USD"> / count}/month\`;\nexport default () => <p>{label}</p>;`,
-    'union cast with a qualified name before division': 'namespace B { export type C<D> = D; }\nconst value = 4, n = 2;\nconst v = `${value as string | B.C<number> / n}`;\nexport default () => null;',
+    'union cast with a qualified name before division': 'namespace B { export type C<D> = D; }\nconst value = 4, n = 2;\nconst v = `${value as string | B.C<number> / n}/month`;\nexport default () => <p>{v}</p>;',
+    'a qualified constituent before the name': 'namespace B { export type C = number; }\ntype Z<Q> = Q;\nconst value = 4, n = 2;\nconst v = `${value as B.C | Z<number> / n}/month`;\nexport default () => <p>{v}</p>;',
   };
   for (const [label, code] of Object.entries(complete)) {
     assert.equal(hasDefaultExport(code), true, label);
@@ -695,7 +696,7 @@ test('cast type arguments reach their `as` through intersections and unions, and
   for (const [label, code] of Object.entries({
     'a type parameter default in a cast': `${d}const label = \`\${total as ReturnType<<T = unknown>(x: T) => number> / count}/month\`;\nexport default () => <p>{label}</p>;`,
     'a mapped-type modifier in a cast': `${d}const label = \`\${total as ReturnType<(x: { +readonly [K in "v"]: number }) => number> / count}/month\`;\nexport default () => <p>{label}</p>;`,
-    'eighteen union constituents': `${union.map((n) => `type ${n} = number;`).join('\n')}\ntype Z<Q> = Q;\n${d}const v = \`\${total as ${union.join(' | ')} | Z<number> / count}\`;\nexport default () => null;`,
+    'eighteen union constituents': `${union.map((n) => `type ${n} = number;`).join('\n')}\ntype Z<Q> = Q;\n${d}const v = \`\${total as ${union.join(' | ')} | Z<number> / count}/month\`;\nexport default () => <p>{v}</p>;`,
   })) {
     assert.equal(hasDefaultExport(code), true, label);
     assert.equal(endsMidStatement(code), false, label);
@@ -743,7 +744,7 @@ test('cast type arguments reach their `as` through intersections and unions, and
   }
   assert.deepEqual(navReferencedKeys(`type Row = { qty: number };\ntype Key = "qty";\n${cmp}const m = \`\${low as Row[Key] < high && count > /}/.exec(text)!.index ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}\`;\nexport default () => null;`), ['details']);
   // An indexed type is still a constituent before the head: `Row[Key] & Brand<"x">` casts.
-  const indexedEarlier = `type Row = { qty: number };\ntype Key = "qty";\ntype Brand<T> = { __b: T };\n${d}const label = \`\${total as Row[Key] & Brand<"x"> / count}\`;\nexport default () => null;`;
+  const indexedEarlier = `type Row = { qty: number };\ntype Key = "qty";\ntype Brand<T> = { __b: T };\n${d}const label = \`\${total as Row[Key] & Brand<"x"> / count}/month\`;\nexport default () => <p>{label}</p>;`;
   assert.equal(endsMidStatement(indexedEarlier), false);
   assert.equal(hasDefaultExport(indexedEarlier), true);
   // A cast whose type is itself conditional: the walk steps back over `extends … ? … :` to the `as`.
@@ -756,7 +757,7 @@ test('cast type arguments reach their `as` through intersections and unions, and
   for (const [label, code] of Object.entries({
     'a union true branch': `${vd}const label = \`\${total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`,
     'a union constraint': `${vd}const label = \`\${total as Value extends string | undefined ? 0 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`,
-    'a union checked type': `${vd}const label = \`\${total as number | Value extends undefined ? 0 : NonNullable<Value> / count}\`;\nexport default () => null;`,
+    'a union checked type': `${vd}const label = \`\${total as number | Value extends undefined ? 0 : NonNullable<Value> / count}/month\`;\nexport default () => <p>{label}</p>;`,
   })) {
     assert.equal(hasDefaultExport(code), true, label);
     assert.equal(endsMidStatement(code), false, label);
@@ -785,6 +786,23 @@ test('cast type arguments reach their `as` through intersections and unions, and
     assert.equal(hasDefaultExport(code), true, `a leading union after \`${keyword}\``);
     assert.equal(endsMidStatement(code), false, `a leading union after \`${keyword}\``);
   }
+  // `as` and `satisfies` are contextual keywords, so each may name a type. With type arguments of its own, or before
+  // `?`, `:` or `extends`, such a name is a constituent, never the cast keyword; so is a member named so (`E.as`).
+  for (const [label, [alias, type]] of Object.entries({
+    'a generic named `satisfies`': ['type satisfies<T> = T;\n', 'satisfies<number> & NonNullable<Value>'],
+    'a generic named `as`': ['type as<T> = T;\n', 'as<number> | NonNullable<Value>'],
+    'a constraint named `satisfies`': ['type satisfies = undefined;\n', 'Value extends satisfies ? 0 : NonNullable<Value>'],
+    'a checked type named `as`': ['type as = number | undefined;\n', 'as extends undefined ? 0 : NonNullable<Value>'],
+    'a true branch named `as`': ['type as = 0;\n', 'Value extends undefined ? as : NonNullable<Value>'],
+  })) {
+    const code = `${alias}${vd}const label = \`\${total as ${type} / count}/month\`;\nexport default () => <p>{label}</p>;`;
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(endsMidStatement(code), false, label);
+    assert.equal(endsMidStatement(`${alias}${vd}export default () => total as ${type} / count /`), true, `${label}, cut`);
+  }
+  const member = 'enum E { as, b }\ntype Z<Q> = Q;\ntype T = E.as | Z<number>\n/}/.test("a}") && console.log(1);\nexport default () => null;';
+  assert.equal(hasUnbalancedBrackets(member), false, 'a member named `as`');
+  assert.equal(endsMidStatement(member), false, 'a member named `as`');
   // A leading operator decides nothing by itself: after `)` it is an expression's `|`, and the `/` starts a regex.
   const notCast = `${vd}const bits = (count) | total < count || count > /}/.exec("a}")!.index;\nexport default () => null;`;
   assert.equal(hasUnbalancedBrackets(notCast), false);

@@ -95,12 +95,12 @@ function greaterThanEndsOperand(src, close) {
 function greaterThanClosesTypeArguments(src, close) {
   const open = matchingTypeArgumentOpen(src, close);
   if (open === -1) return false;
-  return typeArgumentOpenFollowsCastOrAnnotation(src, open);
+  return typeArgumentOpenFollowsCast(src, open);
 }
 
 // The `<` that a type-argument `>` at `close` closes, by angle depth, or -1. Function types are valid inside type
 // arguments (`ReturnType<() => number>`): the arrow's `>` is not an angle close. The span is not judged here. Only a
-// cast gives type-argument context (typeArgumentOpenFollowsCastOrAnnotation), and after `as` or `satisfies`
+// cast gives type-argument context (typeArgumentOpenFollowsCast), and after `as` or `satisfies`
 // TypeScript parses a type, where `Name<` is always type arguments, so no valid code puts an expression there.
 function matchingTypeArgumentOpen(src, close) {
   let depth = 1;
@@ -122,15 +122,19 @@ function matchingTypeArgumentOpen(src, close) {
 const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined', 'null', 'number', 'string',
   'boolean', 'bigint', 'symbol', 'object', 'this', 'true', 'false']);
 
-// Is the `<` at `open` the start of type arguments in a cast or annotation? The type they belong to may be one
-// constituent of an intersection or union, so the walk back steps over the others to reach `as`/`satisfies`/`:`:
-//   total as number & Brand<"USD"> / count     `Brand<…>` is part of the cast; `/` is division
-//   value as A | B.C<D> / n                    the same with a union and a qualified name
+// Is the `<` at `open` the start of a cast's type arguments? After `as` or `satisfies` TypeScript parses a type, so
+// there `Name<` IS type arguments and a `/` after their `>` divides. The name may be one part of a larger type, so the
+// walk back steps over the rest of it to reach the keyword:
+//   total as number & Brand<"USD"> / count     a constituent of an intersection or union
+//   value as A | B.C<D> / n                    a qualified name
 //   total satisfies "n/a" | NonNullable<number> / count    a string-literal constituent
-// Each constituent is a (qualified) name, optionally with its own closed type arguments, or a string literal (its
-// quotes are kept when the lexer blanks it). Anything else ends the walk and the `<` is not taken for type
-// arguments. The walk is bounded by distance, like the other scans here, not by a count of constituents.
-function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
+//   total as | -1 | Brand<"USD"> / count       a type that leads with its operator, and a signed literal
+//   total as V extends U ? 0 : NonNullable<V> / count     the false branch of a conditional type
+// Each constituent is a (qualified or indexed) name, optionally with its own closed type arguments, a numeric literal
+// with its sign, or a string literal (its quotes are kept when the lexer blanks it). Anything else ends the walk and
+// the `<` is not taken for type arguments. The walk is bounded by distance, like the other scans here, not by a count
+// of constituents.
+function typeArgumentOpenFollowsCast(src, open) {
   const skipSpace = (i) => { while (i >= 0 && /\s/.test(src[i])) i -= 1; return i; };
   const skipName = (i) => { while (i >= 0 && /[\w$.\]\[]/.test(src[i])) i -= 1; return i; };
   const wordEndingAt = (e) => { let s = e; while (s >= 0 && /[\w$]/.test(src[s])) s -= 1; let w = ''; for (let k = s + 1; k <= e; k += 1) w += src[k]; return { s, w }; };
@@ -150,14 +154,22 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     }
     const s = skipName(r);
     if (s === r) return null;
-    // `as`, `satisfies` and `extends` are where a type begins, never a constituent: a type may lead with its operator
-    // (`as | A`, `extends | 0 | 1`), and the walk must stop at the keyword, not read it as a name.
-    let word = '';
-    for (let k = s + 1; k <= r; k += 1) word += src[k];
-    if (word === 'as' || word === 'satisfies' || word === 'extends') return null;
     // A negative numeric literal type keeps its sign: `-1 | 0`.
     const t = skipSpace(s);
     return src[t] === '-' && /\d/.test(src[s + 1]) ? t - 1 : s;
+  };
+  // Steps back from a union or intersection operator at `q` over the constituent before it. When the operator leads its
+  // type there is none, and it returns the index before the operator. It leads after a non-name (`? | 0`, `: | A`), and
+  // after a bare `as`, `satisfies` or `extends` (`as | A`, `extends | 0 | 1`): only there are those words keywords.
+  // `as` and `satisfies` are contextual, so with type arguments of its own (`satisfies<T>`), or before `?`, `:` or
+  // `extends`, the word names a type. A type or variable named `as` or `satisfies` with no type arguments, right before
+  // `|` or `&`, is read as the keyword.
+  const skipBeforeOperator = (q) => {
+    const b = skipSpace(q - 1);
+    const { s, w } = wordEndingAt(b);
+    if (src[s] !== '.' && (w === 'as' || w === 'satisfies' || w === 'extends')) return q - 1;
+    const t = skipConstituent(b);
+    return t === null ? q - 1 : t;
   };
   // Steps back over a union or intersection of constituents that ends at `r` (`0 | 1`, `string | undefined`), for the
   // parts of a conditional type. A leading operator is part of it: `| 0 | 1`. Returns the index before it, or null.
@@ -166,9 +178,7 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     while (s !== null) {
       const q = skipSpace(s);
       if (!((src[q] === '&' || src[q] === '|') && src[q - 1] !== src[q])) return s;
-      const t = skipConstituent(skipSpace(q - 1));
-      if (t === null) return q - 1;
-      s = t;
+      s = skipBeforeOperator(q);
     }
     return null;
   };
@@ -187,10 +197,9 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     const q = skipSpace(p);
     const op = src[q];
     if ((op === '&' || op === '|') && src[q - 1] !== op) {
-      // With no constituent before it, the operator leads its type (`as | A | B<C>`, a false branch `: | A | B<C>`), and
-      // what comes before it decides, as it does for any other type: a cast keyword, a conditional's `:`, or neither.
-      const r = skipConstituent(skipSpace(q - 1));
-      p = r === null ? q - 1 : r;
+      // The constituent before the operator, or, when the operator leads its type (`as | A | B<C>`, a false branch
+      // `: | A | B<C>`), nothing: what comes before it then decides, as it does for any other type.
+      p = skipBeforeOperator(q);
       continue;
     }
     // A conditional type's false branch: `as V extends U ? 0 | 1 : NonNullable<V> / count`. Step back over the true

@@ -228,7 +228,8 @@ downloads that round-trip Choice columns.
   read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
   a comment right before JSX or a regex, and a `/` after a property named like a keyword
   (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
-  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines), and a
+  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines, and the
+  name they belong to one part of a union, an intersection or a conditional type's false branch), and a
   file that ends in a member export such as `export default pages.Home` or a self-closing element
   with a callback prop. Two shapes the text alone cannot tell from a cut-off page are refused on
   purpose, and the page rules tell workers to avoid them: a line holding only `...` is always a
