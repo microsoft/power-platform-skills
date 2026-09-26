@@ -170,6 +170,34 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the guard (exit 0 for an outside write
   assert.equal(runHook(payload, { MODEL_APPS_DISABLE_HOOKS: '1' }).status, 0);
 });
 
+test('MODEL_APPS_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => {
+  const preload = path.join(__dirname, 'hook-readdir-throw-preload.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    'const real = fs.readdirSync;',
+    "fs.readdirSync = function patched(p, ...args) {",
+    "  if (String(p).includes('plugins' + require('node:path').sep + 'model-apps' + require('node:path').sep + 'skills')) {",
+    "    const err = new Error('EACCES: permission denied, scandir skills');",
+    "    err.code = 'EACCES';",
+    "    throw err;",
+    '  }',
+    '  return real.call(this, p, ...args);',
+    '};',
+  ].join('\n'));
+  try {
+    const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+    const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+    const res = spawnSync(process.execPath, ['-r', preload, HOOK], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      env: { ...process.env, MODEL_APPS_DISABLE_HOOKS: '1' },
+    });
+    assert.equal(res.status, 0, res.stderr);
+  } finally {
+    fs.rmSync(preload, { force: true });
+  }
+});
+
 test('hook stdin decoding preserves multibyte paths split across pipe chunks', async () => {
   const outside = path.join(path.parse(cwd).root, 'model-apps-guard-東京', 'evil.ts');
   const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };

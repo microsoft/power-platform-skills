@@ -31,7 +31,6 @@
 const fs = require('fs');
 const path = require('path');
 const { blankNonCodePreservingTemplateExpressions, commentRanges } = require('../scripts/lib/source-literals.js');
-const { readUtf8Stream } = require('../scripts/lib/modelapps-hook-utils.js');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const VERIFIED_ICONS_PATH = path.join(PLUGIN_ROOT, 'references', 'verified-icons.txt');
@@ -43,6 +42,8 @@ const ICON_MODULE = '@fluentui/react-icons';
 if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISABLE_HOOKS === 'true') {
   process.exit(0);
 }
+
+const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';

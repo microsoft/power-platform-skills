@@ -32,8 +32,8 @@
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
-const { execFileSync, execFile } = require('child_process');
-const { dataverseRequest, getAuthToken, parseArgs, validateFlags } = require('./lib/dataverse-auth');
+const { execFile } = require('child_process');
+const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags } = require('./lib/dataverse-auth');
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
@@ -55,37 +55,38 @@ function parseEnvUrl(argv) {
   return positional || null;
 }
 
-function runQuiet(cmd, args) {
-  try {
-    return execFileSync(cmd, args, {
-      encoding: 'utf8',
-      timeout: 15000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-// The same contract as runQuiet (trimmed stdout, or null on any failure), but the child runs in the
-// background, so a slow CLI overlaps the synchronous probes that follow instead of adding to them.
+// Trimmed stdout, or null on any failure. The child runs in the background so the event loop stays
+// free to drain other CLI stdout and service their timeout timers while Azure CLI and PAC cold-start.
 function runQuietAsync(cmd, args) {
-  return new Promise((resolve) => {
+  let child = null;
+  let settled = false;
+  const promise = new Promise((resolve) => {
     try {
-      const child = execFile(cmd, args, {
+      child = execFile(cmd, args, {
         encoding: 'utf8',
         timeout: 15000,
         windowsHide: true,
         shell: process.platform === 'win32',
-      }, (error, stdout) => resolve(error ? null : String(stdout || '').trim()));
+      }, (error, stdout) => {
+        settled = true;
+        resolve(error ? null : String(stdout || '').trim());
+      });
       // execFile always opens a stdin pipe; close it, matching runQuiet's 'ignore', so a CLI that
       // checks stdin can never wait on it.
       if (child && child.stdin) child.stdin.end();
     } catch {
+      settled = true;
       resolve(null);
     }
   });
+  return {
+    promise,
+    cancel() {
+      if (!settled && child && typeof child.kill === 'function') {
+        child.kill();
+      }
+    },
+  };
 }
 
 function emit(payload) {
@@ -134,14 +135,17 @@ async function main() {
   // Every probe below is a cold CLI start. Measured on Windows: `pac org who` ~7 s, and each `az`
   // call ~3-5 s. Run one after another (az --version, az account show, pac, then az again for the
   // WhoAmI token), the preflight cost ~19 s at the start of every /genpage and /app-builder run.
-  // pac needs nothing from az, so it is started FIRST and runs while the az probes hold this process.
-  const pacOrgPending = runQuietAsync('pac', ['org', 'who']);
+  // pac needs nothing from az, so it is started FIRST and runs while the az probes run.
+  const pacOrgProbe = runQuietAsync('pac', ['org', 'who']);
 
   // 1) az login. `az account show` answers "installed?" and "logged in?" together on the happy path,
   //    so `az --version` runs only to tell those two failures apart.
-  const azUser = runQuiet('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv']);
+  const azUser = await runQuietAsync('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv']).promise;
   if (!azUser) {
-    if (runQuiet('az', ['--version']) == null) {
+    if (await runQuietAsync('az', ['--version']).promise == null) {
+      // This branch returns before the pac probe is awaited. Kill the child explicitly so a
+      // non-detached PAC process cannot outlive the preflight after its parent exits.
+      pacOrgProbe.cancel();
       return emit(
         buildResult({
           blocker: 'az_missing',
@@ -149,6 +153,9 @@ async function main() {
         })
       );
     }
+    // Same early-return hazard as az_missing: once we know az is installed but logged out, the
+    // pending PAC result cannot affect this verdict, so cancel it before emitting.
+    pacOrgProbe.cancel();
     return emit(
       buildResult({
         blocker: 'az_not_logged_in',
@@ -161,11 +168,11 @@ async function main() {
   // dataverseRequest below reuses it instead of paying another az cold start after pac returns. A
   // failure here is not reported: WhoAmI acquires again and reports it with the right blocker.
   if (envUrl) {
-    try { getAuthToken(envUrl); } catch { /* reported by WhoAmI */ }
+    try { await getAuthTokenAsync(envUrl); } catch { /* reported by WhoAmI */ }
   }
 
   // 2) pac user + env URL (best-effort — pac is NOT required for the Dataverse build path)
-  const pacOrg = await pacOrgPending;
+  const pacOrg = await pacOrgProbe.promise;
   let pacUser = null;
   if (pacOrg) {
     const m = pacOrg.match(/Connected as\s+([^\s\r\n]+)/i);
