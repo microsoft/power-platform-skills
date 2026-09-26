@@ -144,6 +144,25 @@ test('getAuthToken reuses a non-empty token per normalized resource URL', () => 
   assert.deepEqual(calls, ['https://contoso.crm.dynamics.com', 'https://fabrikam.crm.dynamics.com']);
 });
 
+test('a fresh acquire bypasses the memo and replaces the token it holds', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  const tokens = ['OLD\n', 'NEW\n'];
+  let calls = 0;
+  const exec = () => tokens[Math.min(calls++, tokens.length - 1)];
+  const url = 'https://fabrikam.crm4.dynamics.com';
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'OLD');
+    assert.equal(getAuthToken(url, { exec }), 'OLD', 'an ordinary repeat is served from the memo');
+    // A 401 refresh must not be handed the token the server just rejected.
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'NEW');
+    assert.equal(getAuthToken(url, { exec }), 'NEW', 'the refreshed token replaces the memoized one');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(calls, 2);
+});
 test('getAuthToken does not cache a null token result', () => {
   const { getAuthToken } = require('../lib/dataverse-auth.js');
   let calls = 0;

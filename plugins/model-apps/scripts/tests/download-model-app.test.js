@@ -3114,6 +3114,12 @@ test('parseDownloadedPages treats present malformed dataSources as unreadable co
       '22222222-2222-2222-2222-222222222222',
       '33333333-3333-3333-3333-333333333333',
     ]);
+    // The reason is shown to the maker, so it must name the problem rather than a JavaScript error
+    // such as "config.dataSources.find is not a function".
+    const reason = (id) => unreadable.find((u) => u.pageId === id).reason;
+    assert.match(reason('11111111-1111-1111-1111-111111111111'), /dataSources is present but is not an array/);
+    assert.match(reason('22222222-2222-2222-2222-222222222222'), /dataSources is present but is not an array/);
+    assert.match(reason('33333333-3333-3333-3333-333333333333'), /non-empty table logical names/);
     assert.deepStrictEqual(byId.get('44444444-4444-4444-4444-444444444444').dataSources, ['contoso_ticket', 'contoso_asset']);
     assert.deepStrictEqual(byId.get('55555555-5555-5555-5555-555555555555').dataSources, [], 'an absent key is a valid unbound page');
   } finally {
