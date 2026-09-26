@@ -324,6 +324,37 @@ test('transient auto-retry: no retries in dry-run', async () => {
 const cell = (fn) => ({ control: { fieldName: fn } });
 const formOf = (fields) => ({ tabs: [{ columns: [{ sections: [{ rows: fields.map((f) => ({ cells: [cell(f)] })) }] }] }] });
 
+function makeTestWorkspace(name) {
+  const dir = path.join(__dirname, '.tmp-prune-approvals', `${name}-${process.pid}-${Date.now()}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function cleanupTestWorkspace(dir) {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function approvalRecordPath(workspaceDir) {
+  return path.join(workspaceDir, 'destructive-approval.json');
+}
+
+function readApprovalRecord(workspaceDir) {
+  return JSON.parse(fs.readFileSync(approvalRecordPath(workspaceDir), 'utf8'));
+}
+
+function writeApprovalRecord(workspaceDir, record) {
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.writeFileSync(approvalRecordPath(workspaceDir), JSON.stringify(record, null, 2) + '\n', 'utf8');
+}
+
+function successfulRunBuild(capture) {
+  return async (spec, runOpts) => {
+    if (capture) capture.push(runOpts);
+    return { ok: true, created: {}, skipped: { layout: [] } };
+  };
+}
+
 test('envTruthy: only 1/true (case-insensitive) count as set', () => {
   const { envTruthy } = require(path.join(__dirname, '..', 'build-model-app.js'));
   assert.strictEqual(envTruthy('1'), true);
@@ -361,6 +392,125 @@ test('destructive gate: build halts on a form-field removal without --allow-dest
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /allow-destructive/.test(e) && /new_priority/.test(e)), 'names the field it would remove');
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('destructive gate: prune:false form removal is not refused and reaches runBuild', async () => {
+  const { sdk } = mockSdk();
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });
+  const deployedForm = formOf(['new_name', 'new_priority']);
+  const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+  const runOpts = [];
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(runOpts.length, 1, 'runBuild was reached');
+});
+
+test('destructive gate: refusal writes the approval record without changing the refusal message', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('refusal-record');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: { deployedTargets: ['entity:new_customer', 'entity:new_ticket'], wantTargets: ['entity:new_customer'] } };
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild() });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((e) => e.includes('refusing 2 destructive operation(s) without --allow-destructive:\n  • form "Ticket" (new_ticket) — removes field(s): new_priority\n  • app sitemap — drops navigation target(s): entity:new_ticket')), 'refusal text stays the maker-facing list');
+    const record = readApprovalRecord(workspaceDir);
+    assert.strictEqual(record.schemaVersion, 1);
+    assert.deepStrictEqual(record.formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+    assert.deepStrictEqual(record.sitemapRemovals, ['entity:new_ticket']);
+    assert.match(record.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: approved unchanged removals proceed with an authorized map and consume the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('approved-unchanged');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    const runOpts = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+    assert.strictEqual(r.ok, true);
+    assert.ok(runOpts[0].authorizedFormRemovals instanceof Map, 'authorized removals are passed to the engine');
+    assert.deepStrictEqual([...runOpts[0].authorizedFormRemovals.get('form-1')], ['new_priority']);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false, 'record consumed only after success');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a newly discovered field removal after approval halts and refreshes the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('new-field');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority', 'new_newmakerfield']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /new_newmakerfield/.test(e) && !/new_priority/.test(e)), 'only the new field is listed');
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals['form-1'].fields, ['new_priority', 'new_newmakerfield']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a newly discovered sitemap drop after approval halts and refreshes the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('new-sitemap');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: {}, sitemapRemovals: ['entity:new_ticket'] });
+    const state = { collision: { appExists: true, appUnique: 'new_supportdesk' }, forms: [], sitemap: { deployedTargets: ['entity:new_customer', 'entity:new_ticket', 'url:https://contoso.example/help'], wantTargets: ['entity:new_customer'] } };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /url:https:\/\/contoso\.example\/help/.test(e) && !/entity:new_ticket/.test(e)), 'only the new sitemap drop is listed');
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).sitemapRemovals, ['entity:new_ticket', 'url:https://contoso.example/help']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an unreadable approval record fails closed', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('bad-record');
+  try {
+    fs.writeFileSync(approvalRecordPath(workspaceDir), '{not json', 'utf8');
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /destructive-approval\.json/.test(e) && /delete it|re-run without --allow-destructive/.test(e)));
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: --allow-destructive without a record proceeds but still fences this run', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('no-record');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    const runOpts = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual([...runOpts[0].authorizedFormRemovals.get('form-1')], ['new_priority']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
 });
 
 test('destructive gate: --allow-destructive lets the same build proceed', async () => {
@@ -420,6 +570,24 @@ test('collision preflight: silent when nothing collides', async () => {
   const logs = [];
   await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
   assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
+});
+
+test('discoverOpDiffState skips deployed form reads when prune:false means nothing can be removed', async () => {
+  const provision = {
+    queryRecords: async (set) => (set === 'solution' || set === 'appmodule' ? [] : [{ publisherid: 'pub-1' }]),
+    findArtifact: async () => { throw new Error('should not resolve a prune:false form'); },
+    fetchArtifact: async () => { throw new Error('should not fetch a prune:false form'); },
+    getArtifact: async () => { throw new Error('should not read a prune:false form'); },
+  };
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    forms: [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', prune: false, tabs: [{ sections: [{ fields: ['new_name'] }] }] }],
+    appShell: { areas: [] },
+  };
+  const state = await discoverOpDiffState(spec, provision);
+  assert.deepStrictEqual(state.forms, []);
 });
 
 test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYPE) — no name-ambiguity halt on same-named Main/QuickView/Card', async () => {
