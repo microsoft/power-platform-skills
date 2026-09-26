@@ -213,7 +213,20 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'unknown --page-id as a create and would make a new page and report it as an update.',
       });
     }
-    const known = await enumerate();
+    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
+    // The existence and membership listings are independent reads, each its own pac process of about
+    // five seconds, so they run together. Measured live: a pair run one after the other averaged
+    // 10.6 s and an overlapped pair 5.6 s, and all 20 overlapped listings succeeded. The VERDICTS are
+    // still reached in the original order (existence first), so a given failure is reported as it
+    // was before, and a listing that throws surfaces only when its verdict is reached: a page that
+    // does not exist is reported as absent even if the app listing also broke.
+    const settle = (fn) => Promise.resolve().then(fn).then((value) => ({ value }), (error) => ({ failed: true, error }));
+    const [existence, membership] = await Promise.all([
+      settle(enumerate),
+      enumeratePages ? settle(() => enumeratePages(flags['app-id'], { includeUnpublished: true })) : null,
+    ]);
+    if (existence.failed) throw existence.error;
+    const known = existence.value;
     if (!known || known.ok !== true) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} exists before updating it `
@@ -232,7 +245,6 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     // and then writes the page under that app context, which renames it and attaches its table
     // bindings to the wrong app. The app-scoped list is sitemap/navigation membership, so prove the
     // page is actually placed in THIS app before the binding probe downloads content or upload writes.
-    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
     if (!enumeratePages) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} — this pac `
@@ -240,7 +252,8 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'page through the wrong app id would rename it and attach its tables to that app.',
       });
     }
-    const appPages = await enumeratePages(flags['app-id'], { includeUnpublished: true });
+    if (membership.failed) throw membership.error;
+    const appPages = membership.value;
     if (!appPages || appPages.ok !== true) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `

@@ -20,6 +20,9 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
   `az` probes (every probe is asynchronous, and a pending pac probe is cancelled on an early exit), calls `az --version` only to explain a failed `az account show`, and fetches the WhoAmI
   token while pac runs (measured on Windows: 24–32 s before, 16–19 s after). Scripts also reuse one
   `az` token per process instead of starting the CLI for every request, and replace it on a 401.
+- **A `/genpage` update checks its target in about half the time.** The two listings that prove the
+  page exists and is in the app now run together (measured: 10.6 s before, 5.6 s after), because a
+  pac call no longer blocks the process while it runs.
 
 ### Fixed
 

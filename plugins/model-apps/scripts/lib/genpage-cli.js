@@ -2,7 +2,7 @@
 // Injectable wrapper around `pac model genpage upload/list` — the seam the build's pages phase uses
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -38,7 +38,7 @@ function quoteArg(a) {
   return `"${trailingSlashesDoubled}"`;
 }
 
-// Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
+// Build the spawn invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
 // which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
 // line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
 // embedded quotes and other shell metacharacters round-trip verbatim instead of being mangled by
@@ -49,15 +49,59 @@ function quoteArg(a) {
 function buildPacInvocation(args, platform = process.platform) {
   const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
   if (platform === 'win32') {
-    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { encoding: 'utf8', shell: true } };
+    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { shell: true } };
   }
-  return { command: 'pac', args: clean, options: { encoding: 'utf8' } };
+  return { command: 'pac', args: clean, options: {} };
 }
 
 function runPac(args) {
   const inv = buildPacInvocation(args);
-  const r = inv.args ? spawnSync(inv.command, inv.args, inv.options) : spawnSync(inv.command, inv.options);
-  return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
+  // length of every pac call — about five seconds for one `pac model genpage list` — so two
+  // independent listings could not overlap even when a caller awaited them together (an update in
+  // genpage-upload.js does). Every caller already awaits `run`, and branches on `status` without a
+  // catch, so a child that cannot be started resolves as a failed result, as spawnSync's did.
+  //
+  // Output is collected as raw Buffers and decoded ONCE, when the child closes. Decoding each chunk
+  // as it arrives corrupts a multibyte UTF-8 character that a pipe read happens to split, and pac
+  // prints page names, which are user text; spawnSync's `encoding: 'utf8'` decoded the whole buffer,
+  // so this keeps that behaviour. It also drops spawnSync's 1 MiB maxBuffer, past which the child
+  // was killed and its output truncated.
+  const options = { ...inv.options, stdio: ['ignore', 'pipe', 'pipe'] };
+  return new Promise((resolve) => {
+    const out = [];
+    const err = [];
+    let settled = false;
+    const finish = (status, launchError) => {
+      if (settled) return;
+      settled = true;
+      const stderr = Buffer.concat(err).toString('utf8');
+      resolve({
+        status: status == null ? 1 : status,
+        stdout: Buffer.concat(out).toString('utf8'),
+        // POSIX reports a missing pac as a spawn 'error' (ENOENT) with nothing on stderr; carry its
+        // message so the diagnostic says why instead of "pac exited 1 with no output".
+        stderr: stderr || (launchError ? String(launchError.message || launchError) : ''),
+      });
+    };
+    let child;
+    try {
+      child = inv.args ? spawn(inv.command, inv.args, options) : spawn(inv.command, options);
+    } catch (e) {
+      finish(1, e);
+      return;
+    }
+    // EMFILE/ENFILE leave the stdio pipes unset, hence the guards.
+    if (child.stdout) child.stdout.on('data', (c) => out.push(c));
+    if (child.stderr) child.stderr.on('data', (c) => err.push(c));
+    // 'error' (the child could not be started) may or may not be followed by 'close'; `finish`
+    // keeps whichever comes first. 'close' rather than 'exit': 'exit' fires as soon as pac itself
+    // ends, while a process it started can still hold the pipes and write. 'close' waits for every
+    // holder to let go, which is also when spawnSync returned (measured: a grandchild writing 1 s
+    // after its parent exited was captured by spawnSync and 'close', and missed by 'exit').
+    child.on('error', (e) => finish(1, e));
+    child.on('close', (code) => finish(code));
+  });
 }
 
 // Extract the "Page ID: <guid>" pac prints on a successful upload.
