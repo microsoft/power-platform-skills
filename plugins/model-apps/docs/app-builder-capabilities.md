@@ -112,8 +112,8 @@ apart deliberately.
 - **Editing an existing view is additive.** A rebuild appends spec columns the view lacks and keeps
   every column already there, so a column a maker added in the designer survives — and a column
   removed from the spec, or a new order, does not apply. Filters and sort are not re-applied either
-  (the build warns). `--verify` fails on a missing spec column and on a filter/sort divergence, but
-  not on an extra column, so it cannot confirm a removal. Remove or reorder view columns in Maker, or
+  (the build warns). `--verify` fails on a missing spec column, filter condition or sort key (or
+  authored sort keys out of order), but not on extra deployed ones, so it cannot confirm a removal. Remove or reorder view columns in Maker, or
   tear down and rebuild.
 - Choice-column charts.
 
