@@ -73,11 +73,11 @@ const {
   formEventsRegionIntent,
   viewColumnsIntent,
   firstColumnSectionsPointer,
-  cellFitsInRow,
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
+const { fitsGrid } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -2278,7 +2278,7 @@ async function runSdkBuild(spec, opts = {}) {
             // apply sees the width already applied and has nothing to do.
             const width = Number(patch.columns);
             reflow = false;
-            if (!(live.rows || []).every((r) => rowWidth((r && r.cells) || []) <= width)) {
+            if (!fitsGrid(live.rows || [], width)) {
               delete patch.columns;
               reportLayoutSkip(`form section '${live.name || pointer}' keeps its ${live.columns}-column grid: narrowing it `
                 + `to ${width} would overflow rows that cannot be re-flowed without moving a cell into a row-spanning `
@@ -2404,6 +2404,22 @@ async function runSdkBuild(spec, opts = {}) {
     return false;
   };
   const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+  const maxRowspan = (rows) => Math.max(1, ...(rows || []).flatMap((r) => ((r && r.cells) || []).map((c) => Number(c.rowspan) || 1)));
+  const fitsWithCellAtRow = (rows, rowIndex, cell, width) => {
+    const candidate = (rows || []).map((r) => ({ ...r, cells: ((r && r.cells) || []).slice() }));
+    while (candidate.length <= rowIndex) candidate.push({ cells: [] });
+    const row = candidate[rowIndex] || { cells: [] };
+    candidate[rowIndex] = { ...row, cells: [...((row && row.cells) || []), cell] };
+    return fitsGrid(candidate, width);
+  };
+  const firstAppendRowThatFits = (rows, cell, width) => {
+    const start = Math.max(0, (rows || []).length - 1);
+    const limit = (rows || []).length + maxRowspan(rows);
+    for (let rowIndex = start; rowIndex <= limit; rowIndex += 1) {
+      if (fitsWithCellAtRow(rows, rowIndex, cell, width)) return rowIndex;
+    }
+    return Math.max(0, (rows || []).length);
+  };
   // Whether any cell — a field or an empty spacer — comes after (rowIndex, cellIndex) in reading order.
   const cellFollows = (rows, rowIndex, cellIndex) => (rows || []).some((r, ri) => ri >= rowIndex
     && ((r && r.cells) || []).some((_, ci) => ri > rowIndex || ci > cellIndex));
@@ -2478,8 +2494,9 @@ async function runSdkBuild(spec, opts = {}) {
     const row = rows[location.rowIndex];
     const beforeCells = (row && row.cells) || [];
     const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
-    const overflows = rowsFromCells(afterCells, sec.columns).length > 1;
-    const unsafe = reflowBreaksReservation(rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r)));
+    const afterRows = rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r));
+    const overflows = !fitsGrid(afterRows, sec.columns);
+    const unsafe = reflowBreaksReservation(afterRows);
     if (overflows && unsafe) {
       if (rowWidth(afterCells) > rowWidth(beforeCells)) {
         // A WIDENING into an overflow: skipped whole, not half-applied. Applying it without the
@@ -2553,7 +2570,8 @@ async function runSdkBuild(spec, opts = {}) {
   // two single-width fields per row. The reconcile path used to ignore that entirely — every ADDED
   // field became its own single-cell row and every MOVED field was appended to the last row whatever
   // its width — so the same spec deployed a different shape depending only on whether the form
-  // already existed. `cellFitsInRow` is the create path's own rule, shared rather than restated.
+  // already existed. The effective-capacity check below is the create path's width rule plus
+  // any columns still reserved by row-spanning cells above the target row.
   //
   // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
   // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
@@ -2563,10 +2581,14 @@ async function runSdkBuild(spec, opts = {}) {
   const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
-    const lastIndex = rows.length - 1;
-    if (lastIndex >= 0 && cellFitsInRow(rows[lastIndex], wantCell, section.columns)) {
-      await provision.updateElement('form', formId, sectionPointer + '/rows/' + lastIndex,
-        { cells: [...(rows[lastIndex].cells || []), wantCell] });
+    const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
+    while ((section.rows || []).length < rowIndex) {
+      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
+      section.rows = [...(section.rows || []), { cells: [] }];
+    }
+    if (rowIndex < rows.length) {
+      await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
+        { cells: [...(rows[rowIndex].cells || []), wantCell] });
       return;
     }
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
@@ -2633,13 +2655,13 @@ async function runSdkBuild(spec, opts = {}) {
     // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
     // which silently skips the move (the `if (!row) return` guard below).
     const priorRowCount = targetRows.length;
-    let rowIndex = priorRowCount - 1;
-    if (rowIndex < 0 || !cellFitsInRow(targetRows[rowIndex], wantCell, targetSection.columns)) {
-      // Either the section this run just created has no row yet, or the last row is full. The SDK
-      // accepts a row with an empty cells array and serializes it correctly, so seed one and target
-      // it. `addElement` appends, so the new row's index is the PRE-add length.
+    let rowIndex = firstAppendRowThatFits(targetRows, wantCell, targetSection.columns);
+    while (rowIndex >= priorRowCount && ((targetSection.rows || []).length <= rowIndex)) {
+      // Either the section this run just created has no row yet, or all existing rows whose carried
+      // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an
+      // empty cells array and serializes it correctly, so seed rows until the chosen target exists.
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      rowIndex = priorRowCount;
+      targetSection.rows = [...(targetSection.rows || []), { cells: [] }];
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2873,7 +2895,7 @@ async function runSdkBuild(spec, opts = {}) {
   // before deleting ours so the table can be torn down — note that is a delete-enabler, NOT a perfect
   // restore of pre-build activation state (a form that was inactive before this build may be left
   // active after teardown).
-  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers) => {
+  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers, siblingFormIds = []) => {
     // Deactivating the OTHER main forms is only safe once OUR form is the entity default: if the
     // isdefault promote failed we must NOT deactivate the others, or the entity could be left with its
     // (now-deactivated) stock form still the default and no active default — a bricked form experience.
@@ -2890,7 +2912,27 @@ async function runSdkBuild(spec, opts = {}) {
       const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
       if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return promoted;
+    if (!promoted) return promoted;
+    if (typeof provision.queryRecords === 'function') {
+      for (const siblingId of siblingFormIds || []) {
+        if (!siblingId || String(siblingId) === String(formId)) continue;
+        try {
+          const rows = await provision.queryRecords('systemform', {
+            select: ['formid', 'isdefault'],
+            filter: `formid eq ${siblingId}`,
+            top: 1,
+          });
+          const sibling = rows && rows[0];
+          if (sibling && sibling.isdefault === true) {
+            await provision.updateRecord('systemform', String(sibling.formid || siblingId), { isdefault: false });
+          }
+        } catch (err) {
+          const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
+          if (typeof opts.warn === 'function') opts.warn(`could not clear the previous default Main form for '${entityLogical}': ${reason}`);
+        }
+      }
+    }
+    if (!deactivateOthers) return promoted;
     if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
@@ -3139,9 +3181,12 @@ async function runSdkBuild(spec, opts = {}) {
     // table is an environment-wide side effect.
     const promotedEntities = new Set();
     const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    const mainIdsByEntity = new Map(); // entity -> spec-declared Main form ids for sibling demotion
     defs.forEach((d, i) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
+      if (!mainIdsByEntity.has(key)) mainIdsByEntity.set(key, []);
+      if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
       const current = mainByEntity.get(key);
       // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
       if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
@@ -3157,7 +3202,7 @@ async function runSdkBuild(spec, opts = {}) {
       // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
       // bookkeeping below — a build that could not set the flag must not report a default form it
       // did not set, which is what `result.created.defaultForms` claims.
-      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true, mainIdsByEntity.get(entityLogical) || []);
       if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
