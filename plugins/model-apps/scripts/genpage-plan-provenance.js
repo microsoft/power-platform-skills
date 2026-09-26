@@ -20,14 +20,10 @@
 // what the run will touch — the page files of a create, the page id of an edit — and that is what is
 // compared: a stale plan from an earlier run, or one the planner re-derived, targets other pages.
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pagesTables } = require('./lib/page-file-targets.js');
-
-function sha256(text) {
-  return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
-}
+const { sha256 } = require('./lib/hash.js');
 
 // What a plan document targets.
 //   create:  the Pages table's File column — `## Pages` in the written plan, `### Pages (N total)`

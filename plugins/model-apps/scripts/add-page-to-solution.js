@@ -26,13 +26,10 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
+const { odataLit } = require('./lib/odata');
 const APPMODULE_COMPONENT_TYPE = 80;
 const UXAGENTPROJECT_LOGICAL_NAME = 'uxagentproject';
 const CONNECTION_REFERENCE_LOGICAL_NAME = 'connectionreference';
-
-function escapeODataString(value) {
-  return String(value).replace(/'/g, "''");
-}
 
 async function addComponent(envUrl, solutionUniqueName, componentId, componentType, addRequired) {
   const body = {
@@ -46,7 +43,7 @@ async function addComponent(envUrl, solutionUniqueName, componentId, componentTy
 }
 
 async function resolveEntityComponentType(envUrl, logicalName) {
-  const path = `EntityDefinitions(LogicalName='${escapeODataString(logicalName)}')?$select=ObjectTypeCode`;
+  const path = `EntityDefinitions(LogicalName='${odataLit(logicalName)}')?$select=ObjectTypeCode`;
   const res = await dataverseRequest(envUrl, 'GET', path);
   ensureOk(res, `Resolve component type for ${logicalName}`);
   const componentType = Number(res.data?.ObjectTypeCode);
@@ -60,7 +57,7 @@ async function resolveConnectionReferences(envUrl, refs) {
   const resolved = [];
   for (const logicalName of refs) {
     const query =
-      `connectionreferences?$filter=connectionreferencelogicalname eq '${escapeODataString(logicalName)}'` +
+      `connectionreferences?$filter=connectionreferencelogicalname eq '${odataLit(logicalName)}'` +
       '&$select=connectionreferenceid&$top=1';
     const lookup = await dataverseRequest(envUrl, 'GET', query);
     ensureOk(lookup, `Lookup connection reference ${logicalName}`);
@@ -129,13 +126,12 @@ async function main() {
       added.push({ type: 'uxagentproject', id: pageId });
     }
 
-    const skippedConnectionRefs = [];
     for (const { logicalName, id } of resolvedConnectionRefs) {
       await addComponent(envUrl, solutionUniqueName, id, connectionReferenceComponentType, false);
       added.push({ type: 'connectionreference', logicalName, id });
     }
 
-    emitResult(true, { ok: true, added, skippedConnectionRefs });
+    emitResult(true, { ok: true, added });
   } catch (e) {
     emitResult(false, e);
   }
@@ -150,7 +146,6 @@ if (require.main === module) {
 // Exported for unit tests. AppModule is a stable system component type; the two custom-table
 // component types are deliberately resolved per environment by resolveEntityComponentType.
 module.exports = {
-  escapeODataString,
   APPMODULE_COMPONENT_TYPE,
   UXAGENTPROJECT_LOGICAL_NAME,
   CONNECTION_REFERENCE_LOGICAL_NAME,

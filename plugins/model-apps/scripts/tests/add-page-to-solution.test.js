@@ -230,10 +230,8 @@ test('the stable app component type and dynamic entity names are pinned', () => 
     APPMODULE_COMPONENT_TYPE,
     UXAGENTPROJECT_LOGICAL_NAME,
     CONNECTION_REFERENCE_LOGICAL_NAME,
-    escapeODataString,
   } = require(scriptPath);
   assert.equal(APPMODULE_COMPONENT_TYPE, 80);
   assert.equal(UXAGENTPROJECT_LOGICAL_NAME, 'uxagentproject');
   assert.equal(CONNECTION_REFERENCE_LOGICAL_NAME, 'connectionreference');
-  assert.equal(escapeODataString("a'b'c"), "a''b''c");
 });
