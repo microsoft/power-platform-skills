@@ -267,7 +267,7 @@ async function hydrateSpec(read) {
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }
       // Legacy shape: name + optional fields + top-level codeFile (back-compat with hydrate callers
@@ -275,7 +275,7 @@ async function hydrateSpec(read) {
       : {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),
     appShell,

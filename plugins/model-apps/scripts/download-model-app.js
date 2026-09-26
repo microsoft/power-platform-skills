@@ -485,11 +485,6 @@ const APP_COMPONENT_ENTITY_SOURCES = [
 // Dataverse entity set -> the App Spec artifact class it inventories, so a failed read is reported
 // in the author's vocabulary ("forms could not be inventoried") rather than Dataverse's.
 const INVENTORY_KIND_BY_SET = { savedquery: 'views', savedqueryvisualization: 'charts', systemform: 'forms' };
-// Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
-// components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
-// views), and exceeded only with a warning.
-const COMPONENT_PAGE_CAP = 1000;
-
 async function appComponentEntities(sdk, appId) {
   if (!appId) return [];
   try {
@@ -502,21 +497,16 @@ async function appComponentEntities(sdk, appId) {
       const rows = await sdk.queryRecords('appmodulecomponent', {
         select: ['objectid', 'componenttype'],
         filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-        top: COMPONENT_PAGE_CAP,
+        paginate: true,
       });
-      // `$top` is a HARD cap in Dataverse (the SDK refuses to combine `top` with `paginate` for
-      // exactly this reason: `@odata.nextLink` is omitted, so the tail is lost with no signal). An
-      // app with more than this many components of one type would silently lose the remainder —
-      // the same silent-drop class as ADO 6603388, just at a higher threshold — so say so rather
-      // than quietly returning a partial set.
-      if ((rows || []).length >= COMPONENT_PAGE_CAP) {
-        process.stderr.write(`WARNING: this app has at least ${COMPONENT_PAGE_CAP} ${src.set} components; only the first ${COMPONENT_PAGE_CAP} were inspected, so a table referenced only beyond that point may be missing from the spec.\n`);
-      }
+      // The component list decides which hidden tables belong in the downloaded spec, so a capped
+      // read would silently drop tables reachable only through forms/views/charts. Page the whole
+      // list and then batch only the follow-up id lookups to keep URLs bounded.
       const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
       // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
       for (let i = 0; i < ids.length; i += 20) {
         const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
-        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, top: 1000 });
+        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, paginate: true });
         // A dashboard is a `systemform` row too, and its `objecttypecode` is NOT an entity logical
         // name ('none' / ''). Filtering it here keeps a bogus name out of the metadata fetch loop
         // instead of relying on that fetch 404-ing into a bare catch.
@@ -537,7 +527,7 @@ async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
   const clean = [...new Set((ids || []).map((id) => String(id || '').replace(/[{}]/g, '')).filter(Boolean))];
   for (let i = 0; i < clean.length; i += 20) {
     const filter = clean.slice(i, i + 20).map((id) => `${idField} eq ${id}`).join(' or ');
-    const rows = await sdk.queryRecords(set, { select, filter, top: 1000 });
+    const rows = await sdk.queryRecords(set, { select, filter, paginate: true });
     for (const r of rows || []) out.push(mapRow(r));
   }
   return out;
@@ -573,7 +563,7 @@ async function readAppShellSettings(sdk, appId) {
     const byId = new Map((defs || []).map((d) => [odataGuid(d.settingdefinitionid).toLowerCase(), d.uniquename]));
     if (!byId.size) return out;
     // Bound the read by the two DEFINITIONS, not by `$top`. Dataverse honours `$top` as a hard cap and
-    // omits `@odata.nextLink` (see COMPONENT_PAGE_CAP above), so an app-scoped read that leans on a row
+    // omits `@odata.nextLink`, so an app-scoped read that leans on a row
     // limit can return a partial page — and here a partial page is not a visible truncation but a WRONG
     // ANSWER, because an absent row is indistinguishable from "inherits the environment". The app would
     // round-trip without its override and rebuild into the classic shell, silently, which is the exact
@@ -624,20 +614,10 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
           const rows = await sdk.queryRecords('appmodulecomponent', {
             select: ['objectid', 'componenttype'],
             filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-            top: COMPONENT_PAGE_CAP,
+            paginate: true,
           });
-          // A FULL page is indistinguishable from a truncated one, so treat it as truncated. `$top` is
-          // a HARD cap and Dataverse omits `@odata.nextLink` when it is honoured, so there is no
-          // signal to read afterwards. `appComponentEntities` warns about the same cap on its own
-          // query, but THIS list feeds `notRoundTrippedSummary`, which reports a count — so a
-          // truncated read there is not merely a missing table, it is a smaller number presented as
-          // the whole truth. Marking the class incomplete makes the report say it cannot vouch for
-          // the class instead. A false positive at exactly the cap costs one honest
-          // "could not be inventoried" line; the alternative is a silent undercount.
-          if ((rows || []).length >= COMPONENT_PAGE_CAP) {
-            fail(INVENTORY_KIND_BY_SET[src.set] || src.set,
-              new Error(`more than ${COMPONENT_PAGE_CAP} app components of this type; the list was truncated, so this class is incomplete`));
-          }
+          // This inventory feeds the not-round-tripped report; a capped component read would turn
+          // "unknown tail" into a smaller authoritative count. Page completely instead.
           const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
           if (src.set === 'savedquery') {
             inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
@@ -714,7 +694,7 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     // mislabelling somebody's classic workflow as a business rule is the failure mode here.
     const ids = [];
     for (const solId of solIds) {
-      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, top: 1000 });
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, paginate: true });
       ids.push(...(comps || []).map((r) => r && r.objectid).filter(Boolean));
     }
     // rowsByIds de-duplicates, so a rule in two of the candidate solutions is listed once.
@@ -776,11 +756,8 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
     if (solutionError) throw solutionError;
     const owned = new Set();
-    let truncated = null;
     for (const solId of solIds) {
-      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 9`, top: COMPONENT_PAGE_CAP });
-      // A full page is indistinguishable from a truncated one — same rule as the app components above.
-      if ((comps || []).length >= COMPONENT_PAGE_CAP) truncated = new Error(`more than ${COMPONENT_PAGE_CAP} option sets in one of the app's solutions; the list was truncated, so this class is incomplete`);
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 9`, paginate: true });
       for (const r of comps || []) if (r && r.objectid) owned.add(odataGuid(r.objectid).toLowerCase());
     }
     const referenced = new Set([...(referencedGlobalChoices || [])].map((n) => String(n).toLowerCase()));
@@ -798,7 +775,6 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
           .map((r) => withDescription({ name: r.Name }, r.Description))
       );
     }
-    if (truncated) fail('globalChoices', truncated);
   } catch (err) {
     fail('globalChoices', err);
   }
@@ -836,6 +812,11 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
       config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
+      if (Object.prototype.hasOwnProperty.call(config, 'dataSources')) {
+        if (!Array.isArray(config.dataSources)) throw new Error('config.json dataSources is present but is not an array');
+        const bad = config.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+        if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
+      }
     } catch (e) {
       config = {};
       // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
@@ -850,14 +831,14 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
     // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
     let prompt;
     try {
-      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim();
+      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
     } catch (e) {
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
-      dataSources: config.dataSources || [],
+      dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
       prompt,
       codeFile: path.relative(outDir, tsx).replace(/\\/g, '/'),
     });

@@ -490,3 +490,18 @@ test('#583 hydrateSpec carries app.aiDescription only when the deployed app has 
     assert.ok(!('aiDescription' in (await hydrateSpec(white)).app), `whitespace-only ${JSON.stringify(ws)} is omitted`);
   }
 });
+
+
+test('hydrateSpec preserves a downloaded prompt exactly, and includes an explicitly blank prompt', async () => {
+  const exact = '  Conversation with 1 prompts:\r\n1. Keep me exact.\r\n';
+  const base = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const withExact = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(withExact.pages[0].prompt, exact);
+  const withEmpty = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(withEmpty.pages[0].prompt, '', 'a present empty prompt is different from a missing prompt');
+  const missing = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', codeFile: 'p.tsx' }] });
+  assert.ok(!('prompt' in missing.pages[0]), 'missing prompt.txt remains omitted');
+});

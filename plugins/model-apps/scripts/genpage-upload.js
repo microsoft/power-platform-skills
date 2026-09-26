@@ -228,6 +228,39 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + '--page-id to create a page deliberately.',
       });
     }
+    // EXISTENCE is not enough for an update: pac accepts a real page id together with ANY app id
+    // and then writes the page under that app context, which renames it and attaches its table
+    // bindings to the wrong app. The app-scoped list is sitemap/navigation membership, so prove the
+    // page is actually placed in THIS app before the binding probe downloads content or upload writes.
+    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
+    if (!enumeratePages) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} — this pac `
+          + 'wrapper exposes no app-scoped page listing. Refusing to upload, because updating a '
+          + 'page through the wrong app id would rename it and attach its tables to that app.',
+      });
+    }
+    const appPages = await enumeratePages(flags['app-id'], { includeUnpublished: true });
+    if (!appPages || appPages.ok !== true) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `
+          + `(${(appPages && appPages.error) || 'unknown reason'})`,
+      });
+    }
+    const pages = Array.isArray(appPages.pages) ? appPages.pages : [];
+    if (!pages.length) {
+      return emit(false, {
+        error: `app ${flags['app-id']} has no generative pages, or could not be found — cannot verify `
+          + `that page ${flags['page-id']} belongs to it`,
+      });
+    }
+    const pageInApp = pages.some((p) => String(p && p.pageId || '').toLowerCase() === String(flags['page-id']).toLowerCase());
+    if (!pageInApp) {
+      return emit(false, {
+        error: `page ${flags['page-id']} is not in app ${flags['app-id']}'s navigation — updating it `
+          + 'with this app id would rename it and attach its tables to that app; use the id of the app the page belongs to',
+      });
+    }
   }
 
   // An UPDATE that says NOTHING about data sources must not DESTROY them. pac rewrites the page's
@@ -269,6 +302,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below.
       if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
         throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
+      }
+      if (Array.isArray(cfg.dataSources)) {
+        const bad = cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+        if (bad !== undefined) {
+          throw new Error('config.json dataSources must be an array of non-empty table logical names');
+        }
       }
       preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
     } catch (e) {

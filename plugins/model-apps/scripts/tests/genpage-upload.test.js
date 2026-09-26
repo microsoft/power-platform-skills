@@ -49,6 +49,7 @@ function capturingCli(opts = {}) {
       upload: async (o) => { calls.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
       // Default: the requested page exists. Tests that care override this.
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       // An update reads the page's CURRENT bindings so omitting `--data-sources` preserves them
       // instead of persisting `[]`. pac writes this config UTF-8 with a BOM, so the fixture does too.
       download: async ({ outputDir, pageIds }) => {
@@ -695,6 +696,7 @@ test('--clear-data-sources really unbinds, and does not read the old list first'
   let probed = false;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async () => { probed = true; return true; },
     upload: async (o) => { probed = probed || false; return { pageId: o.pageId, _ds: o.dataSources }; },
   });
@@ -718,6 +720,7 @@ test('an unreadable current binding list refuses the update rather than unbindin
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async () => true, // writes nothing — the config is then missing
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
@@ -756,6 +759,7 @@ test('a page whose config has no dataSources key updates normally (it simply has
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir, pageIds }) => {
       for (const pid of (pageIds || [])) {
         fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -783,6 +787,7 @@ test('a config that is PRESENT but unparseable refuses the update', async () => 
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -815,6 +820,7 @@ test('the current bindings are found even when --page-id casing differs from pac
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical, name: 'Current Page' }] }),
     download: async ({ outputDir }) => {
       // pac writes the directory in ITS casing, not the caller's.
       fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
@@ -854,6 +860,7 @@ test('--clear-data-sources combined with --data-sources is refused, not silently
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
   const r = await new Promise((resolve) => {
@@ -874,6 +881,7 @@ test('a dataSources value of the wrong type refuses the update, rather than unbi
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -902,6 +910,7 @@ test('the probe directory is removed even when the read fails', async () => {
   const probes = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir }) => { probes.push(outputDir); return true; }, // writes no config
     upload: async () => ({ pageId: 'x' }),
   });
@@ -984,4 +993,133 @@ test('a BOM is still stripped even though the rest of the file is passed through
     { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
   });
   assert.strictEqual(onDisk, 'keep this\n', 'the BOM goes, the trailing newline stays');
+});
+
+// --- Task D: an update must target a page placed in the supplied app -----------------------------
+
+test('an update refuses a page that exists but is not in the supplied app navigation, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', name: 'Other Page' }] }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d is not in app app-a's navigation/);
+  assert.match(r.payload.error, /would rename it and attach its tables to that app/);
+  assert.strictEqual(downloads, 0, 'membership refusal must happen before the data-source probe');
+  assert.strictEqual(uploads, 0, 'membership refusal must happen before upload');
+});
+
+test('an update refuses an app that lists no generative pages, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [], empty: true }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'missing-app', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /app missing-app has no generative pages, or could not be found/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update refuses when the app-scoped page listing cannot be read', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: false, error: 'pac list failed' }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d belongs to app app-a \(pac list failed\)/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update whose page is a member of the supplied app proceeds, case-insensitively', async () => {
+  const canonical = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const seen = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical.toUpperCase(), name: 'Current Page' }] }),
+    download: async ({ outputDir }) => {
+      fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      fs.writeFileSync(path.join(outputDir, canonical, 'config.json'), JSON.stringify({ dataSources: ['contoso_ticket'] }));
+      return true;
+    },
+    upload: async (o) => { seen.push(o); return { pageId: o.pageId }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', canonical.toUpperCase(), '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(seen.length, 1);
+  assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket']);
+});
+
+test('a wrapper exposing no app-scoped enumeratePages is refused for updates', async () => {
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /exposes no app-scoped page listing/);
+  assert.strictEqual(uploads, 0);
+});
+
+test('preserved data-source bindings must be non-empty strings', async () => {
+  for (const dataSources of [[null], [{}], [18], ['contoso_ticket', '']]) {
+    let uploads = 0;
+    const factory = () => ({
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of pageIds) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), JSON.stringify({ dataSources }));
+        }
+        return true;
+      },
+      upload: async () => { uploads += 1; return { pageId: 'x' }; },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+    assert.strictEqual(r.ok, false, `must refuse ${JSON.stringify(dataSources)}`);
+    assert.match(r.payload.error, /cannot read the current data-source bindings/);
+    assert.strictEqual(uploads, 0, `must not upload ${JSON.stringify(dataSources)}`);
+  }
 });
