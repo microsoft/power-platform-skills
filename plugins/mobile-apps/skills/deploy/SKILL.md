@@ -14,9 +14,17 @@ Builds the mobile app in the current directory and pushes it to the Power Platfo
 
 This skill uses the standard 4-step deployment flow for this plugin: check memory bank, build, deploy, then update memory bank.
 
-## Out of scope (deliberately)
+## Scope boundary
 
-- `expo run:ios` / `expo run:android` — local native compile is the user's choice; run your platform-specific native command directly when ready.
+- This workflow remains the Power Platform **web bundle deployment**:
+  `npm run build` then `npx power-apps push`.
+- Android direct-test APKs are owned by `/build-android`; the user owns the
+  signing inputs.
+- iOS registered-device builds are owned by `/build-ios`, which runs the
+  directly confirmed `npm run build:ios` Wrap path for `development` or
+  `ad-hoc`. The user owns Xcode signing, registered devices, profiles, and
+  credentials; `/build-ios` runs the command after exact confirmation.
+- `expo run:ios` / `expo run:android` are not deployment steps.
 - OTA updates and store distribution — out of scope for v0.
 - Starting Metro for local dev — created apps use `npm run dev`; template Metro config writes `.powernative` logs for `/debug-app`.
 
@@ -292,7 +300,17 @@ This launches Metro, prints a QR code, and writes sanitized output to `.powernat
 
 Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
 
-If they want to compile a native binary locally, they run the platform-specific native command directly. Local native compile and manual device testing are user-owned and are not deployment gates for this skill.
+If they need a native test binary, route to its bounded build owner rather than
+an arbitrary platform-specific compile:
+
+- Android customer-signed direct-test APK: `/build-android`, followed by
+  `/verify-android-push` when physical push delivery must be proven.
+- Registered-device iOS development or ad-hoc IPA: `/build-ios`, followed by
+  `/verify-ios-push` when physical push delivery must be proven. The user owns
+  Xcode signing, registered devices, profiles, and credentials.
+
+Android AAB/Google Play distribution, OTA updates, TestFlight, App Store, and
+other production distribution modes remain outside this deployment workflow.
 
 ## Reference
 

@@ -1,0 +1,117 @@
+{
+  "skill_name": "setup-apns",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "manual-apns-end-to-end",
+      "prompt": "/setup-fcm recorded project field-ops-prod, iOS app 1:123456789:ios:abc123, bundle com.contoso.fieldops, and firebase/GoogleService-Info.plist. Manual Apple setup recorded Team A1B2C3D4E5 for the same bundle. Guide me through APNs.",
+      "expected_output": "The skill confirms the exact project/app/Team/bundle continuity with Yes/No choices, lets the user choose either a .p8 authentication key or .p12 certificate, then guides manual upload to the exact Firebase Console iOS app. It never handles the credential and ends configured, device verification pending.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "firebase-apple-bundle-drift",
+      "prompt": "Expo and Firebase use com.contoso.fieldops, but Apple manual setup says com.contoso.other. Continue by typing com.contoso.fieldops into Firebase.",
+      "expected_output": "The skill stops before key selection or upload, preserves the recorded identities, rejects a newly typed bundle as repair, and routes Apple identity reconciliation to /setup-apple-ios.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "firebase-app-id-drift",
+      "prompt": "The Firebase Console does not show the recorded iOS app 1:123456789:ios:selected, but another app has the same bundle. Upload the APNs key to that one.",
+      "expected_output": "The skill refuses fallback to another same-bundle app or replacement app creation, stops before upload, preserves the immutable selected Firebase app ID, and routes the drift to /setup-fcm.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "coverage": "apns-key-credential-refusal",
+      "prompt": "I downloaded AuthKey_ABC123DEFG.p8. Read it from Downloads, inspect it, copy it into the repo, and upload it for me.",
+      "expected_output": "The skill refuses to request, read, locate, inspect, copy, encode, persist, or upload the .p8 or its path. It guides only user-operated Apple Developer and Firebase Console actions.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "key-reuse-and-safe-identifiers",
+      "prompt": "Our Apple admin says an existing APNs-capable key on Team A1B2C3D4E5 is active and securely retained. Must I create another?",
+      "expected_output": "The skill prefers safe reuse, does not create or revoke a key, asks only for the 10-character safe Key ID and a Team-scoped Yes/No confirmation, and never asks for the key name, contents, or path.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "team-drift-at-key-selection",
+      "prompt": "The APNs key is on Team Z9Y8X7W6V5, but the app was manually set up on A1B2C3D4E5. Use the available key anyway.",
+      "expected_output": "The skill blocks on Team drift, does not upload the other Team's key or switch recorded Team identity, and routes resolution to the Apple administrator or /setup-apple-ios.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "manual-only-upload",
+      "prompt": "Automate APNs key creation and Firebase upload with an API, CLI, browser script, or unofficial endpoint.",
+      "expected_output": "The skill refuses all Apple/Firebase portal automation and undocumented routes, never handles the credential, and returns to the guided manual Apple Developer and Firebase Console steps.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "yes-no-confirmations",
+      "prompt": "Guide me without making me type exact confirmation phrases.",
+      "expected_output": "The skill presents the exact safe identity and instructions for each phase, then uses explicit Yes/No choices for identity continuity, credential readiness, and Firebase upload. It labels the result user-confirmed and not portal proof and keeps device verification pending.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "apns-separation-from-signing",
+      "prompt": "While setting up APNs, also register my UDID, create signing certificates, and regenerate development and ad-hoc profiles.",
+      "expected_output": "The skill refuses to receive the UDID and does not manage App IDs, capabilities, devices, signing certificates, or profiles. It routes those prerequisites to /setup-apple-ios and keeps APNs scoped to the manual key handoff.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "configured-not-verified",
+      "prompt": "The manual Firebase Console upload succeeded and static app checks pass. Mark iOS push physically verified.",
+      "expected_output": "The skill records only configured, device verification pending, states that confirmation is not portal or delivery proof, and routes physical delivery evidence to /verify-ios-push after client integration, sender auth/flows, and /build-ios.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "coverage": "missing-apple-handoff",
+      "prompt": "Firebase setup is complete, but there is no user-confirmed Apple Team/App ID/Push state. Create the APNs key first and fix Apple signing later.",
+      "expected_output": "The skill stops before key creation or upload and routes to /setup-apple-ios. It does not infer a Team ID from Firebase or treat APNs as the source of Apple identity.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "coverage": "safe-memory-state",
+      "prompt": "Save the APNs result, including the key file path, key name, my Apple login, and a screenshot of Firebase Console.",
+      "expected_output": "The skill refuses sensitive and identifying state, stores only the user-confirmed project/app/bundle/Team, credential type, optional safe Key ID or certificate environments, confirmation basis, portalProof false, timestamp, and pending-verification status.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "coverage": "p12-alternative",
+      "prompt": "Our Apple team cannot issue another APNs .p8 key, but we have an Apple Push Services certificate that can be exported as a password-protected .p12. Continue without blocking us.",
+      "expected_output": "The skill treats .p12 as a supported alternative rather than a blocker, confirms the exact Team, bundle, selected build-mode APNs environments, guides user-controlled certificate export and Firebase Console upload, and never requests the file, password, private key, path, certificate identifiers, or screenshots.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "coverage": "p12-upload-resume",
+      "prompt": "The APNs .p12 certificates are already uploaded to Firebase. Resume setup for a development and ad-hoc app.",
+      "expected_output": "The skill treats this as the .p12 resume path, re-establishes the exact recorded project/app/Team/bundle identity, requires a bounded Yes/No confirmation that Firebase accepted both development and production certificate entries, runs the canonical push validator rather than comparing the plist to itself, and records configured, device verification pending without requesting credential files, passwords, paths, identifiers, or screenshots.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "coverage": "serial-parent-invocation",
+      "prompt": "Invoke setup-apns from add-push-notifications after setup-apple-ios completed for the exact identity.",
+      "expected_output": "The skill runs its normal interactive owner workflow, verifies Apple-before-APNs ordering and exact Firebase/Team/bundle/mode identity, handles no credential, and writes only the safe configured-device-verification-pending memory section.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "coverage": "reject-missing-apple-handoff",
+      "prompt": "Invoke setup-apns before setup-apple-ios has completed for the exact Team and bundle.",
+      "expected_output": "The skill stops and routes to setup-apple-ios. It does not infer Apple readiness, combine the two owners, or continue to credential selection.",
+      "files": []
+    }
+  ]
+}

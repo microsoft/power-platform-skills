@@ -1,0 +1,32 @@
+{
+  "name": "synthetic run_flow is not webhook callback proof",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "webhook-proof-must-use-organic-callback"
+    ]
+  },
+  "contract": {
+    "webhookProof": {
+      "triggerName": "When_source_row_is_created",
+      "evidenceSource": "run_flow"
+    }
+  },
+  "requested": {
+    "state": "Started",
+    "connectionReferences": {},
+    "definition": {
+      "triggers": {
+        "When_source_row_is_created": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "parameters": {
+              "subscriptionRequest/entityname": "new_source"
+            }
+          }
+        }
+      },
+      "actions": {}
+    }
+  }
+}

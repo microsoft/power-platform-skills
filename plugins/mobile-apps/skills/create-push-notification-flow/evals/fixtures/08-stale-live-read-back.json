@@ -1,0 +1,35 @@
+{
+  "name": "stale update live read-back mismatch",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "live-definition-mismatch"
+    ]
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Version": {
+          "type": "Compose",
+          "inputs": "updated",
+          "runAfter": {}
+        }
+      }
+    }
+  },
+  "live": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Version": {
+          "type": "Compose",
+          "inputs": "stale",
+          "runAfter": {}
+        }
+      }
+    }
+  }
+}

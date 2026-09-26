@@ -66,13 +66,13 @@ test('blocks an approved package when package.json has a different version', (t)
 });
 
 test('does not let plan approval bypass a known native package block', (t) => {
-  const projectRoot = makeProject('expo-notifications', '1.0.0');
+  const projectRoot = makeProject('expo-updates', '1.0.0');
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
 
-  const result = validate(projectRoot, ['expo-notifications@1.0.0']);
+  const result = validate(projectRoot, ['expo-updates@1.0.0']);
 
   assert.strictEqual(result.status, 2);
-  assert.match(result.stderr, /Native\/runtime dependency `expo-notifications`/);
+  assert.match(result.stderr, /Native\/runtime dependency `expo-updates`/);
 });
 
 test('continues to allow ordinary JavaScript packages without an exception', (t) => {

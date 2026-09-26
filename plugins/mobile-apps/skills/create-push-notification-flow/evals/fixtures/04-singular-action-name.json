@@ -1,0 +1,35 @@
+{
+  "name": "singular Dataverse action rejection",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "action-entity-name-must-be-plural"
+    ]
+  },
+  "contract": {
+    "actionEntityNames": {
+      "Create_Outbox_Row": "new_pushnotifications"
+    }
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Create_Outbox_Row": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "CreateRecord"
+            },
+            "parameters": {
+              "entityName": "new_pushnotification",
+              "item/new_status": 100000001
+            }
+          },
+          "runAfter": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,250 @@
+{
+  "skill_name": "add-push-notifications",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add push notifications to this generated mobile app. Signed-out devices should receive allUsers broadcasts, signed-in devices should use the Entra OID as the FCM topic, and tapping a notification should open the work item detail route.",
+      "expected_output": "The skill verifies runtime packages and host OID support, configures permission UX and topic lifecycle, then generates a typed work-item-detail destination registry entry used by notification taps and Expo Router, or blocks precisely on a missing prerequisite.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "The user denied notifications during onboarding. Add a settings option that lets them enable notifications later without breaking sign-in.",
+      "expected_output": "The skill preserves sign-in, models denied permission, adds an Open Settings recovery path, and does not repeatedly show the OS prompt.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Set up FCM topics in an older app whose package.json has expo-notifications but whose Power Apps Developer runtime does not include React Native Firebase Messaging.",
+      "expected_output": "The skill stops with a native-runtime blocker and does not install packages or create a fake wrapper.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Resume push setup. Android and iOS already have active validated Firebase client files for the same project, but sender authentication and the Power Automate flows have not been created.",
+      "expected_output": "The skill parses the active Android and iOS client files, proves exact Expo package/bundle identity, immutable app IDs and one shared Firebase project (plus memory handoff agreement when recorded), reuses that client integration, completes only missing app-side work, and invokes create-push-notification-flow because the default stopping point is delivery flows.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Android is already integrated, but iOS was newly added to Expo config and has no Firebase client file yet. Firebase contains duplicate exact iOS bundle-ID matches.",
+      "expected_output": "The skill invokes setup-fcm for the missing iOS integration, requires an independent immutable iOS Firebase app-ID selection and exact-identity read-back, preserves the Android selection, and then resumes setup-apns for the selected iOS app.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "The native Firebase client is already integrated. We want the plugin to create the Power Automate flows, but we will configure FCM authentication ourselves.",
+      "expected_output": "The skill allows direct create-push-notification-flow setup without redoing the native client, presents WIF or customer-configured FCM authentication, and routes the manual choice to stopped plugin-created producer and sender flows without credentials.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "The user taps Not now and iOS reports notification permission denied. Finish push setup without breaking login or creating notification registrations.",
+      "expected_output": "The skill returns a non-throwing permission-denied state, preserves sign-in and the Open Settings recovery path, and does not register for remote messages, enable Messaging auto-init, acquire a token, or sync a topic.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "On iOS, notification permission is granted but Firebase getToken fails because the device has not registered for remote messages.",
+      "expected_output": "The skill checks isDeviceRegisteredForRemoteMessages, awaits registerDeviceForRemoteMessages when false, then enables auto-init, acquires the token, and performs exact topic sync; it never calls getToken before registration.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "An opted-in signed-in user's FCM registration token refreshes while the app is running.",
+      "expected_output": "The single idempotent provider listener re-runs exact lowercase OID topic sync from current consent/auth state without persisting either the old or refreshed token.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "A data-only iOS notification arrives while the app is backgrounded or terminated before the React tree mounts.",
+      "expected_output": "The package entry point replaces the fresh-template no-op, imports the generated wrapper's implemented handleBackgroundNotification, registers it before expo-router/entry, and strict final validation proves the lifecycle owner plus consent/settings surfaces without duplicating background registration.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "The user launches the terminated iOS app by tapping a notification with schemaVersion 1, destination work-item-detail, and a typed workItemId parameter.",
+      "expected_output": "The provider consumes the Expo Notifications cold-start response once after router/auth readiness, validates it through the shared semantic navigation parser, retains at most one validated pending intent through sign-in, and never navigates from the background handler or twice from duplicate response paths.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "Push client code and the selected iOS Firebase app are valid, APNs was uploaded manually, sender-auth.json is missing, no flows exist, and no IPA has been built. Tell me exactly where setup stands and continue.",
+      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the completed Apple/APNs handoffs and invokes create-push-notification-flow, which offers WIF or customer-configured FCM authentication. Because no build or verification intent was stated, it stops after the delivery-flow goal and reports the later stages without asking the user to chain commands.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "Everything for iOS push is configured and the flows are published. Please make the signed IPA and prove background and terminated delivery as part of /add-push-notifications.",
+      "expected_output": "The skill does not inspect signing assets or duplicate the user-managed Wrap build, FlowAgent read-back, or physical test procedures. It invokes build-ios, resumes after its exact artifact handoff, and invokes verify-ios-push after the user-managed installation step is complete.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Firebase accepted our iOS message and the outbox row says Sent, so mark APNs and iOS delivery complete even though we only tested in Metro.",
+      "expected_output": "The skill refuses to treat Firebase acceptance, Sent state, or Metro as device proof; keeps APNs configured, device verification pending and physical delivery pending; and routes the exact wrapped physical-device verification to /verify-ios-push.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "Android push runtime integration, sender authentication, and the exact published flows are ready; iOS is not selected. Build and verify Android push next.",
+      "expected_output": "The skill reports Android and iOS states independently, keeps iOS not applicable, invokes build-android, then invokes verify-android-push after the owner-required installation handoff. It does not duplicate or assume the Android owner's artifact, signing, installation, matrix, or evidence details.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "Use the plugin-created Power Automate sender after we manually configure its FCM authentication. Continue toward iOS build and physical verification without validating our credentials.",
+      "expected_output": "The skill requires the exact plugin-created sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, then invokes build-ios and, after installation, verify-ios-push.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "Use a hosted custom endpoint instead of a Power Automate sender flow.",
+      "expected_output": "The skill explains that custom endpoint and Azure Function sender options are not offered. It presents only WIF or plugin-created Power Automate flows with customer-configured FCM authentication.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Use one work-item destination for in-app buttons, the custom scheme, our approved HTTPS domain, and notification taps. Reject old deepLink payloads and unknown destinations without opening another screen.",
+      "expected_output": "The skill creates one typed semantic destination registry and shared parser/dispatcher for all four sources, configures only the exact approved scheme and HTTPS origin, separates parser/native/association/physical verification states, rejects legacy or stale intents without fallback navigation, and keeps Expo Router as the sole executor.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "Add push notifications for Android and take me all the way through a physical-device test. I do not know which setup commands to run.",
+      "expected_output": "The skill uses one guided workflow: it infers Android and end-to-end verification as the stopping point, resumes each existing handoff, invokes setup-fcm only if needed, implements runtime integration, invokes create-push-notification-flow for sender auth and flows, invokes build-android, and invokes verify-android-push after installation. It asks only stage-specific safety and business questions and never makes the user manually chain slash commands.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "The React Native Firebase onMessage listener parses navigation data and setNotificationHandler is configured, but foreground Android messages never show a banner. Treat receipt by onMessage as complete foreground support.",
+      "expected_output": "The skill rejects parse-only foreground handling. It requires an Android-reachable onMessage callback to validate data, await an immediate Notifications.scheduleNotificationAsync call inside try/catch, preserve only safe notification data for response navigation, use the configured visible Android channel in trigger.channelId, and configure setNotificationHandler with shouldShowBanner and shouldShowList enabled so foreground notifications may appear as a banner and remain in the notification center.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "Create Android channel general in app code, use urgent in foreground local notifications, and omit messaging_android_notification_channel_id from firebase.json.",
+      "expected_output": "The skill rejects the inconsistent channel configuration. It creates one non-silent channel before permission and uses the same channel ID for Android channel creation, the foreground local notification trigger, and Firebase's messaging_android_notification_channel_id.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "coverage": "fully-serial-push-orchestration",
+      "prompt": "Add Android and iOS push through delivery flows. Firebase is not configured and all required runtime, WIF, Apple, and APNs decisions are explicit.",
+      "expected_output": "The skill invokes /setup-fcm serially, then invokes /setup-apple-ios and /setup-apns serially, implements runtime integration directly, and invokes /setup-push-wif and FlowAgent authoring serially. It creates no background Task or worker execution envelope.",
+      "files": []
+    },
+    {
+      "id": 23,
+      "coverage": "inline-single-platform-runtime",
+      "prompt": "Android Firebase and WIF are already valid, iOS is not selected, and only Android runtime integration is incomplete. Continue to app configuration.",
+      "expected_output": "The skill implements Android runtime integration directly through Steps 5-9, does not invoke Apple/APNs or manufacture any Task, then continues serially to the selected downstream owners.",
+      "files": []
+    },
+    {
+      "id": 24,
+      "coverage": "task-unavailable-irrelevant",
+      "prompt": "Task execution is unavailable while adding Android and iOS push.",
+      "expected_output": "Push setup is unaffected because it uses no background Task. The skill invokes each owner synchronously and performs runtime integration directly.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "coverage": "serial-owner-tool-context",
+      "prompt": "Firebase, Google Cloud CLI, Azure MCP, and FlowAgent are available only in the current session context.",
+      "expected_output": "The orchestration invokes /setup-fcm, /setup-push-wif, and flow authoring serially in the current context and uses no background agents.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "coverage": "serial-memory-updates",
+      "prompt": "Apple setup, APNs setup, and runtime integration all update resumable state during one push setup run.",
+      "expected_output": "Each serial owner writes only its safe memory section and the main skill rereads state between stages. No deferred worker merge or concurrency envelope is used.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "coverage": "platform-specific-partial-blocker",
+      "prompt": "Serial Firebase and Android runtime succeed, but /setup-apple-ios blocks on Apple Team identity drift. Continue toward the Android build stopping point.",
+      "expected_output": "The parent preserves successful Firebase/runtime progress, records iOS as blocked without promoting Apple/APNs state, then runs shared downstream owners and the Android build when ready. It does not invoke /setup-apns or start the iOS build.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "coverage": "serial-ios-owner-order",
+      "prompt": "WIF repair is required and iOS Apple/APNs prerequisites are pending.",
+      "expected_output": "The skill invokes /setup-apple-ios and then /setup-apns synchronously, implements runtime integration directly, and later invokes /setup-push-wif with exact approvals. No worker preflight or fallback exists.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "coverage": "cold-wif-identity-bootstrap-reapproval",
+      "prompt": "Configure push through delivery flows with WIF. I explicitly choose create-dedicated-registration, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet.",
+      "expected_output": "The serial /setup-push-wif owner accepts a null client ID only for the explicit create-dedicated-registration absence inventory, obtains approval only for Entra/credential/Key Vault bootstrap, executes and rereads the server-generated client ID, then builds a fresh claim-driven remaining Google/API/RBAC plan for a second explicit approval. It writes sender-auth.json only after final four-stage proof and never delegates MCP work to a background agent.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "coverage": "apns-question-after-firebase",
+      "prompt": "Add iOS push to a new app. I have not logged in to Firebase or created the Firebase project and iOS app yet.",
+      "expected_output": "The parent does not ask whether an APNs credential is already uploaded during the initial orchestration questions. It first completes Firebase login when needed, selects or creates and activates the exact project, creates or reuses the exact iOS Firebase app, and validates its immutable app identity and client config. Only then does it collect unresolved Apple Team, build-mode, APNs credential-route, and Firebase Console upload attestations in setup-apple-ios then setup-apns order.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "coverage": "noninteractive-stopping-point-and-links",
+      "prompt": "Add push notifications for iOS.",
+      "expected_output": "The skill does not ask for a stopping point and defaults to Create delivery flows because no build or physical-verification intent is explicit. It does not ask whether Universal Links or App Links are wanted and passes an approved HTTPS origin of null unless the prompt or existing approved plan already contains an explicit exact origin.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "coverage": "wif-registration-choice",
+      "prompt": "Add push notifications and use WIF. I have not chosen which Entra registration should authenticate the sender.",
+      "expected_output": "The parent asks once for reuse-app-registration, use-existing-registration, or create-dedicated-registration, freezes that choice before invoking /setup-push-wif, and never lets the owner silently switch registration source.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "coverage": "existing-registration-fast-path",
+      "prompt": "Add push with WIF using a different existing same-tenant client ID.",
+      "expected_output": "The serial /setup-push-wif owner validates the supplied ID without editing auth.config.json, performs read-only inventory, obtains exact approval, executes only the approved repair/provision work, and requires the same use-existing-registration client ID through final proof.",
+      "files": []
+    },
+    {
+      "id": 34,
+      "coverage": "create-new-only-bootstrap",
+      "prompt": "Add push with WIF and create a new dedicated sender registration.",
+      "expected_output": "Only the explicit create-dedicated-registration choice may start without a client ID. The serial owner uses two approvals: identity bootstrap first, then a fresh claim-driven remaining plan before final proof and sender-auth.json.",
+      "files": []
+    },
+    {
+      "id": 35,
+      "coverage": "configure-app-stage-lazy-readiness",
+      "prompt": "Configure push in the app only; do not create delivery flows or build a device package.",
+      "expected_output": "The parent checks only Firebase client readiness and runtime prerequisites. It does not require gcloud, Azure MCP, FlowAgent, Android SDK tools, Xcode, signing, or a physical device, and it preserves later stages as pending.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "coverage": "delivery-flow-readiness-order",
+      "prompt": "Add push through delivery flows using WIF, but do not build yet.",
+      "expected_output": "The parent completes Firebase readiness first, then invokes the WIF owner for its local/MCP/account/context checks, then invokes the FlowAgent owner for plugin/MCP/environment checks. It does not probe Android or iOS build tools and preserves each successful upstream stage.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "coverage": "selected-platform-build-readiness",
+      "prompt": "Build push for Android only after the delivery flows are ready.",
+      "expected_output": "The parent checks only Android build prerequisites and invokes build-android. It does not require macOS, Xcode, Apple/APNs setup, or an iOS device, and an Android tool blocker does not erase completed Firebase, runtime, WIF, or flow stages.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "coverage": "no-push-worker-preflight",
+      "prompt": "Use a background worker preflight before configuring push notification runtime.",
+      "expected_output": "The skill does not dispatch a push worker or preflight. It uses stage-specific owner readiness checks and implements runtime integration directly.",
+      "files": []
+    }
+  ]
+}

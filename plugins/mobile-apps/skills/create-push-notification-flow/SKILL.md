@@ -1,0 +1,276 @@
+---
+name: create-push-notification-flow
+description: Use when creating, repairing, or extending Power Automate producer and sender flows for Power Apps mobile push notifications, including choosing recommended WIF or customer-configured FCM authentication; Dataverse triggers; outbox queuing; content mapping; trigger-aware deep links; lowercase Entra OID topics; FCM HTTP v1; FlowAgent setup; or push-flow smoke tests.
+user-invocable: true
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__preview_update, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_expression_help, mcp__flowagent__invoke_operation, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__list_backups, mcp__flowagent__get_backup, mcp__flowagent__restore_backup
+model: opus
+---
+
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
+
+**Canonical FlowAgent workflow: [push-flow-authoring.md](${PLUGIN_ROOT}/shared/references/push-flow-authoring.md)** —
+read in full. It owns environment proof, schema/connection discovery,
+definitions, validate/preflight/mutate/read-back, recovery, publishing, and
+smoke-test gates.
+
+**Outbox schema: [push-notification-outbox.md](${PLUGIN_ROOT}/shared/references/push-notification-outbox.md)**.
+
+**Navigation contract: [navigation-link-contract.md](${PLUGIN_ROOT}/shared/references/navigation-link-contract.md)**.
+
+**WIF runtime protocol: [push-flow-wif.md](${PLUGIN_ROOT}/shared/references/push-flow-wif.md)**.
+
+**Sender-auth handoff: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
+
+**Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)**.
+
+**Push tool readiness: [push-tool-readiness.md](${PLUGIN_ROOT}/shared/references/push-tool-readiness.md)** —
+use the flow-authoring probe, stable failure categories, and wait/recheck
+protocol before FlowAgent work.
+
+# Create Push Notification Flow
+
+For a plugin-managed sender, create two separate FlowAgent-authored flows:
+
+1. a producer that resolves a recipient and writes a user-approved `Queued`
+   outbox row; and
+2. a sender that owns idempotency, delivery, and `Sent`/`Failed` transitions.
+
+For customer-configured authentication, author both flows stopped, but leave
+the sender's FCM authentication unconfigured and clearly identify the action
+the customer must complete. The customer configures, validates, publishes,
+monitors, and supports that authentication. Never put FCM authorization into
+each business-event flow.
+
+This skill consumes owner-skill handoffs. `/setup-fcm` owns Firebase through
+the vendor-official Firebase MCP only; `/setup-push-wif` owns Google-side WIF
+provisioning. Do not fall back to `firebase-tools`, `gcloud`, or cloud
+provisioning from this skill.
+
+## Required workflow
+
+**Telemetry checkpoint: `author_push_notification_flows`**
+
+### 1. Bootstrap and prove the environment
+
+Execute Sections 1–2 of `push-flow-authoring.md`. Run the `flow-authoring`
+local prerequisite probe first. The mobile plugin declares
+no automatic installation dependency on the separate `power-automate` plugin.
+If that probe reports a missing local CLI, follow the canonical interactive
+installation loop: show official guidance, invoke `AskUserQuestion` to wait
+for installation or cancellation, and rerun the complete probe. Do not return
+a terminal blocker or end the session while the user is installing `az`, PAC,
+or another required CLI.
+If FlowAgent is unavailable, give the documented manual
+install/restart/setup steps, wait for the user to complete them, and rerun the
+same local and `/mcp` checks. Prove
+`power.config.json`, `npx power-apps`, PAC, Azure, and FlowAgent target the same
+environment/URL/tenant before any mutation. FlowAgent is the only flow mutation
+path; do not use portal automation, shell flow commands, or guessed
+definitions.
+
+Classify missing plugin, missing/disconnected server, missing tool,
+authentication, environment mismatch, disconnected connection,
+permission/API, and transient read-back failures separately. Do not suggest
+installing the plugin or a CLI for an authenticated environment, connector, or
+provider denial.
+
+### 2. Prove Firebase and select sender authentication
+
+Read active native Firebase configs and require one project. Do not rerun
+`/setup-fcm` when valid selected-platform client configuration is already
+active.
+
+Validate a project-local `sender-auth.json` before WIF sender discovery. If
+absent or invalid, read the sender-auth choices reference and first ask the
+customer to choose managed WIF or customer-configured authentication:
+
+1. **Workload Identity Federation (Recommended):** collect one explicit Entra
+   registration choice before invoking `/setup-push-wif`:
+   - **Reuse this app registration** (`reuse-app-registration`) — read
+     `auth.config.json`; require
+     GUID-shaped `msal.clientId` and `msal.tenantId`, exact tenant agreement
+     with the resolved Power Platform environment, and live Entra
+     application/service-principal read-back.
+   - **Use a different existing registration**
+     (`use-existing-registration`) — ask for its Application
+     (client) ID only; use the resolved app-environment tenant as authority;
+     require the same GUID, tenant, application, and service-principal proof;
+     never write this sender-only ID to `auth.config.json`.
+   - **Create a new dedicated registration**
+     (`create-dedicated-registration`) — let `/setup-push-wif` use its
+     separately approved identity-bootstrap path.
+2. **Create Power Automate flows; configure FCM authentication manually:**
+   create both flows stopped without credentials or `sender-auth.json`. The
+   customer completes the sender's authentication before publication.
+
+Do not silently select an Entra registration. If `auth.config.json` has no
+valid client ID, explain that `/set-app-registration-native` can configure it
+and leave only that reuse choice unavailable; the customer may still provide a
+different same-tenant client ID or choose new registration creation. Reject a
+different-tenant or nonexistent supplied registration before cloud mutation.
+Do not change Wrap-managed redirect URIs or delegated Power Platform
+permissions while preparing its registration for confidential WIF use.
+
+After an owner skill returns, revalidate against the exact client Firebase
+project and require version 2 to echo the exact approved registration mode,
+tenant, and client ID. Never construct the WIF handoff here, overwrite
+`auth.config.json` with a sender-only client ID, switch registration modes, or
+add another authentication mode as a fallback.
+
+In manual-auth mode, FlowAgent authors the complete non-secret producer,
+outbox, idempotency, routing, payload, and sender action structure. The sender
+remains stopped and explicitly incomplete until the customer configures FCM
+authentication in the identified action. Record no managed auth handoff,
+credentials, endpoint secrets, or success-shaped authentication proof. A
+checkbox or verbal confirmation cannot promote authentication to
+plugin-validated.
+
+After the customer says authentication is configured, fetch the exact
+plugin-created sender flow ID (its PPAPI/FlowAgent runtime resource ID) and
+read back only the observable
+queued-outbox trigger/guard, idempotent claim, `allUsers` versus lowercase-OID
+routing, one delivery invocation, and terminal `Sent`/`Failed` updates. Do not
+request or inspect credentials, secure values, authentication headers,
+connection secrets, or raw delivery bodies; do not validate
+`sender-auth.json` or claim the customer's authentication, least privilege, or
+rotation design was technically validated.
+
+For each producer and sender, retain two separately named identities: the
+PPAPI/FlowAgent runtime resource ID used for flow read-back/mutation/run
+history and exact callback-registration `name` correlation, and the Dataverse
+Workflow (Process) ID used for Workflow-row and callback-expander async-job
+correlation. Record and use both. Never swap their roles and never require
+equality between them.
+
+### 3. Resolve the outbox and producer intent
+
+Execute Section 3 of the authoring reference. Create a missing outbox only via
+`/add-dataverse --skip-planning`, then reread live metadata. Resolve singular
+logical names, plural entity sets, actual choice integers, and `systemusers`;
+never guess them.
+
+Ask the grouped producer question from the reference. For title, body, and any
+selected navigation parameters, explain lock-screen/device exposure and that
+topic membership is not authorization, recommend minimizing sensitive data,
+then let the user choose title/body source fields and templates. Reject
+credentials, tokens, private keys, authentication headers, or technically
+invalid payload shapes; do not override the user's title/body business-content
+choice on privacy grounds.
+
+Based on the selected Dataverse trigger table, inspect the screen plan and
+navigation registry and suggest a relevant detail destination with the trigger
+row ID, otherwise a relevant list destination, otherwise no deep link. Show
+the suggestion and let the user accept it, choose another registered
+destination, or choose no deep link. Never accept an arbitrary route, URL,
+href, or complete navigation-contract JSON. Default to Dataverse row created
+and owner-based resolution only when unspecified. `ownerid` is not an Entra
+OID: resolve `systemusers.azureactivedirectoryobjectid`, GUID-validate, and
+lowercase it. Team/missing/ambiguous owners must skip or fail, never route to a
+guessed topic.
+
+### 4. Discover before authoring
+
+Execute Section 4. Use `get_connector`/`search_operations`, then
+`get_operation_details`, dynamic resolvers, live connections, and
+`test_connection`. Never infer operation IDs, schemas, parameters, connection
+references, or Dataverse choice values.
+
+For WIF, require the proved Key Vault connection and read
+`push-flow-wif.md`. For manual-auth mode, discover the FCM HTTP action schema
+but leave its authentication configuration for the customer; never insert a
+placeholder credential or secret.
+
+### 5. Author stopped definitions
+
+Execute Section 5 exactly. The sender is idempotent and concurrency-safe.
+`User` uses a validated lowercase OID topic; `AllUsers` uses empty Target OID
+plus exact `allUsers`. Before authoring title/body and navigation mappings,
+warn that title/body/navigation parameters can be visible on the device and
+that topic membership is not authorization. Use the user's approved title/body
+templates and validated navigation mapping while continuing to prohibit
+credentials and authentication material.
+
+The producer uses `OpenApiConnectionWebhook`, singular trigger `entityname`,
+plural action `entityName`, and plural `systemusers` for owner lookup. It
+validates selected title/body and navigation parameter fields, constructs
+canonical navigation JSON, and queues Payload Version `1`, optional
+allowlisted Destination/Navigation Parameters, Status `Queued`, and Attempt
+Count `0`. The sender revalidates the same navigation contract and includes
+`schemaVersion`, `destination`, and `params` only when navigation was selected.
+Do not solicit, store, or merge arbitrary extra FCM data; a legacy `deepLink`
+branch is a blocker.
+
+For lookup expressions, follow live metadata targets. A fixed single-target
+lookup uses its GUID value directly and must not depend on the optional
+`lookuplogicalname` annotation. A polymorphic lookup such as `ownerid` may use
+`@Microsoft.Dynamics.CRM.lookuplogicalname` to distinguish supported target
+types.
+
+### 6. Validate, mutate, read back, and recover
+
+Apply Sections 6–7 to **every** create, update, edit, copy, restore, publish,
+or disable: `validate_flow`, `preflight_flow`, `preview_update` when updating,
+one mutation, then full `get_flow` comparison. An acknowledged response is not
+proof of persistence.
+
+Use only the runtime resource ID with FlowAgent. Resolve and retain the
+Dataverse Workflow ID separately after publication for callback diagnostics.
+A successful runtime read-back does not prove callback registration, and
+unequal IDs are not drift.
+
+Create new flows stopped. Before existing-flow changes, prove a backup or make
+a stopped recovery copy. Prefer surgical `edit_flow`; never use state-only
+`update_flow`, stack edits on failed read-back, mix auth modes, or delete a
+previously working flow as retry. If this invocation created an incorrect flow
+without a usable backup, disable it, read it back as `Stopped`, report its
+exact ID, and leave cleanup explicitly user-owned; do not delete it.
+
+Present verified stopped IDs and require explicit publication confirmation.
+For WIF, publish/read back the sender as `Started` before the producer. For
+manual-auth mode, stop after authoring until the customer configures FCM
+authentication in the sender. Then validate/preflight and read back the same
+exact sender flow without inspecting secure values, require explicit approval,
+publish the sender before the producer, read both exact runtime resource IDs
+back after publication, and resolve both Dataverse Workflow IDs separately.
+
+### 7. Gate delivery testing and hand off
+
+Run non-delivery checks first. Follow Section 8's physical-device, consent,
+`allUsers`, privacy, and live-row confirmation gates. Read the row and run
+history/actions back; do not repeatedly resubmit failures or retain raw
+diagnostics.
+
+Never use `run_flow` as proof for an `OpenApiConnectionWebhook`. Synthetic runs
+can have null trigger bodies and bypass the organic Dataverse callback chain.
+Use one consented organic Dataverse event, then classify the bounded chain as
+missing registration/job, Dataverse async backlog, identity/routing, producer
+without outbox, queued outbox without sender, or terminal sender using the
+reference's read-only diagnostic. Pass the actual explicit source event and
+let callback-job `createdon` define the window; do not reject an update merely
+because the row was created earlier. Treat unqueried outbox evidence as
+unknown, not as proof of `producer-no-outbox`. Validate the producer
+callback-registration `message` against the actual event and the sender
+registration against outbox `created`; classify incompatible choices as
+`registration-event-mismatch`. Classify Failed, Canceled, and Suspended
+callback-expander jobs explicitly rather than treating them as
+healthy/insufficient. `run_flow` remains permitted only when read-back proves
+a manual trigger.
+
+Report environment, Firebase project, connections, read-back results, and
+whether delivery was skipped or verified. Report both producer/sender ID roles
+and states. Never print secrets, tokens, JWTs, secure action values, or raw
+payloads.
+
+Persist the authoring reference's flow-backed `Push flow handoff` schema in
+`memory-bank.md`. Record the exact environment, producer runtime resource
+ID/Dataverse Workflow ID/state, sender runtime resource ID/Dataverse Workflow
+ID/state, read-back timestamp, and sender authentication status. In manual
+Power Automate mode, both runtime resource IDs must read back as `Started`;
+record exactly
+`customer-owned Power Automate sender / observable contract read back;
+authentication not plugin-validated` and no authentication-validation result.
+
+For iOS, published-and-read-back flows hand off to the direct user-managed
+`/build-ios` Wrap path after manual `/setup-apple-ios` and `/setup-apns`
+completion. After the exact IPA is installed, hand off to
+`/verify-ios-push`; a flow smoke test is not physical delivery verification.

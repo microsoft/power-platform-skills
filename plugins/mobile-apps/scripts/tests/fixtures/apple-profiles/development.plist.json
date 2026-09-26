@@ -1,0 +1,14 @@
+{
+  "UUID": "11111111-2222-3333-4444-555555555555",
+  "Name": "Sanitized Development Fixture",
+  "TeamIdentifier": ["A1B2C3D4E5"],
+  "ExpirationDate": "2027-08-21T06:00:00Z",
+  "ProvisionedDevices": ["sanitized-device-1", "sanitized-device-2"],
+  "DeveloperCertificates": ["sanitized-development-certificate"],
+  "Entitlements": {
+    "application-identifier": "A1B2C3D4E5.com.contoso.fieldapp",
+    "com.apple.developer.team-identifier": "A1B2C3D4E5",
+    "get-task-allow": true,
+    "aps-environment": "development"
+  }
+}

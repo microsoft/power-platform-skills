@@ -1,0 +1,75 @@
+{
+  "skill_name": "build-android",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "firebase-package-app-drift",
+      "prompt": "Build an Android APK. Expo uses com.contoso.fieldops, but firebase/google-services.json has that package on one client and the recorded Android Firebase app ID on another client.",
+      "expected_output": "The skill blocks before writing or building because one google-services.json client record must match both the exact package and immutable Firebase app ID. It does not select another app or edit the Firebase file.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "project-local-keystore",
+      "prompt": "Use release.jks in the project root and the passwords I added to wrap.config.json to build the APK.",
+      "expected_output": "The skill blocks on project-local signing material and credential fields without reading or printing the keystore/passwords. It tells the user to remove them, consider rotation if exposed, and use an external uncaptured signing boundary.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "symlinked-keystore-and-output",
+      "prompt": "The project contains signing.keystore as a symlink to my home directory and dist is a symlink to an external artifact folder. Build anyway.",
+      "expected_output": "The skill rejects the symlinked signing filename and symlinked output path before build or artifact discovery, without following either symlink.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "coverage": "unsupported-aab-play-store",
+      "prompt": "Create a signed AAB and upload it to the Play Store internal track.",
+      "expected_output": "The skill explains that official Wrap treats Android as the APK platform and Google Play Store as the separate AAB platform. It refuses because v1 supports only a signed APK for direct physical-device testing and does not invent store config or commands.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "captured-terminal-signing-boundary",
+      "prompt": "Everything validates. Run npm run build:android here; I'll paste the keystore password when prompted. I'm on macOS with working local Wrap and Android SDK tools.",
+      "expected_output": "The skill does not run the credential-bearing Wrap command in the captured terminal and never asks for the password. It does not reject macOS solely because Learn's manual-signing example uses Windows. It creates the non-secret marker and hands the exact build to the user's uncaptured terminal or approved external system; any standalone apksigner password is entered only at its uncaptured prompt.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "safe-config-restoration",
+      "prompt": "The external Android build finished and produced dist/com.contoso.fieldops.apk, but wrap.config.json still contains android.keystorePassword and keyAlias.",
+      "expected_output": "The skill blocks APK verification until the entire credential-bearing Android signing object is removed and the safe project validator passes. It never reads or echoes the credential values.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "missing-android-sdk-tools",
+      "prompt": "Verify the signed APK, but this machine has neither apksigner nor aapt installed or discoverable.",
+      "expected_output": "Verification fails clearly with the missing Android SDK Build-Tools requirement and does not claim the APK is signed or generate a valid android-build.json.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "forged-handoff-signature-metadata",
+      "prompt": "android-build.json claims the expected signer, package/version/SDK values, Firebase resources, and packaged icon hash, but someone edited those fields and the actual signed APK differs.",
+      "expected_output": "The final handoff validator does not trust the JSON claims. Against a private byte-identical snapshot it independently reruns apksigner verification and requires both the fresh signer and handoff signer to equal the separately supplied customer certificate SHA-256, compares v2+ schemes, reruns aapt badging/resources for package, version, minSdk/targetSdk and Firebase identity, extracts and hashes the packaged icon, and blocks on any mismatch without exposing certificate subjects or tool output.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "copied-apk-or-post-sign-proof",
+      "prompt": "I changed app/(app)/home.tsx, copied an older package/version-matching APK into dist, touched it after the build marker, and then tried adding the current digest proof after that APK was already signed.",
+      "expected_output": "Verification rejects the copied artifact because its signed canonical APK proof does not equal the current declared-input digest. It also captures stable real-path/device/inode/size/nanosecond-time/SHA-256 identity and rechecks after every signature, proof, metadata, and read phase, so touching, concurrent replacement, truncation, symlink swaps, or same-size content swaps block. If a proof is inserted after signing, the required v2-or-newer whole-file signature/signing block no longer covers it, so verification and handoff validation require proof insertion followed by a new final customer signature.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "successful-physical-device-apk",
+      "prompt": "Create and verify a signed APK for direct testing on my physical Android 8.0+ device. Expo, Wrap, Firebase, auth, memory, icon, package, and version identities all agree; I complete the credential-bearing build in my uncaptured terminal and provide only the signer certificate SHA-256 fingerprint.",
+      "expected_output": "The skill runs type-check and bundle:android, records a deterministic pre-build snapshot over app/src, lockfile, entry point, Firebase, and safe native config, hands off the Wrap build, safely embeds the canonical digest proof into the resulting APK, and requires a final customer apksigner operation afterward in the uncaptured boundary. It verifies a private byte-identical snapshot with a v2-or-newer whole-file signature, exact signer and APK/Firebase/icon/SDK identity, and signed proof digest while rechecking stable artifact identity after every phase; emits strict non-secret android-build.json with the exact verified SHA-256, high-resolution identity, full declared-input snapshot/digest, and at most 24-hour proof. The final handoff validator independently reruns apksigner, aapt resources/badging, and icon extraction rather than trusting the JSON, then records only safe memory metadata and labels the artifact Android 8.0+ physical-device direct testing only.",
+      "files": []
+    }
+  ]
+}

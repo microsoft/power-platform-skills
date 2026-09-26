@@ -1,0 +1,50 @@
+{
+  "name": "WIF sender cannot retain a Function fallback",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "sender-mode-fallback-forbidden"
+    ]
+  },
+  "contract": {
+    "senderAuthMode": "wif",
+    "requiredSenderActions": [
+      "Send_FCM"
+    ],
+    "forbiddenSenderActions": [
+      "Invoke_FCM_Sender_Function"
+    ],
+    "secureSenderActions": [
+      "Send_FCM"
+    ],
+    "forbiddenConnectionReferences": [
+      "fcmSenderFunction"
+    ]
+  },
+  "requested": {
+    "state": "Stopped",
+    "connectionReferences": {
+      "fcmSenderFunction": "fcmSenderFunction"
+    },
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Send_FCM": {
+          "type": "Http",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {}
+        },
+        "Invoke_FCM_Sender_Function": {
+          "type": "OpenApiConnection",
+          "runAfter": {
+            "Send_FCM": ["Failed"]
+          }
+        }
+      }
+    }
+  }
+}

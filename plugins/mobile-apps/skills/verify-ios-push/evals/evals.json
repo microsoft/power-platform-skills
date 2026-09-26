@@ -1,0 +1,117 @@
+{
+  "skill_name": "verify-ios-push",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "simulator-rejected",
+      "prompt": "Verify iOS push using the iOS simulator. The notification packages are installed and Expo config looks correct.",
+      "expected_output": "The skill stops before the live verification sequence, rejects the simulator and configuration-only proof, requires the exact registered-device IPA installed on a physical iPhone or iPad, and keeps APNs physical verification pending.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "wrong-or-stale-build",
+      "prompt": "A physical iPhone has an older Field Ops IPA installed. The current project has newer pushNotifications.ts and app route changes, but the bundle ID and version string are unchanged. Continue the verification.",
+      "expected_output": "The skill detects that bundled app inputs are newer than the recorded IPA, rejects the stale installed build even though its visible version matches, routes to /build-ios, and performs no delivery test.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "missing-topic-subscription",
+      "prompt": "The sender flow reaches Sent with a provider message ID, but the signed-out physical device receives no allUsers notification. Mark APNs complete because FCM accepted it.",
+      "expected_output": "The skill does not equate Sent/provider acceptance with device subscription or receipt, records the case as failed or blocked, inspects one correlated run safely without repeated resubmission, and leaves APNs pending.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "coverage": "foreground-only",
+      "prompt": "Foreground notifications work on the exact physical build. We did not test background or force-quit cold-start taps. Finish iOS verification.",
+      "expected_output": "The skill records only the foreground case as passed, explicitly rejects foreground-only completion, requires independent background and terminated cold-start/deep-link evidence, and keeps APNs pending.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "background-delivery",
+      "prompt": "Run the background case after foreground succeeded. The exact signed-out app is backgrounded and the allUsers outbox row reaches Sent, but no iOS notification appears.",
+      "expected_output": "The skill correlates the new outbox/sender run/provider evidence, treats missing physical background receipt as a failed background case rather than reusing foreground proof, avoids repeated sends, and routes diagnosis to the owning APNs/build/client stage.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "cold-start-deep-link",
+      "prompt": "The notification launches the force-quit physical app, but it lands on the home screen instead of the allowlisted work-item route. Count the launch as a successful deep-link test.",
+      "expected_output": "The skill fails the cold-start deep-link case because launch alone is insufficient, requires exactly-once validated navigation or the documented login-resume path, records safe route evidence, and leaves APNs pending.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "topic-transition-and-opt-out",
+      "prompt": "Verify signed-in user routing, sign-out to allUsers, and opt-out without inspecting identity values, registration tokens, derived topic strings, or raw recipient target fields.",
+      "expected_output": "The skill proves the signed-in transition behaviorally: the signed-in account receives the user-approved notification through the producer-to-outbox-to-sender chain, correlated only by safe case ID and topic category user. It proves sign-out through a fresh allUsers receipt, tests opt-out non-receipt, and requires a successful re-registration control.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "full-physical-success",
+      "prompt": "The exact fresh ad-hoc IPA recorded after the manual Team/bundle/mode signing confirmation is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve the test notification content after reviewing the device-exposure warning. Run and record the complete iOS push matrix.",
+      "expected_output": "The skill preserves exact recorded IPA path/size/mtime continuity without requiring generated provisioning proof, executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, behavioral signed-in user-topic delivery using only safe case ID and topic category, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "manual-auth-downstream",
+      "prompt": "The exact current development IPA is installed on a registered iPhone, all Firebase/APNs/build identities match, and the customer supplied the exact manual Power Automate sender flow ID. FlowAgent previously read back the producer and sender as Started with the observable outbox/routing/delivery contract. There is no sender-auth.json. Run physical iOS verification.",
+      "expected_output": "The skill does not require or fabricate sender-auth.json or reroute the customer-owned Power Automate sender through a managed auth owner. It refetches the exact producer and customer-supplied sender flow IDs, validates only their observable Started/outbox/routing/delivery contract without inspecting credentials or secure action data, and still requires every iOS A-H physical delivery and APNs completion gate.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "unsupported-custom-endpoint",
+      "prompt": "The current IPA is installed and the producer flow is Started, but we want to use a hosted custom endpoint instead of the Power Automate sender. Run plugin iOS physical verification.",
+      "expected_output": "The skill explains that custom endpoint sender handoffs are not supported and requires the exact plugin-created Power Automate sender flow or a WIF-authenticated sender before physical verification.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "coverage": "missing-ios-build-handoff",
+      "prompt": "A registered iPhone has an IPA installed, but the project has no ios-build.json. The file name and visible app version look current, so continue.",
+      "expected_output": "The skill blocks before the live verification sequence because source-to-artifact continuity is unproven, routes to build-ios to create a fresh lightweight ios-build.json, and does not claim signing attestation.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "coverage": "stale-ios-build-handoff",
+      "prompt": "ios-build.json is older than its valid-until timestamp and max-age window, but the IPA still exists at the recorded path.",
+      "expected_output": "The skill rejects the stale handoff before installation confirmation or live sends and requires a fresh Wrap build handoff rather than relying on path, size, or visible version.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "coverage": "changed-ios-input",
+      "prompt": "After ios-build.json was written, pushNotifications.ts and tamagui.config.ts changed but the IPA and handoff JSON were not updated.",
+      "expected_output": "The skill reruns validate-ios-build-handoff.js, detects declared-input content drift across app or supported root config, blocks installation or the live verification sequence, and routes to build-ios for a new pre-build snapshot, IPA, and handoff.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "coverage": "changed-ios-ipa",
+      "prompt": "Replace the recorded IPA with another file having the same name and modification time, then continue using the existing ios-build.json.",
+      "expected_output": "The skill rejects the substituted IPA because its SHA-256 and size no longer match the handoff, even if the path and timestamp match, and performs no live send.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "coverage": "valid-lightweight-ios-handoff",
+      "prompt": "validate-ios-build-handoff.js reports valid immediately before installation confirmation and again immediately before the live verification sequence. The IPA hash, pre-build declared-input snapshot, app/Firebase/auth/build identities, and freshness window are unchanged, and no mutation can occur during the uninterrupted sequence.",
+      "expected_output": "The skill accepts proof of pre/post-build project-input continuity plus the selected fresh IPA identity/freshness, does not rerun the validator before every individual send unless mutation could occur, clearly states that signing, certificate, provisioning-profile, entitlement, embedded-profile, IPA-signature, and cryptographic input-digest embedding attestation were not performed, and proceeds with the complete physical A-H matrix.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "coverage": "ios-readiness-and-flowagent-classification",
+      "prompt": "Verify an already-built iOS IPA, but PAC is missing and FlowAgent is installed but disconnected.",
+      "expected_output": "The skill classifies the missing local PAC prerequisite through the ios-verify probe, waits for manual repair, and requires a successful recheck without unnecessarily requiring Xcode for the verification stage. It then classifies FlowAgent as mcp-server-disconnected, waits through setup/restart, and requires a fresh connected-tool recheck before flow read-back.",
+      "files": []
+    }
+  ]
+}

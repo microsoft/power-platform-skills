@@ -1,0 +1,223 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(PLUGIN_ROOT, relativePath), 'utf8');
+}
+
+test('canonical push lifecycle defines ordered resumable ownership', () => {
+  const lifecycle = read('shared/references/push-lifecycle.md');
+  const stages = [
+    '1. Firebase client',
+    '2. Platform credentials and capabilities',
+    '3. Runtime integration',
+    '4. Sender authentication',
+    '5. Power Automate flows',
+    '6. Wrapped build',
+    '7. Physical delivery',
+  ];
+
+  let previous = -1;
+  for (const stage of stages) {
+    const index = lifecycle.indexOf(stage);
+    assert.ok(index > previous, `${stage} appears in canonical order`);
+    previous = index;
+  }
+
+  for (const route of [
+    '/setup-fcm',
+    '/setup-apple-ios',
+    '/setup-apns',
+    '/add-push-notifications',
+    '/setup-push-wif',
+    '/create-push-notification-flow',
+    '/build-ios',
+    '/verify-ios-push',
+    '/build-android',
+    '/verify-android-push',
+  ]) {
+    assert.ok(lifecycle.includes(route), `${route} has a lifecycle owner or route`);
+  }
+
+  assert.match(lifecycle, /Android build and verification entries are routing names only/);
+  assert.match(lifecycle, /do not assume an artifact extension, build mode/i);
+  assert.match(lifecycle, /authentication not plugin-validated/);
+  assert.match(lifecycle, /exact producer and sender flow IDs are recorded, published, and read back/);
+  assert.match(lifecycle, /\[push-physical-verification\.md\]\(\.\/push-physical-verification\.md\)/);
+  assert.match(lifecycle, /## Safe manual sender handoff/);
+  assert.match(lifecycle, /customer-owned Power Automate sender \/ observable contract read back; authentication not plugin-validated/);
+  assert.doesNotMatch(lifecycle, /customer-owned non-Flow endpoint/);
+  assert.match(lifecycle, /customer supplies and approves recording the exact sender flow ID/);
+  assert.doesNotMatch(lifecycle, /Use a distinct non-Flow handoff schema/);
+  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with Yes\/No confirmations/);
+  assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
+  assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
+  assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
+  assert.match(lifecycle, /`\/setup-fcm` owns every Firebase MCP call/);
+  assert.match(lifecycle, /`\/setup-push-wif` owns every guarded Google Cloud CLI invocation, Azure MCP\s+call/);
+  assert.match(lifecycle, /Push setup runs serially/);
+  assert.match(lifecycle, /invokes\s+`\/setup-apple-ios` and then `\/setup-apns` synchronously/);
+  assert.match(lifecycle, /implements runtime integration directly/);
+  assert.doesNotMatch(lifecycle, /WORKER_RESULT|operation: preflight|exclusive_files|pre-wave/);
+  assert.match(lifecycle, /app\s+registration or another same-tenant existing registration:[\s\S]*read-only\s+inventory -> explicit approval -> execution and proof/i);
+  assert.match(lifecycle, /Only an explicitly\s+selected new dedicated registration uses the staged path/i);
+  assert.match(lifecycle, /fresh claim-driven plan -> second explicit\s+approval/);
+  assert.match(lifecycle, /first\s+approval never authorizes the remaining plan/);
+  assert.match(lifecycle, /FlowAgent authoring, wrapped builds, installation handoffs, and physical\s+verification remain sequential/);
+});
+
+test('add-push owns runtime integration and orchestrates platform owners', () => {
+  const skill = read('skills/add-push-notifications/SKILL.md');
+  const description = skill.match(/^description: (.+)$/m)?.[1] || '';
+
+  for (const responsibility of [
+    'permissions',
+    'registration-token lifecycle',
+    'topic synchronization',
+    'listeners/background handling',
+    'shared typed navigation-intent integration',
+  ]) {
+    assert.ok(description.includes(responsibility), `description owns ${responsibility}`);
+  }
+
+  assert.match(skill, /default user-facing push command/);
+  assert.match(skill, /Resolve the stopping point/);
+  assert.match(skill, /Never ask the\s+user to choose a stopping point/);
+  assert.match(skill, /Default to \*\*Create delivery flows\*\*/);
+  assert.match(skill, /do not ask about HTTPS App Links\/Universal Links/);
+  assert.match(skill, /invoke `\/build-android`/);
+  assert.match(skill, /invoke `\/verify-android-push`/);
+  assert.match(skill, /never requires or fabricates\s+`sender-auth\.json`/);
+  assert.match(skill, /exact\s+plugin-created sender flow ID/);
+  assert.doesNotMatch(skill, /non-Flow endpoint/);
+  assert.match(skill, /manual Apple Developer\/Xcode guidance/);
+  assert.match(skill, /does not automate Apple setup or emit a proof artifact/);
+  assert.match(skill, /cloud\s+provisioning, flow mutation, wrapped builds/);
+  assert.match(skill, /Build a stage-lazy readiness schedule/);
+  assert.match(skill, /\*\*Configure app:\*\* Firebase client readiness only/);
+  assert.match(skill, /Resource Manager error from Firebase MCP is not evidence that gcloud\s+is missing/);
+  assert.match(skill, /does not dispatch background push agents/);
+});
+
+test('build and physical verification boundaries remain non-overlapping', () => {
+  const build = read('skills/build-ios/SKILL.md');
+  const verify = read('skills/verify-ios-push/SKILL.md');
+  const verifyAndroid = read('skills/verify-android-push/SKILL.md');
+  const physical = read('shared/references/push-physical-verification.md');
+  const buildDescription = build.match(/^description: (.+)$/m)?.[1] || '';
+
+  assert.match(build, /owns only the iOS wrapped-build stage/);
+  assert.match(build, /does not install, launch, or test the IPA/);
+  assert.match(buildDescription, /does not install or verify them/);
+
+  assert.match(verify, /push-physical-verification\.md/);
+  assert.match(verify, /Apply the shared physical-verification protocol first/);
+  assert.match(verify, /A-H matrix below remain mandatory and authoritative/);
+  assert.match(verify, /Do not run the sender-auth validator\s+for a customer-owned Power Automate sender/);
+  assert.match(verify, /exact canonical status and customer-supplied sender flow ID/);
+  assert.doesNotMatch(verify, /non-Flow endpoint/);
+  assert.match(verify, /### A\. Permission UX/);
+  assert.match(verify, /### H\. Token refresh\/re-registration recovery/);
+  assert.match(verify, /Mark APNs physical verification complete only when A-H\s+all pass/);
+
+  assert.match(verifyAndroid, /push-physical-verification\.md/);
+  assert.match(physical, /## Required handoff continuity/);
+  assert.match(physical, /## FlowAgent-only flow boundary/);
+  assert.match(physical, /## Privacy-safe correlation/);
+  assert.match(physical, /## Completion rules/);
+});
+
+test('lifecycle eval IDs append locally and cover guided orchestration', () => {
+  const addPush = JSON.parse(read('skills/add-push-notifications/evals/evals.json'));
+  const verifyIos = JSON.parse(read('skills/verify-ios-push/evals/evals.json'));
+
+  assert.deepStrictEqual(
+    addPush.evals.map(({ id }) => id),
+    Array.from({ length: 38 }, (_, index) => index + 1),
+  );
+  assert.match(addPush.evals[14].expected_output, /invokes build-android/);
+  assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
+  assert.match(addPush.evals[15].expected_output, /exact plugin-created sender flow ID/);
+  assert.match(addPush.evals[15].expected_output, /never inspects credentials/);
+  assert.match(addPush.evals[16].expected_output, /custom endpoint and Azure Function sender options are not offered/);
+  assert.match(addPush.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
+  assert.match(addPush.evals[17].expected_output, /without fallback navigation/);
+  assert.match(addPush.evals[18].expected_output, /one guided workflow/);
+  assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
+  assert.match(addPush.evals[19].expected_output, /scheduleNotificationAsync/);
+  assert.match(addPush.evals[20].expected_output, /same channel ID/);
+  assert.strictEqual(addPush.evals[21].coverage, 'fully-serial-push-orchestration');
+  assert.match(addPush.evals[21].expected_output, /creates no background Task/);
+  assert.strictEqual(addPush.evals[22].coverage, 'inline-single-platform-runtime');
+  assert.strictEqual(addPush.evals[23].coverage, 'task-unavailable-irrelevant');
+  assert.strictEqual(addPush.evals[24].coverage, 'serial-owner-tool-context');
+  assert.strictEqual(addPush.evals[25].coverage, 'serial-memory-updates');
+  assert.strictEqual(addPush.evals[26].coverage, 'platform-specific-partial-blocker');
+  assert.strictEqual(
+    addPush.evals[27].coverage,
+    'serial-ios-owner-order',
+  );
+  assert.match(addPush.evals[27].expected_output, /setup-apple-ios and then \/setup-apns synchronously/);
+  assert.match(addPush.evals[27].expected_output, /No worker preflight or fallback exists/);
+  assert.strictEqual(addPush.evals[28].coverage, 'cold-wif-identity-bootstrap-reapproval');
+  assert.match(addPush.evals[28].expected_output, /null client ID/);
+  assert.match(addPush.evals[28].expected_output, /second explicit approval/);
+  assert.strictEqual(addPush.evals[29].coverage, 'apns-question-after-firebase');
+  assert.match(addPush.evals[29].expected_output, /does not ask whether an APNs credential is already uploaded/);
+  assert.match(addPush.evals[29].expected_output, /Only then/);
+  assert.strictEqual(addPush.evals[30].coverage, 'noninteractive-stopping-point-and-links');
+  assert.match(addPush.evals[30].expected_output, /does not ask for a stopping point/);
+  assert.match(addPush.evals[30].expected_output, /does not ask whether Universal Links or App Links are wanted/);
+  assert.strictEqual(addPush.evals[31].coverage, 'wif-registration-choice');
+  assert.match(addPush.evals[31].expected_output, /reuse-app-registration/);
+  assert.match(addPush.evals[31].expected_output, /use-existing-registration/);
+  assert.match(addPush.evals[31].expected_output, /create-dedicated-registration/);
+  assert.strictEqual(addPush.evals[32].coverage, 'existing-registration-fast-path');
+  assert.match(addPush.evals[32].expected_output, /serial \/setup-push-wif owner/);
+  assert.match(addPush.evals[32].expected_output, /same use-existing-registration client ID through final proof/);
+  assert.strictEqual(addPush.evals[33].coverage, 'create-new-only-bootstrap');
+  assert.match(addPush.evals[33].expected_output, /Only the explicit create-dedicated-registration choice/);
+  assert.strictEqual(addPush.evals[34].coverage, 'configure-app-stage-lazy-readiness');
+  assert.match(addPush.evals[34].expected_output, /does not require gcloud/);
+  assert.strictEqual(addPush.evals[35].coverage, 'delivery-flow-readiness-order');
+  assert.strictEqual(addPush.evals[36].coverage, 'selected-platform-build-readiness');
+  assert.strictEqual(addPush.evals[37].coverage, 'no-push-worker-preflight');
+
+  assert.deepStrictEqual(
+    verifyIos.evals.map(({ id }) => id),
+    Array.from({ length: 16 }, (_, index) => index + 1),
+  );
+  assert.strictEqual(verifyIos.evals[8].coverage, 'manual-auth-downstream');
+  assert.match(verifyIos.evals[8].prompt, /exact manual Power Automate sender flow ID/);
+  assert.match(verifyIos.evals[8].expected_output, /does not require or fabricate sender-auth\.json/);
+  assert.strictEqual(verifyIos.evals[9].coverage, 'unsupported-custom-endpoint');
+  assert.strictEqual(verifyIos.evals[10].coverage, 'missing-ios-build-handoff');
+  assert.strictEqual(verifyIos.evals[14].coverage, 'valid-lightweight-ios-handoff');
+  assert.strictEqual(verifyIos.evals[15].coverage, 'ios-readiness-and-flowagent-classification');
+});
+
+test('manual Power Automate sender handoff stays aligned with flow authoring', () => {
+  const createFlow = read('skills/create-push-notification-flow/SKILL.md');
+  const authoring = read('shared/references/push-flow-authoring.md');
+
+  for (const content of [createFlow, authoring]) {
+    assert.match(
+      content,
+      /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
+      'uses the canonical manual sender status',
+    );
+    assert.match(content, /exact\s+(?:plugin-created\s+)?sender flow ID/i);
+    assert.match(content, /queued[- ]outbox\s+(?:trigger\/guard|guard)/i);
+    assert.match(content, /idempotent claim/i);
+    assert.match(content, /`allUsers`.*lowercase-OID/is);
+    assert.match(content, /delivery invocation/i);
+    assert.match(content, /`Sent`\/`Failed` updates/i);
+    assert.match(content, /do not\s+(?:request or\s+)?inspect[\s\S]*credentials/i);
+  }
+});

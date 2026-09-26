@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "appId": "1:123456789:android:other",
+      "displayName": "Other Android App",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.other"
+    }
+  ]
+}

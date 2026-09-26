@@ -1,0 +1,97 @@
+{
+  "name": "valid WIF sender action tree",
+  "expected": {
+    "valid": true,
+    "reasons": []
+  },
+  "contract": {
+    "senderAuthMode": "wif",
+    "requiredSenderActions": [
+      "Get_Entra_Client_Secret",
+      "Get_Entra_Token",
+      "Exchange_Google_STS",
+      "Impersonate_FCM_Sender",
+      "Send_FCM"
+    ],
+    "forbiddenSenderActions": [
+      "Invoke_FCM_Sender_Function"
+    ],
+    "secureSenderActions": [
+      "Get_Entra_Client_Secret",
+      "Get_Entra_Token",
+      "Exchange_Google_STS",
+      "Impersonate_FCM_Sender",
+      "Send_FCM"
+    ],
+    "requiredConnectionReferences": [
+      "shared_keyvault"
+    ],
+    "forbiddenConnectionReferences": [
+      "fcmSenderFunction"
+    ]
+  },
+  "requested": {
+    "state": "Stopped",
+    "connectionReferences": {
+      "shared_keyvault": "shared_keyvault"
+    },
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Get_Entra_Client_Secret": {
+          "type": "OpenApiConnection",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {}
+        },
+        "Get_Entra_Token": {
+          "type": "Http",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {
+            "Get_Entra_Client_Secret": ["Succeeded"]
+          }
+        },
+        "Exchange_Google_STS": {
+          "type": "Http",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {
+            "Get_Entra_Token": ["Succeeded"]
+          }
+        },
+        "Impersonate_FCM_Sender": {
+          "type": "Http",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {
+            "Exchange_Google_STS": ["Succeeded"]
+          }
+        },
+        "Send_FCM": {
+          "type": "Http",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {
+            "Impersonate_FCM_Sender": ["Succeeded"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,8 +1,8 @@
 ---
 name: add-native
-description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
+description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, push notifications, or supported local file workflows — in a Power Apps mobile app. Routes push notification requests to the dedicated notification workflow.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
@@ -34,6 +34,7 @@ Current dedicated implementations:
 | `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | [`add-pdf-viewer`](add-pdf-viewer/SKILL.md) internal helper | Enforces `https://` / `file://` viewer inputs and native viewer result handling |
 | `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | [`add-pen-input`](add-pen-input/SKILL.md) internal helper | Captures PNG data URI and documents Dataverse Image/File persistence |
 | `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | [`add-geolocation`](add-geolocation/SKILL.md) internal helper | Native background GPS tracking with durable storage and inline Dataverse sync; distinct from one-shot `expo-location` |
+| `push-notifications`, `notifications`, `fcm`, `apns`, `expo-notifications` | `/add-push-notifications` public workflow | Coordinates Firebase/APNs credentials, permission UX, OID/allUsers topics, auth lifecycle, and deep links |
 
 For every other capability listed below, this skill writes the wrapper directly.
 
@@ -54,6 +55,7 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 | Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | `@microsoft/power-apps-native-bglocation` present | Do not use one-shot `expo-location` for background tracking; do not use the `GeolocationExtension`/HostingSDK path |
 | Store generated PDF/signature artifact | Generated Dataverse services after parent row exists | File/Image column or child Evidence/Attachment table exists | Never put File bytes in create/update JSON |
 | Native capability not listed in this table | Resolve from `package.json`, then add an inline wrapper only when the matching package is present and not runtime-banned | Exact relevant package present in `package.json` | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
+| Push notifications / FCM topics / APNs | `/add-push-notifications` | `expo-notifications`, `@react-native-firebase/app`, and `@react-native-firebase/messaging` present | Do not generate a generic notification wrapper; the dedicated workflow owns auth/topic/deep-link lifecycle |
 
 Handle multi-part requests row-by-row. Example: "capture signature and attach signed report PDF" requires `pen-input`, `pdf-report`, Dataverse artifact storage, and possibly `sharing`; do not add only the native capability while leaving storage or screen states undefined. The map is not closed: for new shipped packages, resolve by capability semantics, use the directly matching package when safe, and ask once only if multiple installed packages plausibly match.
 
@@ -196,6 +198,10 @@ When the user asks for "location" or "GPS", disambiguate by intent: continuous/b
 
 If the user names something not in the supported table, apply the Native capability gate: resolve the relevant package from `package.json`, continue only when present and not runtime-banned, otherwise stop with a transparency note.
 
+If the resolved capability is `push-notifications`, `notifications`, `fcm`, `apns`, or `expo-notifications`, invoke `/add-push-notifications` with the same working directory and STOP. Notification integration spans multiple files and cannot use the generic one-file wrapper path.
+
+If the resolved capability is `calendar-management-view`, STOP after verifying `react-native-calendars` is present in `package.json`: no wrapper is generated because it is a UI library, not a device API. The screen-builder owns importing `Calendar`, `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Agenda`, or `CalendarList` directly from `react-native-calendars` based on the approved screen spec.
+
 ### Step 3 — Route to nested helpers or inline wrappers
 
 **Telemetry checkpoint: `dispatch_native_capability`**
@@ -329,5 +335,5 @@ Sample usage:
 ## Notes
 
 - This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
-- For capabilities not in the supported table (`expo-notifications`, Bluetooth, NFC, BLE, AR — until the template adds them), tell the user the template doesn't ship them yet — file a request at the upstream template repo. Do NOT attempt to install or configure anything yourself.
+- For Bluetooth, NFC, BLE, and AR requests without a shipped package, tell the user the template does not support them. Push notifications are handled by `/add-push-notifications`, not this generic wrapper flow.
 - Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

@@ -1,0 +1,38 @@
+{
+  "name": "fixed target lookup must not depend on lookuplogicalname annotation",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "fixed-target-lookup-must-not-depend-on-logical-name-annotation"
+    ]
+  },
+  "contract": {
+    "lookupTargets": {
+      "Resolve_Requestor": "fixed",
+      "Resolve_Owner": "polymorphic"
+    }
+  },
+  "requested": {
+    "state": "Stopped",
+    "connectionReferences": {},
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Resolve_Requestor": {
+          "type": "Compose",
+          "inputs": "@if(equals(triggerBody()?['_new_requestor_value@Microsoft.Dynamics.CRM.lookuplogicalname'],'systemuser'),triggerBody()?['_new_requestor_value'],null)",
+          "runAfter": {}
+        },
+        "Resolve_Owner": {
+          "type": "Compose",
+          "inputs": "@equals(triggerBody()?['_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname'],'systemuser')",
+          "runAfter": {
+            "Resolve_Requestor": [
+              "Succeeded"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
