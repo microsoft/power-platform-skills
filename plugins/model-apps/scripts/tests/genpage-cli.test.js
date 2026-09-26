@@ -1,9 +1,14 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+const scratchDirs = [];
+test.after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
 // LIVE from a Dataverse test environment (2026-07). Columns auto-size to the longest name. `listText` reproduces
@@ -53,6 +58,30 @@ test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quote
   // % (verified to round-trip literally through cmd.exe) keeps prompts/names with env-var syntax intact.
   assert.strictEqual(quoteArg('plain%PATH%end'), '"plain"^%"PATH"^%"end"');
   assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
+});
+
+test('quoteArg doubles a backslash run before an interior quote', () => {
+  assert.strictEqual(quoteArg('qa slash\\"quote'), '"' + 'qa slash' + '\\\\' + '""' + 'quote' + '"');
+  assert.strictEqual(quoteArg(String.raw`a\\\\"b`), '"' + 'a' + '\\\\'.repeat(4) + '""' + 'b' + '"');
+});
+
+test('quoteArg round-trips through a real Windows shell parse', { skip: process.platform !== 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(__dirname, '.genpage-cli-roundtrip-'));
+  scratchDirs.push(dir);
+  const script = path.join(dir, 'argv.js');
+  fs.writeFileSync(script, 'console.log(JSON.stringify(process.argv.slice(2)));\n', 'utf8');
+  for (const value of [
+    'qa slash\\"quote',
+    'qa "Quoted" 東京 %PATH%',
+    'D:\\space path\\\\',
+    String.raw`a\\\\"b`,
+    'Overview',
+  ]) {
+    const command = 'node ' + quoteArg(script) + ' ' + quoteArg(value) + ' after';
+    const r = spawnSync(command, { shell: true, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    assert.deepStrictEqual(JSON.parse(r.stdout), [value, 'after'], `round-trip failed for ${JSON.stringify(value)} via ${command}`);
+  }
 });
 
 test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
@@ -286,6 +315,9 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
   assert.deepStrictEqual(classifyListOutput(LIST_EMPTY).pages, []);
   // recognized-empty: "no pages" phrase variant (observed in older pac builds)
   assert.strictEqual(classifyListOutput('No generated pages found.\n').kind, 'empty');
+  assert.strictEqual(classifyListOutput('  No pages found  \n').kind, 'empty', 'a standalone no-pages line is accepted');
+  assert.strictEqual(classifyListOutput('Warning: no pages could be retrieved because the service is unavailable\n').kind, 'unrecognized', 'a warning sentence is not proof of an empty app');
+  assert.strictEqual(classifyListOutput('Status: No generated pages found after retry\n').kind, 'unrecognized', 'the no-pages phrase must occupy the whole trimmed line');
   // unrecognized: blank output (not proof of empty — could be a timeout or help-dump with no banner)
   assert.strictEqual(classifyListOutput('').kind, 'unrecognized');
   // unrecognized: help/usage banner (pac dumps usage on a flag error but exits 0 on some builds)
@@ -301,6 +333,16 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
 // stdout (names + descriptions), so a page NAMED or DESCRIBED with "no page(s)" text must NOT force an app
 // WITH live pages to classify as EMPTY. A false 'empty' → reconcile sees zero live → duplicate CREATE on
 // build + silent page-drop on download. Empty requires NO positive page evidence.
+test('classifyListOutput: repeated page ids make a matching-count listing unrecognized', () => {
+  const duplicateId = listText([
+    { pageId: GUID, name: 'Overview' },
+    { pageId: GUID.toUpperCase(), name: 'Summary' },
+  ], 2);
+  const k = classifyListOutput(duplicateId);
+  assert.strictEqual(k.kind, 'unrecognized', `duplicate page identity must fail closed; got ${JSON.stringify(k)}`);
+  assert.deepStrictEqual(k.pages, [], 'duplicate identities are not an authoritative set of pages');
+});
+
 test('classifyListOutput: a page NAMED "no pages" does NOT force empty when real pages are listed', () => {
   // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'. The "no pages"
   // phrase is tested against the whole stdout (which includes page NAMES), so it must not fire here.
@@ -892,6 +934,8 @@ test('parsePageId refuses a GUID followed by any identifier character, not just 
       `a token continuing with ${JSON.stringify(suffix)} must be refused, not trimmed to the GUID`);
   }
   // ...but punctuation genuinely ENDS the token — pac prints the id inside prose.
+  assert.strictEqual(parsePageId(`Page ID: ${G}東京`), null,
+    'a Unicode letter continues the token and must not be silently dropped');
   for (const suffix of ['.', ',', ')', ' ', '\n']) {
     assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), G,
       `${JSON.stringify(suffix)} terminates the id and must still parse`);
