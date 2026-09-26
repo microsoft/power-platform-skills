@@ -35,7 +35,6 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { readUtf8Stream } = require('../scripts/lib/modelapps-hook-utils.js');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1' || process.env.MODEL_APPS_SKIP_WRITE_GUARD === 'true';
@@ -46,6 +45,8 @@ const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1' || process.env.MODE
 if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISABLE_HOOKS === 'true') {
   process.exit(0);
 }
+
+const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
 
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
