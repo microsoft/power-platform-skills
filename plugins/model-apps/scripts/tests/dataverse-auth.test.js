@@ -135,7 +135,7 @@ test('getAuthToken reuses a non-empty token per normalized resource URL', () => 
   const oldPath = process.env.PATH;
   process.env.PATH = '';
   try {
-    assert.equal(getAuthToken('https://Contoso.crm.dynamics.com/', { exec, fresh: true }), 'TOK');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com/', { exec, fresh: true }), 'TOK');
     assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'TOK');
     assert.equal(getAuthToken('https://fabrikam.crm.dynamics.com', { exec, fresh: true }), 'TOK');
   } finally {
@@ -180,6 +180,33 @@ test('getAuthToken does not cache a null token result', () => {
     process.env.PATH = oldPath;
   }
   assert.equal(calls, 2);
+});
+
+test('getAuthTokenAsync shares the token memo with getAuthToken and honors fresh replacement', async () => {
+  const { getAuthToken, getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  const calls = [];
+  const exec = (_file, args) => {
+    calls.push(`sync:${args[args.indexOf('--resource') + 1]}`);
+    return 'SYNC\n';
+  };
+  const execFile = (_file, args, _opts, cb) => {
+    calls.push(`async:${args[args.indexOf('--resource') + 1]}`);
+    setImmediate(() => cb(null, calls.length === 1 ? 'ASYNC\n' : 'FRESH\n'));
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(await getAuthTokenAsync('https://contoso.crm.dynamics.com/', { execFile, fresh: true }), 'ASYNC');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'ASYNC');
+    assert.equal(await getAuthTokenAsync('https://contoso.crm.dynamics.com', { execFile, fresh: true }), 'FRESH');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'FRESH');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.deepEqual(calls, [
+    'async:https://contoso.crm.dynamics.com',
+    'async:https://contoso.crm.dynamics.com',
+  ]);
 });
 
 test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {

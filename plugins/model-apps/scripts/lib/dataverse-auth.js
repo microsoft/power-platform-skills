@@ -4,7 +4,7 @@
 // Uses Azure CLI (`az account get-access-token`) for auth — same MSAL cache that pac CLI uses.
 // All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 // Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
@@ -56,6 +56,40 @@ function getAuthToken(envUrl, opts = {}) {
     if (opts.fresh) authTokenMemo.delete(resource);
     return null;
   }
+}
+
+function getAuthTokenAsync(envUrl, opts = {}) {
+  const resource = normalizeTokenResource(envUrl);
+  const exec = opts.execFile || execFile;
+  if (!opts.fresh && authTokenMemo.has(resource)) {
+    return Promise.resolve(authTokenMemo.get(resource));
+  }
+  return new Promise((resolve) => {
+    try {
+      exec(
+        'az',
+        ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
+        { encoding: 'utf8', timeout: 30000, windowsHide: true, shell: process.platform === 'win32' },
+        (error, stdout) => {
+          if (error) {
+            if (opts.fresh) authTokenMemo.delete(resource);
+            resolve(null);
+            return;
+          }
+          const token = String(stdout || '').trim() || null;
+          // Shares the synchronous helper's memo deliberately: check-auth can pre-warm the token
+          // without blocking the event loop, and later synchronous Dataverse callers in the same
+          // process still avoid a second Azure CLI cold start.
+          if (token) authTokenMemo.set(resource, token);
+          else authTokenMemo.delete(resource);
+          resolve(token);
+        }
+      );
+    } catch {
+      if (opts.fresh) authTokenMemo.delete(resource);
+      resolve(null);
+    }
+  });
 }
 
 /**
@@ -686,6 +720,7 @@ module.exports = {
   preflightAuth,
   azIdentity,
   getAuthToken,
+  getAuthTokenAsync,
   makeRequest,
   dataverseRequest,
   ensureOk,
