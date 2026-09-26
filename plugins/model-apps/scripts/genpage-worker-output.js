@@ -9,7 +9,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
 
 // A worker that returns without writing leaves whatever was at its path before, and a complete page an
@@ -22,7 +21,7 @@ const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, ha
 // check with no stamp checks the content alone.
 const STAMP_SUFFIX = '.dispatch-stamp.json';
 const stampPathFor = (abs) => path.join(path.dirname(abs), `.${path.basename(abs)}${STAMP_SUFFIX}`);
-const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const { sha256 } = require('./lib/hash.js');
 
 function stampPageTarget({ filePath }) {
   if (!filePath) return { ok: false, action: 'stamp', problems: ['--file is required'] };

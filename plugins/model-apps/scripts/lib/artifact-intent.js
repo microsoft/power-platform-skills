@@ -912,6 +912,9 @@ module.exports = {
   mergeFieldOptions,
   clampedCellSpan,
   cellFitsInRow,
+  // Shared with projection.js, whose changed-only verifier must skip exactly the controls this
+  // compiler skips; a second copy of the class-id set had to be kept in sync by hand.
+  isNonFieldControl,
   // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its
   // row, and the reconcile must re-pack it with the SAME rule the create path uses, not a second
   // implementation that can drift.
