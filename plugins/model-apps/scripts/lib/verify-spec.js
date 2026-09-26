@@ -119,10 +119,11 @@ async function verifySpec(spec, read, opts = {}) {
   // Views / charts / forms — by (entity, name) identity.
   for (const v of spec.views || []) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
-    // Also select layoutxml so a CONTENT check can catch a view whose column set drifted from the spec
-    // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
-    // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
-    // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
+    // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
+    // added or renamed column that never landed would otherwise pass an existence-only verify). It
+    // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
+    // deployed, and an extra deployed column is deliberately not a failure (see below). Best-effort: the
+    // column check only runs when the deployed row actually carries layoutxml.
     let rows = [];
     let readError = null;
     try {

@@ -5,7 +5,6 @@
 //   rows: [a rowspan=2] / [b, c]
 //   row 2: own 2 + reserved 1 (a) = 3 columns
 
-
 function cellWidth(cell) {
   return Number(cell && cell.colspan) || 1;
 }
