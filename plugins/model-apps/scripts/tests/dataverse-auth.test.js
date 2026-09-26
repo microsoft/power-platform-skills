@@ -155,8 +155,8 @@ test('getAuthToken does not cache a null token result', () => {
   const oldPath = process.env.PATH;
   process.env.PATH = '';
   try {
-    assert.equal(getAuthToken('https://tailspin.crm.dynamics.com', { exec, fresh: true }), null);
-    assert.equal(getAuthToken('https://tailspin.crm.dynamics.com', { exec }), 'TOK');
+    assert.equal(getAuthToken('https://example.crm.dynamics.com', { exec, fresh: true }), null);
+    assert.equal(getAuthToken('https://example.crm.dynamics.com', { exec }), 'TOK');
   } finally {
     process.env.PATH = oldPath;
   }
