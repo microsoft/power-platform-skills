@@ -76,8 +76,12 @@ test('summarize fails the run when any non-skipped suite failed', () => {
 // failure. This is a text assertion rather than a YAML parse because the repo ships no YAML
 // dependency and the properties that matter are all line-level.
 const WORKFLOW = path.resolve(__dirname, '..', '..', '..', '..', '.github', 'workflows', 'model-apps-script-tests.yml');
+// The one exception: the `shared/` sources this plugin ships physical copies of. A change to one is
+// NOT unrelated — telemetry-lib-copy.test.js fails when a copy drifts from its source, and it should
+// fail in the PR that edited the source, not in the next model-apps PR, whose author did not cause it.
+const BUNDLED_SHARED_SOURCES = new Set(['shared/telemetry/**', 'shared/skills/**']);
 
-test('the model-apps CI workflow triggers ONLY on model-apps paths', () => {
+test('the model-apps CI workflow triggers ONLY on model-apps paths and the shared sources it bundles', () => {
   const wf = fs.readFileSync(WORKFLOW, 'utf8');
   // The `paths:` block ends at the first non-list line (the blank line before `jobs:`).
   //   paths:
@@ -95,12 +99,19 @@ test('the model-apps CI workflow triggers ONLY on model-apps paths', () => {
   assert.ok(globs.length > 0, 'the workflow must declare a paths filter, not run on every PR');
   for (const g of globs) {
     assert.ok(
-      g.startsWith('plugins/model-apps/') || g.startsWith('evals/model-apps/') || g.endsWith('model-apps-script-tests.yml'),
+      g.startsWith('plugins/model-apps/') || g.startsWith('evals/model-apps/') || g.endsWith('model-apps-script-tests.yml')
+        || BUNDLED_SHARED_SOURCES.has(g),
       `path filter "${g}" is not scoped to model-apps — this workflow must not run for other plugins`
     );
   }
   // And it must not be scoped so tightly that the plugin's own code stops triggering it.
   assert.ok(globs.some((g) => g.startsWith('plugins/model-apps/')), 'the plugin source must trigger the workflow');
+  // Every shared source the plugin copies from must trigger it, and each one must exist: a renamed
+  // or removed source would otherwise leave an allowed glob that matches nothing.
+  for (const source of BUNDLED_SHARED_SOURCES) {
+    assert.ok(globs.includes(source), `a change to ${source} must run the drift test`);
+    assert.ok(fs.existsSync(path.resolve(__dirname, '..', '..', '..', '..', source.replace(/\/\*\*$/, ''))), `${source} names no directory`);
+  }
 });
 
 test('the model-apps CI workflow opts out of telemetry transmission on every job', () => {
@@ -111,6 +122,20 @@ test('the model-apps CI workflow opts out of telemetry transmission on every job
   const optOuts = (wf.match(/POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT/g) || []).length;
   assert.ok(jobCount >= 2, `expected at least 2 jobs, found ${jobCount}`);
   assert.strictEqual(optOuts, jobCount, `every job must set the opt-out (${optOuts} set / ${jobCount} jobs)`);
+});
+
+test('the model-apps CI workflow has a read-only token, cancels superseded runs, and bounds every job', () => {
+  const wf = fs.readFileSync(WORKFLOW, 'utf8');
+  // Declared at the top level so no job inherits whatever the repository default grants, and no
+  // job widens it again with a write scope of its own.
+  assert.match(wf, /^permissions:[ \t]*\r?\n[ \t]+contents:[ \t]*read[ \t]*\r?$/m, 'the token must be read-only');
+  assert.doesNotMatch(wf, /^\s+[a-z-]+:[ \t]*write[ \t]*\r?$/m, 'no scope may be write');
+  assert.match(wf, /^concurrency:[ \t]*\r?\n(?:[ \t]+.*\r?\n)*?[ \t]+cancel-in-progress:[ \t]*true\b/m,
+    'a new push must cancel the run it supersedes');
+  // Without a limit a hung test holds its runner for GitHub's six-hour default.
+  const jobCount = (wf.match(/^ {4}[a-z0-9-]+:\s*$/gim) || []).length;
+  const timeouts = (wf.match(/^ {8}timeout-minutes:[ \t]*\d+[ \t]*\r?$/gm) || []).length;
+  assert.strictEqual(timeouts, jobCount, `every job must set timeout-minutes (${timeouts} set / ${jobCount} jobs)`);
 });
 
 // --- committed lock files must not carry a registry URL ---------------------------------------
