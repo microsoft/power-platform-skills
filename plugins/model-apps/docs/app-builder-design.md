@@ -299,12 +299,12 @@ Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): naviga
 **Source stays symbolic.** Code-gen emits `PAGEREF_<page-key>` and the **canonical `.tsx` is never
 mutated** with a GUID (mutation would bake environment-specific ids into source and break
 cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because `genpageCli.upload`
-takes a **file path**, not in-memory content (`genpage-cli.js:77-86`), the resolver writes a
+takes a **file path**, not in-memory content (`genpage-cli.js`, `upload()`), the resolver writes a
 **staging file** (a deployment copy adjacent to `RuntimeTypes.ts`); the canonical source is left
 untouched.
 
 **Deployment protocol (safe recovery — new Critical from R2).** `listPages` currently turns any PAC
-failure into `[]` (`genpage-cli.js:67-70`), which the engine treats as "no pages" — risking
+failure into `[]` (`genpage-cli.js`, `listPages()`), which the engine treats as "no pages" — risking
 duplicates and orphans. The `app` stage instead:
 
 1. **Enumerate fail-closed** — page listing retries and **distinguishes failure from empty**; a

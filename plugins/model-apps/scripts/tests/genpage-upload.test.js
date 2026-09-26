@@ -1097,6 +1097,81 @@ test('a wrapper exposing no app-scoped enumeratePages is refused for updates', a
   assert.strictEqual(uploads, 0);
 });
 
+// Each listing is its own pac process of about five seconds, so an update runs the existence and
+// membership listings together. The overlap must not change what the guard DECIDES: verdicts are
+// still reached existence-first, so each failure is reported exactly as it was when the listings
+// ran one after the other.
+const OVERLAP_PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+function updateWith(factory) {
+  return new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', OVERLAP_PAGE, '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) }).catch(reject);
+  });
+}
+
+test('an update starts its existence and membership listings together', async () => {
+  const started = [];
+  const release = new Map();
+  const held = (name, value) => new Promise((resolve) => {
+    started.push(name);
+    release.set(name, () => resolve(value));
+  });
+  const base = capturingCli().factory();
+  const factory = () => ({
+    ...base,
+    enumerateEnvironment: () => held('existence', { ok: true, ids: [OVERLAP_PAGE] }),
+    enumeratePages: () => held('membership', { ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  const done = updateWith(factory);
+  // Neither listing has answered yet, so a guard that awaited them in turn would still be on the first.
+  const deadline = Date.now() + 2000;
+  while (started.length < 2 && Date.now() < deadline) await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([...started].sort(), ['existence', 'membership'],
+    'both listings must be in flight before either answers');
+  // Membership answers FIRST: which listing finishes first must not matter.
+  release.get('membership')();
+  release.get('existence')();
+  const r = await done;
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.updated, true);
+});
+
+test('when both update listings fail, the existence failure is the one reported', async () => {
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: false, error: 'EXISTENCE-LISTING-DOWN' }),
+    enumeratePages: async () => ({ ok: false, error: 'MEMBERSHIP-LISTING-DOWN' }),
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(factory);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page \S+ exists before updating it \(EXISTENCE-LISTING-DOWN\)/);
+  assert.doesNotMatch(r.payload.error, /MEMBERSHIP-LISTING-DOWN/);
+});
+
+// Running the membership listing early must not let ITS failure pre-empt the existence verdict. A
+// listing that throws surfaces only once the guard reaches its verdict, as it did when it ran second.
+test('a listing that throws surfaces only when the guard reaches its verdict', async () => {
+  const absent = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'] }),
+    enumeratePages: async () => { throw new Error('MEMBERSHIP-THREW'); },
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(absent);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /does not exist in this environment/);
+
+  const present = () => ({ ...absent(), enumerateEnvironment: async () => ({ ok: true, ids: [OVERLAP_PAGE] }) });
+  await assert.rejects(updateWith(present), /MEMBERSHIP-THREW/);
+
+  const existenceThrows = () => ({
+    ...absent(),
+    enumerateEnvironment: async () => { throw new Error('EXISTENCE-THREW'); },
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  await assert.rejects(updateWith(existenceThrows), /EXISTENCE-THREW/);
+});
+
 test('preserved data-source bindings must be non-empty strings', async () => {
   for (const dataSources of [[null], [{}], [18], ['contoso_ticket', '']]) {
     let uploads = 0;

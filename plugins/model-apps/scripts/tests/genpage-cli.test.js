@@ -3,11 +3,20 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount } = require('../lib/genpage-cli.js');
+const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+// Scratch goes in the OS temp dir, never beside this file. Tests that walk scripts/ (the await scan in
+// sdk-async-surface.test.js) list every .js file first and read each one seconds later, so a scratch
+// directory this file deletes in between failed them with ENOENT.
 const scratchDirs = [];
+const scratch = (prefix) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+};
 test.after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
@@ -71,8 +80,7 @@ test('quoteArg doubles a backslash run before an interior quote', () => {
 });
 
 test('quoteArg round-trips through a real Windows shell parse', { skip: process.platform !== 'win32' }, () => {
-  const dir = fs.mkdtempSync(path.join(__dirname, '.genpage-cli-roundtrip-'));
-  scratchDirs.push(dir);
+  const dir = scratch('genpage-cli-roundtrip-');
   const script = path.join(dir, 'argv.js');
   fs.writeFileSync(script, 'console.log(JSON.stringify(process.argv.slice(2)));\n', 'utf8');
   for (const value of [
@@ -114,6 +122,105 @@ test('buildPacInvocation collapses embedded newlines in args (both platforms)', 
   assert.deepStrictEqual(posix.args, ['--prompt', 'l1 l2 l3'], 'multi-line prompt collapsed to spaces');
   const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], 'win32');
   assert.ok(!win.command.includes('\n'), 'no raw newline survives into the Windows command line');
+});
+
+// Put a directory first on PATH for the duration of `fn`, so `pac` resolves to whatever it holds.
+async function withPathFirst(dir, fn, { only = false } = {}) {
+  const saved = process.env.PATH;
+  process.env.PATH = only ? dir : dir + path.delimiter + saved;
+  try { return await fn(); } finally { process.env.PATH = saved; }
+}
+
+// A fake `pac` to put first on PATH: `pac.cmd` on Windows, reached through cmd.exe exactly as the
+// real one is, and an executable script elsewhere. By default it writes a multibyte character in two
+// pieces 200 ms apart, then its argv, then an error, and exits 3. With `--big` it writes 1.5 MiB.
+// With `--late` it starts a process that shares its stdout and writes 300 ms after the fake exits.
+const BIG_OUTPUT_BYTES = 1536 * 1024;
+function makeFakePac() {
+  const dir = scratch('genpage-cli-fakepac-');
+  const script = path.join(dir, 'fake-pac.js');
+  fs.writeFileSync(script, [
+    `if (process.argv.includes('--big')) process.stdout.write('x'.repeat(${BIG_OUTPUT_BYTES}));`,
+    "else if (process.argv.includes('--late')) {",
+    "  require('child_process').spawn(process.execPath, ['-e', \"setTimeout(() => process.stdout.write('late'), 300)\"],",
+    "    { stdio: ['ignore', 'inherit', 'inherit'], detached: true, windowsHide: true }).unref();",
+    "  process.stdout.write('early ');",
+    '} else {',
+    "  const bytes = Buffer.from('東京', 'utf8');",
+    '  process.stdout.write(bytes.subarray(0, 1));',
+    '  setTimeout(() => {',
+    "    process.stdout.write(Buffer.concat([bytes.subarray(1), Buffer.from(' ' + JSON.stringify(process.argv.slice(2)) + '\\n', 'utf8')]));",
+    "    process.stderr.write('Error: fake failure\\n');",
+    '    process.exitCode = 3;',
+    '  }, 200);',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'pac.cmd'), `@"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'pac'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  return dir;
+}
+
+// The default runner must YIELD while pac runs. genpage-upload.js overlaps an update's two
+// listings, which saves nothing if every pac call freezes the process the way spawnSync did. The
+// fake's split character catches a runner that decodes each chunk as it arrives.
+test('runPac lets the event loop run while pac runs, and decodes output split mid-character', async () => {
+  const dir = makeFakePac();
+  const args = ['model', 'genpage', 'list', '--name', 'Order Detail'];
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 10);
+  try {
+    const r = await withPathFirst(dir, () => runPac(args));
+    assert.strictEqual(r.status, 3, 'the exit code is passed through');
+    assert.strictEqual(r.stdout, `東京 ${JSON.stringify(args)}\n`, 'the split character arrives whole, and the args intact');
+    assert.match(r.stderr, /Error: fake failure/);
+    assert.ok(ticks > 0, 'timers fired while pac was running, so the process was not blocked');
+  } finally {
+    clearInterval(timer);
+  }
+});
+
+// spawnSync capped output at 1 MiB (its maxBuffer): past that it killed pac and returned a
+// truncated listing as a failure. The runner keeps everything, and reads each pipe to its end before
+// settling — pac can exit while the tail of a large write is still unread in the pipe.
+test('runPac keeps output past 1 MiB, read to the end of the pipe', async () => {
+  const dir = makeFakePac();
+  const r = await withPathFirst(dir, () => runPac(['model', 'genpage', 'list', '--big']));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.length, BIG_OUTPUT_BYTES);
+});
+
+// Settling when pac EXITS would lose output a process it started writes afterwards. spawnSync
+// returned only once the pipes closed, and so does the runner.
+test('runPac settles when the pipes close, as spawnSync did, not when pac exits', async () => {
+  const r = await withPathFirst(makeFakePac(), () => runPac(['model', 'genpage', 'list', '--late']));
+  assert.strictEqual(r.stdout, 'early late');
+  assert.strictEqual(r.status, 0, r.stderr);
+});
+
+// A pac that cannot be started must come back as an ordinary failed result — every caller branches
+// on `status` and none of them catches. That is spawn's 'error' event (ENOENT), which spawnSync
+// reported as status 1 with no text at all. On Windows pac runs through cmd.exe, which would print
+// its own "not recognized" and exit, so the shell itself is made unstartable to reach that path.
+test('runPac resolves with a non-zero status and the launch error when pac cannot be started', async () => {
+  const empty = scratch('genpage-cli-nopac-');
+  const savedComSpec = process.env.ComSpec;
+  if (process.platform === 'win32') process.env.ComSpec = path.join(empty, 'no-such-shell.exe');
+  let r;
+  try {
+    r = await withPathFirst(empty, () => runPac(['model', 'genpage', 'list']), { only: true });
+  } finally {
+    if (process.platform === 'win32') {
+      if (savedComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = savedComSpec;
+    }
+  }
+  assert.notStrictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '');
+  assert.match(r.stderr, /ENOENT/, `the failure must say why; got ${JSON.stringify(r)}`);
 });
 
 test('parsePageId extracts the guid from upload output', () => {
