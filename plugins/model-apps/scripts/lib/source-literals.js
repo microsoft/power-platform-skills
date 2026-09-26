@@ -130,14 +130,34 @@ const PRIMITIVE_TYPES = new Set(['any', 'unknown', 'never', 'void', 'undefined',
 //   total satisfies "n/a" | NonNullable<number> / count    a string-literal constituent
 //   total as | -1 | Brand<"USD"> / count       a type that leads with its operator, and a signed literal
 //   total as V extends U ? 0 : NonNullable<V> / count     the false branch of a conditional type
-// Each constituent is a (qualified or indexed) name, optionally with its own closed type arguments, a numeric literal
-// with its sign, or a string literal (its quotes are kept when the lexer blanks it). Anything else ends the walk and
-// the `<` is not taken for type arguments. The walk is bounded by distance, like the other scans here, not by a count
-// of constituents.
+// Each constituent is a (qualified) name, with its own closed type arguments or with indexes (each stepped over whole,
+// its brackets matched), a numeric literal with its sign, or a string literal (its quotes are kept when the lexer
+// blanks it). Anything else ends the walk and the `<` is not taken for type arguments. The walk is bounded by
+// distance, like the other scans here, not by a count of constituents.
 function typeArgumentOpenFollowsCast(src, open) {
   const skipSpace = (i) => { while (i >= 0 && /\s/.test(src[i])) i -= 1; return i; };
-  const skipName = (i) => { while (i >= 0 && /[\w$.\]\[]/.test(src[i])) i -= 1; return i; };
+  const skipName = (i) => { while (i >= 0 && /[\w$.]/.test(src[i])) i -= 1; return i; };
   const wordEndingAt = (e) => { let s = e; while (s >= 0 && /[\w$]/.test(src[s])) s -= 1; let w = ''; for (let k = s + 1; k <= e; k += 1) w += src[k]; return { s, w }; };
+  // Steps back over a (qualified) name that ends at `r`, with any indexes after it (`Row[Key]`, `Row["tax" | as][0]`).
+  // Each index is matched to its own `[`, so nothing inside one is read by the walk: an operator or a word there belongs
+  // to the index's type, never to the cast's. Returns the index before the name, or null when there is none (a tuple,
+  // `[A, B]`, is not walked) or an index has no `[` within reach.
+  const skipIndexedName = (r) => {
+    while (src[r] === ']') {
+      let depth = 0;
+      let k = r;
+      while (k >= 0 && open - k <= LOOKAHEAD && !(src[k] === '[' && depth === 1)) {
+        if (src[k] === ']') depth += 1;
+        else if (src[k] === '[') depth -= 1;
+        k -= 1;
+      }
+      if (k < 0 || open - k > LOOKAHEAD) return null;
+      r = k - 1;
+      while (r >= 0 && (src[r] === ' ' || src[r] === '\t')) r -= 1;
+    }
+    const s = skipName(r);
+    return s === r ? null : s;
+  };
   // Steps back over one constituent that ends at `r`: a name (qualified or indexed, `Row[Key]`), a literal, either with
   // its own closed type arguments, or a string literal. Returns the index before it, or null.
   const skipConstituent = (r) => {
@@ -152,8 +172,8 @@ function typeArgumentOpenFollowsCast(src, open) {
       if (o === -1) return null;
       r = skipSpace(o - 1);
     }
-    const s = skipName(r);
-    if (s === r) return null;
+    const s = skipIndexedName(r);
+    if (s === null) return null;
     // A negative numeric literal type keeps its sign: `-1 | 0`.
     const t = skipSpace(s);
     return src[t] === '-' && /\d/.test(src[s + 1]) ? t - 1 : s;
@@ -162,14 +182,15 @@ function typeArgumentOpenFollowsCast(src, open) {
   // type there is none, and it returns the index before the operator. It leads after a non-name (`? | 0`, `: | A`), and
   // after a bare `as`, `satisfies` or `extends` (`as | A`, `extends | 0 | 1`): only there are those words keywords.
   // `as` and `satisfies` are contextual, so with type arguments of its own (`satisfies<T>`), within a longer name
-  // (`E.as`, `Row[as | Key]`), or before `?`, `:` or `extends`, the word names a type. The name is taken whole, as
-  // `skipConstituent` reads it, so only a word standing alone is a keyword. A type or variable named `as` or
-  // `satisfies` with no type arguments, standing alone right before `|` or `&`, is read as the keyword.
+  // (`E.as`), or before `?`, `:` or `extends`, the word names a type; and one inside an index (`Row["tax" | as]`) is
+  // never reached, as the index is stepped over whole. The name is taken whole, as `skipConstituent` reads it, so only
+  // a word standing alone is a keyword. A type or variable named `as` or `satisfies` with no type arguments, standing
+  // alone right before `|` or `&`, is read as the keyword.
   const skipBeforeOperator = (q) => {
     const b = skipSpace(q - 1);
-    const s = skipName(b);
+    const s = skipIndexedName(b);
     let word = '';
-    for (let k = s + 1; k <= b; k += 1) word += src[k];
+    if (s !== null) for (let k = s + 1; k <= b; k += 1) word += src[k];
     if (word === 'as' || word === 'satisfies' || word === 'extends') return q - 1;
     const t = skipConstituent(b);
     return t === null ? q - 1 : t;
