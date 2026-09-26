@@ -16,6 +16,33 @@ function runHook(payload, env) {
   return { status: res.status, stderr: res.stderr || '' };
 }
 
+function runHookWithSplitStdin(payload, splitNeedle) {
+  return new Promise((resolve, reject) => {
+    const child = require('node:child_process').spawn(process.execPath, [HOOK], {
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (status) => {
+      resolve({
+        status,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      });
+    });
+    const bytes = Buffer.from(JSON.stringify(payload), 'utf8');
+    const needle = Buffer.from(splitNeedle, 'utf8');
+    const at = bytes.indexOf(needle);
+    assert.notEqual(at, -1, 'payload must contain the split needle');
+    child.stdin.write(bytes.subarray(0, at + 1));
+    setImmediate(() => child.stdin.end(bytes.subarray(at + 1)));
+  });
+}
+
 let cwd;
 test.beforeEach(() => {
   cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ws-'));
@@ -141,6 +168,15 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the guard (exit 0 for an outside write
   const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
   const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
   assert.equal(runHook(payload, { MODEL_APPS_DISABLE_HOOKS: '1' }).status, 0);
+});
+
+test('hook stdin decoding preserves multibyte paths split across pipe chunks', async () => {
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-東京', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  const { status, stderr } = await runHookWithSplitStdin(payload, '東京');
+  assert.equal(status, 1);
+  assert.match(stderr, /outside your project folder/);
+  assert.match(stderr, new RegExp(outside.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('unparseable stdin does not block (exit 0)', () => {

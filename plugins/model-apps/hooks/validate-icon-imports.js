@@ -31,6 +31,7 @@
 const fs = require('fs');
 const path = require('path');
 const { blankNonCodePreservingTemplateExpressions, commentRanges } = require('../scripts/lib/source-literals.js');
+const { readUtf8Stream } = require('../scripts/lib/modelapps-hook-utils.js');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const VERIFIED_ICONS_PATH = path.join(PLUGIN_ROOT, 'references', 'verified-icons.txt');
@@ -287,11 +288,7 @@ function buildBlockMessage(relPath, invalid) {
   return lines.join('\n');
 }
 
-let inputData = '';
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   let input;
   try {
     input = JSON.parse(inputData || '{}');
@@ -340,4 +337,6 @@ process.stdin.on('end', () => {
 
   process.stderr.write(buildBlockMessage(relPath, invalid) + '\n');
   process.exit(2);
+}).catch(() => {
+  process.exit(0); // stdin failure → don't block
 });

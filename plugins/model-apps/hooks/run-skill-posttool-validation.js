@@ -21,6 +21,7 @@ const { spawnSync } = require('child_process');
 const {
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  readUtf8Stream,
 } = require('../scripts/lib/modelapps-hook-utils');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
@@ -38,13 +39,7 @@ function debug(msg) {
 
 debug('[model-apps hook] run-skill-posttool-validation.js started\n');
 
-let inputData = '';
-
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   debug(`[model-apps hook] stdin closed, received ${inputData.length} bytes\n`);
   try {
     const input = JSON.parse(inputData);
@@ -79,4 +74,7 @@ process.stdin.on('end', () => {
     process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
     process.exit(0);
   }
+}).catch((err) => {
+  process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
+  process.exit(0);
 });
