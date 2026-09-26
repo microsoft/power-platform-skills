@@ -9,7 +9,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
+// The structural gate is shared with promote-intent-pages.js (see lib/page-structure.js).
+const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
 
 // A worker that returns without writing leaves whatever was at its path before, and a complete page an
 // earlier attempt left there passes every content check: the stale page was deployed instead of taking
@@ -84,24 +85,6 @@ function readStamp(abs) {
 }
 function consumeStamp(abs) {
   try { fs.rmSync(stampPathFor(abs), { force: true }); } catch { /* best-effort: the next --stamp overwrites it */ }
-}
-
-function structuralProblems(code) {
-  const text = String(code || '');
-  const problems = [];
-  if (!text.trim()) return ['file is empty'];
-  // hasDefaultExport also refuses a file cut off INSIDE its export (`export default function P(props)`
-  // with no body), so say so: the one inline rewrite should write the whole page, not add an export.
-  if (!hasDefaultExport(text)) problems.push('no complete default export — missing, or the file ends inside it');
-  if (hasUnbalancedBrackets(text)) problems.push('unbalanced brackets — output looks truncated');
-  // A cut that leaves every bracket balanced: inside JSX, a template or a comment, or after `a +`.
-  if (endsMidStatement(text)) problems.push('stops mid-statement — output looks truncated');
-  // On the blanked source, so a fence inside a template literal (a page rendering markdown help) is
-  // data; a fence wrapping the file — the model answered in markdown — is code-position text.
-  if (/^\s*(```|~~~)/m.test(blankLiterals(text))) problems.push('contains a markdown code fence');
-  const elision = findElisionMarker(text);
-  if (elision) problems.push(`contains ${elision}`);
-  return problems;
 }
 
 // Every outcome is a result, never a throw: `ok:false` is what sends the orchestrator to its one inline
