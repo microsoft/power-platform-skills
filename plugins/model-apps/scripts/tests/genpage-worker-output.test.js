@@ -27,7 +27,7 @@ test('validatePageOutput rejects a truncated worker file before dispatch is acce
   // sees that the function never closed.
   const balancedTail = validatePageOutput({ filePath: write('export default function GeneratedComponent() {\n  const a = 1;\n  return null;\n') });
   assert.equal(balancedTail.ok, false);
-  assert.deepEqual(balancedTail.problems, ['unbalanced brackets — output looks truncated']);
+  assert.deepEqual(balancedTail.problems, ['unbalanced brackets — the file looks truncated']);
 
   // Cut INSIDE the export statement, nothing is open yet, so the brackets balance — the export
   // itself has to be complete: a function reaches its body, a bare name is one the module has.
