@@ -504,4 +504,9 @@ test('hydrateSpec preserves a downloaded prompt exactly, and includes an explici
   assert.strictEqual(withEmpty.pages[0].prompt, '', 'a present empty prompt is different from a missing prompt');
   const missing = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', codeFile: 'p.tsx' }] });
   assert.ok(!('prompt' in missing.pages[0]), 'missing prompt.txt remains omitted');
+  // The keyed (schemaVersion 2) page shape is built by a separate branch; it must agree.
+  const keyed = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyed.pages[0].prompt, '', 'a keyed page keeps a present empty prompt too');
+  const keyedExact = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyedExact.pages[0].prompt, exact);
 });
