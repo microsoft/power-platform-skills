@@ -71,7 +71,7 @@ function runQuietAsync(cmd, args) {
         settled = true;
         resolve(error ? null : String(stdout || '').trim());
       });
-      // execFile always opens a stdin pipe; close it, matching runQuiet's 'ignore', so a CLI that
+      // execFile always opens a stdin pipe; close it (the effect of stdio 'ignore'), so a CLI that
       // checks stdin can never wait on it.
       if (child && child.stdin) child.stdin.end();
     } catch {
