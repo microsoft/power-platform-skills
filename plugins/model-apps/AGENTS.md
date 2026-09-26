@@ -28,7 +28,6 @@ Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation 
 shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
 
 **Requirements:**
-**Requirements:**
 - **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
 - **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
   same identity as the active `pac` profile
@@ -479,8 +478,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
   id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
-  view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
-  column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
+  view's **column set** (parsed from `layoutxml`; every spec column must be deployed — an extra deployed
+  column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
+  in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
   `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
   checked too (#586): each declared dashboard must exist. A name can also match another app's
@@ -628,6 +628,10 @@ references/                    ← Shared reference docs
   page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
+  app-spec-schema.md           ← The App Spec contract (always-present fields) — /app-builder
+  app-spec-schema-advanced.md  ← Conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants)
+  authoring-flow.md            ← /app-builder Phase 1 authoring playbook, run in the main loop (not a subagent)
+  agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
@@ -638,7 +642,10 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes)
+  check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
+  resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
+  lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
@@ -659,7 +666,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
@@ -667,15 +674,20 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`), plus the CLI arg contract (parseArgs/validateFlags)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once), plus the CLI arg contract (parseArgs/validateFlags)
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-    feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
+    feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
+    form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
+    ai-app-settings.js         ← single source of truth for the per-app AI feature contract
+    interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    page-structure.js          ← the one structural gate a generated page must pass (empty, truncated, prose, elided), shared by genpage-worker-output.js and promote-intent-pages.js
     page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
@@ -716,7 +728,9 @@ scripts/
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts + hooks
-hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
+hooks/                         ← Lifecycle hooks
+  hooks.json                   ← Hook registrations (closed schema — documentation lives in README.md)
+  README.md                    ← What hooks.json wires up, and why
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
   validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in generated .tsx
   validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in model-apps sessions
@@ -864,13 +878,13 @@ The two remaining flags currently ship **OFF**, each waiting on cross-repo depen
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
-backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper. It also
+backs the page structural gate (`lib/page-structure.js`, shared by `promote-intent-pages.js` and
+`genpage-worker-output.js`) plus the eval's effect scoper. It also
 backs the navigation oracle (`pageref-resolver.js`), which finds each call AND parses its object
 in the lexer's mask — executable code inside a template's `${…}` is visible, template text and
-string bodies are not — and reads each value from the source at the same offsets, so one lexer
-drives both. It also backs the worker-output gate
-(`genpage-worker-output.js`), and `findElisionMarker` — the one "was code elided?" rule the
-worker gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
+string bodies are not — and reads each value, and each quoted key (`"pageId"`), from the source at
+the same offsets, so one lexer drives both. It also backs `findElisionMarker` — the one "was code
+elided?" rule the page gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
 a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
 as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
 code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
