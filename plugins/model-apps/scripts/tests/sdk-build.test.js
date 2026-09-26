@@ -2260,7 +2260,8 @@ test('form reconcile: an explicit-layout edit REMOVES a field dropped from the s
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   // Fields are removed via removeElement (retired removeField); pointer encodes field position
   const removals = find(calls, 'removeElement');
-  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0'], 'only the cell for new_obsolete (row 2) is removed');
+  // The cell goes, then the row it left holding nothing (a blank <row/> would otherwise stay behind).
+  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0', '/tabs/0/columns/0/sections/0/rows/2'], 'only new_obsolete (row 2) and the row it emptied are removed');
 });
 
 test('form reconcile: an AUTO layout is additive — a deployed field not in the spec is NOT pruned (Maker adds survive)', async () => {
@@ -3081,7 +3082,8 @@ test('form reconcile: authorized removals prune only fields approved when the ru
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
   const warnings = [];
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set(['new_tier'])]]), warn: (m) => warnings.push(m) });
-  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0']);
+  // new_tier's cell, then the row it left empty; new_manual's cell and row stay.
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
   assert.ok(warnings.some((w) => /new_manual/.test(w) && /not among the removals authorized when this run started/.test(w)), 'the kept field is reported');
 });
 
@@ -3091,7 +3093,7 @@ test('form reconcile: authorized-removal form ids are normalized before fencing'
     tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
   const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['{FORM-EXISTING}', new Set(['new_tier'])]]) });
-  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0']);
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
   assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_manual' }]);
 });
 
