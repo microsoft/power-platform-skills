@@ -972,6 +972,14 @@ custom control), but the spec validator emits a warning.
   spec **omits** `pageId` — it is portable across environments. On rebuild the spec `pageId` is the
   highest identity authority (outranks the manifest), confirmed against EXISTENCE — so a downloaded
   app (including Maker-added pages) rebuilds against the correct existing page without duplication.
+- **What a page round-trip carries — and what it does not.** A download brings back each page's
+  code, prompt, `dataSources` and identity. A page's **connector and Custom API bindings** and the id
+  of the **model** that generated it have no App Spec field, so they are not in the spec. The build
+  uploads without them, and pac leaves a page's existing bindings in place when they are omitted: a
+  rebuild in the **same environment** keeps the bindings working, but that is preservation, not
+  reconstruction — the same spec rebuilt in **another environment** deploys the page without them
+  (bind them there with `/genpage`). The model id is stored empty whenever a rebuild re-uploads the
+  page.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
