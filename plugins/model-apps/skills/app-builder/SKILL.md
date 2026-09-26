@@ -216,6 +216,10 @@ unless destructive authority was supplied independently.
      `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
      (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
      warning; `personas[]` does not take one at all. See the schema reference for why.)
+     The app itself takes two: `app.description` is the short tile text, and `app.aiDescription` is
+     the **routing description** an orchestrator reads to choose between apps — who the app is for,
+     what it covers and excludes, and how to tell it from a sibling app over the same tables. Write
+     it whenever such a sibling exists or is planned.
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison
@@ -432,7 +436,12 @@ table's privileges can block that table's delete. Command
 teardown removes the whole command bar for any entity the spec authored commands on. **Teardown only
 deletes tables this build created** — a **system/standard table** (account, contact, …) is
 auto-detected and **skipped**, and a **reused custom table** is skipped when its entity is flagged
-`"existing": true`, so pre-existing data survives. **Dry-run by default**; add `--apply
+`"existing": true`, so pre-existing data survives. The same flag protects **relationships and global
+choices** — a download sets it on every one it recovers, so tearing down a downloaded spec never removes
+a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
+teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
+has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
+failed, so a re-run can still tell. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.

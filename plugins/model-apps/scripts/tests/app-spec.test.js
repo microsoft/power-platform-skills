@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor, dashboardNameKey } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -442,12 +442,110 @@ test('validateAppSpec rejects a command with no function', () => {
 
 test('validateAppSpec accepts a dashboard with chart + list tiles on declared view/chart', () => {
   const ok = cloneDesk();
+  // The chart and its view must be on the SAME table (a mismatch cross-wires the tile, #586 item 3).
+  const chart = ok.charts[0];
+  const view = ok.views.find((v) => v.entity === chart.entity);
   ok.dashboards = [{ name: 'Ops', tiles: [
-    { type: 'chart', chart: ok.charts[0].name, view: ok.views[0].name },
+    { type: 'chart', chart: chart.name, view: view.name },
     { type: 'list', view: ok.views[0].name, name: 'List' },
   ] }];
   const r = validateAppSpec(ok);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// #586 item 3: view and chart names are unique only PER TABLE, and the build resolves both on the
+// tile's table. Same names across tables are legitimate; a tile that mixes tables, or cannot say
+// which table it means, is not.
+test('validateAppSpec accepts same-named charts on two tables when each tile stays on one table', () => {
+  const ok = cloneDesk();
+  const ticketChart = ok.charts.find((c) => c.entity === 'new_ticket');
+  ok.charts.push({ ...ticketChart, entity: 'new_customer', groupBy: 'new_segment' }); // same name, other table
+  ok.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Tickets' }] }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test("validateAppSpec rejects a chart tile whose chart is declared on a different table than its view", () => {
+  const bad = cloneDesk();
+  const ticketChart = bad.charts.find((c) => c.entity === 'new_ticket');
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Customers' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /chart tile shows new_customer .* is declared on new_ticket/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec requires a tile to name its table when its view name exists on more than one', () => {
+  const spec = cloneDesk();
+  const customerView = spec.views.find((v) => v.entity === 'new_customer');
+  spec.views.push({ ...customerView, name: 'Active Tickets' }); // now "Active Tickets" exists on two tables
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'List' }] }];
+  const ambiguous = validateAppSpec(spec);
+  assert.ok(ambiguous.errors.some((e) => /declared on more than one table .* set the tile's entity/.test(e)), JSON.stringify(ambiguous.errors));
+  spec.dashboards[0].tiles[0].entity = 'new_ticket';
+  const pinned = validateAppSpec(spec);
+  assert.strictEqual(pinned.ok, true, JSON.stringify(pinned.errors));
+});
+
+test("validateAppSpec rejects a tile whose entity does not declare the view it names", () => {
+  const bad = cloneDesk();
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Customers', entity: 'new_ticket', name: 'List' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /names view 'Active Customers' on new_ticket, but that view is declared on new_customer/.test(e)), JSON.stringify(r.errors));
+});
+
+// #586 item 4: a sitemap subarea and the build find a dashboard by NAME, through a Dataverse filter
+// that ignores case, most accents and trailing spaces, so two such names collapse into one dashboard
+// and the other leaves the nav.
+test('validateAppSpec rejects two dashboards whose names Dataverse would treat as one', () => {
+  const bad = cloneDesk();
+  const tile = { type: 'list', view: bad.views[0].name, name: 'List' };
+  for (const [first, second] of [['Overview', 'OVERVIEW '], ['Café', 'CAFE'], ['Overview', 'Overview']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    const r = validateAppSpec(bad);
+    assert.ok(r.errors.some((e) => e.includes(`dashboard '${second}': has the same name as dashboard '${first}'`)), `${first} / ${second}: ${JSON.stringify(r.errors)}`);
+  }
+  // Differences the server keeps must stay legal: a leading space, and a vowel sign (a letter, not an accent).
+  for (const [first, second] of [['Overview', 'Pipeline'], ['Overview', ' Overview'], ['कार', 'कर']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    assert.strictEqual(validateAppSpec(bad).ok, true, `${JSON.stringify(first)} / ${JSON.stringify(second)} are distinct`);
+  }
+});
+
+// Every pair below was written to a live English environment and read back with `eq`; `server` is what
+// Dataverse answered. The key must agree, except where it deliberately folds MORE (a false rejection
+// is loud and fixed by a rename; a missed collision silently drops a dashboard).
+test('dashboardNameKey folds exactly what the server was measured to ignore', () => {
+  const MEASURED = [
+    ['Alpha', 'ALPHA', true], ['Café', 'Cafe', true], ['Résumé', 'Re\u0301sume\u0301', true],
+    ['Bravo', 'Bravo ', true], ['Charlie ', 'Charlie', true], [' Delta', 'Delta', false],
+    ['Echo\u00a0', 'Echo', false], ['Foxtrot\t', 'Foxtrot', false], ['कार', 'कर', false], ['กิน', 'กน', false],
+    ['ばす', 'はす', true], ['مُحَمَّد', 'محمد', false], ['йод', 'иод', false], ['ёж', 'еж', true], ['Жук', 'ЖУК', true],
+    ['Straße', 'Strasse', true], ['Ｇolf', 'Golf', true], ['Æther', 'AEther', true], ['ﬁle', 'file', true],
+    ['Άλφα', 'Αλφα', true], ['Việt', 'Viet', true], ['שָׁלוֹם', 'שלום', true], ['Tăng', 'Tang', true],
+    ['Øre', 'Ore', true], ['Łódź', 'Lodz', true], ['Đà', 'Da', true], ['Œuvre', 'Oeuvre', true],
+    ['İstanbul', 'Istanbul', true], ['ｶﾅ', 'カナ', true], ['カナ', 'かな', true], ['λόγος', 'λόγοσ', true],
+    ['عـلم', 'علم', true], ['क़', 'क', true],
+  ];
+  for (const [a, b, server] of MEASURED) {
+    assert.strictEqual(dashboardNameKey(a) === dashboardNameKey(b), server, `${JSON.stringify(a)} vs ${JSON.stringify(b)}: the server says ${server ? 'equal' : 'distinct'}`);
+  }
+  // The one accepted over-fold: the server keeps a decomposed Hangul syllable distinct from its
+  // precomposed form, which no keyboard produces for a dashboard name.
+  assert.strictEqual(dashboardNameKey('한'), dashboardNameKey('\u1112\u1161\u11ab'));
+  assert.notStrictEqual(dashboardNameKey('Sales Overview'), dashboardNameKey('SalesOverview'), 'inner space still counts');
+  assert.strictEqual(dashboardNameKey(undefined), '');
+});
+
+// A column with no schemaName is reported by name. The sample-data gate resolves Choice values through
+// the loader's helpers, which used to key every Choice/MultiChoice column by `schemaName.toLowerCase()`
+// and threw a TypeError instead — taking validate, verify and even a teardown dry-run down with it.
+test('validateAppSpec reports a Choice column with no schemaName instead of crashing on its sample data', () => {
+  const s = cloneDesk();
+  const e = s.entities[0];
+  e.columns = [...(e.columns || []), { displayName: 'Tags', type: 'MultiChoice' }, { displayName: 'Tier', type: 'Choice', options: ['A', 'B'] }];
+  s.sampleData = { [e.schemaName]: [{ [e.primaryAttribute.schemaName]: 'One' }] };
+  let r;
+  assert.doesNotThrow(() => { r = validateAppSpec(s); });
+  assert.ok(r.errors.some((m) => /a column is missing schemaName/.test(m)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec accepts id-passthrough dashboard tiles (viewId/visualizationId + entity, no declared view/chart)', () => {

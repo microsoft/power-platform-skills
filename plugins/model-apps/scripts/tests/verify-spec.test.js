@@ -1078,6 +1078,37 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
   });
 });
 
+// #583: the routing description is asserted only when the spec sets one, against the row's own
+// `appmodule.aiappdescription`, found by the identity the build wrote under.
+test('#583 verify checks the deployed routing description when the spec sets one', async () => {
+  const base = { solution: { publisherPrefix: 'new' }, app: { name: 'Ops', uniqueName: 'new_ops' } };
+  const withRouting = { ...base, app: { ...base.app, aiDescription: 'Route ops work here.' } };
+  const reader = (rows, fail) => ({
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      if (set !== 'appmodule') return [];
+      if (fail) throw new Error('read denied');
+      assert.match(o.filter, /uniquename eq 'new_ops'/, 'read by the identity the build wrote under');
+      return rows;
+    },
+  });
+  const check = async (spec, read) => (await verifySpec(spec, read)).checks.find((c) => c.kind === 'app-ai-description');
+
+  assert.strictEqual((await check(withRouting, reader([{ aiappdescription: 'Route ops work here.' }]))).present, true);
+  for (const [what, read, re] of [
+    ['a different value', reader([{ aiappdescription: 'Other text' }]), /differs from the spec/],
+    ['no value', reader([{ aiappdescription: null }]), /no routing description/],
+    ['no app', reader([]), /no app module with unique name 'new_ops'/],
+    ['an unreadable row', reader([], true), /could not read the app's routing description: read denied/],
+  ]) {
+    const c = await check(withRouting, read);
+    assert.strictEqual(c.present, false, what);
+    assert.match(c.detail, re, what);
+  }
+  assert.strictEqual(await check(base, reader([{ aiappdescription: 'Written by the platform.' }])), undefined,
+    'nothing is asserted when the spec leaves it to the platform');
+});
+
 // ---------------------------------------------------------------------------
 // App-module TABLE (type-1) membership.
 // ---------------------------------------------------------------------------
@@ -1311,6 +1342,84 @@ test('verify tolerates deployed sections and fields the spec never declared', as
     + `</columns></tab></tabs></form>`;
   const chk = await topoCheck(xml);
   assert.strictEqual(chk.present, true, `extras must not fail the authored subset; got ${chk && chk.detail}`);
+});
+
+// An authored section may share the name the engine gives its timeline host. Verify matches containers
+// the way the BUILD does, and the build never lets an authored section take an engine host by name —
+// so neither may verify, or it grades the author's fields against the timeline section.
+test('verify never matches an authored section to an engine host that shares its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>`
+    + `<section name="section_notes"><rows><row><cell><control id="notescontrol" classid="{06375649-c143-495e-a496-c962e5b4488e}" /></cell></row></rows></section>`
+    + `<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(chk.present, true, `the authored section is the one holding its field; got ${chk && chk.detail}`);
+});
+
+// A host a maker added a bound field to is no longer engine-owned by structure, yet it still holds the
+// timeline — and verify reads FormXML, so it must see the control's classid to know. The build skips such a
+// host by name, label and position, so verify must too, or it grades the author's fields against it.
+test('verify never matches an authored section to an engine host a maker added a field to', async () => {
+  const host = `<section name="section_notes"><labels><label description="Notes" languagecode="1033" /></labels><rows>`
+    + `<row><cell><control id="notescontrol" classid="{06375649-C143-495E-A496-C962E5B4488E}" /></cell></row>`
+    + `<row><cell><control id="new_x" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_x" /></cell></row></rows></section>`;
+  const xml = (second) => `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>${host}${second}</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  // By name: the author's own section_notes sits after the host.
+  const byName = await topoCheck(xml(`<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(byName.present, true, `by name; got ${byName && byName.detail}`);
+  // By label: the author's section was deployed under another name, and carries the host's label.
+  const byLabel = await topoCheck(xml(`<section name="section_x"><labels><label description="Notes" languagecode="1033" /></labels><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => Object.assign(spec.forms[0].tabs[0].columns[1].sections[0], { name: 'sec_renamed', label: 'Notes' }));
+  assert.strictEqual(byLabel.present, true, `by label; got ${byLabel && byLabel.detail}`);
+});
+
+// Engine-owned is a STRUCTURE (only unbound controls), which cannot say who laid a section out: an
+// authored section declared with no fields that a maker filled with a web resource looks the same. Its
+// authored name is the evidence it is the author's, so verify finds it by that name — as the build does —
+// instead of reporting it absent.
+test('verify finds an authored section a maker filled with a control by its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections>`
+    + `<section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section>`
+    + `<section name="sec_related"><rows><row><cell><control id="WebResource_banner" classid="{9FDF5F91-88B1-47f4-AD53-C11EFC01A01D}" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `<column width="40%"><sections><section name="sec_right"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section></sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[0].sections.push({ name: 'sec_related', label: 'Related', fields: [] }); });
+  assert.strictEqual(chk.present, true, `the maker's control does not hide the authored section; got ${chk && chk.detail}`);
+});
+
+// Verify matches containers exactly as the build does, and the build no longer lets a label or
+// position match take a section ANOTHER authored section owns by name (it moves that section to where
+// its own want places it). Here the section NAMED sec_wide sits in tab_one holding sec_main's field,
+// and an unnamed one in tab_two holds sec_wide's: every field is in the right tab, but a form script
+// that addresses sec_wide by name reaches tab_one. Matching sec_main to it by label passed that form.
+test('verify: the label pass skips a section another authored section owns by name', async () => {
+  const section = (name, label, field) => `<section${name ? ` name="${name}"` : ''}><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<rows><row><cell><control datafieldname="${field}" /></cell></row></rows></section>`;
+  const tab = (name, label, sections) => `<tab name="${name}"><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<columns><column width="100%"><sections>${sections}</sections></column></columns></tab>`;
+  const twoTabs = (spec) => {
+    spec.forms[0].tabs = [
+      { name: 'tab_one', label: 'One', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] }] },
+      { name: 'tab_two', label: 'Two', columns: [{ width: '100%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_notes'] }] }] },
+    ];
+  };
+  const misnamed = `<form><tabs>${tab('tab_one', 'One', section('sec_wide', 'Main', 'new_name'))}${tab('tab_two', 'Two', section(null, 'Wide', 'new_notes'))}</tabs></form>`;
+  const chk = await topoCheck(misnamed, twoTabs);
+  assert.strictEqual(chk.present, false, 'a form whose sec_wide is in the wrong tab must not verify');
+  assert.match(chk.detail, /section 'sec_main' is absent from tab 'tab_one'/);
+  // Control: the shape the build produces for that spec verifies.
+  const built = `<form><tabs>${tab('tab_one', 'One', section('sec_main', 'Main', 'new_name'))}${tab('tab_two', 'Two', section('sec_wide', 'Wide', 'new_notes'))}</tabs></form>`;
+  const ok = await topoCheck(built, twoTabs);
+  assert.strictEqual(ok.present, true, `got ${ok.detail}`);
 });
 // --- #N3: the verifier must match containers the way the BUILD does ------------------------------
 // LIVE-REPRODUCED: reshaping an auto-built form to an explicit layout succeeds — the build reuses
@@ -1673,4 +1782,134 @@ test('verify PASSES when the field really is in the requested tab', async () => 
       { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
   });
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
+});
+
+// --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------
+// A chart tile names a table, a view and a chart. The platform accepts and publishes a tile whose
+// chart belongs to another table — and a same-named chart elsewhere made the build produce exactly
+// that, live, while verify passed. So each chart tile's chart and view must both be on its table.
+const DASH_VIEW = '{11111111-1111-1111-1111-111111111111}';
+const DASH_CHART = '{22222222-2222-2222-2222-222222222222}';
+const dashSpec = () => ({ solution: { uniqueName: 's', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+  dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] });
+const chartTile = (over) => ({ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW, VisualizationId: DASH_CHART, ...over } });
+const dashRead = ({ dashboards = [{ formid: 'dash-1' }], chartTable = 'new_ticket', viewTable = 'new_ticket', components = [chartTile()], reader = {} } = {}) => Object.assign({
+  findTable: async () => null,
+  findColumns: async () => [],
+  sitemapXml: async () => '',
+  queryRecords: async (set, q) => {
+    if (set === 'systemform') { if (dashboards instanceof Error) throw dashboards; return dashboards; }
+    if (set === 'savedqueryvisualization') {
+      if (chartTable instanceof Error) throw chartTable;
+      assert.match(q.filter, /^savedqueryvisualizationid eq 22222222-2222-2222-2222-222222222222$/, 'the braced tile GUID is queried bare and unquoted');
+      return chartTable ? [{ primaryentitytypecode: chartTable }] : [];
+    }
+    if (set === 'savedquery') return viewTable ? [{ returnedtypecode: viewTable }] : [];
+    return [];
+  },
+  dashboardComponents: async () => { if (components instanceof Error) throw components; return components; },
+}, reader);
+const dashCheck = async (opts) => (await verifySpec(dashSpec(), dashRead(opts))).checks.find((c) => c.kind === 'dashboard');
+
+test('verify PASSES a dashboard whose chart tile shows its own table\'s view and chart', async () => {
+  const chk = await dashCheck();
+  assert.strictEqual(chk.present, true, chk.detail);
+});
+
+test('verify FAILS a chart tile whose chart belongs to another table (the live cross-wiring)', async () => {
+  const chk = await dashCheck({ chartTable: 'new_customer' });
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /chart tile 'By Priority' shows new_ticket, but its chart belongs to new_customer/);
+});
+
+test('verify FAILS a chart tile whose view belongs to another table, or whose chart no longer exists', async () => {
+  assert.match((await dashCheck({ viewTable: 'new_customer' })).detail, /its view belongs to new_customer/);
+  assert.match((await dashCheck({ chartTable: null })).detail, /its chart does not exist/);
+});
+
+test('verify FAILS a missing dashboard, and an ambiguous name it cannot identify', async () => {
+  assert.strictEqual((await dashCheck({ dashboards: [] })).present, false);
+  const ambiguous = await dashCheck({ dashboards: [{ formid: 'a' }, { formid: 'b' }] });
+  assert.strictEqual(ambiguous.present, false);
+  assert.match(ambiguous.detail, /2 dashboards share this name and this app's solution cannot say which is its own/);
+});
+
+// A name can also match another app's dashboard. The build reuses the one the app's solution holds, so
+// verify checks THAT one — a namesake elsewhere must neither fail a correct app nor hide a broken one.
+test('verify checks the dashboard the app\'s solution holds when a namesake exists elsewhere', async () => {
+  const withSolution = (inSolution, onComponents) => ({
+    reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') return [{ formid: 'dash-foreign' }, { formid: 'dash-ours' }];
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        return dashRead().queryRecords(set, q);
+      },
+      dashboardComponents: async (id) => { onComponents.push(id); return [chartTile()]; },
+    },
+  });
+  const read = [];
+  const ok = await dashCheck(withSolution(['dash-ours'], read));
+  assert.strictEqual(ok.present, true, ok.detail);
+  assert.deepStrictEqual(read, ['dash-ours'], 'the tiles checked are the solution\'s dashboard, not the first match');
+  const none = await dashCheck(withSolution([], []));
+  assert.strictEqual(none.present, false);
+  assert.match(none.detail, /none of them is in this app's solution/);
+});
+
+// The sitemap subarea check resolves its dashboard the SAME way. It used to take the first name match:
+// live, another app's same-named dashboard sorted first and failed a correctly wired app's nav entry.
+test('the dashboard subarea check follows the app\'s solution too, never the first name match', async () => {
+  const OURS = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const FOREIGN = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const spec = { ...dashSpec(), appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops nav' }] }] }] } };
+  const subarea = async (inSolution, sitemapPointsAt, systemforms = [{ formid: FOREIGN }, { formid: OURS }]) => {
+    const lookups = [];
+    const read = dashRead({ reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') { lookups.push(q); if (systemforms instanceof Error) throw systemforms; return systemforms; }
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') {
+          if (inSolution instanceof Error) throw inSolution;
+          return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        }
+        return dashRead().queryRecords(set, q);
+      },
+      sitemapXml: async () => `<SiteMap><Area><SubArea Id="s" DefaultDashboard="{${sitemapPointsAt.toUpperCase()}}"/></Area></SiteMap>`,
+    } });
+    const r = await verifySpec(spec, read);
+    return { chk: r.checks.find((c) => c.kind === 'subarea'), lookups };
+  };
+  const ok = await subarea([OURS], OURS);
+  assert.strictEqual(ok.chk.present, true, `a nav entry wired to the app's own dashboard verifies; got ${ok.chk.detail}`);
+  assert.strictEqual(ok.lookups.length, 1, 'the dashboard check and the subarea check share one lookup per name');
+  assert.strictEqual(ok.lookups[0].paginate, true, 'read in full, not one page of ten the app\'s own could sort beyond');
+  assert.strictEqual((await subarea([OURS], FOREIGN)).chk.present, false, 'a nav entry wired to another app\'s namesake does not');
+  const unknown = (await subarea([], OURS)).chk;
+  assert.strictEqual(unknown.present, false);
+  assert.match(unknown.detail, /2 dashboards share this name and none of them is in this app's solution/);
+  const cannotAsk = (await subarea(new Error('HTTP 503'), OURS)).chk;
+  assert.strictEqual(cannotAsk.present, false, 'an unreadable solution proves nothing');
+  assert.match(cannotAsk.detail, /this app's solution cannot say which is its own \(HTTP 503\)/);
+  const unreadable = (await subarea([OURS], OURS, new Error('boom'))).chk;
+  assert.strictEqual(unreadable.present, false);
+  assert.match(unreadable.detail, /unverified, not proven correct/);
+});
+
+test('verify reports unreadable dashboards, tiles and tile targets as UNVERIFIED, never as correct', async () => {
+  for (const opts of [{ dashboards: new Error('boom') }, { components: new Error('boom') }, { chartTable: new Error('boom') }]) {
+    const chk = await dashCheck(opts);
+    assert.strictEqual(chk.present, false, JSON.stringify(Object.keys(opts)));
+    assert.match(chk.detail, /unverified, not proven correct/);
+  }
+});
+
+test('verify checks dashboard EXISTENCE only when the reader cannot read tiles (additive, reader-gated)', async () => {
+  const chk = await dashCheck({ reader: { dashboardComponents: undefined } });
+  assert.strictEqual(chk.present, true);
+});
+
+test('verify ignores non-chart tiles when proving a dashboard', async () => {
+  const chk = await dashCheck({ components: [{ type: 'list', name: 'L', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW } }, { type: 'iframe', name: 'I', parameters: { Url: 'https://x' } }] });
+  assert.strictEqual(chk.present, true, chk.detail);
 });

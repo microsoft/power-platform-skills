@@ -284,6 +284,10 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ recoverable: true }));
   assert.ok(!isTransientHalt({ message: 'validation failed', cause: { statusCode: 400 } }));
   assert.ok(!isTransientHalt(null));
+  // An error that declares itself non-transient is never retried, whatever status or text it quotes: a
+  // dashboard left outside the app's solution would be silently reused by the retry.
+  assert.ok(!isTransientHalt({ message: 'x', cause: { transient: false, statusCode: 429, message: 'CustomizationLockException … try again later' } }));
+  assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
@@ -619,6 +623,19 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
   const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
   assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
     'main destructures keys makeSdk does not return (or ignores ones it does)');
+});
+
+// The build's verify read each dashboard through an isolated reader made with no client, so it created one of its
+// own — and a second Azure CLI token acquisition — beside the build's. makeSdk builds the reader around its own
+// client, and the verify wiring uses that reader.
+test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
+  assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
+  assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
+  const wiring = src.slice(src.indexOf('verify: (s, verifyOpts) =>'));
+  assert.match(wiring.slice(0, wiring.indexOf('\n')), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 
 // #447 follow-up: an LCID reaches Dataverse as a label LanguageCode, so a value that merely SURVIVES
