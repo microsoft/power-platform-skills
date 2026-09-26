@@ -255,14 +255,6 @@ function casWriteSnapshot(workspaceDir, envelope, expectedGeneration, deps = {})
   }
 }
 
-// Unconditional persist under the lease (no CAS) — used to seed the very first snapshot or to write a
-// freshly-minted envelope where no read-modify-write ordering matters. Prefer casWriteSnapshot on any
-// update path.
-function persistSnapshot(workspaceDir, envelope) {
-  writeSnapshotAtomic(workspaceDir, envelope);
-  return { ok: true };
-}
-
 // INVALIDATE-before-write: force eligible:false and persist, under the lease, ROTATING the generation so a
 // concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS (Sol #6
 // fencing — invalidate/apply/re-bless without a long-held lease). Returns { ok, generation } where
@@ -700,7 +692,6 @@ module.exports = {
   acquireLease,
   releaseLease,
   casWriteSnapshot,
-  persistSnapshot,
   invalidateSnapshot,
   tombstoneSnapshot,
   claimBaselineSnapshot,
