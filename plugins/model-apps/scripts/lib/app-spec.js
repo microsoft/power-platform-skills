@@ -524,13 +524,13 @@ const BUSINESS_RULE_SCOPES = ['Entity'];
 //
 // v1 is deliberately a SINGLE-ENTITY, linear flow: ordered stages, each with ordered steps bound to
 // columns of that same entity. The SDK's artifact additionally models `category`, `nextStageId`,
-// `relationshipName`, `branch`, stage `actions` and `securityRoles`, and those are NOT exposed here:
-//   * cross-entity stages / branching change what the flow MEANS and need live verification per
-//     shape before being offered;
-//   * `securityRoles` needs role IDs (the SDK grants CRUD privileges on the backing table that
-//     ACTIVATION creates, via `reconcileBpfSecurityRoles({ roleId, access })`) — that is the
-//     `security` phase's job, not this one, and is tracked as a follow-up.
-// Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
+// `relationshipName`, `branch` and stage `actions`, and those are NOT exposed here: cross-entity
+// stages and branching change what the flow MEANS and need live verification per shape before being
+// offered. Offering a knob the build cannot verify is how a spec deploys something the author did not
+// mean. The SDK's `securityRoles` started on this list and has since shipped, in a different shape:
+// persona names rather than role ids (validateBpfSecurityRoles below), applied by the `security`
+// phase — the grants are privileges on the backing table that ACTIVATION creates, so they can only be
+// written once both the flow and the personas' roles exist.
 const BPF_STATUSES = ['Active', 'Draft'];
 
 // `businessProcessFlows[].securityRoles` — who may run a flow. #513.
