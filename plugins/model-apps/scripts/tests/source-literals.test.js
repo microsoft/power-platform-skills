@@ -763,6 +763,32 @@ test('cast type arguments reach their `as` through intersections and unions, and
   }
   assert.equal(endsMidStatement(`${vd}export default () => total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count /`), true);
   assert.deepEqual(navReferencedKeys(`${vd}const m = \`\${total as Value extends undefined ? 0 | 1 : NonNullable<Value> / count / 2 ? Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_details" }) : ""}\`;\nexport default () => null;`), ['details']);
+  // A negative literal keeps its sign, and every part may lead with its operator: right after `as` or `satisfies`, the
+  // checked type, the constraint after `extends`, and either branch. A false branch may chain another conditional.
+  const parts = {
+    'a signed literal branch': 'Value extends undefined ? -1 | 0 : NonNullable<Value>',
+    'a leading-union true branch': 'Value extends undefined ? | 0 | 1 : NonNullable<Value>',
+    'a leading-union false branch': 'Value extends undefined ? 0 : | 1 | NonNullable<Value>',
+    'a leading-intersection false branch': 'Value extends undefined ? 0 : & NonNullable<Value>',
+    'a leading-union constraint': 'Value extends | undefined | null ? 0 : NonNullable<Value>',
+    'a leading-union checked type': '| Value extends undefined ? 0 : NonNullable<Value>',
+    'a conditional chained in the false branch': 'Value extends undefined ? 0 : Value extends null ? 1 : NonNullable<Value>',
+  };
+  for (const [label, type] of Object.entries(parts)) {
+    const code = `${vd}const label = \`\${total as ${type} / count}/month\`;\nexport default () => <p>{label}</p>;`;
+    assert.equal(hasDefaultExport(code), true, label);
+    assert.equal(endsMidStatement(code), false, label);
+    assert.equal(endsMidStatement(`${vd}export default () => total as ${type} / count /`), true, `${label}, cut`);
+  }
+  for (const keyword of ['as', 'satisfies']) {
+    const code = `type Z<Q> = Q;\n${vd}const label = \`\${total ${keyword} | number | Z<number> / count}/month\`;\nexport default () => null;`;
+    assert.equal(hasDefaultExport(code), true, `a leading union after \`${keyword}\``);
+    assert.equal(endsMidStatement(code), false, `a leading union after \`${keyword}\``);
+  }
+  // A leading operator decides nothing by itself: after `)` it is an expression's `|`, and the `/` starts a regex.
+  const notCast = `${vd}const bits = (count) | total < count || count > /}/.exec("a}")!.index;\nexport default () => null;`;
+  assert.equal(hasUnbalancedBrackets(notCast), false);
+  assert.equal(endsMidStatement(notCast), false);
 });
 
 test('endsMidStatement treats non-JSX final type argument lists as documented incomplete tails', () => {

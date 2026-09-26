@@ -149,16 +149,26 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
       r = skipSpace(o - 1);
     }
     const s = skipName(r);
-    return s === r ? null : s;
+    if (s === r) return null;
+    // `as`, `satisfies` and `extends` are where a type begins, never a constituent: a type may lead with its operator
+    // (`as | A`, `extends | 0 | 1`), and the walk must stop at the keyword, not read it as a name.
+    let word = '';
+    for (let k = s + 1; k <= r; k += 1) word += src[k];
+    if (word === 'as' || word === 'satisfies' || word === 'extends') return null;
+    // A negative numeric literal type keeps its sign: `-1 | 0`.
+    const t = skipSpace(s);
+    return src[t] === '-' && /\d/.test(src[s + 1]) ? t - 1 : s;
   };
   // Steps back over a union or intersection of constituents that ends at `r` (`0 | 1`, `string | undefined`), for the
-  // parts of a conditional type. Returns the index before it, or null.
+  // parts of a conditional type. A leading operator is part of it: `| 0 | 1`. Returns the index before it, or null.
   const skipCompound = (r) => {
     let s = skipConstituent(r);
     while (s !== null) {
       const q = skipSpace(s);
       if (!((src[q] === '&' || src[q] === '|') && src[q - 1] !== src[q])) return s;
-      s = skipConstituent(skipSpace(q - 1));
+      const t = skipConstituent(skipSpace(q - 1));
+      if (t === null) return q - 1;
+      s = t;
     }
     return null;
   };
@@ -177,15 +187,17 @@ function typeArgumentOpenFollowsCastOrAnnotation(src, open) {
     const q = skipSpace(p);
     const op = src[q];
     if ((op === '&' || op === '|') && src[q - 1] !== op) {
+      // With no constituent before it, the operator leads its type (`as | A | B<C>`, a false branch `: | A | B<C>`), and
+      // what comes before it decides, as it does for any other type: a cast keyword, a conditional's `:`, or neither.
       const r = skipConstituent(skipSpace(q - 1));
-      if (r === null) return false;
-      p = r;
+      p = r === null ? q - 1 : r;
       continue;
     }
     // A conditional type's false branch: `as V extends U ? 0 | 1 : NonNullable<V> / count`. Step back over the true
     // branch, its `?`, the extends type and `extends` itself, to the checked type. Each part may be a union or an
-    // intersection. A ternary or an object property has no `extends` before its `?`, so the walk refuses it here, and
-    // so it does a nested conditional or a parenthesized type inside a branch.
+    // intersection. A conditional chained in a false branch is walked one link per turn of the loop. A ternary or an
+    // object property has no `extends` before its `?`, so the walk refuses it here, and so it does a conditional nested
+    // in a true branch or a parenthesized type in any part.
     if (op === ':' && src[q - 1] !== ':') {
       let r = skipCompound(skipSpace(q - 1));
       if (r === null) return false;
