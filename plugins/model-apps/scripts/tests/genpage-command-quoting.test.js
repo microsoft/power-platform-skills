@@ -17,7 +17,9 @@ const FILES = ['SKILL.md', 'edit-flow.md', 'verify-flow.md'];
 //   - every line of a ```powershell / ```bash block, except comments and the body of a single-quoted here-string
 //     (`$prompt = @'` … `'@`), which is data, not command text;
 //   - every inline code span, anywhere else (a ```markdown log format included), that starts like a command:
-//     `--flag …`, `node …` or `pac …`. JSON examples (`{ "intent": "<need>" }`) and prose are not commands.
+//     `--flag …`, `node …`, `pac …`, or a lowercase command word followed by a flag, a placeholder, a quote, a `$` or
+//     a path (`mkdir -p <folder-name>`, `upload --page-id <id>`). JSON examples (`{ "intent": "<need>" }`), a
+//     `key: value` snippet and prose (`Replaced PAGEREF_<name> tokens`) are not commands.
 function commandText(text) {
   const out = [];
   let fence = null;
@@ -31,7 +33,7 @@ function commandText(text) {
       if (!/^\s*#/.test(line)) out.push({ n: i + 1, code: line });
       return;
     }
-    for (const m of line.matchAll(/`((?:--|node |pac )[^`]*)`/g)) out.push({ n: i + 1, code: m[1] });
+    for (const m of line.matchAll(/`((?:--|node |pac |[a-z][\w.-]*\s+[-<'"$./\\])[^`]*)`/g)) out.push({ n: i + 1, code: m[1] });
   });
   return out;
 }
@@ -77,6 +79,7 @@ test('the command-text reader sees what it guards', () => {
     "node x.js --file '<working-dir>/a.tsx'",
     '```',
     'Prose `--connectors "<working-dir>/c.json"` and a JSON example `{ "intent": "<need>" }`.',
+    'Make it: `mkdir -p <folder-name>`, then `upload --page-id \'<id>\'`; not commands: `pageId: "PAGEREF_<x>"`, `Replaced PAGEREF_<name> tokens`.',
     '```markdown',
     "- Command: `node x.js --env '<org-url>'`",
     '```',
@@ -87,6 +90,8 @@ test('the command-text reader sees what it guards', () => {
     'node x.js --code-file <working-dir>/a.tsx',
     "node x.js --file '<working-dir>/a.tsx'",
     '--connectors "<working-dir>/c.json"',
+    'mkdir -p <folder-name>',
+    "upload --page-id '<id>'",
     "node x.js --env '<org-url>'",
   ]);
 });

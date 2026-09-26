@@ -91,8 +91,8 @@ Derive a short folder name from the user's requirements:
 
 1. Extract the page name or a 2-4 word summary from `$ARGUMENTS`
 2. Convert to kebab-case (e.g., "Candidate Tracker" → `candidate-tracker`)
-3. Create the folder: `mkdir -p <folder-name>` (bash/PowerShell; on cmd use `mkdir <folder-name>`,
-   which has no `-p` and errors if the folder exists)
+3. Create the folder: `mkdir -p '<folder-name>'` (PowerShell or bash, the shells every command in this skill is
+   written for)
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
 ### Phase 0.5: Initialize Local-Dev Manifest
@@ -869,7 +869,7 @@ Connector deployment matrix:
   with the first `upload --add-to-sitemap`.
 - **Edit — connectors changed, added, or one removed:** write the full desired
   binding set to `connectors.json` and include `--connectors` with
-  `upload --page-id <id>` (full replace).
+  `upload --page-id '<id>'` (full replace).
 - **Edit — no connector change:** omit `--connectors`; pac preserves existing
   bindings. Never pass a stale or empty file on an unrelated edit.
 - **Delete all connectors:** write `[]` to `connectors.json` and pass
