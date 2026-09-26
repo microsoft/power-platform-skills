@@ -73,11 +73,12 @@ const {
   formEventsRegionIntent,
   viewColumnsIntent,
   firstColumnSectionsPointer,
+  cellFitsInRow,
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
-const { fitsGrid } = require('./form-occupancy.js');
+const { rowOccupancy, fitsGrid } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -2405,12 +2406,15 @@ async function runSdkBuild(spec, opts = {}) {
   };
   const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
   const maxRowspan = (rows) => Math.max(1, ...(rows || []).flatMap((r) => ((r && r.cells) || []).map((c) => Number(c.rowspan) || 1)));
+  const rowReservationAt = (rows, rowIndex) => {
+    const padded = (rows || []).slice();
+    while (padded.length <= rowIndex) padded.push({ cells: [] });
+    const occupancy = rowOccupancy(padded)[rowIndex];
+    return occupancy ? occupancy.reserved : 0;
+  };
   const fitsWithCellAtRow = (rows, rowIndex, cell, width) => {
-    const candidate = (rows || []).map((r) => ({ ...r, cells: ((r && r.cells) || []).slice() }));
-    while (candidate.length <= rowIndex) candidate.push({ cells: [] });
-    const row = candidate[rowIndex] || { cells: [] };
-    candidate[rowIndex] = { ...row, cells: [...((row && row.cells) || []), cell] };
-    return fitsGrid(candidate, width);
+    const row = ((rows || [])[rowIndex]) || { cells: [] };
+    return cellFitsInRow(row, cell, width, rowReservationAt(rows, rowIndex));
   };
   const firstAppendRowThatFits = (rows, cell, width) => {
     const start = Math.max(0, (rows || []).length - 1);
@@ -2495,7 +2499,13 @@ async function runSdkBuild(spec, opts = {}) {
     const beforeCells = (row && row.cells) || [];
     const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
     const afterRows = rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r));
-    const overflows = !fitsGrid(afterRows, sec.columns);
+    const patchedCell = afterCells[location.cellIndex] || live;
+    const occupiedUntil = location.rowIndex + Math.max(1, Number(patchedCell && patchedCell.rowspan) || 1) - 1;
+    const paddedAfterRows = afterRows.slice();
+    while (paddedAfterRows.length <= occupiedUntil) paddedAfterRows.push({ cells: [] });
+    const occupancy = rowOccupancy(paddedAfterRows);
+    const overflows = occupancy.slice(location.rowIndex, occupiedUntil + 1)
+      .some((row) => row && row.used > (Number(sec.columns) || 1));
     const unsafe = reflowBreaksReservation(afterRows);
     if (overflows && unsafe) {
       if (rowWidth(afterCells) > rowWidth(beforeCells)) {
