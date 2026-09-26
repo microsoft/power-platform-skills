@@ -609,16 +609,19 @@ child view id. Each step emits `[n/total]`.
   re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
   that one artifact (an unpublished edit to a live artifact is invisible). A fresh build without
   `--publish` still leaves new tables/columns/relationships staged-but-unpublished in the solution.
-- **Idempotent — but ADDITIVE, not yet full desired-state convergence.** Existing
+- **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a
-  rebuild is *additive* — it creates what's missing but does **not** re-apply changes to an artifact
-  that already exists (a changed column type, a removed view column — `reconcileView` only *adds* —
-  an edited form/command/dashboard), and never removes an artifact you dropped from the spec. **To
-  apply a structural edit, `teardown --apply` then rebuild fresh.** `--verify` catches this: it
-  checks **content** (a view's column set, relationship + command existence), so an unapplied edit
-  surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
-  `docs/app-builder-capabilities.md`.
+  rebuild never removes an artifact you dropped from the spec, and re-applies only part of an edit to
+  one that already exists. A **form** converges its fields (added; for an explicit layout, dropped ones
+  pruned — see `prune: false` below), column counts and spans. A **view** only *adds* columns: a
+  column removed from the spec, or a new column order, does **not** apply, and neither do its filters
+  or sort. A changed column type and an edited chart, command or dashboard are not re-applied at all.
+  **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
+  `--verify` catches what is **missing** — a spec view column, relationship, command or dashboard, and
+  a view whose filters or sort differ from the spec — as a loud `verify FAIL`. It tolerates **extra**
+  content, so a view column you removed from the spec still passes, just as a column a maker added by
+  hand does.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
