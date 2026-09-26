@@ -116,9 +116,24 @@ function topLevelValue(objText, key, sourceObjText = objText) {
     }
     return { raw: objText.slice(j, k).trim(), valueStart: j, valueEnd: k };
   };
+  let lastMatch = null;
+  const markRuntimeOverride = () => {
+    if (lastMatch) lastMatch.hasRuntimeOverrideAfter = true;
+  };
   for (let i = 0; i < objText.length; i += 1) {
     const c = objText[i];
     if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
+    if (depth === 1 && followsPropertyBoundary(i) && c === '.' && objText[i + 1] === '.' && objText[i + 2] === '.') {
+      markRuntimeOverride();
+      i += 2;
+      continue;
+    }
+    if (depth === 1 && followsPropertyBoundary(i) && c === '[') {
+      // A later computed property can be `["pageId"]` or `["pageType"]` at runtime. Without
+      // evaluating arbitrary JavaScript, the only safe answer is to treat any explicit key before it
+      // as possibly overridden; an explicit key after it still wins by normal object-literal order.
+      markRuntimeOverride();
+    }
     if ((c === '"' || c === "'") && depth === 1) {
       const keyEnd = scanStringEnd(i);
       if (keyEnd !== null) {
@@ -130,7 +145,7 @@ function topLevelValue(objText, key, sourceObjText = objText) {
         // left unmatched because supporting them would require evaluating property expressions.
         const rawKey = sourceObjText.slice(i, keyEnd);
         if (objText[colon] === ':' && followsPropertyBoundary(i) && (rawKey === `"${key}"` || rawKey === `'${key}'`)) {
-          return readValue(colon + 1);
+          lastMatch = readValue(colon + 1);
         }
         i = keyEnd - 1;
         continue;
@@ -147,9 +162,9 @@ function topLevelValue(objText, key, sourceObjText = objText) {
     // Reject false hits inside longer identifiers or value expressions; after skipping whitespace,
     // a real top-level key must follow the object's `{` or the previous property's `,`.
     if (!followsPropertyBoundary(i)) continue;
-    return readValue(i + keyRe.exec(objText.slice(i))[0].length);
+    lastMatch = readValue(i + keyRe.exec(objText.slice(i))[0].length);
   }
-  return null;
+  return lastMatch;
 }
 
 // Parse every generative navigateTo(...) call site into a classified pageId descriptor (see the module
@@ -185,6 +200,10 @@ function extractNavTargets(code) {
     // Classify from the ORIGINAL source span: the mask blanks every string body, so a backtick-quoted
     // `PAGEREF_x` is found (and classified as pageref-malformed) only in `src`.
     const rawOrig = valueAt(pv);
+    if (pt.hasRuntimeOverrideAfter || pv.hasRuntimeOverrideAfter) {
+      out.push({ kind: 'dynamic', raw: rawOrig, valueStart, valueEnd });
+      continue;
+    }
     const canon = CANON.exec(rawOrig);
     if (canon) { out.push({ kind: 'pageref', key: canon[1], valueStart, valueEnd }); continue; }
     // A PAGEREF token in any non-canonical form is malformed (single/back-tick quoted, concatenated)
