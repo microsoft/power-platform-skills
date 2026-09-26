@@ -5440,7 +5440,7 @@ test('form topology: WIDENING a section grid leaves its existing rows untouched'
 // cannot express that reservation — and the authored-rowspan restriction does not help, because
 // the span belongs to the fetched MAKER form, not to the spec. Refusing is the recoverable
 // outcome; silently rearranging a maker's form is not.
-test('form topology: a narrowing that the rows already fit is applied without moving any cell', async () => {
+test('form topology: a narrowing whose carried spacer would overflow keeps the old grid', async () => {
   const spec = makeSpec();
   spec.entities[0].columns.push(
     { schemaName: 'new_code', displayName: 'Code', type: 'Text' },
@@ -5464,15 +5464,16 @@ test('form topology: a narrowing that the rows already fit is applied without mo
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
   const res = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(String(m)) });
 
-  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
-  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  assert.ok(!calls.some((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form'),
+    `no form write may be issued; got ${JSON.stringify(calls.filter((c) => c.args && c.args[0] === 'form').map((c) => c.name))}`);
+  const finalForm = await sdk.getArtifact('form', 'form-existing');
   const sec = finalForm.tabs[0].columns[0].sections[0];
   const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => (c.control && c.control.fieldName) || '(spacer)'));
   assert.deepStrictEqual(shape,
     [['new_name'], ['(spacer)', 'new_tier'], ['new_code', 'new_note']],
-    `no cell may move — every row already fits the narrower grid; got ${JSON.stringify(shape)}`);
-  assert.strictEqual(Number(sec.columns), 2, 'the narrower grid IS applied: nothing about it needs a reflow');
-  assert.deepStrictEqual(res.skipped.layout, [], 'nothing was refused, so nothing is reported as skipped');
+    `no cell may move when the narrowing is skipped; got ${JSON.stringify(shape)}`);
+  assert.strictEqual(Number(sec.columns), 4, 'the old grid is kept because row 2 needs one reserved plus two own columns');
+  assert.ok(res.skipped.layout.some((m) => /narrowing it/.test(m)), `the refusal must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
 });
 
 // When the rows would NOT fit the narrower grid, the width must not be written either. Writing it

@@ -17,6 +17,7 @@ const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
 const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
+const { rowOccupancy } = require('./form-occupancy.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -55,6 +56,7 @@ async function verifySpec(spec, read, opts = {}) {
   const phaseSkipped = [];
 
   const selectedDefaultForms = new Map();
+  const declaredMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
     const formType = f.formType || 'Main';
     if (formType !== 'Main') continue;
@@ -70,6 +72,8 @@ async function verifySpec(spec, read, opts = {}) {
     const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
       String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
     if (!isOwnCustomTable) continue;
+    if (!declaredMainFormsByEntity.has(entity)) declaredMainFormsByEntity.set(entity, []);
+    declaredMainFormsByEntity.get(entity).push(f);
     const current = selectedDefaultForms.get(entity);
     if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
   }
@@ -262,6 +266,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     add('dashboard', d.name, problems.length === 0, problems.join('; '));
   }
+  const resolvedMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
@@ -275,6 +280,10 @@ async function verifySpec(spec, read, opts = {}) {
     } catch { id = null; }
     add('form', name, id);
     const entityLogical = String(f.entity || '').toLowerCase();
+    if (id && declaredMainFormsByEntity.has(entityLogical) && (f.formType || 'Main') === 'Main') {
+      if (!resolvedMainFormsByEntity.has(entityLogical)) resolvedMainFormsByEntity.set(entityLogical, []);
+      resolvedMainFormsByEntity.get(entityLogical).push({ form: f, name, id });
+    }
     if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
       let state = null;
       let readError = null;
@@ -288,6 +297,24 @@ async function verifySpec(spec, read, opts = {}) {
         readError
           ? `could not read deployed systemform.isdefault: ${readError}`
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
+    }
+  }
+  if (typeof read.formDefaultState === 'function') {
+    for (const [entityLogical, selected] of selectedDefaultForms) {
+      const selectedName = selected.name || `${selected.entity} form`;
+      for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
+        if (sibling.form === selected) continue;
+        let state = null;
+        let readError = null;
+        try { state = await read.formDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
+        const present = !!(state && state.isDefault !== true && !readError);
+        add('form-default-unique', `${entityLogical}.${sibling.name}`, present, present ? '' :
+          readError
+            ? `could not read deployed systemform.isdefault: ${readError}`
+            : state && state.isDefault === true
+              ? `another spec-declared Main form is also default; expected only '${selectedName}' to be default`
+              : 'could not prove this spec-declared Main form is not also default');
+      }
     }
   }
 
@@ -455,20 +482,11 @@ async function verifySpec(spec, read, opts = {}) {
             // sitting under a rowspan — live, `[name rowspan=2, tier] / [code, zeta]` in a 2-column
             // section passed, with row 2 needing three columns.
             if (Number.isFinite(secCols) && secCols >= 1) {
-              let carried = []; // one entry per reserving cell: its width and the rows it still covers
-              for (const [ri, drow] of (secHit.item.rows || []).entries()) {
-                const own = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
-                const reserved = carried.reduce((n, r) => n + r.width, 0);
-                const used = own + reserved;
-                if (used > secCols) {
-                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content`
-                    + (reserved ? ` (${reserved} reserved by a row-spanning cell above)` : '')
+              for (const [ri, occupancy] of rowOccupancy(secHit.item.rows || []).entries()) {
+                if (occupancy.used > secCols) {
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${occupancy.used} columns of content`
+                    + (occupancy.reserved ? ` (${occupancy.reserved} reserved by a row-spanning cell above)` : '')
                     + ` in a ${secCols}-column section`);
-                }
-                carried = carried.map((r) => ({ width: r.width, left: r.left - 1 })).filter((r) => r.left > 0);
-                for (const c of drow.cells || []) {
-                  const rs = Number(c.rowspan) || 1;
-                  if (rs > 1) carried.push({ width: Number(c.colspan) || 1, left: rs - 1 });
                 }
               }
             }
