@@ -88,6 +88,41 @@ test('extractNavTargets supports mixed quoted and bare keys', () => {
   assert.deepStrictEqual(navReferencedKeys(code), ['detail']);
 });
 
+test('extractNavTargets ignores quoted pageId text in a ternary value and uses the real key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", foo: c ? "pageId" : "PAGEREF_wrong", pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
+test('extractNavTargets ignores bare pageId identifiers in a ternary value and uses the real key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", foo: c ? pageId : other, pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
+test('extractNavTargets matches keys after comments, newlines, and spreads', () => {
+  const cases = [
+    '{ /* note */ "pageId": "PAGEREF_detail", pageType: "generative" }',
+    '{\n  "pageId": "PAGEREF_detail", pageType: "generative" }',
+    '{ ...base, "pageId": "PAGEREF_detail", pageType: "generative" }',
+  ];
+  for (const obj of cases) {
+    const code = `Xrm.Navigation.navigateTo(${obj});`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target.key, 'detail', obj);
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"', obj);
+  }
+});
+
+test('extractNavTargets does not match pageId inside a longer bare identifier', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", myPageId: "PAGEREF_wrong", pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
 // ─── Comment and template-literal stripping ──────────────────────────────────
 //
 // A navigateTo inside a comment or template literal is NOT a real call site.  The
@@ -288,6 +323,14 @@ test('resolvePageRefs rewrites only the PAGEREF literal inside a quoted-key call
     'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"gp-detail", data: { label: "pageId" }});',
   ].join('\n');
   const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('overview'), expected);
+});
+
+test('resolvePageRefs rewrites the real quoted-key pageId after a ternary decoy', () => {
+  const code = 'Xrm.Navigation.navigateTo({"pageType":"generative", foo: c ? "pageId" : "PAGEREF_wrong", "pageId":"PAGEREF_detail"});';
+  const expected = 'Xrm.Navigation.navigateTo({"pageType":"generative", foo: c ? "pageId" : "PAGEREF_wrong", "pageId":"gp-detail"});';
+  const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['detail', 'gp-detail'], ['wrong', 'gp-wrong']]));
   assert.deepStrictEqual(unresolved, []);
   assert.strictEqual(deployment.get('overview'), expected);
 });

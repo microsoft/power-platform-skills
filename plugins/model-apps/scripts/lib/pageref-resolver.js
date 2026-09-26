@@ -77,6 +77,16 @@ function topLevelValue(objText, key, sourceObjText = objText) {
     }
     return null;
   };
+  const followsPropertyBoundary = (from) => {
+    // Object keys begin immediately after `{` or `,` once whitespace is skipped. The mask blanks
+    // comments to same-length whitespace, so this deliberately walks the mask rather than the source:
+    //   { /* note */ "pageId": "..." }  -> previous non-space is `{`
+    //   c ? "pageId" : "..."          -> previous non-space is `?`, not a key boundary
+    // An identifier character before the match (`myPageId`) therefore still fails.
+    let p = from - 1;
+    while (p >= 0 && /\s/.test(objText[p])) p -= 1;
+    return p < 0 || objText[p] === '{' || objText[p] === ',';
+  };
   const readValue = (colonEnd) => {
     let j = colonEnd;
     while (j < objText.length && /\s/.test(objText[j])) j += 1;
@@ -118,9 +128,8 @@ function topLevelValue(objText, key, sourceObjText = objText) {
         // validated against the original source at the same offsets. Only literal "pageId"/'pageId'
         // keys are in scope; computed keys (["pageId"]) and template-literal keys are deliberately
         // left unmatched because supporting them would require evaluating property expressions.
-        const before = objText[i - 1];
         const rawKey = sourceObjText.slice(i, keyEnd);
-        if (objText[colon] === ':' && (before === undefined || /[{,\s]/.test(before)) && (rawKey === `"${key}"` || rawKey === `'${key}'`)) {
+        if (objText[colon] === ':' && followsPropertyBoundary(i) && (rawKey === `"${key}"` || rawKey === `'${key}'`)) {
           return readValue(colon + 1);
         }
         i = keyEnd - 1;
@@ -135,10 +144,9 @@ function topLevelValue(objText, key, sourceObjText = objText) {
     if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
     if (depth !== 1 || c !== key[0]) continue;
     if (!keyRe.test(objText.slice(i))) continue;
-    // Reject a false hit inside a longer identifier (e.g. the "p" of "myPageId" — c is 'p'
-    // but the character before the match in objText must be a key-boundary: '{', ',', or whitespace).
-    const before = objText[i - 1];
-    if (before !== undefined && !/[{,\s]/.test(before)) continue;
+    // Reject false hits inside longer identifiers or value expressions; after skipping whitespace,
+    // a real top-level key must follow the object's `{` or the previous property's `,`.
+    if (!followsPropertyBoundary(i)) continue;
     return readValue(i + keyRe.exec(objText.slice(i))[0].length);
   }
   return null;
