@@ -163,7 +163,7 @@ jobs:
 
 This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
 
-Current adopters: `power-pages`. Others adopt on demand.
+Current adopters: `power-pages` and `mobile-apps` (transmitting), and `model-apps` (bundled, with its committed `ikey.json` still `disabled: true`). Others adopt on demand. power-pages and model-apps each keep a `scripts/tests/telemetry-lib-copy.test.js` that fails when the bundled copy differs from `shared/telemetry/lib`. model-apps also lists `shared/telemetry/**` in its test workflow's path filter, so an edit to the source alone still runs that test.
 
 ## Legacy Marketplace Compatibility
 
