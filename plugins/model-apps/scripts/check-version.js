@@ -115,9 +115,18 @@ if (require.main === module) {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
 
-    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) =>
-      path.relative(gitRoot, path.join(pluginRoot, manifestPath)).replace(/\\/g, '/')
-    );
+    // The plugin's path inside the repository, as git itself computes it (e.g. "plugins/model-apps/").
+    // Deriving it with path.relative(gitRoot, pluginRoot) broke whenever the two spelled the same folder
+    // differently: git reports the long Windows name (C:/Users/runneradmin/...) while __dirname can carry
+    // the 8.3 short name (C:\Users\RUNNER~1\...), so the relative path pointed outside the repository
+    // and the check silently found nothing.
+    const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], {
+      cwd: pluginRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) => `${prefix}${manifestPath}`);
 
     try {
       execFileSync('git', ['fetch', 'origin', 'main', '--quiet'], {
