@@ -5,13 +5,88 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.9.0
+## [Unreleased] — 2.10.0
+
+Connector authoring loses its feature flag, `--allow-destructive` stops removing more than a maker
+was shown, and the findings of a deep retest that still reproduced are fixed.
+
+### Changed
+
+- **The `connectors` feature flag is removed.** Connector authoring shipped GA and on by default for a
+  release with no rollback needed, so the flag, `GENPAGE_ENABLE_CONNECTORS` and every probe of it are
+  gone. `custom-api` and `custom-telemetry` are unchanged, and an unknown flag now stays off even when
+  a matching env var is set.
+- **The auth preflight overlaps its CLI cold starts.** `check-auth` runs `pac org who` alongside the
+  `az` probes (every probe is asynchronous, and a pending pac probe is cancelled on an early exit), calls `az --version` only to explain a failed `az account show`, and fetches the WhoAmI
+  token while pac runs (measured on Windows: 24–32 s before, 16–19 s after). Scripts also reuse one
+  `az` token per process instead of starting the CLI for every request, and replace it on a 401.
+
+### Fixed
+
+- **`--allow-destructive` removes only what a maker was shown.** A refused apply records the removals
+  it listed (`.maker-workspace/destructive-approval.json`). The approved re-run halts, naming only the
+  new ones, if a form or the sitemap would now lose anything else: a field another maker added in the
+  meantime, or a spec edit. During a run, a field that appears is kept and reported, and a sitemap
+  rewrite that would drop a target added since the approval halts before the push. The record
+  survives failures, retries and partial (`--stage data`) runs, and an unreadable record, or a failed
+  preflight read while one exists, stops the run instead of widening the authority.
+- **`prune: false` forms are no longer reported as removing fields**, and no longer make an apply
+  demand `--allow-destructive` for removals that never happen.
+- **Switching a table's default Main form clears the old default.** Both forms used to stay default
+  while `--verify` passed. The other spec-declared Main forms are now demoted, and verify fails while
+  one still holds the flag.
+- **Row-spanning cells count wherever the build fits a layout.** Narrowing a grid, widening a cell
+  and placing a new field now count the columns a span above still reserves, exactly as verify does,
+  so the build no longer writes a layout verify rejects.
+- **A `/genpage` update must name the page's own app.** A real page id with another app's id, or a
+  nonexistent one, succeeded and renamed the page and attached its tables to that app. The wrapper
+  now proves the page is in the app (unpublished pages included) before downloading or uploading.
+- **Non-ASCII text survives the wire.** A Dataverse response or a hook payload split mid-character
+  across chunks turned Japanese, emoji and accented text into U+FFFD. Both are now decoded whole, and
+  the hooks still honour `MODEL_APPS_DISABLE_HOOKS` before touching anything.
+- **pac on Windows**: a backslash before a quote, including the quotes `%` escaping adds, no longer
+  swallows the next argument. A listing that repeats a page id, a "no pages could be retrieved"
+  warning, and a page id followed by a Unicode letter are no longer taken as authoritative.
+- **Quoted navigation keys** (`{"pageType":"generative","pageId":"PAGEREF_x"}`) are resolved and
+  counted like bare ones, and a string or name followed by `:` inside a value is no longer read as
+  the key. A navigation call whose target a later spread or computed key could replace
+  (`{ …, pageId: "PAGEREF_x", ...options }`) is now refused like any other dynamic target, and a
+  duplicated key counts where it takes effect: the last one.
+- **Downloads**: a malformed page `dataSources` is refused like an unreadable page config instead of
+  becoming unbound or a string, a page prompt keeps its exact text, and component and solution reads
+  page through instead of stopping at 1,000 rows.
+- **The version check no longer fetches your project's repository.** It ran its git commands in the
+  current directory, your project, so every skill start fetched your `origin`, and it compared
+  against a repository without the plugin, so the notice could never fire.
+
+### Removed
+
+- Dead helpers (`persistSnapshot`, `hasDebt`, `listDebt`, `getDefaultPublisherPrefix`), and the copies
+  of shared helpers: the non-field control set, OData escaping, SHA-256, and the page structural
+  gate, now one module for both skills.
+
+### Documentation
+
+- The skill no longer says BPF security-role grants are rejected. It states per artifact what a
+  rebuild re-applies to an existing form, view, chart, command or dashboard, and what `--verify` can
+  prove: a removed view column is not caught. A page's connector and Custom API bindings survive only
+  a same-environment rebuild.
+
+## [2.9.0]
 
 A dry run that says what an apply would really do, sample data that can express a hierarchy, and
 downloads that round-trip Choice columns.
 
 ### Added
 
+- **`app.aiDescription` — a routing description for agents** ([#583]). The text an orchestrator reads
+  to choose between sibling apps over the same tables, kept apart from the tile's `app.description`.
+  It is written to the platform's `appmodule.aiappdescription` at create, and on an existing app when
+  it differs. A download carries it back, and `--verify` checks it. Leave it out and the build never
+  touches the deployed value. If the app has an unpublished change in Maker, the build halts and tells
+  you to publish first, rather than failing with a remedy that cannot work. A workspace copy of the app
+  holding an earlier run's unpushed edits — an interrupted build, say — is refused before anything is
+  applied, rather than pushed along with this run's changes, and a failed push of the app resets it.
 - **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
   **Deliberately out of scope** beside the traceability table. Documentary only.
 - **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell
@@ -29,6 +104,17 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A named form section moves to the tab the spec puts it in.** A section found elsewhere on the
+  deployed form — dragged in Maker, or moved in the spec — used to be updated where it stood, so the
+  build succeeded, the section stayed in the old tab, and `--verify` failed the form. It is now moved
+  (the same section, fields and all), and a neighbour with the same label can no longer take it over.
+  A section of yours that shares its name with the engine's own host (`section_notes`) never takes
+  the timeline or a sub-grid host — by name, label or position, and even after a maker added a field to
+  the host: it gets a section of its own. With notes on, the timeline no longer takes over a
+  `section_notes` of yours, or a section a maker added, either — their fields stay put, and an existing
+  form gets its timeline too — and a section you declared with no fields keeps its name even after a
+  maker puts a web resource or sub-grid in it. An emptied copy of a section you named like a generated
+  one (`section_1_0`) is no longer reported with advice to give it a name.
 - **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
   anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
   summary read as authoritative — and a truncated-but-authoritative listing is what drives a
@@ -178,9 +264,158 @@ downloads that round-trip Choice columns.
   keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
   still commit, and a re-send could only be refused as a false version conflict. Activating a
   business process flow on a newly created table can take longer than the old 60 s.
+- **`/genpage` runs only the plan you approved** ([#585]). An edit plan is read as an edit, by its file name,
+  and the approval preview by its own Current State block and the written plan by its own File Being Edited
+  section, so a Pages table or an edit section quoted from the page's prompt cannot make an edit of another
+  page pass. A plan left over from an earlier run is
+  quarantined before the planner writes, and the new file must build exactly the pages the approved
+  plan named — so a planner that failed to write, or wrote a different plan, halts instead of running it.
+  A link at the plan path, its approval sidecar or the quarantine folder (a dangling one included), or a
+  hard link at either file, is refused rather than written through, and an overlong or conflicting page
+  id is refused, not truncated to a valid-looking one. An edit's target is the page the preview's own
+  File line names, so neither a path quoted from the page's prompt nor another file in its folder
+  (`page.tsx.bak`) can stand in for it.
+- **A truncated page is caught before deploy** ([#585]). Every page — each parallel worker's, and one
+  written inline — is checked for a complete default export, balanced brackets and elided code
+  (`// TODO`, `// ...`, "omitted for brevity"). A write cut off where every bracket still balances
+  fails too: inside its own export line (`export default function Page(props)` with no body),
+  inside JSX, a string or a comment, or right after an operator — in `/app-builder`'s page promotion
+  as well. A failing worker page is rebuilt inline, and an inline page that still fails halts.
+  "Loading…" in a label is UI copy, not elision.
+- **A missing `## Custom API Bindings` section halts instead of meaning "none"** ([#585]). Only the
+  exact `No custom API bindings.` sentinel says a page has none, so a broken plan can no longer drop
+  an approved binding. A plan made while `custom-api` was on halts too once the flag is off, instead
+  of generating Custom API calls that deploy with no bindings.
+- **Solution packaging checks every connection reference before changing anything** ([#585]). A
+  missing reference used to fail after the app and pages had already been added to the solution.
+- **Connections without both ids are no longer offered for binding** ([#585]). A listing where no row
+  has a connection and a connector id is an error, not "no connections" — in every table layout PAC
+  prints, including a connection row that matches none of its columns.
+- **Right-to-left layout follows PAC's RTL column** ([#585]), not a list of six Arabic and Hebrew
+  LCIDs — Persian, Urdu, other Arabic regions and the rest now render right to left.
+- **Re-running the manifest generator with a new feature no longer reports success over a stale
+  `package.json`** ([#585]). A missing package fails with the fix, and `/genpage` halts there for you
+  to merge it or rerun with `--force`; a version you changed is kept and reported as `versionDrift`. A
+  manifest saved with a UTF-8 byte-order mark (Windows PowerShell's default) is read as usual.
+- **The code-generation rules list exactly the packages the page installs** ([#585]), and a test
+  fails when they drift from the dependency map. Three libraries the rules offered but the package
+  never installed are gone from the list.
+- **Icons are verified however they are imported** ([#585]). A namespace, default, `require` or
+  dynamic `import()` of `@fluentui/react-icons` is blocked — in any quote style, anywhere on a line,
+  combined with a named import, or with a trailing comma or import options — since only named
+  imports can be checked.
+  A shipped sample that used two unverified sized icons is fixed, and every sample must now pass.
+- **Navigation checks read code, not prose** ([#588]). A `navigateTo` in help text no longer counts
+  as a link, and one inside a template's `${…}` is no longer invisible to the portability check. An
+  emoji in a comment or a template, or a regex holding `/*`, `//` or a backtick
+  (`u.replace(/\/*$/, "")`), no longer hides every call after it — which had left a placeholder link
+  unresolved in the deployed page while verification passed.
+- **A complete page is no longer rejected as truncated** ([#585]). `/app-builder`'s page promotion
+  read these as unbalanced brackets and refused a finished page: braces in a nested template's text,
+  a comment right before JSX or a regex, and a `/` after a property named like a keyword
+  (`counts.new / total`), a non-null assertion (`closed! / total`) or `i++`, a division after a type
+  cast (`total as NonNullable<number> / count`, its type arguments nested or across lines, and the
+  name they belong to one part of a union, an intersection or a conditional type's false branch), and a
+  file that ends in a member export such as `export default pages.Home` or a self-closing element
+  with a callback prop. Two shapes the text alone cannot tell from a cut-off page are refused on
+  purpose, and the page rules tell workers to avoid them: a line holding only `...` is always a
+  placeholder, even where TypeScript would read a spread of the next line, and a file whose last
+  statement ends in type arguments (`export default Page<string>`, a `type` alias) needs its `;`.
+  The same checks back `/genpage`'s new gate.
+- **A page's display name reaches the upload by file** ([#588]). `genpage-upload.js` takes `--name-file`, and
+  `/genpage` writes the name to a file as it does the prompt: substituted into `--name "<name>"`, a shell expanded
+  `$(…)` in it before the script ran, and `Revenue $100` arrived as `Revenue `.
+- **`/genpage` single-quotes every value it fills into a command.** A working directory with a space in its
+  path became two arguments, and a `$` in an app or solution name was expanded; the skill now states the rule
+  once, every command template follows it, and a test fails when one drifts back.
+- **The maker's text never passes through a shell, and the upload's input files never through a link.**
+  `/genpage` writes the prompt, agent-message and page-name files with its file tool, not a shell command — even a
+  single-quoted here-string ends at a line that begins with `'@`, and the rest of that line runs — after checking
+  that none of those names is a link. `genpage-upload.js` refuses any of its input files (those three,
+  `--connectors`, `--actions`) that is a link, a hard link or a folder, since a write through one rewrites the file
+  it points to.
+- **Page file names are checked before any worker writes** ([#588]). Absolute and drive-relative paths,
+  `..`, backslash aliases, a character a shell would expand or split on (a space, `$`, a backtick, `;` —
+  names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (`CON.tsx`, a `:` — an NTFS alternate stream — or
+  a trailing dot), a name that is not a `.tsx` page (`package.json`), a page path that is itself a link
+  or not a regular file, a folder that links outside the working directory or cannot be read, and
+  names that collide ignoring case (`Page.tsx` / `page.tsx`, with each other or with a file or folder
+  already there) halt the build, as does a new page that is an already-built one reached through a link
+  or junction, or a working directory that is a link or not a folder at all. A plan with a second Pages
+  table naming files — one quoted in the requirements, fenced, quoted or not, and each table counted on its own,
+  however many share a heading — halts too, instead of only the
+  first being checked. So does a Pages section with any other table row beside its File table (a
+  delimiter row repeated under a page row had made that row a header, and its page vanished from
+  both checks) or a table with two File columns; a row written without its outer pipes is read like
+  any other. `/app-builder` writes its page plan only as a plain file in the working
+  directory, never through a link, hard link or folder at its path (`write-page-plan.js` no longer takes
+  `--out`). The same rule covers the
+  pages `/app-builder` generates — which now
+  runs the disk checks too, before its workers — and the evals. A worker's page that is a folder or
+  cannot be read fails its check instead of crashing it.
 - **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
   that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
   first.
+- **Same-named charts on different tables no longer cross-wire a dashboard tile** ([#586]). A tile
+  plotted one table's chart over another table's view. Chart identity now includes its table; a tile
+  whose view name exists on several tables must say which with `entity`, and verify checks that each
+  chart tile's chart and view belong to the tile's table — on the published dashboard: one with
+  unpublished changes is reported unverified, and the tiles are read into a throwaway workspace, never
+  through the build's copy, which may hold unpushed edits. A draft saved and put back while the tiles are
+  read is caught too, by the draft's version rather than its content.
+- **Two dashboards whose names Dataverse treats as one are refused** ([#586]) — it compares names
+  ignoring case, accents and trailing spaces — because a rebuild would collapse them into one and drop
+  the other from the nav. A download withholds such a pair and says why, and it withholds a dashboard
+  whose name cannot be read rather than naming it after its sitemap title.
+- **A dashboard belongs to the app through the app's solution** ([#586]). A name can also match another
+  app's dashboard, and teardown used to delete every match. It now deletes only the dashboards the app's
+  solution holds, none when the spec has no real solution to ask, and keeps the solution while any step
+  failed — a solution it could not read counts as one — so a re-run can still tell. When several
+  match, the build reuses the solution's own or halts instead of reusing an arbitrary one, and verify
+  checks that same one — including the sitemap entry that opens it, which took the first match and
+  failed a correctly wired app. A dashboard the build cannot add to its solution is removed again
+  rather than left outside it; if that fails too, the build halts naming it and does not auto-retry,
+  since a retry would reuse it outside the solution. A lone match outside the solution is still reused
+  (a downloaded app's dashboard may never have joined the solution that holds the app), and the build
+  now warns that nothing proves it is this app's rather than another app's namesake.
+- **A Choice written as a label, its translation, or its number is one sample-data key** ([#586]). The
+  loader always saw them that way; the spec gate compared them as written, so a duplicate passed it
+  and the seed then failed after tables and forms had deployed. A Choice column with no `schemaName`
+  on a table with sample data is now reported by name instead of crashing validation.
+- **A download reports only the app's own global choices as not round-tripped** ([#586]) — the ones
+  its solution owns or its columns bind — instead of every unmanaged option set in the environment.
+- **A teardown fences any `--changed-only` run already in flight** ([#587]). Its tombstone kept the
+  snapshot's generation, so a run that had read the snapshot first could re-bless it over the
+  tombstone. A first build, which has no snapshot yet, is fenced too: it claims one before it builds,
+  and a teardown tombstones even a workspace with none. When two teardowns of one workspace overlap,
+  the fence stays until the last of them finishes, a `--changed-only` build waits while one is still
+  running — and a build that cannot resolve its live identity also refuses when one began while it was
+  looking — and `--clear-workspace` leaves a workspace that still holds the fence. Teardown now also
+  **refuses to delete anything when it cannot write that fence**, instead of warning and carrying on.
+  The workspace lease that guards the fence is never taken from a holder that is still alive, however
+  long it has held it: one paused mid-write, on a machine that slept, would otherwise commit its stale
+  view over the fence when it resumed. An old lease names the file to delete if its holder's pid was
+  reused by another process, and so does a reclaim of it abandoned by a crash: it is never removed by
+  another writer, which let two writers hold the lease. `--clear-workspace` clears under the same lease,
+  and only when no fence has appeared since the teardown finished. A build that another build or a
+  teardown ran alongside fails, and makes whatever snapshot it then finds ineligible; when even that is
+  refused, because the other writer holds the lease or the snapshot cannot be read, the refusal is
+  recorded beside the snapshot and the next `--changed-only` run builds in full.
+- **Tearing down a downloaded spec keeps its relationships and global choices** ([#587]), as it
+  already kept its tables: a download flags all three `existing: true`. Deleting a relationship
+  removed its lookup column — and that column's data — from a table teardown kept.
+- **An app in several unmanaged solutions downloads the same way every time** ([#587]). The spec keeps
+  `Default` and names the candidates in `solutionCandidates` — never whichever row the server happened
+  to return first, which teardown would then delete. Its business rules and option sets are still
+  reported across all of them, and a membership that cannot be read is reported as unknown. When the
+  candidates' publishers do not share one prefix, or the solutions or a publisher cannot be read — the
+  one solution's included — the spec's publisher prefix is not guessed from the app name: it stays the
+  unverified `new`, relationships keep their deployed names, and the download says to set it.
+- **The teardown summary no longer calls every skip "not found".** Steps kept on purpose and steps
+  never attempted after a failed app delete are counted as what they are.
+- **A failure after the app is already deleted no longer strands the rest of the teardown.** The SDK
+  tidies its local copy after the remote delete; when that step failed, teardown stopped as though
+  the app still existed. It now asks the platform, and carries on when the app is gone.
 
 ### Changed
 
@@ -207,7 +442,10 @@ downloads that round-trip Choice columns.
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
 [#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#585]: https://github.com/microsoft/power-platform-skills/issues/585
+[#586]: https://github.com/microsoft/power-platform-skills/issues/586
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#588]: https://github.com/microsoft/power-platform-skills/issues/588
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 

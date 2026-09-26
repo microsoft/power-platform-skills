@@ -211,6 +211,12 @@ async function hydrateSpec(read) {
     app: {
       name: app.name,
       description: app.description || '',
+      // #583: the routing description round-trips when the app has one. The SDK sets `aiDescription` on
+      // a fetched app whenever `appmodule.aiappdescription` is non-empty — including whitespace-only — so
+      // a blank one is dropped here: validation refuses a blank value, and one the platform left blank
+      // would otherwise fail the whole download. Absent stays absent, and the build never writes an absent
+      // field, so a rebuild cannot blank one the platform wrote.
+      ...(typeof app.aiDescription === 'string' && app.aiDescription.trim() ? { aiDescription: app.aiDescription } : {}),
       ...(app.uniquename ? { uniqueName: app.uniquename } : {}),
       ...(typeof app.newLook === 'boolean' ? { newLook: app.newLook } : {}),
       ...(typeof app.headerNavigationRefresh === 'boolean' ? { headerNavigationRefresh: app.headerNavigationRefresh } : {}),
@@ -261,7 +267,7 @@ async function hydrateSpec(read) {
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }
       // Legacy shape: name + optional fields + top-level codeFile (back-compat with hydrate callers
@@ -269,7 +275,7 @@ async function hydrateSpec(read) {
       : {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),
     appShell,

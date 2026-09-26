@@ -19,7 +19,6 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -57,15 +56,28 @@ function extractConnectorId(connectionId) {
   return match ? match[1] : '';
 }
 
+function usableConnection(row) {
+  return Boolean(row.connectorId && row.connectionId);
+}
+
+function usableConnectionRows(rows, source) {
+  const usable = rows.filter(usableConnection);
+  if (rows.length && !usable.length) {
+    throw new Error(`pac connection list ${source} contained ${rows.length} row(s), but no usable connection rows with both connection and connector identifiers`);
+  }
+  return usable;
+}
+
 function parseJsonConnections(raw) {
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    const rows = Array.isArray(parsed) ? parsed : parsed?.value;
-    if (!Array.isArray(rows)) return null;
-    return rows.map(mapConnectionRow).filter((row) => row.connectorId || row.connectionId || row.displayName);
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
+  const rows = Array.isArray(parsed) ? parsed : parsed?.value;
+  if (!Array.isArray(rows)) return null;
+  return usableConnectionRows(rows.map(mapConnectionRow), 'JSON');
 }
 
 function parseFixedWidthTable(raw) {
@@ -83,7 +95,7 @@ function parseFixedWidthTable(raw) {
     end: matches[index + 1]?.index,
   }));
 
-  return lines
+  return usableConnectionRows(lines
     .slice(separatorIndex + 1)
     .filter((line) => line.trim() && !/^-+$/.test(line.trim()))
     .map((line) => {
@@ -92,8 +104,7 @@ function parseFixedWidthTable(raw) {
         row[range.name] = line.slice(range.start, range.end).trim();
       }
       return mapConnectionRow(row);
-    })
-    .filter((row) => row.connectorId || row.connectionId || row.displayName);
+    }), 'fixed-width table');
 }
 
 function parseWhitespaceTable(raw) {
@@ -107,18 +118,22 @@ function parseWhitespaceTable(raw) {
   // with no dashed separator. Names may contain spaces, so splitting each row on
   // whitespace loses the boundary. The connector API path is the stable delimiter.
   if (normalizedHeaders.join(',') === 'id,name,apiid,status') {
-    return lines
+    // Every connection row in this layout carries its connector's API path, so a line that does too but does
+    // not match is a connection row read wrong — a changed column layout, say. It is kept as a row with no
+    // ids, so usableConnectionRows fails closed when no row has both, where dropping it read the listing as
+    // "no connections"; beside a usable row it is dropped. A line WITHOUT the path is not a connection at all
+    // — a message such as "No connections found.", a notice, the wrapped tail of a long name — and is
+    // dropped. The Status column may be several words ("Not connected"), or empty.
+    return usableConnectionRows(lines
       .slice(headerIndex + 1)
-      .map((line) => line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)\s*$/i))
-      .filter(Boolean)
-      .map((match) => mapConnectionRow({
-        Id: match[1],
-        Name: match[2],
-        'API Id': match[3],
-        Status: match[4],
-      }));
+      .map((line) => {
+        const match = line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)(?:\s+(.+?))?\s*$/i);
+        if (match) return mapConnectionRow({ Id: match[1], Name: match[2], 'API Id': match[3], Status: match[4] || '' });
+        return /\/providers\/Microsoft\.PowerApps\/apis\//i.test(line) ? { connectorId: '', connectionId: '', displayName: line.trim() } : null;
+      })
+      .filter(Boolean), 'Id/Name/API Id table');
   }
-  return lines
+  return usableConnectionRows(lines
     .slice(headerIndex + 1)
     .filter((line) => !/^-+$/.test(line.trim()))
     .map((line) => {
@@ -128,8 +143,7 @@ function parseWhitespaceTable(raw) {
         row[header] = values[index] || '';
       });
       return mapConnectionRow(row);
-    })
-    .filter((row) => row.connectorId || row.connectionId || row.displayName);
+    }), 'whitespace table');
 }
 
 function parsePacConnectionList(raw) {
@@ -200,10 +214,6 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Rollback gate (fail closed) — see lib/feature-flags.js. connectors is GA and ships ON, so
-  // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
-  exitIfConnectorsDisabled();
-
   const argv = process.argv.slice(2);
   const { positional } = parseArgs(argv);
   const USAGE = 'Usage: node list-connections.js <envUrl>';

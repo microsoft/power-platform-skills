@@ -1,12 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
+const { Readable } = require('node:stream');
 const {
   TRACKED_SKILLS,
   TRACKED_SKILL_NAMES,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  readUtf8Stream,
 } = require('../lib/modelapps-hook-utils');
 
 test('discovers genpage and report-issue as tracked skills', () => {
@@ -65,4 +66,12 @@ test('getValidatorScript returns null when a skill has no validator', () => {
   // genpage currently ships no skills/genpage/scripts/validate*.js.
   assert.equal(getValidatorScript('genpage'), null);
   assert.equal(getValidatorScript('nope'), null);
+});
+
+test('readUtf8Stream preserves a multibyte character split across Buffer chunks', async () => {
+  const text = 'payload: 東京 😀 Café';
+  const bytes = Buffer.from(text, 'utf8');
+  const split = bytes.indexOf(Buffer.from('😀', 'utf8')) + 1;
+  const stream = Readable.from([bytes.subarray(0, split), bytes.subarray(split)]);
+  assert.equal(await readUtf8Stream(stream), text);
 });

@@ -44,6 +44,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
   requireSuccessfulPush,
+  pushFailed,
   reportPartialPush,
   errorCodeChain,
   makeEntitySetResolver,
@@ -76,7 +77,8 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
+const { rowOccupancy, fitsGrid } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -89,6 +91,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
+const { isRestrictedSolution } = require('./system-solutions.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -114,6 +117,59 @@ const TILE_CLASS_ID = {
 // is added to the solution under that type, not under a bespoke one.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
 const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20, workflow: 29 };
+
+// Which of `ids` (dashboard systemform ids) are components of the solution `solutionUniqueName`.
+//
+// A dashboard's only identity in an App Spec is its name, and Dataverse neither keeps names unique nor
+// compares them exactly (it ignores case, most accents and trailing spaces), so a lookup by name can
+// return other apps' dashboards too. Every dashboard the build creates is added to the app's solution
+// (the dashboards phase below) — which makes membership the evidence of ownership that the name alone
+// cannot give. Used by the build (which of several matches to reuse) and by teardown (which to delete).
+//
+// Returns a Set of bare lower-case ids, or null when there is no solution to ask: none named, a
+// built-in container (it holds every unmanaged customization, so it proves nothing), or one that no
+// longer exists. Throws when a read fails; each caller decides how to fail closed.
+async function dashboardsInSolution(sdk, solutionUniqueName, ids) {
+  if (!solutionUniqueName || isRestrictedSolution(solutionUniqueName)) return null;
+  const bare = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
+  const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${odataLit(solutionUniqueName)}'`, top: 1 });
+  const solId = sols && sols[0] && sols[0].solutionid;
+  if (!solId) return null;
+  const wanted = [...new Set((ids || []).map(bare).filter(Boolean))];
+  const members = new Set();
+  // In chunks, so the OR-list — and the URL — stays bounded however many name matches there are
+  // (findDashboardsByName reads them all). A component appears once per solution, so a chunk of 25
+  // ids answers at most 25 rows and `top: 50` never truncates.
+  for (let i = 0; i < wanted.length; i += 25) {
+    const chunk = wanted.slice(i, i + 25);
+    const rows = await sdk.queryRecords('solutioncomponent', {
+      select: ['objectid'],
+      filter: `_solutionid_value eq ${bare(solId)} and componenttype eq ${COMPONENT_TYPE.dashboard} and (${chunk.map((id) => `objectid eq ${id}`).join(' or ')})`,
+      top: 50,
+    });
+    for (const r of rows || []) {
+      const id = bare(r && r.objectid);
+      if (id) members.add(id);
+    }
+  }
+  return members;
+}
+
+// Every dashboard whose name matches `name` (Dataverse's comparison: case, most accents and trailing
+// spaces ignored), as `[{ id, name }]`. The vendored `resolveArtifact('dashboard', { name })` reads ONE
+// page — `top: 10` with no `$orderby`, so the server picks which ten — and with more matches than that
+// the app's own dashboard can sort beyond it, leaving every ownership decision (reuse, check, delete)
+// made without it. So a full page is re-read in full. A reader without resolveArtifact (verify's)
+// always reads in full. Shared by build, verify and teardown so all three see the same set.
+const DASHBOARD_LOOKUP_PAGE = 10;
+async function findDashboardsByName(sdk, name) {
+  if (typeof sdk.resolveArtifact === 'function') {
+    const page = (await sdk.resolveArtifact('dashboard', { name })) || [];
+    if (page.length < DASHBOARD_LOOKUP_PAGE) return page;
+  }
+  const rows = (await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `type eq 0 and name eq '${odataLit(name)}'`, paginate: true })) || [];
+  return rows.map((r) => ({ id: String(r.formid), name: String(r.name) }));
+}
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -144,6 +200,11 @@ const HEADER_NAV_SETTING = 'HeaderAndNavigationRefresh';
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
 // already created; the target entity is derived from the referenced view. iframe/webresource tiles
 // carry a url / web-resource name.
+//
+// Views AND charts are keyed `entity|name`, and a tile resolves both on its OWN target entity. A chart
+// keyed by name alone let two same-named charts on different tables collide, so a tile took whichever
+// was built last — one table's view with another table's chart, which the platform accepts and
+// publishes (live-measured). Validation guarantees the named chart exists on the tile's table.
 function dashboardTileOpts(spec, tile, result) {
   const viewEntity = (name) => { const v = (spec.views || []).find((x) => x.name === name); return v && v.entity.toLowerCase(); };
   const span = (o) => { if (tile.colspan) o.colspan = tile.colspan; if (tile.rowspan) o.rowspan = tile.rowspan; return o; };
@@ -152,7 +213,7 @@ function dashboardTileOpts(spec, tile, result) {
   const targetEntity = tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view);
   if (tile.type === 'chart') {
     return span({ type: 'chart', name: tile.name || tile.chart, targetEntity,
-      viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`], visualizationId: tile.visualizationId || result.created.charts[tile.chart] });
+      viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`], visualizationId: tile.visualizationId || result.created.charts[`${targetEntity}|${tile.chart}`] });
   }
   if (tile.type === 'list') {
     return span({ type: 'list', name: tile.name || tile.view, targetEntity, viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`] });
@@ -921,8 +982,154 @@ function appDef(spec, result, opts = {}) {
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
       subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)).filter(Boolean) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },
+    // #583: the routing description, only when the spec sets one (see applyAppAiDescription).
+    ...(spec.app.aiDescription ? { aiDescription: spec.app.aiDescription } : {}),
     ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
+}
+
+// #583: set the routing description (`app.aiDescription` → `appmodule.aiappdescription`) on the FETCHED
+// artifact of an app that already exists. Returns true when the artifact changed and needs a push.
+//
+//   * Only when the spec sets one. Absent means "leave the deployed value alone" — the platform can write
+//     this text itself — so an omitted field is never written, and never blanked.
+//   * Only when it differs from the FETCHED artifact, which is the draft layer
+//     (RetrieveUnpublishedMultiple) the SDK's own push compares the header against. So `true` here means
+//     exactly "the push will write the header", and a plain rebuild neither pushes nor publishes for
+//     nothing. Same rule as the chart description reconcile: read the layer the write targets.
+//   * A fetched app carries `aiDescription` only when the row has one, and `updateElement` refuses a
+//     path that is not there (PATH_NOT_FOUND). So the key is ADDED at the artifact root when absent and
+//     updated when present.
+// LIVE-MEASURED: addElement at the root and a push write `aiappdescription` (read back before and after
+// publish); a later updateElement and push change it; an unrelated edit and push leave it untouched.
+async function applyAppAiDescription(provision, spec, appId) {
+  const want = spec.app && spec.app.aiDescription;
+  if (typeof want !== 'string' || !want.trim()) return false;
+  const current = (await provision.getArtifact('app', appId)) || {};
+  if (current.aiDescription === want) return false;
+  if (current.aiDescription === undefined) await provision.addElement('app', appId, '', { aiDescription: want });
+  else await provision.updateElement('app', appId, '/aiDescription', want);
+  return true;
+}
+
+// #583: halt precisely when the push of an app whose routing description this run changed was refused
+// because Dataverse will not take a header write until the app is PUBLISHED — rather than because of a
+// concurrent edit. Called before requireSuccessfulPush, whose generic 412 remedy (re-download and
+// rebuild) reads the same draft and fails the same way. The SDK reports that state two ways:
+//   * APP_DRAFT_HEADER_NOT_WRITABLE, THROWN (see pushAppHeader) for an app that was never published. The
+//     SDK's own message names the state, so no read is needed.
+//   * VERSION_CONFLICT, RESOLVED (saved:false) for a published app with an unpublished header change.
+//     LIVE-MEASURED: once a header change (name, description or routing description) is pushed but not
+//     published, the appmodule row has a second, unpublished layer with its own version number, and the
+//     SDK's next header PATCH fails with 412 although nothing changed since the fetch; a sitemap-only
+//     push over the same state still succeeds, and publishing clears it. The state arises from a header
+//     edit saved in Maker but not published, or from a build whose publish did not complete. A 412 is
+//     relabelled only when it was the APPMODULE row's and a draft read PROVES that state (componentstate
+//     1 = Unpublished:
+//     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_ComponentState);
+//     any other outcome — a settled row, a read that fails — returns and leaves the generic halt in place.
+//
+//     Whose 412 it was matters because the SDK writes an app in two PATCHes, the header then the sitemap,
+//     each conditional on its own version, and names the refused one in the error's `detail`:
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/appmodules(<id>)
+//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/sitemaps(<id>)
+//     A sitemap 412 is a concurrent sitemap edit — and by then this push's own header write has committed,
+//     leaving exactly the unpublished layer the draft read finds. Relabelling it reset the copy, and
+//     "publish, then re-run" then overwrote the other edit; the kept copy is what makes that re-run stop.
+//
+// Before halting it RESETS the workspace copy to the server's. The refused push left this run's edits in
+// it; once the operator publishes, the server moves, and a plain fetch then refuses to discard unpushed
+// edits (LOCAL_EDITS_WOULD_BE_LOST) — so "publish, then re-run" would halt again. Measured against the
+// vendored bundle. The edits were projected from the spec and the re-run re-applies them, so nothing is
+// lost; if the reset itself fails, the halt names the workspace to delete instead.
+async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
+  // pushFailed reads `saved`, then the older SDK spelling `success`, then a bare error — the same reading
+  // requireSuccessfulPush applies, so the precise halt fires for either result shape.
+  const code = pushFailed(pushed) && pushed.error && pushed.error.code;
+  const neverPublished = code === 'APP_DRAFT_HEADER_NOT_WRITABLE';
+  if (!neverPublished) {
+    if (code !== 'VERSION_CONFLICT' || !provision.dataverse || typeof provision.dataverse.get !== 'function') return;
+    if (!/\/appmodules\(/i.test(`${pushed.error.detail || ''} ${pushed.error.message || ''}`)) return;
+    let pending = false;
+    try {
+      // No `$top`: look for the unpublished layer among EVERY row the draft read returns. Measured, it
+      // returns only the unpublished row while one exists, but that is not a documented guarantee, and a
+      // published row read first would silently fall through to the generic halt this exists to replace.
+      const res = await provision.dataverse.get(`/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=componentstate&$filter=appmoduleid eq ${appId}`);
+      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        pending = res.body.value.some((r) => r && r.componentstate === 1);
+      }
+    } catch {
+      return;
+    }
+    if (!pending) return;
+  }
+  let reset = true;
+  try {
+    await provision.fetchArtifact('app', appId, { overwrite: true });
+  } catch {
+    reset = false;
+  }
+  const workspace = reset ? ''
+    : ' First delete the .maker-workspace directory (or the --workspace one): it still holds this run\'s unpushed copy of the app, which a re-run would refuse to overwrite.';
+  const why = neverPublished
+    ? 'the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is'
+    : 'the app has an unpublished change to its name, description or routing description (saved in Maker, or by a build whose publish did not complete), and Dataverse refuses another write to those fields until it is published';
+  const fix = neverPublished ? 'publish the app in Power Apps' : 'publish the app in Power Apps (or discard the change)';
+  throw new BuildHalt(`push app ${name} failed: ${why}. Re-downloading reads the same draft and fails the same way: ${fix}, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
+}
+
+// #583: push an app artifact whose header this run may have changed (the routing description). A refusal
+// that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
+// else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
+// FAILED push first resets the workspace copy (discardUnrecordedEdits).
+async function pushAppHeader(provision, appId, name, headerChanged) {
+  let pushed;
+  try {
+    pushed = await provision.pushArtifact('app', appId);
+  } catch (e) {
+    if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
+    await discardUnrecordedEdits(provision, appId, e, true);
+    throw e;
+  }
+  if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+  if (pushFailed(pushed)) await discardUnrecordedEdits(provision, appId, pushed.error, false);
+  return pushed;
+}
+
+// #583: after a push of the app FAILED, reset the workspace copy to the server's. Its edits were never
+// recorded, and a copy still holding them hurts the re-run: its plain fetch refuses to discard them
+// (LOCAL_EDITS_WOULD_BE_LOST) once the server has moved; the next run that pushes the app refuses such a
+// copy outright (refuseUnpushedAppCopy); and applyAppAiDescription would compare against it, so a pending
+// routing description read as "already set". The edits are projected from the spec, so the re-run
+// re-applies them and nothing is lost. (Only a push that carried a header change used to reset; a failed
+// sitemap-only push left the copy holding its edits.)
+//
+// A concurrent edit is the one failure that KEEPS the copy: a VERSION_CONFLICT, or a returned failure
+// with no code at all (the bare 412 requireSuccessfulPush reads the same way). There the remedy is a
+// fresh download, and the unrecorded copy is what makes a blind re-run stop instead of overwriting the
+// other edit. Best-effort: a reset that fails leaves the copy exactly as it was before this existed.
+async function discardUnrecordedEdits(provision, appId, error, thrown) {
+  const code = error && error.code;
+  if (code === 'VERSION_CONFLICT' || (!thrown && !code)) return;
+  try {
+    await provision.fetchArtifact('app', appId, { overwrite: true });
+  } catch { /* see above */ }
+}
+
+// #583 review: an app copy an earlier run left holding unpushed edits — a build interrupted between its edit
+// and its push, say — goes out with the next push of the app, whatever that run asked for. A plain fetch
+// keeps such a copy while the server has not moved, and the SDK serializes every field that differs from
+// its stored server copy: a routing description the spec leaves out ("leave the deployed one alone") was
+// overwritten with the earlier run's, a wanted one read as already set (so its push skipped the
+// unpublished-header halt), and a stale sitemap rewrite was replayed, detaching live pages with no gate. So
+// a run that will push the app refuses such a copy before it applies anything.
+async function refuseUnpushedAppCopy(provision, appId, name) {
+  const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === appId);
+  if (listed && listed.isDirty) {
+    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. Delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+  }
 }
 
 // A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
@@ -1436,6 +1643,40 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
 }
 
 // --- orchestrator ----------------------------------------------------------------------
+function normalizeFormId(value) {
+  return String(value || '').trim().replace(/^\{+|\}+$/g, '').toLowerCase();
+}
+
+function authorizedFormRemovalEntry(map, formId, createdThisRun) {
+  if (!(map instanceof Map)) return { fenced: false, authorized: null, normalizedFormId: normalizeFormId(formId) };
+  const normalized = normalizeFormId(formId);
+  if (map.has(normalized)) return { fenced: true, authorized: map.get(normalized), normalizedFormId: normalized };
+  for (const [key, value] of map) {
+    if (normalizeFormId(key) === normalized) return { fenced: true, authorized: value, normalizedFormId: normalized };
+  }
+  if (createdThisRun && createdThisRun.has(normalized)) return { fenced: false, authorized: null, normalizedFormId: normalized };
+  return { fenced: true, authorized: new Set(), normalizedFormId: normalized };
+}
+
+function sitemapTargetsForFence(container) {
+  // Use the destructive-op classifier's target vocabulary so the preflight record and the engine fence
+  // cannot drift (entity:<logical>, url:<url>). Required lazily to avoid a module-load cycle: op-diff
+  // reaches sdk-build through sdk-teardown, while this helper runs only after sdk-build is initialized.
+  return require('./op-diff.js').sitemapTargets(container);
+}
+
+async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, authorized, phase) {
+  if (!(authorized instanceof Set)) return;
+  await provision.fetchArtifact('app', appId, { overwrite: true });
+  const live = await provision.getArtifact('app', appId) || {};
+  const want = new Set(sitemapTargetsForFence(nextSiteMap || {}));
+  const dropped = sitemapTargetsForFence(live.siteMap || {}).filter((target) => !want.has(target));
+  const unauthorized = dropped.filter((target) => !authorized.has(target));
+  if (unauthorized.length) {
+    throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true });
+  }
+}
+
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
@@ -1473,7 +1714,8 @@ async function runSdkBuild(spec, opts = {}) {
     };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [] } };
+  const createdFormsThisRun = new Set();
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1821,20 +2063,6 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
-  // After a whole tab or form-column is appended, record where each of its sections landed, so the
-  // field pass places into them through the same locator the converge path produces. A freshly
-  // added container's sections occupy indices 0..n-1 in declaration order.
-  const recordColumnSectionTargets = (out, wantColumn, tabIndex, columnIndex, liveColumns) => {
-    const live = ((liveColumns || [])[columnIndex] || {}).sections || [];
-    (wantColumn.sections || []).forEach((s, si) => {
-      out[s.name] = { pointer: '/tabs/' + tabIndex + '/columns/' + columnIndex + '/sections/' + si, name: (live[si] || {}).name };
-    });
-  };
-
-  const recordSectionTargets = (out, wantTab, tabIndex, liveTab) => {
-    (wantTab.columns || []).forEach((c, ci) => recordColumnSectionTargets(out, c, tabIndex, ci, (liveTab || {}).columns));
-  };
-
   // Identity of a deployed tab/section across rebuilds, in descending order of confidence:
   //   1. NAME  — what the compiler emits, so a form this plugin created matches itself exactly.
   //   2. LABEL — what the author sees and types; survives a name this plugin did not choose
@@ -1889,8 +2117,37 @@ async function runSdkBuild(spec, opts = {}) {
     // object a section legitimately named `__proto__` would mutate the prototype instead of becoming
     // an own enumerable property, so it would be invisible to `Object.values` — and the
     // vacated-section sweep would then treat a section the layout explicitly claimed as unclaimed.
+    //
+    // Only AUTHORED wants are recorded: the map routes the author's fields. The compiler's notes section
+    // is also named `section_notes`, and an authored section may be too — recording the engine's want
+    // after the author's replaced the author's target, and the field pass then poured the author's fields
+    // into the timeline and the sweep removed the emptied authored section. An engine section routes no
+    // field, and the sweep never removes a section that still holds its control.
     const sectionTargets = Object.create(null);
     const wantTabs = def.tabs || [];
+    // The section names the AUTHOR declared, computed by the compiler from the spec with the same
+    // function verify uses, so the label and position passes cannot hand one want's named section to
+    // another (see claimedByAuthoredName) — and build and verify skip the same containers.
+    const authoredSectionNames = new Set(def.__authoredSectionNames || []);
+    // …and the subset the author NAMED. Only those are looked for across the form (see the form-wide
+    // lookup below): a generated name encodes the section's place.
+    const namedSectionNames = new Set(def.__namedSectionNames || []);
+    // A section MOVE shifts its siblings: the ones after it in the source column slide up one. Every
+    // recorded target pointer there is corrected, not only the name-less ones resolveSectionPointer
+    // falls back to — the vacated-section sweep also treats recorded pointers as claims, and a stale
+    // one would spare a section it should reclaim. Nothing recorded can sit at or after the INSERTION
+    // point: the target column's own matches all precede it, and every other column's matches live in
+    // that column (an authored name hit in another column is moved, never recorded in place; an engine
+    // want, which is never moved, is never recorded at all).
+    const shiftRecordedSectionPointers = (fromPointer) => {
+      const split = (p) => { const m = /^(.*\/sections)\/(\d+)$/.exec(p || ''); return m ? { list: m[1], index: Number(m[2]) } : null; };
+      const from = split(fromPointer);
+      if (!from) return;
+      for (const t of Object.values(sectionTargets)) {
+        const at = t && split(t.pointer);
+        if (at && at.list === from.list && at.index > from.index) t.pointer = at.list + '/' + (at.index - 1);
+      }
+    };
     // Indices already taken by an earlier want, so two wants can never converge on one container.
     const claimedTabs = new Set();
     const claimedSections = new Map(); // column pointer -> Set(index)
@@ -1900,15 +2157,19 @@ async function runSdkBuild(spec, opts = {}) {
       // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
       // computed against an earlier snapshot can address the wrong container.
       let form = await provision.getArtifact('form', formId) || {};
-      const tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
       if (!tabMatch) {
+        // A new tab is added with EMPTY form-columns, and its sections then go through the same
+        // per-section pass as an existing tab's: a section the deployed form already carries elsewhere
+        // is MOVED in, and only a genuinely new one is created. Adding the tab with its sections created
+        // a same-named DUPLICATE of any section it relocated — the field pass then emptied the original,
+        // which the vacated-section sweep spared for its claimed name.
         await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
-          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: (c.sections || []).map(stripRows) })),
+          columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: [] })),
         }));
         form = await provision.getArtifact('form', formId) || {};
-        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
-        if (added) { claimedTabs.add(added.index); recordSectionTargets(sectionTargets, wantTab, added.index, added.item); }
-        continue;
+        tabMatch = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        if (!tabMatch) continue; // defensive: the added tab could not be found again
       }
       claimedTabs.add(tabMatch.index);
       const tabPointer = '/tabs/' + tabMatch.index;
@@ -1918,18 +2179,17 @@ async function runSdkBuild(spec, opts = {}) {
       const wantColumns = wantTab.columns || [];
       for (let ci = 0; ci < wantColumns.length; ci++) {
         form = await provision.getArtifact('form', formId) || {};
-        const liveTab = (form.tabs || [])[tabMatch.index];
+        let liveTab = (form.tabs || [])[tabMatch.index];
         if (!liveTab) break; // defensive: the tab vanished mid-reconcile
-        const liveColumns = liveTab.columns || [];
-        if (ci >= liveColumns.length) {
-          // A tab that gained a form-column — e.g. a single-column form widened into two.
-          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], {
-            sections: (wantColumns[ci].sections || []).map(stripRows),
-          }));
+        if (ci >= (liveTab.columns || []).length) {
+          // A tab that gained a form-column — e.g. a single-column form widened into two. Added EMPTY,
+          // for the same reason as a new tab: its sections go through the per-section pass below.
+          await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], { sections: [] }));
           form = await provision.getArtifact('form', formId) || {};
-          recordColumnSectionTargets(sectionTargets, wantColumns[ci], tabMatch.index, ci, ((form.tabs || [])[tabMatch.index] || {}).columns);
-          continue;
+          liveTab = (form.tabs || [])[tabMatch.index];
+          if (!liveTab || ci >= (liveTab.columns || []).length) break; // defensive: the add did not land
         }
+        const liveColumns = liveTab.columns || [];
         if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
           await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
         }
@@ -1939,18 +2199,89 @@ async function runSdkBuild(spec, opts = {}) {
           form = await provision.getArtifact('form', formId) || {};
           const columnPointer = tabPointer + '/columns/' + ci;
           const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
-          // A section may have been dragged to a different tab in Maker; it is still THAT section,
-          // so a form-wide name hit outranks a positional one inside this column.
-          const global = wantSection.name ? findSectionLocation(form, wantSection.name) : null;
           const claimedHere = claimedIn(columnPointer);
-          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si, { claimed: claimedHere, skip: isEngineOwnedSection });
+          // A section may have been dragged to a different tab in Maker, or the spec may now place it
+          // somewhere else; either way it is still THAT section, so a form-wide name hit outranks a
+          // positional one inside this column. A name hit INSIDE this column is preferred, so a pair of
+          // same-named sections left by an older build resolves to the one already in place.
+          const liveList = ((liveSections || {}).sections) || [];
+          // An AUTHORED want never takes an engine HOST (the notes timeline, a sub-grid host, still under
+          // the name the compiler gave it) by name, here or anywhere below. An authored section may legally
+          // carry the name the engine gives its host — `section_notes` is a natural name for a section
+          // holding a notes field — and taking the host MOVED it into the author's column and poured
+          // authored fields into it. Such a host is simply not a candidate: the want is matched or created
+          // like any other authored section — and a host a maker added a field to is still one, since it
+          // still holds its control. A section a maker filled with a control but that carries an AUTHORED
+          // name stays a candidate: the name is the evidence it is the author's (see isEngineHostSection). An ENGINE want, in turn, takes only a section holding its own control
+          // (the notes timeline's class id): its name is shared with any authored `section_notes`, and taking
+          // the author's section for its host meant an existing form never got its timeline (see
+          // holdsControlOf).
+          const authoredWant = !isEngineOwnedSection(wantSection);
+          const engineHost = authoredWant ? null : holdsControlOf(wantSection);
+          const candidate = (s) => (authoredWant ? !isEngineHostSection(s) : engineHost(s));
+          const sameName = (s) => !!(s && s.name) && String(s.name).toLowerCase() === String(wantSection.name).toLowerCase() && candidate(s);
+          const inColumn = wantSection.name ? liveList.findIndex((s, i) => !claimedHere.has(i) && sameName(s)) : -1;
+          // The form-wide lookup is for a section the author NAMED — and for an engine want, whose host a
+          // maker may have moved. A GENERATED name (`section_<tab>[_<column>]_<index>`) encodes the
+          // section's place, so a section of that name elsewhere — dragged there in Maker, or another one
+          // that carries it after a reorder — is not taken from there: as documented for a generated
+          // section (app-spec-schema.md, "Moving a section"), it is created where the layout places it,
+          // its fields follow, and the emptied original is removed. The in-column hit above still finds it
+          // where it belongs, so an unchanged layout converges.
+          const lookFormWide = !!wantSection.name && (!authoredWant || namedSectionNames.has(String(wantSection.name).toLowerCase()));
+          let global = inColumn >= 0 ? { pointer: columnPointer + '/sections/' + inColumn, section: liveList[inColumn] }
+            : (lookFormWide ? findSectionLocation(form, wantSection.name, candidate) : null);
+          // A named section the spec places in THIS column but that lives elsewhere is MOVED here: the
+          // same node, so its id, name, rows and any maker-set properties travel with it. It used to be
+          // reused in place — its attributes patched, its location left alone — so the build reported
+          // success, the section stayed in the wrong tab, and verify, which checks placement, failed.
+          // It lands right after the furthest section this column has already matched — exactly the
+          // sections the layout places before it here — so it follows all of them (or goes first when
+          // there are none) and stays ahead of any sub-grid host appended after them.
+          //
+          // An ENGINE-owned want (the notes section, a sub-grid host) is never moved: the author did
+          // not place it — the compiler appends it to the first tab — so a maker who moved the
+          // timeline elsewhere keeps it there, and nothing verifies its placement either.
+          if (global && !isEngineOwnedSection(wantSection) && !global.pointer.startsWith(columnPointer + '/sections/')) {
+            const liveCount = liveList.length;
+            const index = Math.min(liveCount, claimedHere.size ? Math.max(...claimedHere) + 1 : 0);
+            // Named for the report before the move: after it, `global` addresses the new place.
+            const fromTab = ((form.tabs || [])[global.tabIndex] || {}).name || `#${global.tabIndex + 1}`;
+            const fromColumn = global.columnIndex + 1;
+            // Source and target are different arrays here, so moveElement's remove-then-splice needs no
+            // index compensation (it is only off by one within a single array).
+            await provision.moveElement('form', formId, global.pointer, columnPointer + '/sections', { index });
+            shiftRecordedSectionPointers(global.pointer);
+            // Moving a section a maker may have dragged there on purpose is the spec winning, as it does
+            // for a section's columns and label — so it is reported, never silent.
+            if (typeof opts.warn === 'function') {
+              opts.warn(`form ${def.name}: moved section '${wantSection.name}' from tab '${fromTab}' (form-column ${fromColumn}) `
+                + `to tab '${liveTab.name || `#${tabMatch.index + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
+            }
+            form = await provision.getArtifact('form', formId) || {};
+            const moved = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            global = { pointer: columnPointer + '/sections/' + index, section: moved[index] || global.section };
+          }
+          // An ENGINE want has no label or position to go on: its evidence is its name and its own control,
+          // both weighed above. Running it through the label and position passes let the notes section, when
+          // no host qualified, take whatever maker section sat at its index — relabelled "Notes", re-flowed
+          // to one column, and still no timeline.
+          const local = (global || !authoredWant) ? null : matchContainer((liveSections || {}).sections, wantSection, si,
+            { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
           if (!global && !local) {
-            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
+            // An authored section is created where the layout places it: right after the furthest section this
+            // column has already matched, the index the move above uses. Appended, it landed after every
+            // section still to come — a new one declared mid-column, or a generated one recreated after a
+            // drag in Maker — and the build never reorders what exists, so the wrong order was permanent (and
+            // verify does not check order). Nothing recorded sits at or after that index, so no recorded
+            // pointer shifts. An ENGINE want is still appended: the compiler puts the notes section last.
+            const at = authoredWant ? Math.min(liveList.length, claimedHere.size ? Math.max(...claimedHere) + 1 : 0) : null;
+            await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection), ...(at === null ? [] : [{ position: { index: at } }]));
             form = await provision.getArtifact('form', formId) || {};
             const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
-            const addedIdx = addedList.length - 1;
+            const addedIdx = at === null ? addedList.length - 1 : at;
             claimedHere.add(addedIdx);
-            sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
+            if (authoredWant) sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
             continue;
           }
           if (local) claimedHere.add(local.index);
@@ -1963,7 +2294,7 @@ async function runSdkBuild(spec, opts = {}) {
           }
           const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
           const live = global ? global.section : local.item;
-          sectionTargets[wantSection.name] = { pointer, name: live.name };
+          if (authoredWant) sectionTargets[wantSection.name] = { pointer, name: live.name };
           // `columns` is the key that matters most: it is what makes a section render as two
           // columns rather than one, and it was previously unreachable on an existing form.
           const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
@@ -1983,7 +2314,7 @@ async function runSdkBuild(spec, opts = {}) {
             // apply sees the width already applied and has nothing to do.
             const width = Number(patch.columns);
             reflow = false;
-            if (!(live.rows || []).every((r) => rowWidth((r && r.cells) || []) <= width)) {
+            if (!fitsGrid(live.rows || [], width)) {
               delete patch.columns;
               reportLayoutSkip(`form section '${live.name || pointer}' keeps its ${live.columns}-column grid: narrowing it `
                 + `to ${width} would overflow rows that cannot be re-flowed without moving a cell into a row-spanning `
@@ -2005,6 +2336,15 @@ async function runSdkBuild(spec, opts = {}) {
   // back to the recorded pointer for a section that carries no name at all.
   const resolveSectionPointer = (form, target) => {
     if (!target) return null;
+    // The recorded pointer, when the section there still carries the recorded name, is EXACT — and
+    // only it can tell two same-named sections apart (a real one and an empty twin an older build left
+    // in another tab), where a name search always returns the first in document order. Section indices
+    // do not move under the field pass (it mutates rows and cells; the topology pass corrects them
+    // across its own section moves), so a mismatch means the pointer went stale, and the name decides.
+    if (target.name && target.pointer) {
+      const at = sectionAt(form, target.pointer);
+      if (at && String(at.name || '').toLowerCase() === String(target.name).toLowerCase()) return target.pointer;
+    }
     if (target.name) {
       const loc = findSectionLocation(form, target.name);
       if (loc) return loc.pointer;
@@ -2100,6 +2440,25 @@ async function runSdkBuild(spec, opts = {}) {
     return false;
   };
   const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+  const maxRowspan = (rows) => Math.max(1, ...(rows || []).flatMap((r) => ((r && r.cells) || []).map((c) => Number(c.rowspan) || 1)));
+  const rowReservationAt = (rows, rowIndex) => {
+    const padded = (rows || []).slice();
+    while (padded.length <= rowIndex) padded.push({ cells: [] });
+    const occupancy = rowOccupancy(padded)[rowIndex];
+    return occupancy ? occupancy.reserved : 0;
+  };
+  const fitsWithCellAtRow = (rows, rowIndex, cell, width) => {
+    const row = ((rows || [])[rowIndex]) || { cells: [] };
+    return cellFitsInRow(row, cell, width, rowReservationAt(rows, rowIndex));
+  };
+  const firstAppendRowThatFits = (rows, cell, width) => {
+    const start = Math.max(0, (rows || []).length - 1);
+    const limit = (rows || []).length + maxRowspan(rows);
+    for (let rowIndex = start; rowIndex <= limit; rowIndex += 1) {
+      if (fitsWithCellAtRow(rows, rowIndex, cell, width)) return rowIndex;
+    }
+    return Math.max(0, (rows || []).length);
+  };
   // Whether any cell — a field or an empty spacer — comes after (rowIndex, cellIndex) in reading order.
   const cellFollows = (rows, rowIndex, cellIndex) => (rows || []).some((r, ri) => ri >= rowIndex
     && ((r && r.cells) || []).some((_, ci) => ri > rowIndex || ci > cellIndex));
@@ -2174,8 +2533,15 @@ async function runSdkBuild(spec, opts = {}) {
     const row = rows[location.rowIndex];
     const beforeCells = (row && row.cells) || [];
     const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
-    const overflows = rowsFromCells(afterCells, sec.columns).length > 1;
-    const unsafe = reflowBreaksReservation(rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r)));
+    const afterRows = rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r));
+    const patchedCell = afterCells[location.cellIndex] || live;
+    const occupiedUntil = location.rowIndex + Math.max(1, Number(patchedCell && patchedCell.rowspan) || 1) - 1;
+    const paddedAfterRows = afterRows.slice();
+    while (paddedAfterRows.length <= occupiedUntil) paddedAfterRows.push({ cells: [] });
+    const occupancy = rowOccupancy(paddedAfterRows);
+    const overflows = occupancy.slice(location.rowIndex, occupiedUntil + 1)
+      .some((row) => row && row.used > (Number(sec.columns) || 1));
+    const unsafe = reflowBreaksReservation(afterRows);
     if (overflows && unsafe) {
       if (rowWidth(afterCells) > rowWidth(beforeCells)) {
         // A WIDENING into an overflow: skipped whole, not half-applied. Applying it without the
@@ -2249,7 +2615,8 @@ async function runSdkBuild(spec, opts = {}) {
   // two single-width fields per row. The reconcile path used to ignore that entirely — every ADDED
   // field became its own single-cell row and every MOVED field was appended to the last row whatever
   // its width — so the same spec deployed a different shape depending only on whether the form
-  // already existed. `cellFitsInRow` is the create path's own rule, shared rather than restated.
+  // already existed. The effective-capacity check below is the create path's width rule plus
+  // any columns still reserved by row-spanning cells above the target row.
   //
   // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
   // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
@@ -2259,10 +2626,14 @@ async function runSdkBuild(spec, opts = {}) {
   const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
-    const lastIndex = rows.length - 1;
-    if (lastIndex >= 0 && cellFitsInRow(rows[lastIndex], wantCell, section.columns)) {
-      await provision.updateElement('form', formId, sectionPointer + '/rows/' + lastIndex,
-        { cells: [...(rows[lastIndex].cells || []), wantCell] });
+    const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
+    while ((section.rows || []).length < rowIndex) {
+      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
+      section.rows = [...(section.rows || []), { cells: [] }];
+    }
+    if (rowIndex < rows.length) {
+      await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
+        { cells: [...(rows[rowIndex].cells || []), wantCell] });
       return;
     }
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
@@ -2329,13 +2700,13 @@ async function runSdkBuild(spec, opts = {}) {
     // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
     // which silently skips the move (the `if (!row) return` guard below).
     const priorRowCount = targetRows.length;
-    let rowIndex = priorRowCount - 1;
-    if (rowIndex < 0 || !cellFitsInRow(targetRows[rowIndex], wantCell, targetSection.columns)) {
-      // Either the section this run just created has no row yet, or the last row is full. The SDK
-      // accepts a row with an empty cells array and serializes it correctly, so seed one and target
-      // it. `addElement` appends, so the new row's index is the PRE-add length.
+    let rowIndex = firstAppendRowThatFits(targetRows, wantCell, targetSection.columns);
+    while (rowIndex >= priorRowCount && ((targetSection.rows || []).length <= rowIndex)) {
+      // Either the section this run just created has no row yet, or all existing rows whose carried
+      // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an
+      // empty cells array and serializes it correctly, so seed rows until the chosen target exists.
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      rowIndex = priorRowCount;
+      targetSection.rows = [...(targetSection.rows || []), { cells: [] }];
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2422,8 +2793,18 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
+      const { fenced, authorized, normalizedFormId } = authorizedFormRemovalEntry(opts.authorizedFormRemovals, formId, createdFormsThisRun);
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
+        if (fenced && (!authorized || !authorized.has(logical))) {
+          // The preflight gate records the exact live field list the maker approved before this run.
+          // If a later form read sees more fields, deleting them would exceed that approval (another
+          // maker may have added the field while this build was starting), so keep the field and make
+          // the skipped destructive change visible on the build result.
+          result.skipped.unauthorizedRemovals.push({ formId: normalizedFormId, form: def.name, field: logical });
+          reportLayoutSkip(`form ${def.name}: kept field '${logical}' because it was not among the removals authorized when this run started. Another maker may have added it; re-run to review it.`);
+          continue;
+        }
         const pruneForm = await provision.getArtifact('form', formId) || {};
         const loc = findFieldCellLocation(pruneForm, logical);
         // Pruning can empty a section too, so it feeds the vacated set on the same terms as a move.
@@ -2449,7 +2830,10 @@ async function runSdkBuild(spec, opts = {}) {
     //     out of. Without this the sweep deleted a section a maker had created empty and may
     //     show/hide from a form script — an unchanged layout would silently destroy it, and the
     //     destructive preflight cannot see it because that compares fields, not containers.
-    //   · the section is NOT one the authored layout claimed (by pointer or by deployed name).
+    //   · the section is NOT one the authored layout claimed — judged by the section each target
+    //     RESOLVES to on the live form, not by name: two same-named sections (a real one and a copy an
+    //     older build left in another tab) share a name, and a name test spared the emptied copy
+    //     forever while the field pass had moved everything into the real one.
     //   · it holds NO cells at all — not merely no bound fields. A section can carry a spacer or a
     //     control this reader does not model, and an empty-LOOKING section is not an empty one.
     //
@@ -2459,24 +2843,21 @@ async function runSdkBuild(spec, opts = {}) {
     // and is spared above. Mutation testing proved it unkillable, and a guard that cannot fail
     // implies coverage that does not exist.
     if (def.__explicitLayout && def.__prune !== false) {
-      const claimedPointers = new Set();
-      const claimedNames = new Set();
-      for (const t of Object.values(sectionTargets || {})) {
-        if (!t) continue;
-        if (t.pointer) claimedPointers.add(t.pointer);
-        if (t.name) claimedNames.add(String(t.name).toLowerCase());
-      }
       // Collected from a single read and removed from the BACK, because removeElement shifts the
       // indices of later siblings — deleting front-first would silently target the wrong section.
       const orphans = [];
       const live = await provision.getArtifact('form', formId) || {};
+      const claimedPointers = new Set();
+      for (const t of Object.values(sectionTargets || {})) {
+        const p = t && resolveSectionPointer(live, t);
+        if (p) claimedPointers.add(p);
+      }
       (live.tabs || []).forEach((tab, ti) => {
         (tab.columns || []).forEach((col, ci) => {
           (col.sections || []).forEach((sec, si) => {
             const pointer = `/tabs/${ti}/columns/${ci}/sections/${si}`;
             if (claimedPointers.has(pointer)) return;
             const secName = sec && sec.name ? String(sec.name).toLowerCase() : null;
-            if (secName && claimedNames.has(secName)) return;
             if (!secName || !vacatedSections.has(secName)) return;
             const cells = ((sec && sec.rows) || []).flatMap((r) => (r && r.cells) || []);
             if (cells.length) return;
@@ -2487,7 +2868,12 @@ async function runSdkBuild(spec, opts = {}) {
       for (const o of orphans.slice().reverse()) {
         await provision.removeElement('form', formId, o.pointer);
         if (typeof opts.warn === 'function') {
-          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it. Give a section an explicit \`name\` if you intend to move it between tabs or form-columns.`);
+          // The naming hint helps only a GENERATED name (`section_<tab>[_<column>]_<index>`), which is
+          // the one that loses its identity on a move; a named copy or a dropped section needs none. The
+          // shape alone is not proof: an author may NAME a section `section_0_0`, and a copy of that
+          // needs no advice to give it a name.
+          const generated = /^section_\d+(?:_\d+)?_\d+$/.test(String(o.name)) && !(def.__namedSectionNames || []).includes(String(o.name).toLowerCase());
+          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it.${generated ? ' Give a section an explicit `name` if you intend to move it between tabs or form-columns.' : ''}`);
         }
       }
     }
@@ -2564,7 +2950,7 @@ async function runSdkBuild(spec, opts = {}) {
   // before deleting ours so the table can be torn down — note that is a delete-enabler, NOT a perfect
   // restore of pre-build activation state (a form that was inactive before this build may be left
   // active after teardown).
-  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers) => {
+  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers, siblingFormIds = []) => {
     // Deactivating the OTHER main forms is only safe once OUR form is the entity default: if the
     // isdefault promote failed we must NOT deactivate the others, or the entity could be left with its
     // (now-deactivated) stock form still the default and no active default — a bricked form experience.
@@ -2581,7 +2967,27 @@ async function runSdkBuild(spec, opts = {}) {
       const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
       if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return promoted;
+    if (!promoted) return promoted;
+    if (typeof provision.queryRecords === 'function') {
+      for (const siblingId of siblingFormIds || []) {
+        if (!siblingId || String(siblingId) === String(formId)) continue;
+        try {
+          const rows = await provision.queryRecords('systemform', {
+            select: ['formid', 'isdefault'],
+            filter: `formid eq ${siblingId}`,
+            top: 1,
+          });
+          const sibling = rows && rows[0];
+          if (sibling && sibling.isdefault === true) {
+            await provision.updateRecord('systemform', String(sibling.formid || siblingId), { isdefault: false });
+          }
+        } catch (err) {
+          const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
+          if (typeof opts.warn === 'function') opts.warn(`could not clear the previous default Main form for '${entityLogical}': ${reason}`);
+        }
+      }
+    }
+    if (!deactivateOthers) return promoted;
     if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
@@ -2633,6 +3039,7 @@ async function runSdkBuild(spec, opts = {}) {
     let id;
     if (type === 'form') {
       id = await createFormShell(def);
+      createdFormsThisRun.add(normalizeFormId(id));
       await addSubgrids(id, def.__subgrids);
     } else {
       id = (await provision.createArtifact(type, def)).id;
@@ -2758,7 +3165,7 @@ async function runSdkBuild(spec, opts = {}) {
         return pushed.id;
       });
     });
-    charts.forEach((c, i) => { result.created.charts[c.name] = ids[i]; });
+    charts.forEach((c, i) => { result.created.charts[`${String(c.entity).toLowerCase()}|${c.name}`] = ids[i]; });
   }
 
   // 6. Forms (independent -> parallel; sub-grids reference the child view ids built above).
@@ -2830,9 +3237,12 @@ async function runSdkBuild(spec, opts = {}) {
     // table is an environment-wide side effect.
     const promotedEntities = new Set();
     const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    const mainIdsByEntity = new Map(); // entity -> spec-declared Main form ids for sibling demotion
     defs.forEach((d, i) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
+      if (!mainIdsByEntity.has(key)) mainIdsByEntity.set(key, []);
+      if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
       const current = mainByEntity.get(key);
       // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
       if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
@@ -2848,7 +3258,7 @@ async function runSdkBuild(spec, opts = {}) {
       // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
       // bookkeeping below — a build that could not set the flag must not report a default form it
       // did not set, which is what `result.created.defaultForms` claims.
-      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true, mainIdsByEntity.get(entityLogical) || []);
       if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
@@ -3351,8 +3761,49 @@ async function runSdkBuild(spec, opts = {}) {
       // the dashboard kind (only view/chart/form/app), but the vendored bundle's resolveArtifact does (it
       // is what the teardown engine uses to find dashboards, sdk-teardown.js). Like charts, dashboard TILE
       // EDITS are not reapplied on a rebuild — recreate the dashboard to change it. Never removes tiles.
-      const existing = await provision.resolveArtifact('dashboard', { name: dash.name });
-      const existingId = existing && existing[0] && existing[0].id;
+      const existing = await findDashboardsByName(provision, dash.name);
+      let existingId = existing[0] && existing[0].id;
+      // A name lookup can return several dashboards — names are not unique, and the lookup ignores
+      // case, most accents and trailing spaces — and reusing the first one returned bound this app to
+      // an arbitrary one, possibly another app's. The app's own is the one its solution holds; when
+      // that does not single one out, halt with the names to fix rather than guess.
+      if (existing.length > 1) {
+        let ours = null;
+        let unreadable = '';
+        try {
+          const members = await dashboardsInSolution(provision, sol.uniqueName, existing.map((e) => e.id));
+          ours = members ? existing.filter((e) => members.has(String(e.id).replace(/[{}]/g, '').toLowerCase())) : null;
+        } catch (err) {
+          unreadable = ` (${(err && err.message) || err})`;
+        }
+        if (ours && ours.length === 1) {
+          existingId = ours[0].id;
+        } else {
+          const reason = ours === null
+            ? `and this app's solution cannot say which is its own${unreadable}`
+            : `and ${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution '${sol.uniqueName}'`;
+          await runner.run('dashboards', `dashboard "${dash.name}"`, async () => {
+            throw new Error(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to reuse. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
+          });
+        }
+      } else if (existing.length === 1 && typeof opts.warn === 'function') {
+        // A LONE match is reused without that proof. A downloaded app's dashboard may never have joined
+        // the solution the download recovered — the one holding the APP; a dashboard made in Maker outside
+        // it stays in Default — and refusing or duplicating it would break that rebuild. It is not ADDED to
+        // the solution either (only a dashboard the build creates is), so teardown, which deletes solution
+        // members only, keeps it. But a lone match outside the solution may be another app's namesake, and
+        // this app is then bound to it with nothing to tell — so the build says so. A read that fails
+        // proves nothing either way and is no reason to fail the step: the reuse is today's behaviour.
+        let members = null;
+        try {
+          members = await dashboardsInSolution(provision, sol.uniqueName, [existing[0].id]);
+        } catch {
+          members = null;
+        }
+        if (members && !members.has(String(existing[0].id).replace(/[{}]/g, '').toLowerCase())) {
+          opts.warn(`dashboard "${dash.name}": the one dashboard with this name is not in this app's solution '${sol.uniqueName}', so nothing proves it is this app's. It is reused; teardown will keep it, and a solution export will leave it out. If it is this app's, add it to the solution in Maker; if it is another app's, give this dashboard a different name.`);
+        }
+      }
       if (existingId) {
         runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse; tile edits aren't applied on rebuild, recreate to change)`);
         result.created.dashboards[dash.name] = existingId;
@@ -3367,7 +3818,48 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tiles[ti], result), ti));
         }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`, opts.warn);
-        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+        try {
+          await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+        } catch (err) {
+          // The app's solution is the only proof, to a later rebuild or teardown, that this dashboard is
+          // the app's (names are not unique — see dashboardsInSolution). Left outside it, a rebuild would
+          // reuse it as a lone name match without ever adding it, and teardown would keep it as "not
+          // created by this build" while its tiles blocked the chart and view deletes. So undo the push
+          // — a re-run then simply creates it again — and when that fails too, say what is left behind.
+          const why = (err && err.message) || String(err);
+          let undoErr = null;
+          try {
+            await provision.deleteRemoteArtifact('dashboard', pushed.id);
+          } catch (e) {
+            undoErr = e;
+          }
+          // deleteRemoteArtifact removes the row and THEN the local workspace copy, so a failure can come
+          // from either half. Only a row that is still there is left outside the solution; when that
+          // cannot be read either, assume it is.
+          let stranded = false;
+          if (undoErr) {
+            stranded = true;
+            try {
+              const still = await provision.queryRecords('systemform', { select: ['formid'], filter: `formid eq ${String(pushed.id).replace(/[{}]/g, '')}`, top: 1 });
+              stranded = !!(still && still.length);
+            } catch { /* cannot tell — keep assuming it is still there */ }
+          }
+          if (stranded) {
+            const left = new Error(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's`);
+            // Never auto-retried (isTransientHalt, build-model-app.js): a retry would reuse it as a lone
+            // name match without adding it, whatever transient text the causes quoted above carry.
+            left.transient = false;
+            left.cause = err;
+            throw left;
+          }
+          const removed = new Error(`dashboard "${dash.name}" could not be added to solution '${sol.uniqueName}' (${why}), so it was removed again — re-run to create it afresh`);
+          // Nothing is left behind, so a retry is safe: keep the cause's HTTP status, so a 429/503 is
+          // still auto-retried as it was before the undo existed.
+          const status = err && (err.statusCode || err.status);
+          if (status) removed.statusCode = status;
+          removed.cause = err;
+          throw removed;
+        }
         result.created.dashboards[dash.name] = pushed.id;
       });
     }
@@ -3398,6 +3890,22 @@ async function runSdkBuild(spec, opts = {}) {
       if (existingId) {
         appWasExisting = true;
         await provision.fetchArtifact('app', existingId);
+        // Refused here, before anything is applied, whenever this run pushes the app: the finalizer (every
+        // pages-phase run that rewrites the sitemap), or the app-shell pushes below (refuseUnpushedAppCopy).
+        const routingSet = typeof (spec.app && spec.app.aiDescription) === 'string' && !!spec.app.aiDescription.trim();
+        const pushesApp = has('pages')
+          ? !(opts.changedOnly && opts.changedOnly.skipSitemapFinalize)
+          : (!appHasPageSubareas(spec) || routingSet);
+        if (pushesApp) await refuseUnpushedAppCopy(provision, existingId, def.name);
+        // #583: the routing description rides an app push this run ALREADY makes — never a second push from
+        // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
+        // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
+        // sitemap writer, and applies it there, after its own re-fetch and after the removal gate. Pushing
+        // the fetched app HERE would re-send the LIVE sitemap, which the SDK validates reference by
+        // reference, so a subarea whose page or table was deleted in Maker would halt the run before the
+        // pages phase could drop it. Without the pages phase it is applied below, right before the push
+        // that carries it — after the live-page gate, so a gate that halts leaves no unrecorded edit in
+        // the workspace copy for the re-run's plain fetch to refuse.
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
         // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
         // stay pinned. Explicit forms/views/charts component pins are applied at CREATE only (below):
@@ -3428,9 +3936,25 @@ async function runSdkBuild(spec, opts = {}) {
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
+          await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
+          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+        } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
+          // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
+          // --apply): a page-backed app's sitemap is not written on this run, so the routing description
+          // needs its own push. That push re-sends the workspace copy's sitemap, which the SDK validates —
+          // and which is the live one only because a copy holding an earlier run's unpushed edits was
+          // refused above (refuseUnpushedAppCopy): replaying a stale sitemap rewrite detached live pages
+          // with no gate and no --allow-destructive, and the copy's routing description may be this very
+          // edit, left unpushed, so "unchanged" against it would skip the push the server still needs.
+          const current = await provision.getArtifact('app', existingId) || {};
+          await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
+          if (await applyAppAiDescription(provision, spec, existingId)) {
+            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
+            reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
@@ -3697,9 +4221,14 @@ async function runSdkBuild(spec, opts = {}) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
+          await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
           await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+          // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
+          // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
+          const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
+          const appName = (spec.app && spec.app.name) || result.created.app;
+          requireSuccessfulPush(await pushAppHeader(provision, result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
       } else {
@@ -4312,9 +4841,7 @@ async function runSdkBuild(spec, opts = {}) {
       // from `result.created.charts` would therefore hand publish an id it cannot resolve for an
       // existing chart with no description to reconcile, and the throw escapes publishArtifact and
       // halts the phase. `chartsToPublish` is populated at exactly the two points that put a chart in
-      // the workspace. It is also keyed by entity rather than by chart NAME, which sidesteps the
-      // `result.created.charts` name-only keying (two same-named charts on different entities
-      // collide there).
+      // the workspace, and keyed by entity because publishing is per-entity.
       for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
       await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
       if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
@@ -4414,4 +4941,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

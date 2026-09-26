@@ -4,7 +4,7 @@
 // Uses Azure CLI (`az account get-access-token`) for auth — same MSAL cache that pac CLI uses.
 // All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 // Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
@@ -14,19 +14,82 @@ const { nearestName } = require('./nearest-name.js');
  * Gets an Azure CLI access token for the given Dataverse environment URL.
  * Returns null if `az` is missing, the user isn't logged in, or the resource is unreachable.
  * @param {string} envUrl - e.g. "https://contoso.crm.dynamics.com"
+ * @param {object} [opts]
+ * @param {boolean} [opts.fresh=false] bypass the process memo and replace it with a new token
+ * @param {Function} [opts.exec=execFileSync] test seam for the Azure CLI subprocess
  * @returns {string|null}
  */
-function getAuthToken(envUrl) {
+const authTokenMemo = new Map();
+
+function normalizeTokenResource(envUrl) {
+  const raw = String(envUrl == null ? '' : envUrl).trim().replace(/\/+$/, '');
   try {
-    const out = execFileSync(
+    const u = new URL(raw);
+    u.hostname = u.hostname.toLowerCase();
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return raw;
+  }
+}
+
+function getAuthToken(envUrl, opts = {}) {
+  const resource = normalizeTokenResource(envUrl);
+  const exec = opts.exec || execFileSync;
+  if (!opts.fresh && authTokenMemo.has(resource)) {
+    return authTokenMemo.get(resource);
+  }
+  try {
+    const out = exec(
       'az',
-      ['account', 'get-access-token', '--resource', envUrl, '--query', 'accessToken', '-o', 'tsv'],
+      ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
       { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' }
     );
-    return out.trim() || null;
+    const token = out.trim() || null;
+    // `az account get-access-token` is expensive on a cold Windows process, but an immediate
+    // re-call returns the same MSAL-cached token (see the ensureOk 401 note below). Reusing that
+    // non-null token within this Node process removes repeated CLI cold-starts without changing
+    // Dataverse semantics; a caller that just saw a 401 passes `{ fresh: true }` to replace it.
+    if (token) authTokenMemo.set(resource, token);
+    else authTokenMemo.delete(resource);
+    return token;
   } catch {
+    if (opts.fresh) authTokenMemo.delete(resource);
     return null;
   }
+}
+
+function getAuthTokenAsync(envUrl, opts = {}) {
+  const resource = normalizeTokenResource(envUrl);
+  const exec = opts.execFile || execFile;
+  if (!opts.fresh && authTokenMemo.has(resource)) {
+    return Promise.resolve(authTokenMemo.get(resource));
+  }
+  return new Promise((resolve) => {
+    try {
+      exec(
+        'az',
+        ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
+        { encoding: 'utf8', timeout: 30000, windowsHide: true, shell: process.platform === 'win32' },
+        (error, stdout) => {
+          if (error) {
+            if (opts.fresh) authTokenMemo.delete(resource);
+            resolve(null);
+            return;
+          }
+          const token = String(stdout || '').trim() || null;
+          // Shares the synchronous helper's memo deliberately: check-auth can pre-warm the token
+          // without blocking the event loop, and later synchronous Dataverse callers in the same
+          // process still avoid a second Azure CLI cold start.
+          if (token) authTokenMemo.set(resource, token);
+          else authTokenMemo.delete(resource);
+          resolve(token);
+        }
+      );
+    } catch {
+      if (opts.fresh) authTokenMemo.delete(resource);
+      resolve(null);
+    }
+  });
 }
 
 /**
@@ -230,9 +293,10 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         timeout,
       },
       (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
+          const data = Buffer.concat(chunks).toString('utf8');
           const result = { statusCode: res.statusCode, body: data };
           if (includeHeaders) result.headers = res.headers;
           resolve(result);
@@ -279,7 +343,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
   // different diagnoses — and would otherwise fetch the very same token twice in a row.
   // The 401 refresh path below still re-acquires from the CLI, because a preset token that has just
   // been rejected is exactly the thing that must not be retried.
-  let token = presetToken || acquireToken(cleanUrl);
+  let token = presetToken || acquireToken(cleanUrl, { fresh: false });
   if (!token) {
     throw new Error(`Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`);
   }
@@ -303,7 +367,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      token = acquireToken(cleanUrl);
+      token = acquireToken(cleanUrl, { fresh: true });
       if (!token) throw new Error("Token refresh failed. Run 'az login' again.");
       continue;
     }
@@ -384,26 +448,6 @@ function requiredLevel(level = 'None') {
     CanBeChanged: true,
     ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings',
   };
-}
-
-/**
- * Discovers the publisher prefix for the default solution in this env.
- * Falls back to "new" if the query fails.
- * @param {string} envUrl
- * @returns {Promise<string>}
- */
-async function getDefaultPublisherPrefix(envUrl) {
-  try {
-    const res = await dataverseRequest(
-      envUrl,
-      'GET',
-      "solutions?$select=uniquename&$filter=uniquename eq 'Default'&$expand=publisherid($select=customizationprefix)&$top=1"
-    );
-    const prefix = res?.data?.value?.[0]?.publisherid?.customizationprefix;
-    return prefix || 'new';
-  } catch {
-    return 'new';
-  }
 }
 
 /**
@@ -676,12 +720,12 @@ module.exports = {
   preflightAuth,
   azIdentity,
   getAuthToken,
+  getAuthTokenAsync,
   makeRequest,
   dataverseRequest,
   ensureOk,
   label,
   requiredLevel,
-  getDefaultPublisherPrefix,
   readProvisionedLanguages,
   readOrgLanguageCode,
   parseArgs,

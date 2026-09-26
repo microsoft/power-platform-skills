@@ -170,7 +170,16 @@ pac model list-languages
 
 Note the output. If multiple languages are configured (or any non-English language),
 localization will be included in the generated code. Include the detected languages
-when reporting the environment to the user.
+when reporting the environment to the user. Record each language's **LCID, Code and RTL**
+columns exactly as PAC prints them, for example:
+
+```
+LCID Language                Code  RTL
+1025 Arabic (Saudi Arabia)   ar-SA Yes
+```
+
+The page builder takes text direction from that RTL value, never from a list of LCIDs it
+remembers (`references/localization.md` → *RTL Layout Support*).
 
 ### Continue Requirements Gathering
 
@@ -283,9 +292,8 @@ Two cases:
    environment or the wrong mode cannot be undone. Return this only after your
    auth/environment steps have run, so both values are real.
 
-`genpage-connector-builder` remains the single owner of the connectors rollback gate,
-connection / connection-ref discovery, connection-reference creation, and the binding
-contract. When no connectors are involved, write the exact sentinel
+`genpage-connector-builder` remains the single owner of connection / connection-ref
+discovery, connection-reference creation, and the binding contract. When no connectors are involved, write the exact sentinel
 `No connector bindings.` into the plan.
 
 When the orchestrator forwards results it provides:
@@ -492,7 +500,8 @@ plan mode does not reach the user from a subagent.
 - [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
-- [list detected languages, or "English only — no localization needed"]
+- [each detected language as `<LCID> <Code> — RTL: Yes|No` from `pac model list-languages`
+  (e.g. `1025 ar-SA — RTL: Yes`), or "English only — no localization needed"]
 
 ### Design
 - [styling preferences, features, accessibility notes from requirements]
@@ -519,7 +528,9 @@ ${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
-the exact heading. Page filenames in the `## Pages` table must be unique.
+the exact heading. Page filenames in the `## Pages` table must be unique, and use only letters,
+digits, `-`, `_` and `.` — kebab-case such as `project-overview.tsx`, never a space or a shell
+character: the dispatch gate refuses any other name, and the build halts.
 
 ### CRITICAL — Prefix discipline in `## Entity Creation Required`
 

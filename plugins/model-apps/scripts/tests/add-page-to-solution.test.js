@@ -128,7 +128,7 @@ test('the appmodule is packaged BEFORE any page or connection reference', async 
 });
 
 test('a connection reference that does not exist fails the run instead of packaging a partial solution', async () => {
-  const { cli, emitted } = harness({
+  const { cli, calls, emitted } = harness({
     argv: [ENV, 'sol', 'app-1', '--connection-refs', 'new_missing'],
     refLookup: (requestPath) =>
       requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")
@@ -138,6 +138,34 @@ test('a connection reference that does not exist fails the run instead of packag
   await cli.main();
   assert.equal(emitted[0].ok, false);
   assert.match(String(emitted[0].payload.message || emitted[0].payload), /new_missing.*not found/);
+  assert.equal(
+    calls.filter((call) => call.path === 'AddSolutionComponent').length,
+    0,
+    'missing connection references must be validated before any solution mutation',
+  );
+});
+
+test('all requested connection references are validated before adding the app or pages', async () => {
+  const { cli, calls, emitted } = harness({
+    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1,p2', '--connection-refs', 'new_missing'],
+    refLookup: (requestPath) => {
+      if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
+        return { status: 200, data: { ObjectTypeCode: 10372 } };
+      }
+      if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
+        return { status: 200, data: { ObjectTypeCode: 10158 } };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  await cli.main();
+  assert.equal(emitted[0].ok, false);
+  assert.match(String(emitted[0].payload.message || emitted[0].payload), /new_missing.*not found/);
+  assert.deepEqual(
+    calls.filter((call) => call.path === 'AddSolutionComponent'),
+    [],
+    'a failed connection-reference lookup must leave app and pages unmodified',
+  );
 });
 
 test('a connection reference logical name with a quote is OData-escaped, not injected', async () => {
@@ -197,47 +225,13 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
   );
 });
 
-test('--connection-refs while the rollback switch is off exits 3 before any mutation', () => {
-  // The gate's whole purpose: refuse BEFORE the first AddSolutionComponent, so a refused run
-  // leaves the solution untouched rather than half-packaged (app + pages added, refs missing).
-  // Dropping the refs while still reporting ok:true is what made this silently lossy before —
-  // the solution then imports with unbound connectors.
-  const res = spawnSync(
-    process.execPath,
-    [scriptPath, 'https://contoso.crm.dynamics.com', 'sol', 'app-1', '--connection-refs', 'new_a'],
-    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
-  );
-  assert.equal(res.status, 3, 'exit 3 = feature off (distinct from 1 = usage/runtime error)');
-  assert.match(res.stderr, /Connector support is disabled/);
-  assert.doesNotMatch(res.stdout || '', /"ok":\s*true/, 'must not report success');
-});
-
-test('packaging WITHOUT --connection-refs is not gated by the rollback switch', () => {
-  // Only an explicit connector request is refused; ordinary page packaging must still work.
-  // Reaching a Dataverse/auth failure (not exit 3) proves the gate did not fire.
-  const res = spawnSync(
-    process.execPath,
-    [scriptPath, 'https://example.invalid', 'sol', 'app-1', '--page-ids', 'p1'],
-    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
-  );
-  assert.notEqual(res.status, 3, 'the gate must not fire without --connection-refs');
-});
-
-test('connectionRefsToAdd drops refs only when the switch is off', () => {
-  const { connectionRefsToAdd } = require(scriptPath);
-  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], true), ['new_a', 'new_b']);
-  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], false), []);
-});
-
 test('the stable app component type and dynamic entity names are pinned', () => {
   const {
     APPMODULE_COMPONENT_TYPE,
     UXAGENTPROJECT_LOGICAL_NAME,
     CONNECTION_REFERENCE_LOGICAL_NAME,
-    escapeODataString,
   } = require(scriptPath);
   assert.equal(APPMODULE_COMPONENT_TYPE, 80);
   assert.equal(UXAGENTPROJECT_LOGICAL_NAME, 'uxagentproject');
   assert.equal(CONNECTION_REFERENCE_LOGICAL_NAME, 'connectionreference');
-  assert.equal(escapeODataString("a'b'c"), "a''b''c");
 });

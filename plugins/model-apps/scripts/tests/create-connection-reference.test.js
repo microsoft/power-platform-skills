@@ -23,15 +23,6 @@ test('missing args exits 1 with usage', () => {
   assert.match(res.stderr, /Usage:/);
 });
 
-test('the rollback switch still works end to end (exit 3 before any Dataverse call)', () => {
-  const res = spawnSync(
-    process.execPath,
-    [scriptPath, 'https://contoso.crm.dynamics.com', 'new_x', '/providers/Microsoft.PowerApps/apis/shared_x'],
-    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
-  );
-  assert.equal(res.status, 3);
-  assert.match(res.stderr, /disabled/i);
-});
 
 // --- Wire-level contract ----------------------------------------------------
 

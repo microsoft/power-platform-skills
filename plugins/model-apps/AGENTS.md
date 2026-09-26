@@ -28,7 +28,6 @@ Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation 
 shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
 
 **Requirements:**
-**Requirements:**
 - **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
 - **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
   same identity as the active `pac` profile
@@ -139,7 +138,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `updateElement('/siteMap')`, a dashboard tile is `addElement('/components')`. Form reconcile adds the
   spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
-  never duplicates a control. Every push routes through `requireSuccessfulPush` (a 412 version conflict
+  never duplicates a control. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
+  retries and later failures stay bound to that gate-time list. A later `--allow-destructive` run may
+  remove only that recorded set; the record is consumed only after a successful run that included both
+  removal phases (`forms` and `app-shell`) and kept no field, and is otherwise kept on failure, partial
+  runs, changed-only runs, or when the fence kept a field. The gate fails closed if the record is
+  unreadable or if discovery fails while a record exists, because live removals cannot be compared with
+  the approved list. If live state contains a new removal, the build halts, lists only that new removal,
+  refreshes the record, and the engine keeps any field or sitemap target that appears during the run
+  rather than pruning beyond the preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict
   halts the build for a fresh download instead of silently dropping the edit) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
@@ -207,6 +215,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
   warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
   a silent success.
+  **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
+  and on an existing app when it differs from the fetched draft, riding that run's app push. The
+  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
+  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
+  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  other failed push that carried the change resets the copy too — except a concurrent edit
+  (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
+  without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
+  nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
+  run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -347,14 +367,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
-  still tears down cleanly instead of erroring. Command teardown
+  still tears down cleanly instead of erroring. It is also **kept while any earlier step failed**:
+  dashboards are found by name, and the app's own are the ones its solution holds (a built-in container
+  holds every dashboard, so with no real solution teardown deletes none), which makes the solution the
+  only proof a re-run has — deleted after a failure, the retry kept the app's dashboards for good. A
+  membership read that fails is itself a failed step, never a skip or a not-found (as either, the
+  solution was deleted right after it). Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
   writes); best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
   error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
   and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
-  `--clear-workspace` prunes `.maker-workspace/` after a clean apply. `planTeardown(spec)` is pure (dry-run +
+  `--clear-workspace` prunes `.maker-workspace/` after a clean apply (not while another teardown of it
+  still holds the changed-only fence). `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
@@ -419,7 +445,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a downgrade there silently stops custom nav icons from round-tripping. Recovered **tables are flagged
   `existing: true`**, so a teardown of a downloaded spec never deletes a table (+ its data) this build
   cannot prove it created — download can't distinguish app-created from merely-referenced tables, so it
-  fails safe (an orphaned table is recoverable; deleted customer data is not).
+  fails safe (an orphaned table is recoverable; deleted customer data is not). The **same flag is set on
+  every recovered relationship and global choice** and teardown honours it for all three (#587 item 6):
+  deleting a relationship strips its lookup column off a retained table, and an option set is org-wide.
+  An app in **several unmanaged solutions** is never resolved to one of them (#587 item 9): Dataverse
+  has no "owning" solution, a rebuild adds to the spec's solution and teardown deletes it, and the
+  app-name heuristic is the unreliable guess above. The spec keeps `Default` (never torn down), the
+  download names the candidates in `solutionCandidates` and scopes its inventory by all of them, and
+  keeps a publisher prefix only when every candidate's publisher agrees. A membership that cannot be
+  read is reported as such — business rules and solution-owned global choices become "unknown" —
+  rather than read as "no solution".
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
   changed in Maker throws a version conflict → re-pull, never clobber). **Classic DashBoard subareas
@@ -452,10 +487,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
   id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
-  view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
-  column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
+  view's **column set** (parsed from `layoutxml`; every spec column must be deployed — an extra deployed
+  column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
+  in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. It also reconciles
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
+  checked too (#586): each declared dashboard must exist. A name can also match another app's
+  dashboard, so when it matches several, verify checks the one the app's solution holds — the one the
+  build reuses (`dashboardsInSolution`, shared with the build and teardown) — and fails only when the
+  solution cannot single one out. All three find the candidates with `findDashboardsByName`: the
+  vendored lookup reads one page of ten in no defined order, so a full page is re-read in full and the
+  app's own cannot sort out of sight. The sitemap subarea check asks the same question (one lookup per
+  name, shared), so the two cannot pick different dashboards — it used to take the first match, and live
+  a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every chart tile's
+  visualization and view must belong to the tile's `TargetEntityType` — the cross-wiring a same-named
+  chart on another table produced. A tile whose owner rows cannot be read is reported unverified, not
+  passed. It also reconciles
   **AI app features**: for every `ai.appFeatures` entry it proves an APP-SCOPE OVERRIDE ROW exists in
   `appsettings` holding the requested value. Verify previously had no awareness of `spec.ai` at all, so
   a run whose every AI feature was skipped (admin gate off) or silently not persisted still reported a
@@ -571,7 +618,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Feature flags (connectors=ga/on, custom-api, custom-telemetry)
+feature-flags.json             ← Feature flags (custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -590,6 +637,10 @@ references/                    ← Shared reference docs
   page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
+  app-spec-schema.md           ← The App Spec contract (always-present fields) — /app-builder
+  app-spec-schema-advanced.md  ← Conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants)
+  authoring-flow.md            ← /app-builder Phase 1 authoring playbook, run in the main loop (not a subagent)
+  agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
@@ -600,7 +651,10 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes)
+  check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
+  resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
+  lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
@@ -621,20 +675,29 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in)
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
+  genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`), plus the CLI arg contract (parseArgs/validateFlags)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once), plus the CLI arg contract (parseArgs/validateFlags)
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-    feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
+    feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
+    form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
+    ai-app-settings.js         ← single source of truth for the per-app AI feature contract
+    interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    page-structure.js          ← the one structural gate a generated page must pass (empty, truncated, prose, elided), shared by genpage-worker-output.js and promote-intent-pages.js
+    page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
@@ -663,7 +726,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
@@ -674,7 +737,9 @@ scripts/
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts + hooks
-hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
+hooks/                         ← Lifecycle hooks
+  hooks.json                   ← Hook registrations (closed schema — documentation lives in README.md)
+  README.md                    ← What hooks.json wires up, and why
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
   validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in generated .tsx
   validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in model-apps sessions
@@ -710,7 +775,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 | `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
@@ -743,14 +808,15 @@ revert. Once a release has shipped with the flag on and no rollback was needed, 
 a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
 about at every call site.
 
-`connectors` is in that window now: **GA, shipping `true`, gate retained as a rollback
-switch, scheduled for removal in the next release.**
+Connector authoring is GA and no longer has a feature flag. The remaining flags are
+`custom-api` and `custom-telemetry`; both currently ship **OFF** while their dependencies
+finish rolling out.
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
   it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CONNECTORS=0` to roll connectors back) → committed
+  `GENPAGE_ENABLE_CUSTOM_API=1` for a single run) → committed
   `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
@@ -759,19 +825,19 @@ switch, scheduled for removal in the next release.**
   flag's lifecycle **status** (experimental / in-progress / ga), effective state +
   source (env/file/default), summary, how to enable, plus config-validation warnings.
   Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
-  (the committed `feature-flags.json` carries only the on/off value).
-- **Script backstop:** connector entrypoints call the shared
-  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
-  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
-  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
-  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
+  (the committed `feature-flags.json` carries only the on/off value). Unknown flags
+  are disabled even when a matching env var is set.
+- **Script backstop:** Custom API entrypoints call the shared
+  `exitIfCustomApiDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-custom-apis.js`. Connector scripts have no feature-flag
+  backstop because connector authoring is GA.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
 
 **Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
-shared helper.** The currently-gated features gate at the same five places, so the rule is stated
-once here and only the per-feature specifics are tabled below:
+shared helper.** Gate a feature at the same five places, so the rule is stated once here and
+only the per-feature specifics are tabled below:
 
 1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
    never gate inline.
@@ -783,21 +849,20 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `connectors` | `custom-api` | `custom-telemetry` |
-|---|---|---|---|
-| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
-| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
-| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
-| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
-| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
+| | `custom-api` | `custom-telemetry` |
+|---|---|---|
+| **Owner agent** | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
 the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
-difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
-binding table both yield `none`, because the page-builder only needs to know how many bindings it
-may call — which keeps the dispatch stable when the flag is eventually removed.
+difference: that value is the **binding count**, not a flag state. An empty binding table yields
+`none`, because the page-builder only needs to know how many bindings it may call.
 
 `custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
@@ -806,10 +871,8 @@ produces the dispatch line. It also carries a second gate the other flags do not
 when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
 asked to measure or track something. `enabled` is permission, not instruction.
 
-All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
+The two remaining flags currently ship **OFF**, each waiting on cross-repo dependencies:
 
-- **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
-  authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
 - **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
   plus the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb to
   persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
@@ -824,7 +887,27 @@ All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
-backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper.
+backs the page structural gate (`lib/page-structure.js`, shared by `promote-intent-pages.js` and
+`genpage-worker-output.js`) plus the eval's effect scoper. It also
+backs the navigation oracle (`pageref-resolver.js`), which finds each call AND parses its object
+in the lexer's mask — executable code inside a template's `${…}` is visible, template text and
+string bodies are not — and reads each value, and each quoted key (`"pageId"`), from the source at
+the same offsets, so one lexer drives both. It also backs `findElisionMarker` — the one "was code
+elided?" rule the page gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
+a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
+as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
+code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
+scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
+`!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
+head, after which a statement starts. Each of those rules was once broken, and each break refused
+a complete page as truncated or hid a navigation call. `hasDefaultExport` also needs the export
+itself to be complete (a function or class reaches its body; a bare name is one the module
+declares or imports, not a token that merely appears — the `as` of `import * as React` is not a
+binding), because a write cut inside its export line balances; any complete `export default` will
+do, for overloads. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
+lexer reports when a file stops inside a string, template, comment or JSX element, and a file
+may not end on a token that needs more (`a +`, `React.`, `=>`). Both gates run all three checks.
 
 Judge changes to it by **both** error directions, and weight them correctly:
 - a false **accept** promotes prose as a page, and promotion is sticky — the page is then
@@ -836,7 +919,10 @@ Judge changes to it by **both** error directions, and weight them correctly:
 committed `.tsx` in `samples/` and `evals/model-apps/genpage/fixtures/` (enumerated via
 `git ls-files`, so it does not race the transient fixture dirs `capture-fixture.test.js`
 creates). Two lexer bugs were invisible to hand-written cases and caught only by that
-corpus — keep it, and add to it rather than around it.
+corpus — keep it, and add to it rather than around it. The worker-output gate
+(`genpage-worker-output.test.js`) and the icon hook (`validate-icon-imports.test.js`, samples
+only) run the same kind of corpus: every committed page must pass them, because a false reject
+there throws away a good page or blocks a pattern the page builder was told to copy.
 
 Residual limits, accepted deliberately:
 - **`<` disambiguation is structural, not semantic.** A generic arrow is recognised by its

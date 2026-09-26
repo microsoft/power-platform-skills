@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readUtf8Stream } = require('./utf8-stream.js');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const SKILLS_DIR = path.join(PLUGIN_ROOT, 'skills');
@@ -135,4 +136,5 @@ module.exports = {
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  readUtf8Stream,
 };

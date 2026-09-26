@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -51,13 +51,25 @@ async function readDashboards(sdk, app, warn) {
       if (typeof warn === 'function') warn(`dashboard '${title || id}' (${id}) could not be read: ${e && e.message}`);
       continue;
     }
-    let name = title || id;
+    let name = null;
     let description;
+    let nameError = null;
     try {
       const rows = await sdk.queryRecords('systemform', { select: ['name', 'description'], filter: `formid eq ${id}`, top: 1 });
       if (rows && rows[0] && rows[0].name) name = rows[0].name;
       description = rows && rows[0] && rows[0].description;
-    } catch { /* keep fallback */ }
+    } catch (e) { nameError = e; }
+    // An App Spec refers to a dashboard by NAME, and a rebuild finds the deployed one by that name. The
+    // sitemap title is only the subarea's label: standing in for an unread name, it made a rebuild create
+    // (or bind to) another dashboard, and hid a real name clash from the check below. So a dashboard whose
+    // name cannot be read is withheld like an unreadable one — its subarea dropped, which trips the
+    // lossy-download gate with this reason.
+    if (!name) {
+      if (typeof warn === 'function') {
+        warn(`dashboard '${title || id}' (${id}): its name could not be read (${nameError ? (nameError.message || nameError) : 'no row for it'}), and an App Spec refers to a dashboard by name, so it is left out; its sitemap subarea will be dropped. Download again once it can be read.`);
+      }
+      continue;
+    }
     const tiles = [];
     for (const c of art.components || []) {
       const p = c.parameters || {};
@@ -109,7 +121,23 @@ async function readDashboards(sdk, app, warn) {
         + `(${(art.components || []).length} component(s)); its sitemap subarea will be dropped.`);
     }
   }
-  return out;
+  // Two DIFFERENT dashboards whose names compare equal cannot survive the round trip (#586 item 4):
+  // the App Spec names a dashboard, its sitemap subarea points at it BY NAME, and the build finds an
+  // existing one by name — so both subareas would resolve to whichever dashboard a rebuild found, and
+  // the other would silently leave the nav. Every dashboard sharing its name is withheld instead,
+  // which drops its subarea and trips the lossy-download gate with this reason as the cause.
+  // Compared with the App Spec gate's own key, so a download can never emit a spec that gate rejects.
+  // `ids` is keyed by lowercased id, so one dashboard behind two subareas is a single entry here and
+  // can never be mistaken for a clash with itself.
+  const byName = new Map();
+  for (const d of out) byName.set(dashboardNameKey(d.name), (byName.get(dashboardNameKey(d.name)) || []).concat(d));
+  const ambiguous = [...byName.values()].filter((same) => same.length > 1);
+  for (const same of ambiguous) {
+    if (typeof warn === 'function') {
+      warn(`dashboards ${same.map((d) => `${d.id} ('${d.name}')`).join(', ')} share the name '${same[0].name}' as far as Dataverse is concerned (it compares names ignoring case, and in most languages accents), and an App Spec refers to a dashboard by name, so they cannot be told apart; rename one in Maker and download again`);
+    }
+  }
+  return ambiguous.length ? out.filter((d) => byName.get(dashboardNameKey(d.name)).length === 1) : out;
 }
 
 // Reconstruct relationships[] from live metadata (#567).
@@ -132,7 +160,11 @@ async function readDashboards(sdk, app, warn) {
 // Returns { relationships, skipped } — `skipped` feeds the not-round-tripped report so a
 // relationship this cannot express is DECLARED missing rather than silently absent, which was the
 // whole complaint in #567.
-async function readRelationships(sdk, logicals, publisherPrefix, warn) {
+//
+// `prefixUnknown`: the spec's publisher prefix is a placeholder (see runDownload), so every deployed name is
+// carried as it is. Omitting one because it equals the name the build would generate is only safe under the
+// REAL prefix: under the placeholder, a rebuild generates another name and creates the relationship twice.
+async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false } = {}) {
   const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
   const lc = (s) => String(s || '').toLowerCase();
   const relationships = [];
@@ -242,8 +274,13 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
       const auto = relationshipSchemaName({ referenced, referencing }, publisherPrefix);
       const deployed = r.SchemaName;
       const prefixOk = !publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`);
-      const rel = { type: 'OneToMany', referenced, referencing, lookup };
-      if (deployed && lc(deployed) !== lc(auto)) {
+      // `existing: true` for the reason the recovered TABLES carry it (#587 item 6): nothing here can
+      // prove this app created the relationship, and a teardown that deleted it would take the lookup
+      // column — and its data — off a table that teardown otherwise retains. A rebuild still creates a
+      // missing one; only teardown reads the flag.
+      const rel = { type: 'OneToMany', referenced, referencing, lookup, existing: true };
+      if (deployed && prefixUnknown) rel.schemaName = deployed;
+      else if (deployed && lc(deployed) !== lc(auto)) {
         if (prefixOk) rel.schemaName = deployed;
         else if (typeof warn === 'function') {
           // RENAMED, not skipped. This relationship IS pushed below, so recording it in `skipped`
@@ -283,10 +320,11 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
         //
         // `manyToManySchemaName` SORTS the two entity names before composing, so `auto` is computed
         // from the same pair that is emitted rather than from the order Dataverse happened to report.
-        const rel = { type: 'ManyToMany', entity1: e1, entity2: e2 };
+        const rel = { type: 'ManyToMany', entity1: e1, entity2: e2, existing: true }; // ownership unprovable, as for 1:N above
         const auto = manyToManySchemaName({ entity1: e1, entity2: e2 }, publisherPrefix);
         const deployed = r.SchemaName;
-        if (deployed && lc(deployed) !== lc(auto)) {
+        if (deployed && prefixUnknown) rel.schemaName = deployed;
+        else if (deployed && lc(deployed) !== lc(auto)) {
           if (!publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) rel.schemaName = deployed;
           else if (typeof warn === 'function') {
             // RENAMED, not skipped — this relationship IS carried into the spec, so recording it as
@@ -447,11 +485,6 @@ const APP_COMPONENT_ENTITY_SOURCES = [
 // Dataverse entity set -> the App Spec artifact class it inventories, so a failed read is reported
 // in the author's vocabulary ("forms could not be inventoried") rather than Dataverse's.
 const INVENTORY_KIND_BY_SET = { savedquery: 'views', savedqueryvisualization: 'charts', systemform: 'forms' };
-// Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
-// components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
-// views), and exceeded only with a warning.
-const COMPONENT_PAGE_CAP = 1000;
-
 async function appComponentEntities(sdk, appId) {
   if (!appId) return [];
   try {
@@ -464,21 +497,16 @@ async function appComponentEntities(sdk, appId) {
       const rows = await sdk.queryRecords('appmodulecomponent', {
         select: ['objectid', 'componenttype'],
         filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-        top: COMPONENT_PAGE_CAP,
+        paginate: true,
       });
-      // `$top` is a HARD cap in Dataverse (the SDK refuses to combine `top` with `paginate` for
-      // exactly this reason: `@odata.nextLink` is omitted, so the tail is lost with no signal). An
-      // app with more than this many components of one type would silently lose the remainder —
-      // the same silent-drop class as ADO 6603388, just at a higher threshold — so say so rather
-      // than quietly returning a partial set.
-      if ((rows || []).length >= COMPONENT_PAGE_CAP) {
-        process.stderr.write(`WARNING: this app has at least ${COMPONENT_PAGE_CAP} ${src.set} components; only the first ${COMPONENT_PAGE_CAP} were inspected, so a table referenced only beyond that point may be missing from the spec.\n`);
-      }
+      // The component list decides which hidden tables belong in the downloaded spec, so a capped
+      // read would silently drop tables reachable only through forms/views/charts. Page the whole
+      // list and then batch only the follow-up id lookups to keep URLs bounded.
       const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
       // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
       for (let i = 0; i < ids.length; i += 20) {
         const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
-        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, top: 1000 });
+        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, paginate: true });
         // A dashboard is a `systemform` row too, and its `objecttypecode` is NOT an entity logical
         // name ('none' / ''). Filtering it here keeps a bogus name out of the metadata fetch loop
         // instead of relying on that fetch 404-ing into a bare catch.
@@ -499,7 +527,7 @@ async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
   const clean = [...new Set((ids || []).map((id) => String(id || '').replace(/[{}]/g, '')).filter(Boolean))];
   for (let i = 0; i < clean.length; i += 20) {
     const filter = clean.slice(i, i + 20).map((id) => `${idField} eq ${id}`).join(' or ');
-    const rows = await sdk.queryRecords(set, { select, filter, top: 1000 });
+    const rows = await sdk.queryRecords(set, { select, filter, paginate: true });
     for (const r of rows || []) out.push(mapRow(r));
   }
   return out;
@@ -535,7 +563,7 @@ async function readAppShellSettings(sdk, appId) {
     const byId = new Map((defs || []).map((d) => [odataGuid(d.settingdefinitionid).toLowerCase(), d.uniquename]));
     if (!byId.size) return out;
     // Bound the read by the two DEFINITIONS, not by `$top`. Dataverse honours `$top` as a hard cap and
-    // omits `@odata.nextLink` (see COMPONENT_PAGE_CAP above), so an app-scoped read that leans on a row
+    // omits `@odata.nextLink`, so an app-scoped read that leans on a row
     // limit can return a partial page — and here a partial page is not a visible truncation but a WRONG
     // ANSWER, because an absent row is indistinguishable from "inherits the environment". The app would
     // round-trip without its override and rebuild into the classic shell, silently, which is the exact
@@ -566,7 +594,7 @@ async function readAppShellSettings(sdk, appId) {
   return out;
 }
 
-async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
+async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices) {
   // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
   // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
   // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
@@ -586,20 +614,10 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
           const rows = await sdk.queryRecords('appmodulecomponent', {
             select: ['objectid', 'componenttype'],
             filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-            top: COMPONENT_PAGE_CAP,
+            paginate: true,
           });
-          // A FULL page is indistinguishable from a truncated one, so treat it as truncated. `$top` is
-          // a HARD cap and Dataverse omits `@odata.nextLink` when it is honoured, so there is no
-          // signal to read afterwards. `appComponentEntities` warns about the same cap on its own
-          // query, but THIS list feeds `notRoundTrippedSummary`, which reports a count — so a
-          // truncated read there is not merely a missing table, it is a smaller number presented as
-          // the whole truth. Marking the class incomplete makes the report say it cannot vouch for
-          // the class instead. A false positive at exactly the cap costs one honest
-          // "could not be inventoried" line; the alternative is a silent undercount.
-          if ((rows || []).length >= COMPONENT_PAGE_CAP) {
-            fail(INVENTORY_KIND_BY_SET[src.set] || src.set,
-              new Error(`more than ${COMPONENT_PAGE_CAP} app components of this type; the list was truncated, so this class is incomplete`));
-          }
+          // This inventory feeds the not-round-tripped report; a capped component read would turn
+          // "unknown tail" into a smaller authoritative count. Page completely instead.
           const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
           if (src.set === 'savedquery') {
             inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
@@ -639,32 +657,51 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     for (const src of APP_COMPONENT_ENTITY_SOURCES) fail(INVENTORY_KIND_BY_SET[src.set] || src.set, err);
   }
 
-  try {
-    if (solutionUniqueName && !isRestrictedSolution(solutionUniqueName)) {
-      const esc = String(solutionUniqueName).replace(/'/g, "''");
-      const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${esc}'`, top: 1 });
-      const solId = sols && sols[0] && sols[0].solutionid;
-      if (solId) {
-        // Solution component type 29 is Workflow — which is EVERY process kind, not just business
-        // rules: classic workflows, actions, business process flows and modern flows all land here.
-        // See component type values: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
-        //
-        // So the rows must be narrowed after the fetch. A business rule is `category 2`, and `type 1`
-        // is the DEFINITION — activating one makes Dataverse create a second `type 2` copy of it, so
-        // without the type filter every active rule would appear twice in the inventory.
-        //
-        // Filtered client-side rather than in the query because `rowsByIds` batches on the id column;
-        // both fields are requested in the select so the decision is made on real values, and a row
-        // that reports NEITHER field is dropped rather than assumed to be a rule — fail closed, since
-        // mislabelling somebody's classic workflow as a business rule is the failure mode here.
-        const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, top: 1000 });
-        const ids = (comps || []).map((r) => r && r.objectid).filter(Boolean);
-        const processes = await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description', 'category', 'type'], (r) => r);
-        for (const r of processes) {
-          if (Number(r && r.category) !== 2 || Number(r && r.type) !== 1) continue;
-          inventory.businessRules.push(withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description));
-        }
+  // The app's own solution(s), resolved ONCE: the business-rule and the global-choice reads are both
+  // scoped to them. `solutionScope` is one uniquename, EVERY candidate when the app is in several
+  // (#587 item 9), or an Error when its membership could not be read (runDownload decides which).
+  // Built-in containers (Default/Active/Basic) hold every unmanaged customization in the org, so they
+  // scope nothing and are dropped. A FAILED lookup is kept apart as `solutionError`, because "the app
+  // has no solution" and "we could not look" are different facts: each dependent class must report the
+  // second as unknown rather than as empty.
+  let solutionError = solutionScope instanceof Error ? solutionScope : null;
+  const solIds = [];
+  if (!solutionError) {
+    try {
+      for (const name of [].concat(solutionScope || []).filter((n) => n && !isRestrictedSolution(n))) {
+        const esc = String(name).replace(/'/g, "''");
+        const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${esc}'`, top: 1 });
+        if (sols && sols[0] && sols[0].solutionid) solIds.push(sols[0].solutionid);
       }
+    } catch (err) {
+      solutionError = err;
+    }
+  }
+
+  try {
+    if (solutionError) throw solutionError;
+    // Solution component type 29 is Workflow — which is EVERY process kind, not just business
+    // rules: classic workflows, actions, business process flows and modern flows all land here.
+    // See component type values: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+    //
+    // So the rows must be narrowed after the fetch. A business rule is `category 2`, and `type 1`
+    // is the DEFINITION — activating one makes Dataverse create a second `type 2` copy of it, so
+    // without the type filter every active rule would appear twice in the inventory.
+    //
+    // Filtered client-side rather than in the query because `rowsByIds` batches on the id column;
+    // both fields are requested in the select so the decision is made on real values, and a row
+    // that reports NEITHER field is dropped rather than assumed to be a rule — fail closed, since
+    // mislabelling somebody's classic workflow as a business rule is the failure mode here.
+    const ids = [];
+    for (const solId of solIds) {
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, paginate: true });
+      ids.push(...(comps || []).map((r) => r && r.objectid).filter(Boolean));
+    }
+    // rowsByIds de-duplicates, so a rule in two of the candidate solutions is listed once.
+    const processes = await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description', 'category', 'type'], (r) => r);
+    for (const r of processes) {
+      if (Number(r && r.category) !== 2 || Number(r && r.type) !== 1) continue;
+      inventory.businessRules.push(withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description));
     }
   } catch (err) {
     // FAIL CLOSED, not silent. This used to swallow the error as "an inspection aid, not a rebuild
@@ -708,14 +745,36 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     // An ABSENT `IsManaged` keeps the row. This inventory's whole purpose is to avoid asserting an
     // absence it cannot substantiate, so an unreadable flag degrades to "report it" rather than to a
     // silent drop.
-    const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged');
-    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
-    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
-    inventory.globalChoices.push(
-      ...res.body.value
-        .filter((r) => r && r.IsManaged !== true)
-        .map((r) => withDescription({ name: r.Name }, r.Description))
-    );
+    //
+    // And the inventory is SCOPED TO THE APP (#586 item 5): a set is listed only when the app's
+    // SOLUTION owns it, or when a column this download emits REFERENCES it (so its description is
+    // kept). The metadata collection is org-wide, so listing every unmanaged row told the author to
+    // recreate metadata the app has nothing to do with — measured live, an isolated app whose spec
+    // declared no global choices was reported as leaving two behind while its solution held zero
+    // option-set components. Ownership is solution component type 9 (OptionSet), whose `objectid` is
+    // the set's MetadataId — hence MetadataId in the $select, and the join is on normalized GUIDs.
+    // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+    if (solutionError) throw solutionError;
+    const owned = new Set();
+    for (const solId of solIds) {
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 9`, paginate: true });
+      for (const r of comps || []) if (r && r.objectid) owned.add(odataGuid(r.objectid).toLowerCase());
+    }
+    const referenced = new Set([...(referencedGlobalChoices || [])].map((n) => String(n).toLowerCase()));
+    // Nothing in scope — no solution that could own a set, and no emitted column binding one — means
+    // there is nothing of THIS app's to find, so the org-wide read is skipped rather than filtered to
+    // an empty list. That is not an unknown: the sets the app binds are all declared in the spec.
+    if (owned.size || referenced.size) {
+      const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged,MetadataId');
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+      if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+      inventory.globalChoices.push(
+        ...res.body.value
+          .filter((r) => r && r.IsManaged !== true)
+          .filter((r) => owned.has(odataGuid(r.MetadataId).toLowerCase()) || referenced.has(String(r.Name || '').toLowerCase()))
+          .map((r) => withDescription({ name: r.Name }, r.Description))
+      );
+    }
   } catch (err) {
     fail('globalChoices', err);
   }
@@ -753,6 +812,11 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
       config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
+      if (Object.prototype.hasOwnProperty.call(config, 'dataSources')) {
+        if (!Array.isArray(config.dataSources)) throw new Error('config.json dataSources is present but is not an array');
+        const bad = config.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+        if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
+      }
     } catch (e) {
       config = {};
       // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
@@ -767,14 +831,14 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
     // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
     let prompt;
     try {
-      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '').trim();
+      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
     } catch (e) {
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
-      dataSources: config.dataSources || [],
+      dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
       prompt,
       codeFile: path.relative(outDir, tsx).replace(/\\/g, '/'),
     });
@@ -996,13 +1060,16 @@ async function readOptionSets(sdk, logical) {
 // Options are FLATTENED to a single string here, unlike the inline case: `validateAppSpec` rejects a
 // localized `globalChoices[]` option outright, because Dataverse accepts the multi-language payload
 // for a shared set and stores only the base language without reporting the loss.
+//
+// Declared `existing: true` (#587 item 6): a global option set is org-wide and can be shared with other
+// apps, and nothing here proves this app created it — so teardown retains it, as it does the tables.
 function collectGlobalChoices(meta, into) {
   for (const a of (meta && meta.attributes) || []) {
     const os = a && a.optionSet;
     if (!os || !os.isGlobal || !os.name) continue;
     const key = String(os.name).toLowerCase();
     if (into.has(key)) continue;
-    into.set(key, { name: os.name, options: os.options.map((l) => descriptionFromDataverse(l)) });
+    into.set(key, { name: os.name, options: os.options.map((l) => descriptionFromDataverse(l)), existing: true });
   }
   return into;
 }
@@ -1146,8 +1213,10 @@ function notRoundTrippedSummary(inventory) {
 // Drop from the not-round-tripped inventory the global choices this download DOES now reconstruct
 // (#564). The report's whole value is that its claims are true: a shared set emitted into
 // `spec.globalChoices[]` IS carried forward, so listing it as "not round-tripped" would be the same
-// class of false statement the report exists to prevent. Every other global choice in the
-// environment stays listed — the app does not bind it, so a rebuild genuinely will not recreate it.
+// class of false statement the report exists to prevent. Every other set in the inventory — which
+// holds only sets the app's solution owns or its columns bind (#586 item 5) — stays listed: the spec
+// does not declare it, so a rebuild genuinely will not recreate it. `declared` is any collection with
+// `has(lowerCasedName)` and `size`.
 function roundTrippedAware(inventory, globalChoiceDecls) {
   if (!inventory || !Array.isArray(inventory.globalChoices) || !globalChoiceDecls || !globalChoiceDecls.size) return inventory;
   const declared = globalChoiceDecls;
@@ -1709,52 +1778,80 @@ function droppedSubareaCount(app, spec) {
 
 // Recover the REAL unmanaged solution an app module belongs to. An app is a `solutioncomponent` of
 // EVERY solution it lives in — always the built-in system solutions (Active/Default/Basic) AND the
-// real unmanaged solution it was created in. The naive `top:1` query returns an arbitrary row (often
-// 'Default', which is itself ismanaged=false, so an ismanaged filter does not exclude it), so the
-// real solution was never recovered and a downloaded spec defaulted its solution to the restricted
-// 'Default' — which teardown then 400s on, orphaning the real solution. So enumerate ALL memberships
-// and pick the single unmanaged, non-system solution. Best-effort: returns null (caller keeps its own
-// default) on no match or any query error — never throws.
+// real unmanaged solution(s) it was added to. The naive `top:1` query returned an arbitrary row (often
+// 'Default', which is itself ismanaged=false, so an ismanaged filter does not exclude it), so the real
+// solution was never recovered and a downloaded spec defaulted to the restricted 'Default' — which
+// teardown then 400s on, orphaning the real solution. So every membership is read (`paginate`, which
+// the SDK refuses to combine with `top`: `$top` is a hard cap that suppresses `@odata.nextLink`).
+// Never throws. Returns one of:
+//   null                                               — no real (unmanaged, non-system) solution
+//   { uniqueName, description?, publisherPrefix?, publisherUnreadable? }  — exactly one: the app's solution
+//   { ambiguous: [uniqueName, ...], publisherPrefix?, publisherUnreadable? } — several (#587 item 9)
+//   { unreadable: reason }                                                 — the membership could not be read
 //
-// Returns `{ uniqueName, publisherPrefix? }`. The publisher prefix is read from the recovered
-// solution's OWNING PUBLISHER via the SDK's `getSolution`, because it is the only authoritative
-// source: the prefix was previously guessed from the app's uniquename, which breaks whenever the app
-// name doesn't encode the solution's publisher — an app named `new_customermanagement` inside
-// publisher `contoso`, an app with no prefix at all, or a publisher prefix longer than the guess's
-// length bound all collapsed to the literal `'new'` (ADO 6603390). `getSolution` is best-effort on top
-// of best-effort: if it fails or the publisher defines no prefix, we return the uniqueName alone and
-// the caller falls back to the app-derived guess.
+// SEVERAL is never resolved to one. Dataverse has no "owning" solution — a component is simply a
+// member of each — and the pick is not cosmetic: a rebuild adds components to the spec's solution and
+// teardown deletes that container. The rule this replaced took the first qualifying row of a capped
+// first page, so two downloads of one app could name different solutions on row order alone; a
+// heuristic such as "the one whose publisher matches the app name's prefix" rests on the app-name
+// guess ADO 6603390 showed is unreliable. The caller keeps 'Default' — which teardown never deletes —
+// and names the candidates. UNREADABLE stays apart from null for the reason it does everywhere else in
+// this file: "the app is in no solution" and "we could not look" must not look alike.
+//
+// `publisherPrefix` is read from the solution's OWNING PUBLISHER via the SDK's `getSolution`, the only
+// authoritative source: the prefix used to be guessed from the app's uniquename, which breaks whenever
+// the app name doesn't encode the publisher — an app named `new_customermanagement` inside publisher
+// `contoso`, an app with no prefix, or a prefix longer than the guess's length bound all collapsed to
+// the literal `'new'` (ADO 6603390). With several candidates it is reported only when EVERY
+// candidate's prefix was read and they agree: the prefix shapes the relationship schema names the
+// download emits, so a wrong one makes a same-environment rebuild create duplicates — a failed read
+// never counts as agreement. A publisher read that FAILS, for the one solution or any of several, is
+// reported as `publisherUnreadable` (the reason), and the caller then treats the prefix as unknown rather
+// than guess it: a failed read says nothing about the publisher. Only when there is simply no usable
+// prefix — a bundle without getSolution, or a publisher without a customization prefix — does the caller
+// fall back to the app-derived guess.
 async function recoverAppSolution(sdk, appId) {
+  let real;
   try {
-    // objectid == the appmoduleid. `top:500` is a safe over-provision (an app is realistically a
-    // component of only a handful of solutions) that keeps us on the same proven query path as every
-    // other queryRecords call in the skill (all pass an explicit top) — it just must not be the old
-    // `top:1`, which returned an arbitrary single membership (often 'Default').
-    const comps = await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: `objectid eq ${appId}`, top: 500 });
+    const comps = await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: `objectid eq ${appId}`, paginate: true });
     const solIds = [...new Set((comps || []).map((c) => c && c._solutionid_value).filter(Boolean))];
     if (!solIds.length) return null;
-    // One OR-batched lookup for all candidate solutions (solutionid is a Guid, so it is unquoted in
-    // the OData filter — mirrors the existing `solutionid eq ${id}` usage elsewhere in this file).
-    const filter = solIds.map((id) => `solutionid eq ${id}`).join(' or ');
-    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged', 'description'], filter, top: 500 });
-    const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
-    if (!real) return null;
-    const out = withDescription({ uniqueName: real.uniquename }, real.description);
-    // Authoritative publisher prefix for anything authored into THIS solution. Guarded on the method
-    // existing so an older vendored bundle (pre-getSolution) degrades to the caller's fallback instead
-    // of throwing away the solution we just recovered.
-    if (typeof sdk.getSolution === 'function') {
-      try {
-        const info = await sdk.getSolution(real.uniquename);
-        // An empty-string prefix is legitimate for some first-party publishers, but it is not usable as
-        // a customization prefix, so treat it as "not recovered" and let the caller fall back.
-        if (info && info.publisherPrefix) out.publisherPrefix = String(info.publisherPrefix).toLowerCase();
-      } catch { /* best-effort — keep the recovered uniqueName */ }
-    }
-    return out;
-  } catch {
-    return null; // best-effort — a recovery failure must not break the download
+    const sols = await rowsByIds(sdk, 'solution', 'solutionid', solIds, ['solutionid', 'uniquename', 'ismanaged', 'description'], (r) => r);
+    // Sorted so the candidates — and everything derived from them — are order-independent.
+    real = sols
+      .filter((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename))
+      .sort((a, b) => String(a.uniquename).localeCompare(String(b.uniquename)));
+  } catch (e) {
+    return { unreadable: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
   }
+  if (!real.length) return null;
+  // Resolves to the prefix, to null when there is none to use, or to { failed: reason } when the read
+  // itself failed. Guarded on the method existing so an older vendored bundle (pre-getSolution) degrades
+  // to the caller's fallback. An empty-string prefix is legitimate for some first-party publishers, but it
+  // is not usable as a customization prefix, so it reads as "none".
+  const prefixOf = async (s) => {
+    if (typeof sdk.getSolution !== 'function') return null;
+    try {
+      const info = await sdk.getSolution(s.uniquename);
+      return info && info.publisherPrefix ? String(info.publisherPrefix).toLowerCase() : null;
+    } catch (e) {
+      return { failed: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
+    }
+  };
+  if (real.length === 1) {
+    const out = withDescription({ uniqueName: real[0].uniquename }, real[0].description);
+    const prefix = await prefixOf(real[0]);
+    if (typeof prefix === 'string') out.publisherPrefix = prefix;
+    else if (prefix) out.publisherUnreadable = prefix.failed;
+    return out;
+  }
+  const prefixes = [];
+  for (const s of real) prefixes.push(await prefixOf(s));
+  const out = { ambiguous: real.map((s) => String(s.uniquename)) };
+  if (prefixes.every((p) => typeof p === 'string') && new Set(prefixes).size === 1) out.publisherPrefix = prefixes[0];
+  const failed = prefixes.find((p) => p && typeof p === 'object');
+  if (failed) out.publisherUnreadable = failed.failed;
+  return out;
 }
 
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
@@ -2021,13 +2118,41 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // when recovery finds nothing — that fallback cannot be torn down, but teardown skips it safely (see
   // system-solutions.js) rather than erroring.
   const recovered = await recoverAppSolution(sdk, appId);
+  // Several real solutions (#587 item 9), or a membership that could not be read: the spec keeps
+  // 'Default' rather than a guess — the one solution a teardown never deletes — and says so. The
+  // candidates are returned as well as printed, so the JSON result carries them.
+  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
+  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
+  if (solutionCandidates) {
+    process.stderr.write(`WARNING: this app belongs to ${solutionCandidates.length} unmanaged solutions (${solutionCandidates.join(', ')}) and a download cannot tell which one you manage it in, so the spec's solution is left as 'Default', which a teardown never deletes. Set solution.uniqueName in app-spec.json to that solution before a rebuild or teardown.\n`);
+  }
+  if (solutionUnreadable) {
+    process.stderr.write(`WARNING: the solutions this app belongs to could not be read (${solutionUnreadable}), so the spec's solution is left as 'Default', which a teardown never deletes, and its business rules and solution-owned global choices are reported as unknown. Set solution.uniqueName in app-spec.json before a rebuild or teardown.\n`);
+  }
 
   // Prefix precedence: the SOLUTION's publisher (authoritative) → the app-uniquename guess (fallback).
   // `prefixResolved` means "this prefix is trustworthy", which gates the icon own-vs-foreign
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
   const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  const trustedPrefix = solutionPrefix || appDerivedPrefix;
+  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
+  // Several candidate solutions whose publishers do not share one prefix, none that could be read, or a
+  // publisher whose read FAILED — the one solution's included: the prefix is UNKNOWN. The app-name guess is
+  // exactly the heuristic that ambiguity refuses to use (see recoverAppSolution), and a wrong prefix renames
+  // every relationship not carrying it, so a same-environment rebuild creates each a second time. So it is
+  // not used: the prefix stays the unverified default, and relationships keep their deployed names. (A failed
+  // read of the one solution's publisher used to read as "no prefix", which fell back to the guess.)
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
+  if (prefixUnknown) {
+    let why = solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown';
+    if (publisherUnreadable) {
+      why = solutionCandidates
+        ? `the publishers of those solutions could not all be read (${publisherUnreadable})`
+        : `the publisher of solution '${recovered.uniqueName}' could not be read (${publisherUnreadable})`;
+    }
+    process.stderr.write(`WARNING: ${why}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
+  }
+  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
   // `recoverAppSolution` already unwraps the solution's description; carry it across. This object is
@@ -2078,7 +2203,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   try {
     const rel = await readRelationships(sdk, allLogicals, solution.publisherPrefix, (m) => {
       process.stderr.write(`WARNING: ${m}\n`);
-    });
+    }, { prefixUnknown });
     relationships = rel.relationships;
     relationshipsSkipped = rel.skipped;
   } catch (e) {
@@ -2113,8 +2238,19 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     globalChoices: async () => finalizeGlobalChoices(entities, globalChoiceDecls),
     // Captured on the way past so the role-restriction warning below can read it. The accessor stays
     // a function (hydrateSpec's contract) and is still called exactly once, so this adds no query.
+    // The global-choice inventory is scoped to the sets the app's solution owns plus the ones an
+    // emitted column binds (#586 item 5); the second half is read off `entities` here rather than off
+    // the `globalChoices` accessor so it does not depend on the order hydrateSpec calls them in.
     descriptionInventory: async () => {
-      capturedInventory = await readDescriptionInventory(sdk, appId, solution.uniqueName);
+      const referenced = new Set();
+      for (const e of entities || []) for (const c of (e && e.columns) || []) if (c && c.globalChoice) referenced.add(String(c.globalChoice).toLowerCase());
+      // Scoped the way the solution was resolved: the one solution; EVERY candidate when there are
+      // several — each contains the app, and scoping by none would report their business rules as
+      // "none", the silent absence this report exists to prevent; unknown when unreadable.
+      const scope = solutionUnreadable
+        ? new Error(`the solutions this app belongs to could not be read (${solutionUnreadable})`)
+        : (solutionCandidates || solution.uniqueName);
+      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced);
       return capturedInventory;
     },
   };
@@ -2132,12 +2268,18 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // reported failure was not that they are omitted — that is a documented limitation — but that
   // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
   // from "this download does not carry views".
-  const notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, globalChoiceDecls));
+  //
+  // Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
+  // `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
+  // dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
+  // report whose job is naming them.
+  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
+  const notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
   if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main() {
@@ -2194,7 +2336,7 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -2236,7 +2378,7 @@ async function main() {
   const specPath = path.join(outDir, 'app-spec.json');
   preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
 }
 
 // Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.

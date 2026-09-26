@@ -288,10 +288,11 @@ test('#6a readDescriptionInventory RECORDS a per-class read failure', async () =
     },
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
-  const inv = await readDescriptionInventory(sdk, APP, null);
+  const inv = await readDescriptionInventory(sdk, APP, null, new Set(['contoso_status']));
   // `globalChoices` is now reported too: the stub answers that metadata read with a 404, and a
   // non-2xx is no longer coerced to an empty list. Before, it read as "this environment has no
-  // global choices" — a positive claim made from a failed read.
+  // global choices" — a positive claim made from a failed read. (A column binding `contoso_status`
+  // puts a set in scope, so the read is actually made; with nothing in scope it is skipped.)
   assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['forms', 'globalChoices'], JSON.stringify(inv.incomplete));
   assert.match(inv.incomplete.find((i) => i.kind === 'forms').reason, /403/);
   // The class that DID read is still present — one failed query must not blank the others.
@@ -308,17 +309,19 @@ test('#6a3 a non-2xx global-choice read is UNKNOWN, not "this environment has no
   // `notRoundTrippedSummary` started reporting global choices: a class it omits reads as absent.
   const { readDescriptionInventory } = require('../download-model-app.js');
   const base = { queryRecords: async () => [] };
+  // A column binding `contoso_status` puts one set in scope, so the metadata read is actually made.
+  const bound = new Set(['contoso_status']);
   for (const [label, get] of [
     ['non-2xx', async () => ({ status: 403, headers: {}, body: {} })],
     ['malformed body', async () => ({ status: 200, headers: {}, body: { notValue: 1 } })],
     ['throws', async () => { throw new Error('socket hang up'); }],
   ]) {
-    const inv = await readDescriptionInventory({ ...base, dataverse: { get } }, null, null);
+    const inv = await readDescriptionInventory({ ...base, dataverse: { get } }, null, null, bound);
     assert.ok((inv.incomplete || []).some((i) => i.kind === 'globalChoices'),
       `${label}: expected globalChoices to be recorded as unknown, got ${JSON.stringify(inv.incomplete)}`);
   }
   // And a GOOD read records nothing.
-  const ok = await readDescriptionInventory({ ...base, dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [{ Name: 'contoso_status' }] } }) } }, null, null);
+  const ok = await readDescriptionInventory({ ...base, dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [{ Name: 'contoso_status' }] } }) } }, null, null, bound);
   assert.ok(!(ok.incomplete || []).some((i) => i.kind === 'globalChoices'));
   assert.deepStrictEqual((ok.globalChoices || []).map((g) => g.name), ['contoso_status']);
 });
@@ -347,38 +350,31 @@ test('#6a4 a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business
   assert.ok(!(clean.incomplete || []).some((i) => i.kind === 'businessRules'), JSON.stringify(clean.incomplete));
 });
 
-test('#6a5 a TRUNCATED component page marks the class incomplete, not undercounted', async () => {
-  // `$top` is a hard cap and Dataverse omits `@odata.nextLink` when it is honoured, so a full page is
-  // indistinguishable from a truncated one and there is no signal to read afterwards. This list feeds
-  // `notRoundTrippedSummary`, which reports a COUNT — so a truncated read there is not merely a
-  // missing artifact, it is a smaller number presented as the whole truth.
-  //
-  // Written after a mutation run showed the guard was shipped untested: disabling it changed no test.
+test('#6a5 app component inventory reads are paginated, not capped and undercounted', async () => {
+  // These component rows decide which deployed forms/views/charts are reported as not round-tripped.
+  // A capped read turns the tail into an authoritative undercount, so the query must ask the SDK to
+  // follow every page instead of relying on `$top`.
   const { readDescriptionInventory } = require('../download-model-app.js');
   const APP = '11111111-1111-1111-1111-111111111111';
-  const CAP = 1000; // COMPONENT_PAGE_CAP — module-private, so pinned here deliberately.
-  const full = Array.from({ length: CAP }, (_, i) => ({ objectid: `v-${i}`, componenttype: 26 }));
-  const sdk = (rows) => ({
+  const calls = [];
+  const sdk = {
     dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) },
     queryRecords: async (logical, opts) => {
+      calls.push({ logical, opts });
       if (logical === 'appmodule') return [{ appmoduleidunique: APP }];
-      // Only the VIEW class (componenttype 26) is saturated; the others return a short page.
-      if (logical === 'appmodulecomponent') return /componenttype eq 26/.test((opts && opts.filter) || '') ? rows : [];
-      if (logical === 'savedquery') return [];
+      if (logical === 'appmodulecomponent') return [];
       return [];
     },
-  });
+  };
 
-  const truncated = await readDescriptionInventory(sdk(full), APP, null);
-  const v = (truncated.incomplete || []).find((i) => i.kind === 'views');
-  assert.ok(v, `views must be marked incomplete at the cap, got ${JSON.stringify(truncated.incomplete)}`);
-  assert.match(v.reason, /truncated/i, v.reason);
-  // Scoped: the classes that read a SHORT page are not tarred with it.
-  assert.ok(!(truncated.incomplete || []).some((i) => i.kind === 'charts'), JSON.stringify(truncated.incomplete));
-
-  // One row under the cap is a complete read and must stay silent, or the warning cries wolf.
-  const under = await readDescriptionInventory(sdk(full.slice(0, CAP - 1)), APP, null);
-  assert.ok(!(under.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(under.incomplete));
+  const inv = await readDescriptionInventory(sdk, APP, null);
+  assert.ok(!(inv.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(inv.incomplete));
+  const componentReads = calls.filter((c) => c.logical === 'appmodulecomponent');
+  assert.ok(componentReads.length >= 3, `expected reads for views/charts/forms, got ${JSON.stringify(componentReads)}`);
+  for (const call of componentReads) {
+    assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
+    assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
+  }
 });
 
 test('#6a2 an unreadable app-component list marks EVERY class unknown', async () => {
@@ -389,7 +385,7 @@ test('#6a2 an unreadable app-component list marks EVERY class unknown', async ()
     queryRecords: async () => { throw new Error('HTTP 500'); },
     dataverse: { get: async () => ({ status: 500, headers: {}, body: {} }) },
   };
-  const inv = await readDescriptionInventory(sdk, '11111111-1111-1111-1111-111111111111', null);
+  const inv = await readDescriptionInventory(sdk, '11111111-1111-1111-1111-111111111111', null, new Set(['contoso_status']));
   assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['charts', 'forms', 'globalChoices', 'views']);
 });
 

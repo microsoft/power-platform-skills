@@ -9,7 +9,7 @@
  * Functions are also exported for testing.
  */
 
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -73,10 +73,11 @@ function readMarketplaceName(gitRoot) {
   return marketplace?.name || null;
 }
 
-function readJsonFromGit(ref, relativePaths) {
+function readJsonFromGit(ref, relativePaths, cwd) {
   for (const relativePath of relativePaths) {
     try {
       const content = execFileSync('git', ['show', `${ref}:${relativePath}`], {
+        cwd,
         encoding: 'utf8',
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -101,18 +102,35 @@ if (require.main === module) {
     const localVersion = localPlugin.version;
     if (!localVersion) process.exit(0);
 
-    const gitRoot = execSync('git rev-parse --show-toplevel', {
+    // Every git call is anchored to the plugin directory. The skills run this script from the
+    // USER's project directory, so a git command without `cwd` operated on the user's repository:
+    // it fetched their `origin main` at every skill start (network, and a possible credential
+    // prompt) and then compared against a manifest path that does not exist there, so the notice
+    // could never fire. A marketplace install is a plain copy, not a clone, so `rev-parse` fails
+    // there and the script exits silently, as it does on any other error.
+    const gitRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: pluginRoot,
       encoding: 'utf8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
 
-    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) =>
-      path.relative(gitRoot, path.join(pluginRoot, manifestPath)).replace(/\\/g, '/')
-    );
+    // The plugin's path inside the repository, as git itself computes it (e.g. "plugins/model-apps/").
+    // Deriving it with path.relative(gitRoot, pluginRoot) broke whenever the two spelled the same folder
+    // differently: git reports the long Windows name (C:/Users/runneradmin/...) while __dirname can carry
+    // the 8.3 short name (C:\Users\RUNNER~1\...), so the relative path pointed outside the repository
+    // and the check silently found nothing.
+    const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], {
+      cwd: pluginRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) => `${prefix}${manifestPath}`);
 
     try {
-      execSync('git fetch origin main --quiet', {
+      execFileSync('git', ['fetch', 'origin', 'main', '--quiet'], {
+        cwd: pluginRoot,
         encoding: 'utf8',
         timeout: 10000,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -121,7 +139,7 @@ if (require.main === module) {
       // A cached origin/main is sufficient when the network is unavailable.
     }
 
-    const remotePlugin = readJsonFromGit('origin/main', remoteManifestPaths);
+    const remotePlugin = readJsonFromGit('origin/main', remoteManifestPaths, pluginRoot);
     if (!remotePlugin?.version) process.exit(0);
 
     if (compareSemver(localVersion, remotePlugin.version) > 0) {

@@ -471,3 +471,42 @@ test('directEntry is defaulted ONLY where it is missing and actually required', 
   assert.strictEqual(spec2.pages.find((p) => p.key === 'detail').directEntry, undefined,
     'the default tracks the validation condition exactly, not the mere presence of pageInput');
 });
+
+// #583: the routing description round-trips when the deployed app has one. When it has none the field
+// stays ABSENT — never `""` — because the build writes only a field the spec sets, so a download can
+// never plant an empty value that a rebuild would then use to blank a platform-written description.
+test('#583 hydrateSpec carries app.aiDescription only when the deployed app has one', async () => {
+  const read = deployedRead();
+  const app = await read.app();
+  const withRouting = { ...read, app: async () => ({ ...app, aiDescription: 'Route order work here.' }) };
+  assert.strictEqual((await hydrateSpec(withRouting)).app.aiDescription, 'Route order work here.');
+  assert.ok(!('aiDescription' in (await hydrateSpec(deployedRead())).app));
+  const blank = { ...read, app: async () => ({ ...app, aiDescription: '' }) };
+  assert.ok(!('aiDescription' in (await hydrateSpec(blank)).app), 'an empty value is omitted, not emitted as ""');
+  // Whitespace-only is non-empty to the SDK, which sets the key; emitting it would fail the whole
+  // download, because validation refuses a blank routing description.
+  for (const ws of [' ', '\n', ' \t\r\n ']) {
+    const white = { ...read, app: async () => ({ ...app, aiDescription: ws }) };
+    assert.ok(!('aiDescription' in (await hydrateSpec(white)).app), `whitespace-only ${JSON.stringify(ws)} is omitted`);
+  }
+});
+
+
+test('hydrateSpec preserves a downloaded prompt exactly, and includes an explicitly blank prompt', async () => {
+  const exact = '  Conversation with 1 prompts:\r\n1. Keep me exact.\r\n';
+  const base = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const withExact = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(withExact.pages[0].prompt, exact);
+  const withEmpty = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(withEmpty.pages[0].prompt, '', 'a present empty prompt is different from a missing prompt');
+  const missing = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', codeFile: 'p.tsx' }] });
+  assert.ok(!('prompt' in missing.pages[0]), 'missing prompt.txt remains omitted');
+  // The keyed (schemaVersion 2) page shape is built by a separate branch; it must agree.
+  const keyed = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyed.pages[0].prompt, '', 'a keyed page keeps a present empty prompt too');
+  const keyedExact = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyedExact.pages[0].prompt, exact);
+});

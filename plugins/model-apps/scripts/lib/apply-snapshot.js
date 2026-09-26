@@ -105,14 +105,6 @@ function identityMatches(envelope, live) {
   return { ok: true, reason: 'identity matches' };
 }
 
-function hasDebt(envelope) {
-  return isEnvelope(envelope) && envelope.debt.length > 0;
-}
-
-function listDebt(envelope) {
-  return isEnvelope(envelope) ? envelope.debt.slice() : [];
-}
-
 // Record a debt: an artifact whose intended state could NOT be safely applied incrementally (an
 // unsupported edit, a removal, a chart/command/dashboard/web-resource-content change). While ANY debt is
 // present the snapshot can never become eligible. Deduped by (artifactType|identity|reason) so re-running
@@ -194,13 +186,18 @@ function generationMatches(diskEnvelope, expectedGeneration) {
 }
 
 // THE gate: may we take the `--changed-only` fast path against `live`? Fail-closed — returns
-// { eligible:false, reason } unless EVERY condition holds: valid schema-3 envelope, identity matches live,
-// not tombstoned, eligible flag true, empty debt, and a generation present (needed for the write-CAS).
+// { eligible:false, reason } unless EVERY condition holds: valid schema-3 envelope, not tombstoned, identity
+// matches live, eligible flag true, empty debt, and a generation present (needed for the write-CAS).
+//
+// The tombstone is checked BEFORE identity so it is the reason reported. A teardown that found no snapshot
+// writes a fresh tombstone that carries no identity (it never asks WhoAmI), and an identity-first gate
+// called that "orgId mismatch (different Dataverse org)" — fail-closed either way, but it sent the reader
+// looking for the wrong problem.
 function isFastPathEligible(envelope, live) {
   if (!isEnvelope(envelope)) return { eligible: false, reason: 'no valid snapshot (full build)' };
+  if (isTombstoned(envelope)) return { eligible: false, reason: 'snapshot tombstoned by a teardown' };
   const idm = identityMatches(envelope, live);
   if (!idm.ok) return { eligible: false, reason: idm.reason };
-  if (isTombstoned(envelope)) return { eligible: false, reason: 'snapshot tombstoned by a teardown' };
   if (envelope.eligible !== true) return { eligible: false, reason: 'snapshot not eligible (last apply was full/unsupported or invalidated)' };
   if (envelope.debt.length > 0) return { eligible: false, reason: `snapshot carries ${envelope.debt.length} open debt entr${envelope.debt.length === 1 ? 'y' : 'ies'}` };
   if (!envelope.generation) return { eligible: false, reason: 'snapshot missing generation token (cannot CAS)' };
@@ -217,8 +214,6 @@ module.exports = {
   parseEnvelope,
   serializeEnvelope,
   identityMatches,
-  hasDebt,
-  listDebt,
   addDebt,
   clearDebtMatching,
   markIneligible,

@@ -39,7 +39,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
       throw new Error(`Refusing to send the Dataverse token for ${expectedOrigin} to a different origin (${target.origin}); the request URL must be under the --env org URL.`);
     }
   }
-  const getToken = deps.getToken || ((u) => getAuthToken(u));
+  const getToken = deps.getToken || ((u, options) => getAuthToken(u, options));
   const request = deps.request || makeRequest;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const random = deps.random || Math.random;
@@ -85,9 +85,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 
   let token = null;
-  function ensureToken() {
+  function ensureToken(options = {}) {
     if (!token) {
-      token = getToken(clean);
+      token = getToken(clean, options);
       if (!token) {
         throw new Error(`Failed to get Azure CLI token for ${clean}. Run 'az login' first.`);
       }
@@ -169,7 +169,13 @@ function createAzHttpClient(orgUrl, deps = {}) {
         continue;
       }
       if (res.statusCode === 401 && !last) {
-        token = null; // force a token refresh and retry immediately
+        // The process-wide token memo is safe for ordinary repeats, but a 401 is the server telling
+        // us this token was rejected. The retry must bypass that memo or it can only resend the same
+        // rejected bearer value and convert a refresh path into a guaranteed second 401.
+        token = getToken(clean, { fresh: true });
+        if (!token) {
+          throw new Error(`Failed to refresh Azure CLI token for ${clean}. Run 'az login' first.`);
+        }
         continue;
       }
       if (TRANSIENT.has(res.statusCode) && !last && !noRetry) {

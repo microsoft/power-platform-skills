@@ -14,7 +14,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
@@ -36,7 +36,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
-const { readerFor } = require('./verify-model-app.js');
+const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
@@ -93,12 +93,17 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
     cleanup();
     throw err;
   }
-  // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
-  // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
-  // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
-  // vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw client
-  // has no caller. Returning it anyway would advertise a bypass this file no longer takes.
-  return { sdk, provisionSdk, cleanup };
+  // Only the two SDK instances, the cleanup and verify's isolated dashboard reader are returned. The raw
+  // `httpClient` used to come back with them so the caller could wire verify's role-privilege reader — that
+  // read had no SDK surface and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request
+  // itself. The vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw
+  // client has no caller. Returning it anyway would advertise a bypass this file no longer takes.
+  //
+  // The isolated reader is built HERE so it shares this client, and with it the Azure CLI token: made by the
+  // caller, it created a client of its own, and a second `az account get-access-token`, for every build's
+  // dashboard verify. Each read still gets its own throwaway workspace and SDK (verify-model-app.js).
+  const isolatedReader = isolatedReaderFor(env, { httpClient });
+  return { sdk, provisionSdk, cleanup, isolatedReader };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -165,14 +170,14 @@ async function discoverOpDiffState(spec, provision) {
   const forms = [];
   for (const f of spec.forms || []) {
     const def = compileFormIntent(spec, f, {});
-    if (!def.__explicitLayout) continue;
+    if (!def.__explicitLayout || def.__prune === false) continue;
     // Resolve by (entity, name, TYPE) — NOT name alone. A table routinely has same-named Main / Quick View
     // / Card forms, so a name-only lookup matched multiple rows and the SDK's AmbiguousArtifactError halted
     // this preflight (fail-closed), blocking the edit. Type-scoped resolution targets the requested form.
     const id = await resolveExistingFormId(provision, def);
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
-    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
+    forms.push({ formId: id, label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
   // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
   let sitemap = null;
@@ -185,6 +190,132 @@ async function discoverOpDiffState(spec, provision) {
     }
   }
   return { collision, forms, sitemap };
+}
+
+const DESTRUCTIVE_APPROVAL_FILE = 'destructive-approval.json';
+
+function destructiveApprovalPath(workspaceDir) {
+  return workspaceDir ? path.join(workspaceDir, DESTRUCTIVE_APPROVAL_FILE) : null;
+}
+
+// Approval records are deliberately tiny and human-readable because they bind a later
+// `--allow-destructive` run to the exact refusal list a maker reviewed:
+//   {
+//     "schemaVersion": 1,
+//     "generatedAt": "2026-01-01T00:00:00.000Z",
+//     "formRemovals": { "<form-id>": { "label": "form \"Main\" (new_table)", "fields": ["new_field"] } },
+//     "sitemapRemovals": ["entity:new_table", "url:https://contoso.crm.dynamics.com/help"]
+//   }
+// Treat every malformed shape as unreadable: guessing at a damaged approval would widen destructive
+// authority, which is exactly what this file is meant to prevent.
+function normalizeApprovalRecord(value) {
+  if (!value || value.schemaVersion !== 1 || !value.formRemovals || Array.isArray(value.formRemovals) || typeof value.formRemovals !== 'object' || !Array.isArray(value.sitemapRemovals)) return null;
+  const formRemovals = {};
+  for (const [formId, entry] of Object.entries(value.formRemovals)) {
+    if (!entry || !Array.isArray(entry.fields)) return null;
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) return null;
+    formRemovals[normalizedFormId] = {
+      label: typeof entry.label === 'string' ? entry.label : normalizedFormId,
+      fields: entry.fields.map((f) => String(f).toLowerCase()),
+    };
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : '',
+    formRemovals,
+    sitemapRemovals: value.sitemapRemovals.map((target) => String(target)),
+  };
+}
+
+function readApprovalRecord(workspaceDir) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file || !fs.existsSync(file)) return { exists: false, file, record: null };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const record = normalizeApprovalRecord(parsed);
+    if (!record) throw new Error('record has an unsupported shape');
+    return { exists: true, file, record };
+  } catch (err) {
+    return { exists: true, file, error: err };
+  }
+}
+
+function writeApprovalRecord(workspaceDir, removals) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file) return;
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const record = { schemaVersion: 1, generatedAt: new Date().toISOString(), ...removals };
+  const tmp = path.join(workspaceDir, `.${DESTRUCTIVE_APPROVAL_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(record, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, file);
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort cleanup only */ }
+  }
+}
+
+function deleteApprovalRecord(workspaceDir) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
+}
+
+function removalRecordFromOps(removals) {
+  const byForm = new Map();
+  const sitemap = [];
+  for (const op of removals || []) {
+    if (op.kind === 'form-field-removal') {
+      const formId = normalizeFormId(op.formId);
+      if (!formId) continue;
+      if (!byForm.has(formId)) byForm.set(formId, { formId, label: op.label, fields: [] });
+      byForm.get(formId).fields.push(...(op.fields || []));
+    } else if (op.kind === 'sitemap-removal') {
+      sitemap.push(...(op.targets || []));
+    }
+  }
+  const formRemovals = {};
+  for (const entry of byForm.values()) {
+    formRemovals[entry.formId] = { label: entry.label, fields: [...new Set(entry.fields.map((f) => String(f).toLowerCase()))] };
+  }
+  return {
+    formRemovals,
+    sitemapRemovals: [...new Set(sitemap.map((target) => String(target)))],
+  };
+}
+
+function authorizedFormRemovalMap(state, removals) {
+  const map = new Map();
+  for (const f of (state && state.forms) || []) {
+    if (f && f.formId && f.def && f.def.__explicitLayout && f.def.__prune !== false) map.set(normalizeFormId(f.formId), new Set());
+  }
+  for (const [formId, entry] of Object.entries(removalRecordFromOps(removals).formRemovals)) {
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) continue;
+    if (!map.has(normalizedFormId)) map.set(normalizedFormId, new Set());
+    for (const field of entry.fields || []) map.get(normalizedFormId).add(field);
+  }
+  return map;
+}
+
+function findNewlyUnapprovedRemovals(current, approved) {
+  const approvedSitemap = new Set(approved.sitemapRemovals || []);
+  const newOps = [];
+  for (const [formId, entry] of Object.entries(current.formRemovals || {})) {
+    const normalizedFormId = normalizeFormId(formId);
+    const approvedEntry = (approved.formRemovals || {})[normalizedFormId];
+    const ok = new Set((approvedEntry && approvedEntry.fields) || []);
+    const fields = (entry.fields || []).filter((field) => !ok.has(field));
+    if (fields.length) newOps.push({ kind: 'form-field-removal', label: entry.label, fields });
+  }
+  const sitemap = (current.sitemapRemovals || []).filter((target) => !approvedSitemap.has(target));
+  if (sitemap.length) newOps.push({ kind: 'sitemap-removal', label: 'app sitemap', targets: sitemap });
+  return newOps;
+}
+
+function formatNewRemovalDetail(op) {
+  if (op.kind === 'form-field-removal') return `removes field(s): ${op.fields.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
+  return `drops navigation target(s): ${op.targets.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
 }
 
 async function buildModelApp(spec, opts, deps) {
@@ -205,6 +336,9 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  let authorizedFormRemovals;
+  let authorizedSitemapRemovals;
+  let currentDestructiveApproval;
 
   // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
@@ -245,6 +379,13 @@ async function buildModelApp(spec, opts, deps) {
     const allowDestructive = opts.allowDestructive === true;
     let state;
     let discoveryError = null;
+    const priorApproval = allowDestructive && opts.workspaceDir ? readApprovalRecord(opts.workspaceDir) : { exists: false };
+    if (priorApproval.error) {
+      const msg = `${priorApproval.file} could not be read as a destructive approval record — delete it or re-run without --allow-destructive to see the list again.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-unreadable', detail: priorApproval.file, ...counts });
+      return { ok: false, errors: [msg] };
+    }
     try {
       state = deps.discoverOpDiffState
         ? await deps.discoverOpDiffState(spec, deps.provisionSdk)
@@ -257,6 +398,12 @@ async function buildModelApp(spec, opts, deps) {
     // the environment is unhealthy, letting an unattended-collision overwrite or a form/sitemap removal
     // slip through (design §11 — "can't verify safety ⇒ refuse", not "⇒ proceed"). Re-running usually
     // clears a transient read failure; --allow-destructive is the explicit escape hatch.
+    if (discoveryError && priorApproval.exists) {
+      const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — live removals cannot be compared with the approved list in ${DESTRUCTIVE_APPROVAL_FILE}. Re-run to retry before writing.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-compare-failed', detail: String((discoveryError && discoveryError.message) || discoveryError), ...counts });
+      return { ok: false, errors: [msg] };
+    }
     if (discoveryError && !allowDestructive) {
       const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — refusing to write without verifying the apply is non-destructive. Re-run to retry, or pass --allow-destructive to proceed without the check.`;
       log(`\n✗ ${msg}`);
@@ -285,12 +432,44 @@ async function buildModelApp(spec, opts, deps) {
       //     app-collision op is handled above (interactive/non-interactive nuance), so exclude it here.
       const diff = classifyOps(spec, state, { teardown: false });
       const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal');
+      authorizedFormRemovals = authorizedFormRemovalMap(state, removals);
+      const currentApproval = removalRecordFromOps(removals);
+      currentDestructiveApproval = currentApproval;
+      if (state.sitemap) authorizedSitemapRemovals = new Set(currentApproval.sitemapRemovals);
       if (removals.length && !allowDestructive) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
+        if (opts.workspaceDir) {
+          try {
+            writeApprovalRecord(opts.workspaceDir, currentApproval);
+          } catch (err) {
+            // Approval records are a safety aid for the NEXT invocation. The refusal itself is the
+            // primary guard, so a disk failure must not replace the exact destructive-op list the maker
+            // needs to review now.
+            log(`\n⚠ could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
+          }
+        }
         log(`\n✗ ${msg}`);
         if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops', detail: removals.map((o) => o.kind).join(','), ...counts });
         return { ok: false, errors: [msg] };
+      }
+      if (allowDestructive && opts.workspaceDir) {
+        if (priorApproval.exists) {
+          const newlyUnapproved = findNewlyUnapprovedRemovals(currentApproval, priorApproval.record);
+          if (newlyUnapproved.length) {
+            try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not refresh ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+            const lines = newlyUnapproved.map((o) => `  • ${o.label} — ${formatNewRemovalDetail(o)}`);
+            const msg = `refusing ${newlyUnapproved.length} destructive operation(s) that were not on the list the maker approved:\n${lines.join('\n')}`;
+            log(`\n✗ ${msg}`);
+            if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops-new', detail: newlyUnapproved.map((o) => o.kind).join(','), ...counts });
+            return { ok: false, errors: [msg] };
+          }
+        }
+        if (removals.length) {
+          // Persist the gate-time list BEFORE the first mutation. If the engine later keeps a new
+          // field and then fails, the next approved run must still be bound to what this run saw.
+          try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+        }
       }
     }
   }
@@ -326,6 +505,8 @@ async function buildModelApp(spec, opts, deps) {
         warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
+        authorizedFormRemovals,
+        authorizedSitemapRemovals,
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         emit,
@@ -437,6 +618,23 @@ async function buildModelApp(spec, opts, deps) {
   } else if (journal) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
+  if (opts.apply && r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && opts.workspaceDir) {
+    const kept = (((r.skipped || {}).unauthorizedRemovals) || []);
+    const active = opts.phases || PHASES;
+    const ranRemovalPhases = active.includes('forms') && active.includes('app-shell') && !(opts.changedOnly && opts.changedOnly.fastApply);
+    if (kept.length) {
+      const record = currentDestructiveApproval || { formRemovals: {}, sitemapRemovals: [] };
+      try {
+        writeApprovalRecord(opts.workspaceDir, record);
+        const names = kept.map((x) => `${x.form || x.formId || 'form'}:${x.field}`).join(', ');
+        log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was left for review, so the next run will ask about them before removing anything.`);
+      } catch (err) {
+        log(`\n⚠ kept unauthorized form removal(s), but could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
+      }
+    } else if (ranRemovalPhases) {
+      try { deleteApprovalRecord(opts.workspaceDir); } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+    }
+  }
   // Attach non-blocking validation advisories to the result JSON so programmatic callers see them too
   // (they were already narrated via `log` above). Never overrides an error result's shape.
   if (r && typeof r === 'object' && (v.warnings || []).length) r.warnings = v.warnings;
@@ -449,6 +647,12 @@ async function buildModelApp(spec, opts, deps) {
 // "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
 function isTransientHalt(err) {
   if (!err) return false;
+  // An error that says it must not be retried wins over any status or text it carries. A dashboard
+  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
+  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
+  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
+  // prevent.
+  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
   const status = (err.cause && err.cause.statusCode) || err.statusCode;
   const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
   return (
@@ -630,7 +834,7 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  const { sdk, provisionSdk, cleanup, isolatedReader } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -690,7 +894,7 @@ async function main() {
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, isolatedReader }), verifyOpts),
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

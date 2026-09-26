@@ -41,7 +41,7 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
    replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
-   when the edit does not touch them, or when the `connectors` rollback gate is off.
+   when the edit does not touch them.
    **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
    discovers, removes, or clears Custom API bindings.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
@@ -74,14 +74,25 @@ application of planned edits.
 
 Follow these phases in order for every `/genpage` invocation.
 
+**Every `<…>` you fill into a command goes in single quotes** (`'<working-dir>/prompt.txt'`, `'<App Name>'`).
+PowerShell and bash expand nothing inside them — not `$name`, not `$(…)`, not a backtick — and a space does not split
+the value. Escape a single quote inside the value the shell's way: in PowerShell double it, the typographic `‘ ’`
+included (`'Bob''s app'`); in bash close, escape and reopen (`'Bob'\''s app'`). Never use double quotes for a value
+(`"Revenue $100"` arrived as `Revenue `) and never leave one bare (`D:\Work Projects\…` became two arguments). A value
+holding a double quote `"` is not put on a command line at all — Windows PowerShell 5.1 drops it and can split the
+argument there — so ask for an app or solution name without one. Free text (a prompt, an agent message, a page's
+display name) never goes into a shell command at all, however it is quoted: even a single-quoted here-string ends at a
+line that begins with `'@`, and the rest of that line runs. Write it with your file-writing tool and pass the path
+(Phase 6).
+
 ### Phase 0: Create Working Directory
 
 Derive a short folder name from the user's requirements:
 
 1. Extract the page name or a 2-4 word summary from `$ARGUMENTS`
 2. Convert to kebab-case (e.g., "Candidate Tracker" → `candidate-tracker`)
-3. Create the folder: `mkdir -p <folder-name>` (bash/PowerShell; on cmd use `mkdir <folder-name>`,
-   which has no `-p` and errors if the folder exists)
+3. Create the folder: `mkdir -p '<folder-name>'` (PowerShell or bash, the shells every command in this skill is
+   written for)
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
 ### Phase 0.5: Initialize Local-Dev Manifest
@@ -93,18 +104,30 @@ definition" in their editor. Versions come from
 `scripts/lib/supported-dependencies.js`).
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slug>
+node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-slug>'
 ```
 
 - `<kebab-slug>` is the same slug used for the working directory.
 - Add `--features charts,datepicker,timepicker` (comma-separated) only when
   the requirements clearly call for them; otherwise omit and keep the
   manifest lean.
-- The script is **idempotent** — it skips files that already exist. Pass
-  `--force` to overwrite (used in regeneration flows when versions drift).
-- Output is a JSON summary on stdout; pipe to stderr for visibility but do
-  not block the workflow if the script returns non-zero — the manifest is a
-  dev-ergonomics aid, not part of the deployed artifact.
+- The script keeps an existing `package.json` (no `--force`) only when it
+  already lists every package the requested features need. A package present
+  at a version the user changed is kept and listed as `versionDrift` in the
+  JSON summary — mention it, since local type-checking then differs from the
+  versions pages are written for. Pass `--force` to overwrite (used in
+  regeneration flows when versions drift).
+- Output is a JSON summary on stdout. **Continue only on exit 0.**
+  - **Exit 2 — halt** and show the user the error line. When it names
+    packages a requested feature needs that the existing `package.json`
+    lacks, ask whether they will merge them into it or want a rerun with
+    `--force` (which replaces the file), and rerun until it exits 0 before
+    Phase 1 — continuing would leave a `--features charts` run on a manifest
+    without `d3`, the stale state this check exists to stop. Exit 2 also
+    reports a working directory that is a link or not a directory: never
+    write through it.
+  - Any other non-zero exit is a usage error in the command above: fix it and
+    rerun.
 
 ### Phase 1: Plan
 
@@ -239,6 +262,26 @@ missing and stop, so the run can be re-driven with the decision supplied.
    section headings are a machine-readable contract that every downstream phase
    parses by name.
 
+   Before that approval writeback dispatch, quarantine any previous authoritative
+   plan so a stale file cannot satisfy the post-dispatch existence check:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" prepare --plan '<working-dir>/genpage-plan.md'
+   ```
+
+   Continue only on `"ok":true`. It refuses a plan path, approval sidecar
+   (`.approved-genpage-plan.md`) or `.genpage-provenance` folder that is a link or
+   junction (a dangling one included) or the wrong kind of entry, since the approved
+   plan would be written through it: on `"ok":false`, halt and tell the user to remove
+   what the error names.
+
+   Also save the plan body the planner returned for approval — the one presented
+   with `EnterPlanMode`, or approved by default when unattended — to a sidecar such
+   as `<working-dir>/.approved-genpage-plan.md` (not `genpage-plan.md`), exactly as
+   returned. The planner writes a different document from it (the schema file, with
+   suffix-only names), so the verifier compares what both name as targets: the pages
+   to build.
+
    If `genpage-planner` reports that the file tools needed to write the approved
    `genpage-plan.md` are unavailable, do not retry it and do not write the plan
    inline. **Halt** with the approved plan body and failure recorded. Planner
@@ -248,16 +291,27 @@ missing and stop, so the run can be re-driven with the decision supplied.
    Phase 2 reads that file as its first action.
 
    **If it is missing, do not proceed and do not write it yourself.** Re-invoke
-   the planner once more with the approval outcome and the plan body. If it is
-   still missing, stop and tell the user what was approved and what failed to be
-   written — a hand-written substitute is a plan with no provenance, and every
-   later phase will treat it as approved.
+   the planner once more with the approval outcome and the plan body after running
+   the `prepare` command above again. If it is still missing, stop and tell the
+   user what was approved and what failed to be written — a hand-written substitute
+   is a plan with no provenance, and every later phase will treat it as approved.
+
+   If it exists, verify its provenance before Phase 2:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md'
+   ```
+
+   Continue only when the JSON result has `"ok":true`, and record its `writtenHash`
+   in `workflow-log.md`. If the written plan targets other pages than the approved
+   plan named — an extra, missing or renamed page file — halt: downstream phases
+   would build pages the user did not approve.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps connector discovery and its rollback gate in one
-agent while avoiding nested `Task` calls from the planner.
+not by `genpage-planner`. This keeps connector discovery in one agent while avoiding
+nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
 obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
@@ -280,10 +334,9 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of connector discovery and of the `connectors`
-rollback gate: it probes first, writes `No connector bindings.` + `[]` when the gate
-is off or the page needs no connector, and performs all connection discovery only
-when one is required.
+The builder remains the single owner of connector discovery: it writes
+`No connector bindings.` + `[]` when the page needs no connector, and performs all
+connection discovery only when one is required.
 
 #### 1b. Custom API discovery is orchestrator-owned too
 
@@ -473,7 +526,7 @@ Read `genpage-plan.md` for the app decision and the `Solution` line in
 **If "create new":**
 
 ```powershell
-pac model create --name "App Name" --solution "<Solution unique name>" --publish
+pac model create --name '<App Name>' --solution '<Solution unique name>' --publish
 ```
 
 **`--solution` is mandatory.** `pac model create` errors out with
@@ -498,7 +551,7 @@ the `Solution` line is informational only for this phase.
 If any page uses Dataverse entities, generate the TypeScript schema:
 
 ```powershell
-pac model genpage generate-types --data-sources "entity1,entity2,..." --output-file <working-dir>/RuntimeTypes.ts
+pac model genpage generate-types --data-sources 'entity1,entity2,...' --output-file '<working-dir>/RuntimeTypes.ts'
 ```
 
 > **Windows + Bash**: Always use forward slashes in file paths (e.g., `D:/temp/RuntimeTypes.ts`).
@@ -509,32 +562,19 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-**Re-probe the rollback gate here — do not rely on the plan content alone.** Connectors
-are GA and the flag ships ON, so this normally passes; it exists so a plan authored
-while the feature was on cannot deploy connectors after it has been turned off:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-```
-
-**If it prints `disabled`:** the outcome is `Connectors: none` **regardless of what the
-plan's `## Connector Bindings` section says**. Skip the rest of this phase — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload. (Backstop:
-`list-connections.js` / `create-connection-reference.js` also fail closed with exit 3.)
-
-**If it prints `enabled`:** read the plan's `## Connector Bindings` section and treat it
-as bindings **only when it contains an actual binding table** (a `| Logical Name | …`
-header with at least one data row). If the section is `No connector bindings.`, empty,
-missing, or malformed, the page has no connectors: skip this phase entirely — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload.
+Read the plan's `## Connector Bindings` section and treat it as bindings **only when
+it contains an actual binding table** (a `| Logical Name | …` header with at least
+one data row). If the section is `No connector bindings.`, empty, missing, or
+malformed, the page has no connectors: skip this phase entirely — do not create or
+pass `connectors.json`, and do not add `--connectors` on upload.
 
 **Carry this decision into code generation.** The outcome is `Connectors: <n>
 binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
 it verbatim in every page-builder dispatch — otherwise the generated page could call
 a connector this run never binds, and the page fails at runtime instead of simply
-omitting the feature. Note the dispatch value is the **binding count**, not the flag
-state: a disabled gate and an empty binding table both produce `none`, because the
-page-builder only ever needs to know how many bindings it may call.
+omitting the feature. The dispatch value is the **binding count**, not a flag state:
+an empty binding table produces `none`, because the page-builder only ever needs to
+know how many bindings it may call.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
@@ -572,15 +612,22 @@ authored while the flag was ON must not deploy Custom API bindings after it is t
 node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-api
 ```
 
-**If it prints `disabled`:** Custom API support is OFF. Skip this phase entirely — do not
-create or pass `actions.json`, and never add `--actions` on upload — **regardless of what the
-plan's `## Custom API Bindings` section says**. (Backstop: `list-custom-apis.js` also fails
-closed with exit 3 if invoked while OFF.)
+**If it prints `disabled`:** Custom API support is OFF. Do not create or pass `actions.json`,
+and never add `--actions` on upload. The plan's `## Custom API Bindings` section still decides
+whether the run may go on: only a body of exactly `No custom API bindings.` continues, with no
+Custom APIs. For an **actual binding table** (a `| Name | Kind | …` header with at least one data
+row), **halt before page generation**. That plan was made while the flag was on, and page
+generation takes the table as permission to emit `executeAction` / `executeFunction` calls —
+deploying them with no bindings leaves pages calling Custom APIs that are not bound. Tell the user
+to turn the flag back on, or re-run planning (the Custom API builder writes no bindings while the
+flag is off). A missing, empty, or malformed section halts too, exactly as in the `enabled`
+branch. (Backstop: `list-custom-apis.js` also fails closed with exit 3 if invoked while OFF.)
 
-**If it prints `enabled`:** read the plan's `## Custom API Bindings` section and treat it as
-bindings **only when it contains an actual binding table** (a `| Name | Kind | …` header with
-at least one data row). If the section is `No custom API bindings.`, empty, missing, or
-malformed, treat the page as having no Custom APIs and skip this phase.
+**If it prints `enabled`:** read the plan's `## Custom API Bindings` section. The section is
+mandatory: continue with no actions only when its body is exactly `No custom API bindings.`.
+Treat it as bindings only when it contains an actual binding table (a `| Name | Kind | …`
+header with at least one data row). If the section is missing, empty, or malformed, **halt**
+before page generation; do not interpret a planner/schema failure as "no Custom APIs".
 
 When there are real bindings, the `genpage-customapi-builder` agent already wrote
 `<working-dir>/actions.json` during planning — verify it exists and matches the plan table. If
@@ -620,9 +667,27 @@ Read `genpage-plan.md` and extract the pages table.
 Before invoking any builders, verify:
 - At least one page exists in the `## Pages` table
 - Every page has a `### [Page Name]` subsection in `## Per-Page Specifications`
-- **All filenames in the `## Pages` table are unique.** If any are duplicated,
-  rewrite the plan appending `-1`, `-2`, etc. before dispatch. Duplicate filenames
-  cause silent last-writer-wins data loss under parallel execution.
+- **All filenames in the `## Pages` table are safe and unique.** Run the deterministic gate —
+  it applies the same rule as the plan validator and `/app-builder`:
+
+  ```powershell
+  node "${PLUGIN_ROOT}/scripts/check-page-files.js" --plan '<working-dir>/genpage-plan.md'
+  ```
+
+  Continue only on `"ok":true`. It reads the plan's one `## Pages` table: a plan with a second
+  Pages table that has a File column is refused, not read by its first — one quoted in the
+  requirements, fenced, quoted or not, counts. It refuses absolute paths (drive-qualified ones included), `..`
+  traversal, backslash separator aliases, a character a shell would expand or split on (a space,
+  `$`, a backtick, `;` — page file names use letters, digits, `.`, `-` and `_`), a name Windows cannot store (a device name such as
+  `CON.tsx`, a reserved character such as `:`, or a trailing dot or space), a name that is not a
+  `.tsx` page file (such as `package.json` or `RuntimeTypes.ts`), a page path that is itself a link,
+  junction or hard link or is not a regular file, a parent that resolves through a link or junction
+  to outside the working directory or cannot be resolved at all (a dangling link, a folder it cannot
+  read), and case-insensitive collisions — `Page.tsx` plus `page.tsx` in the plan, two names that
+  reach one file through a link, or a name whose file or folder is already on disk under another
+  spelling. On any problem, halt and re-plan instead of rewriting filenames here: a renamed
+  file is a page the user did not approve, and the provenance check compares page files.
+  Duplicate filenames cause silent last-writer-wins data loss under parallel execution.
 
 See `${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
@@ -633,17 +698,19 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. Only when the Phase 4.5 probe printed `enabled` **and** the plan's
-   `## Connector Bindings` section contains an **actual binding table** (a
-   `| Logical Name | …` header with at least one data row), also read
-   `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
-   sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
+3. Only when the plan's `## Connector Bindings` section contains an **actual
+   binding table** (a `| Logical Name | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
+   `No connector bindings.` sentinel or an empty/missing/malformed section as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
-3b. Only when the plan's `## Custom API Bindings` section contains an **actual
-   binding table** (a `| Name | Kind | …` header with at least one data row),
-   also read `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
-   `No custom API bindings.` sentinel, or an empty/missing/malformed section, as
-   having no Custom APIs (same contract as Phase 4.6 and genpage-page-builder).
+3b. Only when the Phase 4.6 probe printed `enabled` **and** the plan's
+   `## Custom API Bindings` section contains an **actual binding table** (a
+   `| Name | Kind | …` header with at least one data row), also read
+   `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
+   `No custom API bindings.` sentinel as no Custom APIs. If the section is
+   missing, empty, or malformed, halt before inline generation (same contract as
+   Phase 4.6); do not downgrade a planner/schema failure to "no Custom APIs."
+   (A `disabled` probe with a binding table has already halted in Phase 4.6.)
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
@@ -654,7 +721,15 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    contains no telemetry calls — do not read it.
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+7. Stamp the target, so the gate below can tell the page you write from one an earlier attempt left
+   there. Here and below, `<filename>` is the page's `File` value from the plan without its `.tsx`
+   extension (`candidate-tracker.tsx` gives `candidate-tracker`):
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file '<working-dir>/<filename>.tsx'
+   ```
+
+   Then write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
 8. After writing, Grep every named import from `@fluentui/react-icons` against
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
@@ -663,14 +738,33 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    that shorthand only at runtime; the regex catches unquoted, quoted, and
    whitespace-separated property syntax. Replace every match with the four
    explicit border-side widths before deployment.
-10. Proceed to Phase 6
+10. Run the completeness gate on the page you wrote — the same one 5c runs on a
+    worker's page, and this is also the page a 5c fallback produces:
+
+    ```powershell
+    node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file '<working-dir>/<filename>.tsx'
+    ```
+
+    On `"ok":false`, rewrite the page once from the same plan inputs and run the
+    gate again; if it still fails, halt with the reported problems rather than
+    deploy an incomplete page.
+11. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
 
 #### 5c. Multi-page: invoke page-builders in parallel
 
-**If the plan's Pages table contains 2+ rows**, invoke a `genpage-page-builder`
+**If the plan's Pages table contains 2+ rows**, first stamp every target, so the gate after the
+workers can tell a page a worker wrote from one an earlier attempt left there (continue only on
+`"ok":true`). Here and below, `<filename>` and `[filename]` are each page's `File` value from the
+plan without its `.tsx` extension (`candidate-tracker.tsx` gives `candidate-tracker`):
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --stamp --file '<working-dir>/<filename>.tsx'
+```
+
+Then invoke a `genpage-page-builder`
 agent via the `Task` tool per page. **Fire all invocations in a single message**
 for parallel execution.
 
@@ -680,7 +774,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
-- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 outcome, verbatim
+- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 binding-count outcome, verbatim
 - **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
@@ -718,12 +812,26 @@ For each page, pass a prompt that includes:
 
 Wait for all page-builder tasks to complete before proceeding.
 
-After the parallel workers return, confirm every target file exists. If a worker
-reported missing declared file/process tools or produced no file, do not
-re-dispatch that worker. Run the Phase 5b page-builder workflow inline for only
-the failed page, preserving the same plan and dispatch inputs. Then Grep every
-generated page with `['"]?borderWidth['"]?\s*:` and replace the unsupported
-Griffel shorthand before Phase 6.
+After the parallel workers return, validate every target file with the deterministic
+completeness gate:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-worker-output.js" --file '<working-dir>/<filename>.tsx'
+```
+
+The script reuses the source-literals checks for a complete default export (a file
+cut off inside its own export line fails), unbalanced brackets, and a file that
+stops mid-statement (inside JSX, a string or a comment, or after an operator), and also rejects a markdown code fence around the code and
+elided code — a `FIXME` comment, a `TODO` that opens a comment or takes a colon,
+a comment opening with `...`, "omitted for brevity", or a bare `...` line. The
+same words in strings or JSX text ("Loading…"), or as prose in a comment ("the
+todo list"), are UI copy and pass. It also refuses a page that is exactly as its dispatch stamp
+recorded it: the worker wrote nothing, and what is there is an earlier attempt's. If a worker reported missing declared file/process tools, produced no file,
+or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
+Run the Phase 5b page-builder workflow inline for only the failed page, preserving
+the same plan and dispatch inputs. This is the same inline fallback path for missing
+and invalid worker output. Then Grep every generated page with
+`['"]?borderWidth['"]?\s*:` and replace the unsupported Griffel shorthand before Phase 6.
 
 ### Phase 6: Deploy
 
@@ -742,11 +850,11 @@ The help output must contain `--connectors`. If it does not, stop and surface:
 not silently drop bindings.
 
 Connector deployment matrix:
-- **Create (new page):** include `--connectors "<working-dir>/connectors.json"`
+- **Create (new page):** include `--connectors '<working-dir>/connectors.json'`
   with the first `upload --add-to-sitemap`.
 - **Edit — connectors changed, added, or one removed:** write the full desired
   binding set to `connectors.json` and include `--connectors` with
-  `upload --page-id <id>` (full replace).
+  `upload --page-id '<id>'` (full replace).
 - **Edit — no connector change:** omit `--connectors`; pac preserves existing
   bindings. Never pass a stale or empty file on an unrelated edit.
 - **Delete all connectors:** write `[]` to `connectors.json` and pass
@@ -757,7 +865,7 @@ must contain `--actions`; if not, stop and surface "Custom API deploy requires a
 `pac model genpage upload --actions` (PowerPlatform-Scale-AdminTools)." Don't silently drop bindings.
 
 Custom API deployment follows the **identical matrix** as connectors, substituting
-`--actions "<working-dir>/actions.json"` for `--connectors`: pass it on create; on an edit only
+`--actions '<working-dir>/actions.json'` for `--connectors`: pass it on create; on an edit only
 when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
 existing); write `[]` and pass it to clear all `actionBindings`.
 
@@ -771,24 +879,41 @@ Was it quote wrapped? No, be sure to wrap values that contain spaces.
 
 …for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
 
-**Write the prompt and agent-message to files first**, then pass the paths:
+**Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
+paths. The display name is the maker's text too: substituted into a double-quoted `--name` value, PowerShell expanded `$(…)` in
+it before the script ran, and `Revenue $100` arrived as `Revenue `. Pass it with `--name-file`, never `--name`.
+
+**Write these files with your file-writing tool (Write), never with a shell command.** No quoting makes the maker's
+text safe inside a command: a single-quoted here-string ends at a line that begins with `'@` (or `‘@`, `’@`), and the
+rest of that line runs. First check that none of the names is a link — a write through a link or hard link left at
+one of them rewrites the file it points to, outside the working directory included — and clear the files an earlier
+deploy left, so the tool writes each one fresh. This step carries no text:
 
 ```powershell
-Set-Content -Path "<working-dir>/prompt.txt"        -Value $prompt        -Encoding UTF8 -NoNewline
-Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encoding UTF8 -NoNewline
+$wd = '<working-dir>'
+foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
+  $at = Get-Item -LiteralPath (Join-Path $wd $f) -Force -ErrorAction SilentlyContinue
+  if ($at -and ($at.LinkType -or $at.PSIsContainer)) { throw "$f in $wd is a link or a folder, not a file this skill wrote: remove it and re-run" }
+  if ($at) { Remove-Item -LiteralPath $at.FullName -Force }
+}
 ```
+
+Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
+agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
+trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
+folder, but only after the write.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file "<path>" --data-sources '<entities>' --prompt-file "<working-dir>/prompt.txt" --model <model-id> --name "<page name>" --agent-message-file "<working-dir>/agent-message.txt" --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env '<org-url>' --app-id '<id>' --code-file '<path>' --data-sources '<entities>' --prompt-file '<working-dir>/prompt.txt' --model '<model-id>' --name-file '<working-dir>/page-name.txt' --agent-message-file '<working-dir>/agent-message.txt' --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
 
-When present, the logged command must also include `--connectors "<working-dir>/connectors.json"`
-and/or `--actions "<working-dir>/actions.json"`.
+When present, the logged command must also include `--connectors '<working-dir>/connectors.json'`
+and/or `--actions '<working-dir>/actions.json'`.
 
 #### Prompt semantics
 
@@ -810,16 +935,16 @@ re-deploys, and the entire edit flow.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --code-file <working-dir>/<file>.tsx `
-  --name "Page Display Name" `
-  --data-sources "entity1,entity2" `
-  --connectors "<working-dir>/connectors.json" `
-  --actions "<working-dir>/actions.json" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt" `
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --name-file '<working-dir>/page-name.txt' `
+  --data-sources 'entity1,entity2' `
+  --connectors '<working-dir>/connectors.json' `
+  --actions '<working-dir>/actions.json' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt' `
   --add-to-sitemap
 ```
 
@@ -834,16 +959,16 @@ Use `--page-id`, omit `--add-to-sitemap`, and **scope the prompt to the delta on
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file <working-dir>/<file>.tsx `
-  --data-sources "entity1,entity2" `
-  --connectors "<working-dir>/connectors.json" `
-  --actions "<working-dir>/actions.json" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --data-sources 'entity1,entity2' `
+  --connectors '<working-dir>/connectors.json' `
+  --actions '<working-dir>/actions.json' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 For updates, include the `--connectors` line only when this upload intentionally
@@ -873,21 +998,20 @@ phase substitutes the real GUIDs.
    "Prompt semantics" rule in Phase 6, this is an **update**, so the prompt
    describes the delta only — not the original page description:
 
-   ```powershell
-   Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
-     -Value "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)"
-   Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
-     -Value "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
+   Check and clear the two names as in Phase 6, then write them with the file tool: `prompt.txt` holding
+   `Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)` and `agent-message.txt`
+   holding `Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6`. Then:
 
+   ```powershell
    node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-     --env <org-url> `
-     --app-id <app-id> `
-     --page-id <page-id-from-Phase-6> `
-     --code-file <working-dir>/<file>.tsx `
-     --data-sources "entity1,entity2" `
-     --prompt-file "<working-dir>/prompt.txt" `
-     --model "<current-model-id>" `
-     --agent-message-file "<working-dir>/agent-message.txt"
+     --env '<org-url>' `
+     --app-id '<app-id>' `
+     --page-id '<page-id-from-Phase-6>' `
+     --code-file '<working-dir>/<file>.tsx' `
+     --data-sources 'entity1,entity2' `
+     --prompt-file '<working-dir>/prompt.txt' `
+     --model '<current-model-id>' `
+     --agent-message-file '<working-dir>/agent-message.txt'
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.
@@ -899,14 +1023,14 @@ Adds the deployed app, the GenPage(s), and any connection references to the
 target solution so they travel cross-environment.
 
 1. Ensure the solution exists — create it only if it doesn't already exist:
-   `node ${PLUGIN_ROOT}/scripts/provision-solution.js <envUrl> <solutionUniqueName> "<Friendly Name>" [--publisher <uniqueName>]`
+   `node "${PLUGIN_ROOT}/scripts/provision-solution.js" '<envUrl>' '<solutionUniqueName>' '<Friendly Name>' [--publisher '<uniqueName>']`
    It prints `{ "ok": true, "solutionId": …, "uniqueName": …, "publisherPrefix": … }`;
    `uniqueName` must start with a letter and contain only letters, digits, and
    underscores. Without `--publisher` it resolves the environment's default publisher.
 2. Add the app + GenPage(s) + connection references (pass the page-id(s) returned
    by Phase 6 as `--page-ids` — the GenPage is added explicitly, it does NOT travel
    with the app on its own):
-   `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --page-ids "<page-id1,page-id2>" --connection-refs "<logicalName1,logicalName2>"`
+   `node "${PLUGIN_ROOT}/scripts/add-page-to-solution.js" '<envUrl>' '<solutionUniqueName>' '<app-id>' --page-ids '<page-id1,page-id2>' --connection-refs '<logicalName1,logicalName2>'`
 3. Log the command + result to `workflow-log.md`.
 
 Cross-env note: the app (80) pulls the sitemap (62); the GenPage

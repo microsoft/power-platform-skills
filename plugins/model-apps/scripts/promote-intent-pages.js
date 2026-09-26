@@ -22,34 +22,9 @@ const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dat
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
 const { navReferencedKeys, navMalformedRefs, navTargetParity } = require('./lib/pageref-resolver.js');
-const { hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
-
-// A generated page must be a real React module. We deliberately do NOT typecheck here (the plugin
-// ships with no dependencies, so there is no TS parser to call, and typechecking is the build's
-// job) — this is the structural gate that catches the realistic worker failures: an empty file, a
-// truncated write, or prose returned instead of code.
-//
-// Every check runs over literal-blanked source (see lib/source-literals.js). A substring search —
-// even one over pageref-resolver's stripNonCode, which deliberately PRESERVES ordinary string
-// bodies — accepted prose that merely MENTIONS an export:
-//   /* export default */                                -> promoted
-//   const prose = "export default GeneratedComponent";   -> promoted
-// Promotion is sticky (the page is then marked implemented and skipped on the next run), so a
-// fail-open here corrupts the state the user would otherwise retry from.
-function structuralProblems(code) {
-  const out = [];
-  if (!code.trim()) return ['file is empty'];
-  if (!hasDefaultExport(code)) {
-    out.push('no real `export default` (or `export { X as default }`) — the host cannot mount the page');
-  }
-  if (hasUnbalancedBrackets(code)) {
-    out.push('unbalanced brackets — the file looks truncated');
-  }
-  // A worker that answers in prose usually still opens a fence; a real .tsx never contains one.
-  // Both CommonMark fence markers count.
-  if (/^\s*(```|~~~)/m.test(code)) out.push('contains a markdown code fence — the worker returned prose, not a module');
-  return out;
-}
+// The structural gate (empty, truncated, prose, elided) is shared with genpage-worker-output.js, so a
+// page one gate refuses the other refuses too. See lib/page-structure.js for each check and why.
+const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
 
 function validatePage(page, absWorkingDir) {
   const key = pageKey(page);

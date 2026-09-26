@@ -291,6 +291,22 @@ test('deploy: two duplicate-named pages BOTH live (fresh download) build as UPDA
 // OVERRIDE 2 (new-Important-1): a DYNAMIC nav pageId (e.g. pageId: someVar — a variable, not a literal)
 // must be rejected BEFORE any write, even when navigatesTo:[] so the existing parity check sees no mismatch.
 // Only extractNavTargets-based structural detection (kind:'dynamic') catches it. Error code: pages-nav-parity.
+test('deploy: trailing spread after nav pageId HALTS before any write', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'),
+      `export default function O(){ const options = JSON.parse('{"pageId":"PAGEREF_other"}'); Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", ...options }); return null; }`,
+      'utf8');
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-nav-parity'
+    );
+    assert.strictEqual(genpageCli.uploads.length, 0, 'trailing spread can override pageId at runtime, so the page is rejected before upload');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write — new-Important-1 override-2', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-dynav-'));
   try {

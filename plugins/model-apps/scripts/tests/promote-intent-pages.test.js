@@ -64,9 +64,9 @@ test('ONE failing page aborts the whole promotion and leaves the spec byte-ident
   assert.equal(fs.readFileSync(path.join(dir, 'app-spec.json'), 'utf8'), before, 'spec untouched');
 });
 
-test('rejects Sol-class prose that only LOOKS like a module', () => {
-  // A plain `export default` substring search — even over pageref-resolver's stripNonCode, which
-  // preserves ordinary string bodies — accepted every one of these, promoting prose as a page.
+test('rejects prose that only LOOKS like a module', () => {
+  // A plain `export default` substring search — even over a copy that keeps ordinary string
+  // bodies — accepted every one of these, promoting prose as a page.
   for (const [name, code, expected] of [
     ['empty', '   \n', /file is empty/],
     ['no default export', 'export function P() {}\n', /no real `export default/],
@@ -78,6 +78,17 @@ test('rejects Sol-class prose that only LOOKS like a module', () => {
     ['line-commented export', '// export default function P(){}\nThis is prose\n', /no real `export default/],
     ['empty default export', 'export default;\n', /no real `export default/],
     ['truncated write', 'export default function P() {\n  return <div>\n', /truncated/],
+    // Cut right after a complete statement: it ends in plain code, so only the bracket count sees it.
+    ['truncated after a complete statement', 'export default function P() {\n  const a = 1;\n  return null;\n', /unbalanced brackets/],
+    // Cut inside the export statement itself: nothing is left open, so brackets balance.
+    ['write cut after the export header', 'import * as React from "react";\nexport default function P(props: Props)', /no real `export default/],
+    ['write cut mid-name', 'const GeneratedComponent = () => <div/>;\nexport default GeneratedComp', /no real `export default/],
+    // Every bracket balances and the export is intact, but the write stopped mid-statement.
+    ['write cut inside JSX', 'export default () => <div>Loading', /stops mid-statement/],
+    // Elided code fails promotion as it fails the worker gate: the shared elision rule.
+    ['a TODO elision', 'export default function P() {\n  // TODO: render the rest\n  return null;\n}\n', /incomplete/],
+    ['an elided block', 'export default function P() {\n  // ...\n  return null;\n}\n', /incomplete/],
+    ['omitted for brevity', 'export default function P() {\n  /* omitted for brevity */\n  return null;\n}\n', /incomplete/],
   ]) {
     const dir = makeWorkspace(
       { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },
@@ -98,6 +109,16 @@ test('accepts the legitimate default-export forms a worker really emits', () => 
     ['after a doc comment mentioning export default', '/**\n * export default is required\n */\nexport default function P(){ return <div/>; }\n'],
     ['aliased default export', 'function P(){ return <div/>; }\nexport { P as default };\n'],
     ['JSX text with an apostrophe', "export default function P(){ return <p>it's fine</p>; }\n"],
+    // A `/` after a property named like a keyword, or after a non-null assertion, divides.
+    ['a keyword-named property divided', 'export default function P(){ const c = { new: 3 }; return <p>{c.new / 8}</p>; }\n'],
+    ['a non-null assertion divided', 'export default function P(){ const n: number | null = 3; return <p>{n! / 8}</p>; }\n'],
+    ['JSX inside a template expression', 'const x = `${<span>Save</span>}`;\nexport default function P(){ return <div/>; }\n'],
+    // …and data or prose that only resembles what the gate refuses: a fence inside a template literal, UI copy
+    // that says "Loading…", and a comment ABOUT a todo list — the same reading the worker gate gives them.
+    ['a markdown fence inside a template', 'const help = `\n\\`\\`\\`tsx\nconst a = 1;\n\\`\\`\\`\n`;\nexport default function P(){ return <pre>{help}</pre>; }\n'],
+    ['a markdown fence inside a block comment', '/* usage:\n```\n<Page />\n```\n*/\nexport default function P(){ return null; }\n'],
+    ['UI copy that says Loading…', 'export default function P(){ return <div>Loading\u2026</div>; }\n'],
+    ['a comment about the todo list', '// Renders the todo list.\nexport default function P(){ return null; }\n'],
   ]) {
     const dir = makeWorkspace(
       { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },
