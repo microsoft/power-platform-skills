@@ -192,8 +192,9 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   // would let it, the tombstone's generation being the very one this run read. So the run waits for it,
   // whichever build it would have run (the no-identity fallback included). A tombstone no teardown still
   // holds (one that failed, or was killed and stopped being seen) does not block: it only makes the
-  // baseline ineligible, through its debt. A teardown starting after this read is caught by the invalidate's
-  // generation fence below — or, in the no-identity fallback, by the re-read before it builds.
+  // baseline ineligible, through its debt. A teardown starting after this read is caught by a generation fence
+  // below: the invalidate's, or, in the no-identity fallback, the re-read before it builds and the check made
+  // when the build returns.
   const running = store.teardownsInFlight(snapshot);
   if (running.length) {
     const who = running.map((t) => `pid ${t.pid}, last seen ${Math.max(0, Math.round((Date.now() - (typeof t.beat === 'number' ? t.beat : t.at)) / 1000))}s ago`).join('; ');
