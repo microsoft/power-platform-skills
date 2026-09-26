@@ -209,10 +209,10 @@ works through.
 - **`status`** matters more than it does for a rule: an inactive BPF is not merely inert, it is
   **invisible** — the stage bar does not render at all. `Active` is the default for that reason.
 - **v1 is single-entity and linear.** Every stage must be on the flow's own `entity`. The SDK also
-  models cross-entity stages, branching, stage actions and security-role grants; keys carrying them
-  are **rejected** at flow, stage **and** step level (the allowed keys are `name`/`entity`/
-  `description`/`status`/`order`/`stages`; per stage `name`/`entity`/`steps`; per step
-  `name`/`field`/`required`). The rejection is an allow-list rather than a list of known-bad names
+  models cross-entity stages, branching and stage actions; keys carrying them are **rejected** at
+  flow, stage **and** step level (the allowed keys are `name`/`entity`/`description`/`status`/
+  `order`/`stages`/`securityRoles` — the last is covered in its own section below; per stage
+  `name`/`entity`/`steps`; per step `name`/`field`/`required`). The rejection is an allow-list rather than a list of known-bad names
   because the SDK's own normalizers silently discard any key they do not copy — so an unguarded
   `branch` on a stage, or `fieldLogicalName` instead of `field` on a step, would validate clean and
   deploy as though it had never been written. Configure those in Maker after the flow deploys.
