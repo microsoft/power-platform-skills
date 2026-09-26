@@ -1025,11 +1025,11 @@ test('the global-choice inventory is scoped to the app: its solution\'s sets and
   const failed = await readDescriptionInventory(sdkFor({ throwOnSolution: true }), 'app-1', 'ContosoSolution', new Set(['contoso_bound']));
   assert.deepStrictEqual((failed.incomplete || []).filter((i) => /403/.test(i.reason)).map((i) => i.kind).sort(), ['businessRules', 'globalChoices']);
 
-  // A FULL page of owned sets is indistinguishable from a truncated one: say so, and keep what was read.
-  const full = Array.from({ length: 1000 }, (_, i) => (i === 0 ? OWNED : `e5e5e5e5-0000-4000-8000-${String(i).padStart(12, '0')}`));
-  const truncated = await readDescriptionInventory(sdkFor({ owned: full }), 'app-1', 'ContosoSolution', new Set());
-  assert.deepStrictEqual(names(truncated), ['contoso_owned']);
-  assert.match((unknown(truncated)[0] || {}).reason || '', /truncated/);
+  // The solution-component read is paginated, not capped, so a large solution-owned option-set
+  // list is read completely instead of being reported as an unknowable full page.
+  const seen = [];
+  const paged = await readDescriptionInventory(sdkFor({ gets: seen }), 'app-1', 'ContosoSolution', new Set());
+  assert.deepStrictEqual(unknown(paged), [], 'a paginated read should not report a truncation warning');
 });
 
 // An app in several solutions (#587 item 9) is inventoried across EVERY candidate — each contains the
@@ -3055,8 +3055,8 @@ test('a page with NO prompt.txt omits prompt entirely, rather than claiming an e
 
   assert.strictEqual(byId.get('11111111-1111-1111-1111-111111111111').prompt, undefined,
     'a missing prompt.txt is an OMISSION — the wrapper default applies, the build must not refuse');
-  assert.strictEqual(byId.get('22222222-2222-2222-2222-222222222222').prompt, '',
-    'a present-but-blank file stays explicit so the blank-provenance guard still fails closed');
+  assert.strictEqual(byId.get('22222222-2222-2222-2222-222222222222').prompt, '   \n',
+    'a present-but-blank file stays explicit, including its whitespace, so the blank-provenance guard still fails closed');
   assert.strictEqual(byId.get('33333333-3333-3333-3333-333333333333').prompt, 'real prompt');
 
   // The emitted spec must not carry the key at all for the omitted case — `undefined` is dropped by
@@ -3086,4 +3086,91 @@ test('a config that exists but cannot be READ is recorded unreadable, not treate
     'an unreadable config must reach the lossy-download gate rather than read as "no bindings"');
 
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+
+// --- Task D: downloaded page config and prompt must be exact and fail closed ----------------------
+
+test('parseDownloadedPages treats present malformed dataSources as unreadable config, while absent means unbound', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlds-shapes-'));
+  try {
+    const mk = (id, config) => {
+      const d = path.join(root, id);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+      if (config !== undefined) fs.writeFileSync(path.join(d, 'config.json'), JSON.stringify(config), 'utf8');
+    };
+    mk('11111111-1111-1111-1111-111111111111', { dataSources: 'contoso_ticket' });
+    mk('22222222-2222-2222-2222-222222222222', { dataSources: null });
+    mk('33333333-3333-3333-3333-333333333333', { dataSources: ['contoso_ticket', 18] });
+    mk('44444444-4444-4444-4444-444444444444', { dataSources: ['contoso_ticket', 'contoso_asset'] });
+    mk('55555555-5555-5555-5555-555555555555', { model: 'm' });
+
+    const unreadable = [];
+    const pages = parseDownloadedPages(root, root, null, unreadable);
+    const byId = new Map(pages.map((p) => [p.pageId, p]));
+    assert.deepStrictEqual(unreadable.map((u) => u.pageId).sort(), [
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+      '33333333-3333-3333-3333-333333333333',
+    ]);
+    assert.deepStrictEqual(byId.get('44444444-4444-4444-4444-444444444444').dataSources, ['contoso_ticket', 'contoso_asset']);
+    assert.deepStrictEqual(byId.get('55555555-5555-5555-5555-555555555555').dataSources, [], 'an absent key is a valid unbound page');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseDownloadedPages keeps downloaded prompt text exact except for a leading BOM', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dlprompt-exact-'));
+  try {
+    const mk = (id, prompt) => {
+      const d = path.join(root, id);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'page.tsx'), 'export default () => null;', 'utf8');
+      fs.writeFileSync(path.join(d, 'config.json'), JSON.stringify({ dataSources: [] }), 'utf8');
+      fs.writeFileSync(path.join(d, 'prompt.txt'), prompt, 'utf8');
+    };
+    const exact = '  Conversation with 1 prompts:\r\n1. Keep surrounding whitespace.\r\n';
+    mk('11111111-1111-1111-1111-111111111111', exact);
+    mk('22222222-2222-2222-2222-222222222222', '\uFEFF' + exact);
+
+    const pages = parseDownloadedPages(root, root, null, []);
+    const byId = new Map(pages.map((p) => [p.pageId, p]));
+    assert.strictEqual(byId.get('11111111-1111-1111-1111-111111111111').prompt, exact);
+    assert.strictEqual(byId.get('22222222-2222-2222-2222-222222222222').prompt, exact, 'only the BOM is stripped');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('complete reads use SDK pagination where truncation would change download decisions', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'appmodule') return [{ appmoduleidunique: 'app-unique' }];
+      if (set === 'appmodulecomponent') return [];
+      if (set === 'solution') return [{ solutionid: 'sol-1' }];
+      if (set === 'solutioncomponent') return [];
+      return [];
+    },
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+
+  await appComponentEntities(sdk, 'app-1');
+  await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution', new Set());
+
+  const appComponentReads = calls.filter((c) => c.set === 'appmodulecomponent');
+  assert.ok(appComponentReads.length >= 4, 'component reads should be exercised');
+  for (const call of appComponentReads) {
+    assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
+    assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
+  }
+  const solutionComponentReads = calls.filter((c) => c.set === 'solutioncomponent');
+  assert.ok(solutionComponentReads.length >= 1, 'solution component reads should be exercised');
+  for (const call of solutionComponentReads) {
+    assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
+    assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
+  }
 });
