@@ -63,40 +63,34 @@ function objectArgAt(code, open) {
 // whole string literal (escape-aware); an unquoted value (or a quoted string followed by '+', which
 // indicates a concat expression) runs to the next top-level ',' or the closing '}'. The char-before
 // check rejects a false hit inside a longer identifier (e.g. `myPageId`).
-function topLevelValue(objText, key) {
+function topLevelValue(objText, key, sourceObjText = objText) {
   let depth = 0;
   let inStr = null;
   // `key` is always a code-controlled literal ('pageType' or 'pageId'), never user-supplied,
   // so no regex-escape is needed before interpolating into the pattern.
   const keyRe = new RegExp('^' + key + '\\s*:');
-  for (let i = 0; i < objText.length; i += 1) {
-    const c = objText[i];
-    if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
-    // inStr handles quoted values (delimiters kept, bodies blanked by the mask) so a value is never
-    // misread as key or bracket content when scanning for the target key.
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-    if (c === '{' || c === '[' || c === '(') { depth += 1; continue; }
-    if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
-    if (depth !== 1 || c !== key[0]) continue;
-    if (!keyRe.test(objText.slice(i))) continue;
-    // Reject a false hit inside a longer identifier (e.g. the "p" of "myPageId" — c is 'p'
-    // but the character before the match in objText must be a key-boundary: '{', ',', or whitespace).
-    const before = objText[i - 1];
-    if (before !== undefined && !/[{,\s]/.test(before)) continue;
-    let j = i + keyRe.exec(objText.slice(i))[0].length;
+  const scanStringEnd = (from) => {
+    const q = objText[from];
+    for (let k = from + 1; k < objText.length; k += 1) {
+      if (objText[k] === '\\') { k += 1; continue; }
+      if (objText[k] === q) return k + 1;
+    }
+    return null;
+  };
+  const readValue = (colonEnd) => {
+    let j = colonEnd;
     while (j < objText.length && /\s/.test(objText[j])) j += 1;
     const q = objText[j];
     if (q === '"' || q === "'" || q === '`') {
       // Quoted value: scan to the matching closing quote, respecting escape sequences.
-      let k = j + 1;
-      for (; k < objText.length; k += 1) { if (objText[k] === '\\') { k += 1; continue; } if (objText[k] === q) { k += 1; break; } }
+      const end = scanStringEnd(j) || objText.length;
       // If the quoted string is followed (after optional whitespace) by '+', it is a concat
       // expression — fall through to unquoted scanning to capture the full span, so the
       // tightened QUOTED regex correctly classifies it as `dynamic` rather than `literal`.
-      let kk = k;
+      let kk = end;
       while (kk < objText.length && /\s/.test(objText[kk])) kk++;
       if (!(kk < objText.length && objText[kk] === '+')) {
-        return { raw: objText.slice(j, k), valueStart: j, valueEnd: k };
+        return { raw: objText.slice(j, end), valueStart: j, valueEnd: end };
       }
       // Falls through to the unquoted scanning below.
     }
@@ -111,6 +105,41 @@ function topLevelValue(objText, key) {
       else if (cc === ',' && d2 === 0) break;
     }
     return { raw: objText.slice(j, k).trim(), valueStart: j, valueEnd: k };
+  };
+  for (let i = 0; i < objText.length; i += 1) {
+    const c = objText[i];
+    if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
+    if ((c === '"' || c === "'") && depth === 1) {
+      const keyEnd = scanStringEnd(i);
+      if (keyEnd !== null) {
+        let colon = keyEnd;
+        while (colon < objText.length && /\s/.test(objText[colon])) colon += 1;
+        // The lexer mask blanks string bodies but preserves delimiters, so quoted property names are
+        // validated against the original source at the same offsets. Only literal "pageId"/'pageId'
+        // keys are in scope; computed keys (["pageId"]) and template-literal keys are deliberately
+        // left unmatched because supporting them would require evaluating property expressions.
+        const before = objText[i - 1];
+        const rawKey = sourceObjText.slice(i, keyEnd);
+        if (objText[colon] === ':' && (before === undefined || /[{,\s]/.test(before)) && (rawKey === `"${key}"` || rawKey === `'${key}'`)) {
+          return readValue(colon + 1);
+        }
+        i = keyEnd - 1;
+        continue;
+      }
+    }
+    // inStr handles quoted values (delimiters kept, bodies blanked by the mask) so a value is never
+    // misread as key or bracket content when scanning for the target key. Template-literal keys are
+    // out of scope for the same reason as computed keys above.
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '{' || c === '[' || c === '(') { depth += 1; continue; }
+    if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
+    if (depth !== 1 || c !== key[0]) continue;
+    if (!keyRe.test(objText.slice(i))) continue;
+    // Reject a false hit inside a longer identifier (e.g. the "p" of "myPageId" — c is 'p'
+    // but the character before the match in objText must be a key-boundary: '{', ',', or whitespace).
+    const before = objText[i - 1];
+    if (before !== undefined && !/[{,\s]/.test(before)) continue;
+    return readValue(i + keyRe.exec(objText.slice(i))[0].length);
   }
   return null;
 }
@@ -137,10 +166,11 @@ function extractNavTargets(code) {
     // pv.valueStart / pv.valueEnd are relative to obj.text, which starts at `open`; adding `open`
     // makes them absolute offsets into the mask and, equally, into the original source.
     const valueAt = (v) => src.slice(open + v.valueStart, open + v.valueEnd).trim();
-    const pt = topLevelValue(obj.text, 'pageType');
+    const sourceObjText = src.slice(open, obj.end);
+    const pt = topLevelValue(obj.text, 'pageType', sourceObjText);
     const ptQ = pt && QUOTED.exec(valueAt(pt));
     if (!ptQ || ptQ[2] !== 'generative') continue;
-    const pv = topLevelValue(obj.text, 'pageId');
+    const pv = topLevelValue(obj.text, 'pageId', sourceObjText);
     if (!pv) continue;
     const valueStart = open + pv.valueStart;
     const valueEnd = open + pv.valueEnd;
