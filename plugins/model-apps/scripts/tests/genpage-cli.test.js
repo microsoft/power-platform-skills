@@ -60,6 +60,11 @@ test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quote
   assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
 });
 
+test('quoteArg doubles a backslash run before a percent escape quote', () => {
+  assert.strictEqual(quoteArg('a\\%b'), '"' + 'a' + '\\\\' + '"^%"' + 'b' + '"');
+  assert.strictEqual(quoteArg('D:\\data\\%PATH%\\x'), '"' + 'D:\\data' + '\\\\' + '"^%"' + 'PATH' + '"^%"' + '\\x' + '"');
+});
+
 test('quoteArg doubles a backslash run before an interior quote', () => {
   assert.strictEqual(quoteArg('qa slash\\"quote'), '"' + 'qa slash' + '\\\\' + '""' + 'quote' + '"');
   assert.strictEqual(quoteArg(String.raw`a\\\\"b`), '"' + 'a' + '\\\\'.repeat(4) + '""' + 'b' + '"');
@@ -75,6 +80,11 @@ test('quoteArg round-trips through a real Windows shell parse', { skip: process.
     'qa "Quoted" 東京 %PATH%',
     'D:\\space path\\\\',
     String.raw`a\\\\"b`,
+    'a\\%b',
+    'D:\\data\\%PATH%\\x',
+    '50\\%',
+    '\\\\%',
+    'a\\\"%b',
     'Overview',
   ]) {
     const command = 'node ' + quoteArg(script) + ' ' + quoteArg(value) + ' after';

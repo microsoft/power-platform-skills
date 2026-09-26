@@ -16,18 +16,19 @@ const path = require('node:path');
 // collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
 function quoteArg(a) {
   const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  const q = s
-    .replace(/(\\*)"/g, (_m, slashes) => slashes + slashes + '""')
-    .replace(/%/g, '"^%"');
+  const q = s.replace(/(\\*)(["%])/g, (_m, slashes, ch) => {
+    const escaped = ch === '"' ? '""' : '"^%"';
+    return slashes + slashes + escaped;
+  });
   // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
   // each percent so prompts/names containing environment-variable syntax round-trip literally.
   if (!/[\s"'&|<>^()%]/.test(s)) return s;
   // The C runtime treats a backslash run before ANY quote specially, not only the closing quote:
-  // 2n backslashes before `"` become n literal backslashes plus a quote delimiter. Real cmd.exe
-  // parse before this guard:
-  //   value: qa slash\"quote, next arg: after
-  //   argv:  ["qa slash\"quote after"]
-  // Double the run before each caller-supplied quote, then emit the existing cmd quote escape (`""`).
+  // 2n backslashes before `"` become n literal backslashes plus a quote delimiter. That includes
+  // quotes we synthesize while escaping `%` for cmd.exe (`"^%"`). Real cmd.exe parse before this guard:
+  //   value: qa slash\"quote, next arg: after  -> ["qa slash\"quote after"]
+  //   value: a\%b, next arg: after             -> ["a\"%b after"]
+  // Double the run before each quote source, then emit `""` for caller quotes or `"^%"` for percents.
   // The final quote has the same rule, so a trailing separator is still doubled:
   //   --output-directory "C:\Users\Power User\download\"
   // would otherwise absorb the following flags into the path. Interior backslashes that are NOT
