@@ -16,18 +16,22 @@ const path = require('node:path');
 // collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
 function quoteArg(a) {
   const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
+  const q = s
+    .replace(/(\\*)"/g, (_m, slashes) => slashes + slashes + '""')
+    .replace(/%/g, '"^%"');
   // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
   // each percent so prompts/names containing environment-variable syntax round-trip literally.
   if (!/[\s"'&|<>^()%]/.test(s)) return s;
-  // A run of backslashes immediately before the closing quote must be DOUBLED. Windows command-line
-  // parsing treats `\"` as an escaped quote, so a directory argument ending in a separator —
+  // The C runtime treats a backslash run before ANY quote specially, not only the closing quote:
+  // 2n backslashes before `"` become n literal backslashes plus a quote delimiter. Real cmd.exe
+  // parse before this guard:
+  //   value: qa slash\"quote, next arg: after
+  //   argv:  ["qa slash\"quote after"]
+  // Double the run before each caller-supplied quote, then emit the existing cmd quote escape (`""`).
+  // The final quote has the same rule, so a trailing separator is still doubled:
   //   --output-directory "C:\Users\Power User\download\"
-  // — escaped its own closing quote and swallowed the following flags into the path. MEASURED via a
-  // real cmd.exe parse:
-  //   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
-  // Only the trailing run matters: an interior `\` is literal to the parser, so escaping those would
-  // corrupt every ordinary Windows path.
+  // would otherwise absorb the following flags into the path. Interior backslashes that are NOT
+  // immediately before a quote remain literal, preserving ordinary Windows paths.
   // See: https://learn.microsoft.com/cpp/cpp/main-function-command-line-args#parsing-c-command-line-arguments
   const trailingSlashesDoubled = q.replace(/(\\+)$/, (m) => m + m);
   return `"${trailingSlashesDoubled}"`;
@@ -72,13 +76,14 @@ function runPac(args) {
 // IDENTIFIER character so a too-long token is REFUSED rather than trimmed. Restricting the boundary
 // to the GUID alphabet was not enough: `6e0c28a2-cdbf-41ec-9186-d10fd5de6e35oops` has a non-hex
 // character next, so the lookahead passed and the id was accepted with the suffix silently dropped.
-// `[\w-]` is the right class — a following `.` or `,` or `)` genuinely ends the token (pac prints the
-// id inside prose), while any letter, digit, underscore or hyphen means the token continues.
-// Returning null is the safe outcome: the caller treats a zero exit with no parsable id as an
-// UNCERTAIN create and reconciles by env-wide id diff.
+// The boundary must be Unicode-aware: a suffix such as `東京` is still a continuing identifier
+// token even though JavaScript `\w` is ASCII-only. A following `.` or `,` or `)` genuinely ends the
+// token (pac prints the id inside prose), while any Unicode letter/number/mark, underscore or hyphen
+// means the token continues. Returning null is the safe outcome: the caller treats a zero exit with
+// no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 function parsePageId(out) {
-  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\w-])').exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\p{L}\\p{N}\\p{M}_-])', 'u').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -181,8 +186,24 @@ function classifyListOutput(stdout) {
   // download. An explicit "Found 0" is trustworthy only when no row was actually parsed (else it is a
   // contradictory/truncated listing → fail-closed 'unrecognized').
   if (count === 0) return pages.length === 0 ? { kind: 'empty', pages: [] } : { kind: 'unrecognized', pages: [] };
-  if (count === null && pages.length === 0 && /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
-  // A complete, authoritative listing: at least one page, every page has a name, count matches
+  // Older pac builds have printed a no-pages marker as its own line. Treat only that complete,
+  // trimmed line as authoritative:
+  //   No generated pages found.
+  //   No pages found
+  // A warning such as "no pages could be retrieved" means the service failed to enumerate, not
+  // that the app is empty, so it must fail closed.
+  if (count === null && pages.length === 0 && /^[^\S\r\n]*no[^\S\r\n]+(?:generated[^\S\r\n]+)?pages[^\S\r\n]+found\.?[^\S\r\n]*$/im.test(s)) {
+    return { kind: 'empty', pages: [] };
+  }
+  const seenIds = new Set();
+  const hasDuplicateIds = pages.some((p) => {
+    const key = String(p.pageId || '').toLowerCase();
+    if (seenIds.has(key)) return true;
+    seenIds.add(key);
+    return false;
+  });
+  if (hasDuplicateIds) return { kind: 'unrecognized', pages: [] };
+  // A complete, authoritative listing: at least one DISTINCT page, every page has a name, count matches
   const allNamed = pages.length > 0 && pages.every((p) => p.name && String(p.name).trim());
   if (allNamed && count !== null && count === pages.length) return { kind: 'pages', pages };
   return { kind: 'unrecognized', pages: [] };
