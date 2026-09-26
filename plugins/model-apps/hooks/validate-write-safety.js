@@ -35,6 +35,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { readUtf8Stream } = require('../scripts/lib/modelapps-hook-utils.js');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1' || process.env.MODEL_APPS_SKIP_WRITE_GUARD === 'true';
@@ -132,9 +133,7 @@ function extractWritePaths(toolName, toolInput) {
   return [];
 }
 
-let inputData = '';
-process.stdin.on('data', (c) => { inputData += c; });
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   if (SKIP) {
     debug('MODEL_APPS_SKIP_WRITE_GUARD=1 — bypassing');
     process.exit(0);
@@ -175,5 +174,8 @@ process.stdin.on('end', () => {
   }
 
   debug(`OK ${toolName} ${extractWritePaths(toolName, toolInput).join(',')}`);
+  process.exit(0);
+}).catch((err) => {
+  debug(`stdin read failed: ${err.message}`);
   process.exit(0);
 });
