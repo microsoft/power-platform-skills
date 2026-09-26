@@ -41,7 +41,7 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
    replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
-   when the edit does not touch them, or when the `connectors` rollback gate is off.
+   when the edit does not touch them.
    **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
    discovers, removes, or clears Custom API bindings.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
@@ -310,8 +310,8 @@ missing and stop, so the run can be re-driven with the decision supplied.
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps connector discovery and its rollback gate in one
-agent while avoiding nested `Task` calls from the planner.
+not by `genpage-planner`. This keeps connector discovery in one agent while avoiding
+nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
 obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
@@ -334,10 +334,9 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of connector discovery and of the `connectors`
-rollback gate: it probes first, writes `No connector bindings.` + `[]` when the gate
-is off or the page needs no connector, and performs all connection discovery only
-when one is required.
+The builder remains the single owner of connector discovery: it writes
+`No connector bindings.` + `[]` when the page needs no connector, and performs all
+connection discovery only when one is required.
 
 #### 1b. Custom API discovery is orchestrator-owned too
 

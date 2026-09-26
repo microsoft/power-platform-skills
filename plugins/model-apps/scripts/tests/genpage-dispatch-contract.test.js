@@ -74,13 +74,20 @@ test('the orchestrator emits the exact token the page-builder triggers on', () =
 test('connector docs do not probe the retired feature flag', () => {
   const docs = [
     path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'),
+    path.join(PLUGIN, 'agents', 'genpage-planner.md'),
+    path.join(PLUGIN, 'agents', 'genpage-edit-planner.md'),
     path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'),
+    path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'),
     path.join(PLUGIN, 'references', 'connectors.md'),
   ];
   for (const doc of docs) {
     const text = readDoc(doc);
     assert.doesNotMatch(text, /feature-flags\.js"?\s+connectors\b/, `${rel(doc)} must not probe the retired connectors flag`);
     assert.doesNotMatch(text, /GENPAGE_ENABLE_CONNECTORS/, `${rel(doc)} must not document the retired connectors env var`);
+    // Prose that still describes a connectors "rollback gate" tells an agent to probe for it, and the
+    // retired flag now always reports disabled, which would silently drop the page's connectors.
+    assert.doesNotMatch(text, /connectors`?\s+rollback\s+gate|connector\s+discovery\s+and\s+its\s+rollback\s+gate|probes\s+first,\s+writes\s+`No connector bindings/i,
+      `${rel(doc)} must not describe a connectors rollback gate`);
   }
 });
 test('connector metadata discovery uses the PAC connector name, not the full API resource path', () => {

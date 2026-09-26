@@ -619,12 +619,13 @@ child view id. Each step emits `[n/total]`.
   one that already exists. A **form** converges its fields (added; for an explicit layout, dropped ones
   pruned — see `prune: false` below), column counts and spans. A **view** only *adds* columns: a
   column removed from the spec, or a new column order, does **not** apply, and neither do its filters
-  or sort. A changed column type and an edited chart, command or dashboard are not re-applied at all.
+  or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
+  existing chart takes only a changed description.
   **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
-  `--verify` catches what is **missing** — a spec view column, relationship, command or dashboard, and
-  a view whose filters or sort differ from the spec — as a loud `verify FAIL`. It tolerates **extra**
-  content, so a view column you removed from the spec still passes, just as a column a maker added by
-  hand does.
+  `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
+  sort keys must also keep their order), a relationship, command or dashboard — as a loud
+  `verify FAIL`. It tolerates **extra** deployed content, so a view column, filter or sort key you
+  removed from the spec still passes, just as one a maker added by hand does.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
