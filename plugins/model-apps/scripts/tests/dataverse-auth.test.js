@@ -1,6 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
 const { parseArgs, readJsonArg, label, requiredLevel } = require('../lib/dataverse-auth');
 
@@ -92,6 +93,76 @@ test('requiredLevel: respects argument', () => {
   assert.equal(requiredLevel('ApplicationRequired').Value, 'ApplicationRequired');
 });
 
+test('makeRequest preserves UTF-8 characters split across response chunks', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const body = JSON.stringify({ city: '東京', emoji: '😀', cafe: 'Café' });
+  const bodyBytes = Buffer.from(body, 'utf8');
+  const server = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (req.url === '/split') {
+      for (let i = 0; i < bodyBytes.length; i += 1) {
+        res.write(bodyBytes.subarray(i, i + 1));
+      }
+      res.end();
+      return;
+    }
+    if (req.url === '/whole') {
+      res.end(bodyBytes);
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const whole = await makeRequest({ url: `http://127.0.0.1:${port}/whole` });
+    const split = await makeRequest({ url: `http://127.0.0.1:${port}/split` });
+    assert.equal(whole.body, body);
+    assert.equal(split.body, body);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  const calls = [];
+  const exec = (_file, args) => {
+    calls.push(args[args.indexOf('--resource') + 1]);
+    return 'TOK\n';
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken('https://Contoso.crm.dynamics.com/', { exec, fresh: true }), 'TOK');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'TOK');
+    assert.equal(getAuthToken('https://fabrikam.crm.dynamics.com', { exec, fresh: true }), 'TOK');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.deepEqual(calls, ['https://contoso.crm.dynamics.com', 'https://fabrikam.crm.dynamics.com']);
+});
+
+test('getAuthToken does not cache a null token result', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  let calls = 0;
+  const exec = () => {
+    calls += 1;
+    if (calls === 1) return '\n';
+    return 'TOK\n';
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken('https://tailspin.crm.dynamics.com', { exec, fresh: true }), null);
+    assert.equal(getAuthToken('https://tailspin.crm.dynamics.com', { exec }), 'TOK');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(calls, 2);
+});
+
 test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {
   // Spawn a tiny script that calls emitResult(false, {errors:[...]}) and
   // verify that stdout contains the JSON payload — not the literal string
@@ -162,6 +233,28 @@ test('dataverseRequest USES a preset token and skips the CLI entirely', async ()
   });
   assert.strictEqual(cliCalls, 1);
   assert.strictEqual(sentAuth, 'Bearer tok-from-cli');
+});
+
+
+test('dataverseRequest bypasses the token memo after a 401 before retrying', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const tokenCalls = [];
+  const sent = [];
+  const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+    getToken: (_url, options) => {
+      tokenCalls.push(Boolean(options && options.fresh));
+      return tokenCalls.length === 1 ? 'OLD' : 'NEW';
+    },
+    request: async ({ headers }) => {
+      sent.push(headers.Authorization);
+      return sent.length === 1
+        ? { statusCode: 401, body: '' }
+        : { statusCode: 200, body: '{"ok":true}' };
+    },
+  });
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(tokenCalls, [false, true]);
+  assert.deepStrictEqual(sent, ['Bearer OLD', 'Bearer NEW']);
 });
 
 test('a path-bearing or query-bearing env is refused, not silently trimmed to its origin', async () => {

@@ -67,6 +67,27 @@ test('refreshes token once on 401 then succeeds', async () => {
   assert.strictEqual(calls[1].headers.Authorization, 'Bearer T2'); // refreshed
 });
 
+
+test('refreshes token with a fresh acquire on 401, bypassing any process memo', async () => {
+  const tokenCalls = [];
+  const { request, calls } = fakeTransport(() => {
+    return calls.length === 1
+      ? { statusCode: 401, headers: {}, body: '' }
+      : { statusCode: 200, headers: {}, body: '{"ok":true}' };
+  });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', {
+    getToken: (_url, options) => {
+      tokenCalls.push(Boolean(options && options.fresh));
+      return tokenCalls.length === 1 ? 'OLD' : 'NEW';
+    },
+    request,
+  });
+  const res = await http.get('https://org.crm.dynamics.com/api/data/v9.2/accounts');
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(tokenCalls, [false, true]);
+  assert.deepStrictEqual(calls.map((c) => c.headers.Authorization), ['Bearer OLD', 'Bearer NEW']);
+});
+
 test('retries a transient 500 (SQL deadlock) with backoff, then succeeds', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 2 ? { statusCode: 500, headers: {}, body: 'deadlock 1205' } : { statusCode: 200, headers: {}, body: '{"ok":true}' }
