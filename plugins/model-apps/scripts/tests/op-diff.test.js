@@ -47,6 +47,19 @@ test('formRemovals is empty for an auto layout (auto never prunes)', () => {
   assert.deepStrictEqual(formRemovals(deployed, def), []);
 });
 
+test('formRemovals is empty when an explicit layout opts out with prune:false', () => {
+  const def = Object.assign(formOf(['new_subject']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });
+  const deployed = formOf(['new_name', 'new_subject', 'new_priority']);
+  assert.deepStrictEqual(formRemovals(deployed, def), []);
+});
+
+test('formRemovals still lists removals when prune is absent or true', () => {
+  const deployed = formOf(['new_name', 'new_subject', 'new_priority']);
+  const base = { __explicitLayout: true, __primaryField: 'new_name' };
+  assert.deepStrictEqual(formRemovals(deployed, Object.assign(formOf(['new_name']), base)), ['new_subject', 'new_priority']);
+  assert.deepStrictEqual(formRemovals(deployed, Object.assign(formOf(['new_name']), base, { __prune: true })), ['new_subject', 'new_priority']);
+});
+
 test('classifyOps: no destructive ops when nothing is discovered', () => {
   assert.deepStrictEqual(classifyOps({ app: { name: 'X' } }, {}), { destructive: [], hasDestructive: false });
 });
@@ -83,6 +96,13 @@ test('classifyOps: an auto-layout form in discovered.forms is never destructive'
   const def = Object.assign(formOf(['new_name']), { __explicitLayout: false, __primaryField: 'new_name' });
   const deployed = formOf(['new_name', 'new_priority', 'new_stale']);
   const r = classifyOps({}, { forms: [{ label: 'form "Ticket" (new_ticket)', deployedForm: deployed, def }] });
+  assert.deepStrictEqual(r, { destructive: [], hasDestructive: false });
+});
+
+test('classifyOps: a prune:false explicit-layout form in discovered.forms is never destructive', () => {
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });
+  const deployed = formOf(['new_name', 'new_priority', 'new_stale']);
+  const r = classifyOps({}, { forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: deployed, def }] });
   assert.deepStrictEqual(r, { destructive: [], hasDestructive: false });
 });
 
