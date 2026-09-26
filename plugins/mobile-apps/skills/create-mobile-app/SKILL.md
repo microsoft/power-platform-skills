@@ -1858,7 +1858,7 @@ Arguments:
   --capability <name>
 ```
 
-Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
+Run sequentially: the helpers mapped in the OOB controls reference may update the app's `package.json` and lockfile through [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md). Forward the approved capability package/spec and any approved JavaScript dependency rows so the helper can reuse consent and validate the complete manifest. Other native wrappers require template-shipped packages. No helper edits `app.config.js`. Stop on dependency/setup failure before screen generation; do not let builders import an uninstalled control.
 
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
 

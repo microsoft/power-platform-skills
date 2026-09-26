@@ -249,7 +249,7 @@ For PDF/signature requests, map the change to every affected section instead of 
 | Store signed approval as Dataverse image | Data Model: Image column; Screens: normalize `data:image/png;base64,...` before update; Native Capabilities: `pen-input` if capture is in-app |
 | Generate/export/print evidence PDF | Native Capabilities: `pdf-report` only when `expo-print` is present, plus `sharing` only when local share is needed and `expo-sharing` is present; Data Model: File column only if retained; Screens: generation pending/failed/success states |
 | Persist generated PDFs | Data Model: Dataverse File column or child Attachment table; Screens: create/update row first, then upload File bytes; Native Capabilities: `pdf-report` |
-| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` for HTTPS URLs or local `file://` URIs when `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ is present; Screens: invalid URL and viewer failed states |
+| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` for HTTPS URLs or local `file://` URIs, including an app dependency addition for `@microsoft/power-apps-native-pdf-viewer` when missing; Screens: invalid URL and viewer failed states |
 
 If a single PDF/signature request requires multiple plan sections, say so and run the edit loop section-by-section. Do not write a native capability entry that references a Dataverse column or screen state that remains absent from the plan.
 
@@ -373,8 +373,9 @@ Parse the first line of every agent result using the return-status protocol in `
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
-- `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
-- `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
+- Microsoft OOB controls may require an on-demand app dependency addition. Follow [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md) to propose the package/spec from the control reference at the approval gate; do not install in planning or `--plan-only` mode.
+- `native-pdf-viewer` opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
+- `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer`, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
 - `pen-input` returns a PNG data URI; cancellation is a non-error state; Dataverse target must be Image, File, or child Evidence/Signature row.
 
 For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. If the connector drives new screens or forms, update the Screens section too before applying code.
@@ -429,7 +430,7 @@ Apply sections in dependency order so screens always build against the current d
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
-5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
+5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Forward approved package/spec changes and any approved JavaScript dependency rows. Only helpers mapped in the OOB controls reference may add their requested app dependencies through the shared Microsoft control dependency setup. Other missing native packages remain blocked; never fake wrappers. Stop on dependency/setup failure before rebuilding screens that import the control.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.

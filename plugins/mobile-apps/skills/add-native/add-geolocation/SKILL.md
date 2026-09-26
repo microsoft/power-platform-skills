@@ -19,17 +19,18 @@ Hard rules:
 - Auth is MSAL-only. Do not expose OneAuth or an auth selector.
 - Use `geoService(dataSource, app_id)` and `BgLocationClient`.
 - Do not use `GeolocationExtension`, HostingSDK, PCF, Launch URI, or CordovaV2 bridge paths.
-- Do not install packages or edit native config.
+- Only `@microsoft/power-apps-native-bglocation` may be added through the shared Microsoft control dependency setup. Do not install other native packages or edit native config.
 - The control is not usable until its Dataverse target table and mapped columns are verified.
 
-## 1. Verify app and package
+## 1. Verify app and ensure the dependency
 
 ```bash
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
 ```
 
-If either check fails, stop. The template/app must already ship the native package.
+If the app check fails, stop and tell the user to run `/create-mobile-app` first.
+
+Run [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md) for `@microsoft/power-apps-native-bglocation`. When missing, add it to the app's runtime `dependencies` and update the lockfile with the approved dependency spec from the control reference before writing the wrapper. Reuse an existing compatible installation without upgrading it. If dependency verification fails, stop before generating imports.
 
 ## 2. Verify the Dataverse target table first
 
@@ -202,13 +203,18 @@ npx tsc --noEmit
 Only after table + columns are verified and TypeScript passes, report:
 
 ```text
-Geolocation status : READY
-Package present    : @microsoft/power-apps-native-bglocation
+Geolocation status : READY (static checks; native runtime verification separate)
+Package/version    : @microsoft/power-apps-native-bglocation@<version>
+Dependency action  : <added / moved to runtime dependencies / already present>
+Manifest/lockfile  : <changed files / unchanged>
 Wrapper            : src/native/geolocation.ts
 Required config    : connectionUrl, trackInBackground, persistAcrossRestarts
 Auth               : MSAL only
 Target table       : <TABLE> verified
 Native config      : not changed
+Native runtime     : <verified separately / not verified>
 ```
 
 If table verification failed, report `BLOCKED` or `UNVERIFIED` instead and do not update `memory-bank.md` as if the control is ready.
+
+Installing the dependency does not add native code to the running binary. Preserve permission/unsupported/native-error handling and report missing runtime support separately; a compatible player/runtime is required outside this workflow.

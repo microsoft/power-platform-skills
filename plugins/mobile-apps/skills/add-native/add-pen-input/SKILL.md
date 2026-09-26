@@ -25,13 +25,11 @@ test -f app.config.js && test -f power.config.json && test -f package.json && te
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
-### 2. Verify package is already present
+### 2. Ensure the app dependency
 
-```bash
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
-```
+Run [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md) for `@microsoft/power-apps-native-pen-input`. When missing, add it to the app's runtime `dependencies` and update the lockfile with the approved dependency spec from the control reference before writing the wrapper. Reuse an existing compatible installation without upgrading it.
 
-If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
+If dependency verification fails, STOP before generating imports. Do not run `npx expo install`/`pod install` or edit `app.config.js`. The app dependency and native availability are separate checks.
 
 ### 3. Write or verify `src/native/penInput.ts`
 
@@ -165,7 +163,7 @@ Fix any TypeScript errors before rebuilding.
 
 ### 7. Native rebuild note
 
-This skill does not install native code. If the package was just added outside the skill, the app needs a native rebuild outside this workflow. If the package was already in the build, Metro hot reload is enough for wrapper edits.
+This skill can install the app dependency, but cannot add native code to a running binary. Follow the shared setup's runtime boundary: preserve `NATIVE_MODULE_MISSING` and require a compatible player/runtime if native pen input is absent. Do not claim a native rebuild or device check occurred. Metro hot reload is sufficient for wrapper-only edits only when native support is already in the build.
 
 ### 8. Do not use HostingSDK / PCF
 
@@ -183,11 +181,14 @@ Tell the user:
 
 ```text
 Pen input added
-Package present   : @microsoft/power-apps-native-pen-input
+Package/version   : @microsoft/power-apps-native-pen-input@<version>
+Dependency action : <added / moved to runtime dependencies / already present>
+Manifest/lockfile : <changed files / unchanged>
 Wrapper           : src/native/penInput.ts
 Output            : PNG data URI
 Type-check        : PASS
 Native rebuild    : not performed by this skill
+Native runtime    : <verified separately / not verified>
 Usage             : captureSignature(...)
 HostingSDK / PCF  : not used
 ```
