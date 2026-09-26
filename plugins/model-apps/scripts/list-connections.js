@@ -19,7 +19,6 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -215,10 +214,6 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Rollback gate (fail closed) — see lib/feature-flags.js. connectors is GA and ships ON, so
-  // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
-  exitIfConnectorsDisabled();
-
   const argv = process.argv.slice(2);
   const { positional } = parseArgs(argv);
   const USAGE = 'Usage: node list-connections.js <envUrl>';
