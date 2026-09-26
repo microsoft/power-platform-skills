@@ -74,6 +74,9 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
   rebuild re-applies to an existing form, view, chart, command or dashboard, and what `--verify` can
   prove: a removed view column is not caught. A page's connector and Custom API bindings survive only
   a same-environment rebuild.
+- The telemetry disclosure matches its shared source again: it lists the Power Pages-only site
+  framework field and says Model Apps sends neither that nor the Entra object ID. A test now fails
+  when the bundled telemetry library or workflow drifts from `shared/`.
 
 ## [2.9.0]
 
