@@ -1330,16 +1330,20 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 - Treat each form field as one compound direction surface: localized labels,
   placeholders, hints, helper text, validation messages, prefixes, suffixes,
   icons, and open menus follow the active UI direction and use logical
-  alignment. Use `dir="auto"` for free-form multilingual values. Keep only
-  classified machine-oriented values such as email addresses, URLs, code,
-  paths, GUIDs, and identifiers LTR; add the adjacent
+  alignment. Native free-form inputs and textareas use adaptive `dir`: the
+  active UI direction while empty, `auto` while populated, and the active UI
+  direction again after clearing. Preserve or add `dirname` where submitted
+  direction metadata is appropriate. Keep only
+  classified machine-oriented values such as email addresses, telephone
+  numbers, URLs, code, paths, GUIDs, and identifiers LTR; add the adjacent
   `/* bidi-fixed: <specific reason>; verify=ltr,rtl */` or equivalent HTML
   directive required by the shared standard. Their surrounding field UI
   remains direction-aware.
 - Wrap independently inserted unknown-direction content (names, comments,
   titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
   code, file paths, GUIDs, and other machine values explicitly isolated,
-  normally LTR. Use `dir="auto"` for free-form multilingual inputs.
+  normally LTR. Free-form native controls must not use permanent `dir="auto"`;
+  bind their native direction to value emptiness and the active UI direction.
 - Format dates, numbers, currency, percentages, and relative time with `Intl`
   APIs rather than concatenating locale-sensitive punctuation or symbols.
 - Classify directional icons and assets as unchanged, mirrored, or replaced.
@@ -1423,7 +1427,12 @@ and verify that component in both LTR and RTL. For intentionally fixed
 machine-oriented text, add the adjacent `bidi-fixed` directive and verify the
 surrounding UI in both directions. Use pseudo-opposite-direction content to
 check wrapping, navigation, forms, mixed names/identifiers, icons, calendars,
-and narrow/mobile layout even when no second real locale exists yet.
+and narrow/mobile layout even when no second real locale exists yet. For every
+free-form native input or textarea, verify empty, RTL-valued, LTR-valued,
+clear-after-RTL, and clear-after-LTR states under both UI directions. Each
+clear state must enter the corresponding value before clearing it; empty and
+cleared states follow the UI locale, while populated states follow the entered
+value.
 
 Reconcile `BIDIRECTIONAL_REVIEW_DATA` against the completed source and rendered
 routes. Add every implemented visible or interactive component that was not

@@ -251,6 +251,22 @@ function validateRunSpec(spec, localizationContext = null) {
           }
         }
       }
+      if (state?.attributes !== undefined &&
+          !Array.isArray(state.attributes)) {
+        errors.push(`${statePrefix}.attributes must be an array.`);
+      }
+      for (const [checkIndex, check] of asArray(state?.attributes).entries()) {
+        const checkPrefix = `${statePrefix}.attributes[${checkIndex}]`;
+        if (!isNonEmpty(check?.selector)) {
+          errors.push(`${checkPrefix}.selector is required.`);
+        }
+        if (!isNonEmpty(check?.name)) {
+          errors.push(`${checkPrefix}.name is required.`);
+        }
+        if (typeof check?.expected !== 'string') {
+          errors.push(`${checkPrefix}.expected must be a string.`);
+        }
+      }
       if (state?.focusOrder !== undefined) {
         validateStringArray(state.focusOrder, `${statePrefix}.focusOrder`, errors, 2);
       }
@@ -665,6 +681,9 @@ async function runVerificationCase(
     for (const check of state.computed || []) {
       await evaluateComputedCheck(page, check, locale, verificationCase.id, findings);
     }
+    for (const check of state.attributes || []) {
+      await evaluateAttributeCheck(page, check, verificationCase.id, findings);
+    }
     if (state.focusOrder?.length) {
       await verifyFocusOrder(page, state.focusOrder, verificationCase.id, findings);
     }
@@ -1016,6 +1035,21 @@ async function evaluateComputedCheck(page, check, locale, caseId, findings) {
       'computed-style-mismatch',
       'error',
       `Expected ${check.property} to be ${accepted.join(' or ')}, but found "${actual}".`,
+      check.selector
+    ));
+  }
+}
+
+async function evaluateAttributeCheck(page, check, caseId, findings) {
+  const actual = await page.locator(check.selector).first()
+    .getAttribute(check.name);
+  if (actual !== check.expected) {
+    findings.push(makeFinding(
+      caseId,
+      'attribute-mismatch',
+      'error',
+      `Expected ${check.name}="${check.expected}" but found ` +
+      `${actual === null ? 'no attribute' : `"${actual}"`}.`,
       check.selector
     ));
   }

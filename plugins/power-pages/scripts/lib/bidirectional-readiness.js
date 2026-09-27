@@ -62,6 +62,12 @@ function collectSourceFiles(projectRoot) {
   return files;
 }
 
+function stripHtmlCommentsPreservingLines(source) {
+  return source.replace(/<!--[\s\S]*?-->/g, (comment) =>
+    comment.replace(/[^\r\n]/g, ' ')
+  );
+}
+
 function walk(target, files) {
   if (!fs.existsSync(target)) return;
   const stat = fs.statSync(target);
@@ -81,15 +87,34 @@ function auditBidirectionalReadiness(projectRoot) {
     const relativePath = path.relative(projectRoot, filePath).replaceAll('\\', '/');
     const source = fs.readFileSync(filePath, 'utf8');
     const lines = source.split(/\r?\n/);
-    const directionalScrollLines = collectDirectionalScrollLines(
-      stripCommentsFromSource(source)
-    );
     const extension = path.extname(filePath).toLowerCase();
+    const sourceWithoutComments = stripCommentsFromSource(source);
+    const controlScanSource = stripCommentsFromSource(
+      isMarkupFile(extension)
+        ? stripHtmlCommentsPreservingLines(source)
+        : source
+    );
+    const directionalScrollLines =
+      collectDirectionalScrollLines(sourceWithoutComments);
     const firstFindingIndex = findings.length;
     let pendingDirective = null;
     let markupState = createMarkupState();
     let styleObjectDepth = 0;
     let commentState = { blockEnd: null, quote: null };
+
+    for (const match of collectStaticAutoDirectionControls(
+      controlScanSource
+    )) {
+      findings.push(finding(
+        relativePath,
+        lineNumberAtOffset(controlScanSource, match.index),
+        'static-auto-control-direction',
+        'error',
+        `Native ${match.tagName} controls must use the active UI ` +
+        'direction while empty and switch to auto only when populated; a ' +
+        'permanent dir="auto" can misalign localized placeholders.'
+      ));
+    }
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
@@ -280,6 +305,126 @@ function auditBidirectionalReadiness(projectRoot) {
     summary: summarizeFindings(findings),
     findings,
   };
+}
+
+function collectStaticAutoDirectionControls(source) {
+  const matches = [];
+  for (const match of source.matchAll(
+    /<(input|textarea)(?=\s|\/?>)/gi
+  )) {
+    const end = findOpeningTagEnd(source, match.index);
+    if (end < 0) continue;
+    const openingTag = source.slice(match.index, end + 1);
+    if (hasStaticAutoDirectionAttribute(openingTag)) {
+      matches.push({
+        index: match.index,
+        tagName: match[1].toLowerCase(),
+      });
+    }
+  }
+  return matches;
+}
+
+function findOpeningTagEnd(source, start) {
+  let quote = null;
+  let escaped = false;
+  let expressionDepth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === '`') {
+      quote = character;
+    } else if (character === '{') {
+      expressionDepth += 1;
+    } else if (character === '}') {
+      expressionDepth = Math.max(0, expressionDepth - 1);
+    } else if (character === '>' && expressionDepth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function hasStaticAutoDirectionAttribute(openingTag) {
+  let index = openingTag.search(/\s/);
+  while (index >= 0 && index < openingTag.length) {
+    while (/\s/.test(openingTag[index] || '')) index += 1;
+    if (openingTag[index] === '/' || openingTag[index] === '>') return false;
+    const nameStart = index;
+    while (index < openingTag.length &&
+        !/[\s=/>]/.test(openingTag[index])) {
+      index += 1;
+    }
+    const name = openingTag.slice(nameStart, index).toLowerCase();
+    while (/\s/.test(openingTag[index] || '')) index += 1;
+    if (openingTag[index] !== '=') continue;
+    index += 1;
+    while (/\s/.test(openingTag[index] || '')) index += 1;
+    const parsed = readAttributeValue(openingTag, index);
+    index = parsed.nextIndex;
+    if (['dir', ':dir', 'v-bind:dir', '[dir]', '[attr.dir]'].includes(name) &&
+        normalizeStaticAttributeValue(parsed.value) === 'auto') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readAttributeValue(openingTag, start) {
+  const first = openingTag[start];
+  if (first === '"' || first === "'" || first === '`') {
+    let value = '';
+    let escaped = false;
+    for (let index = start + 1; index < openingTag.length; index += 1) {
+      const character = openingTag[index];
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === first) {
+        return { value, nextIndex: index + 1 };
+      }
+      value += character;
+    }
+    return { value, nextIndex: openingTag.length };
+  }
+  if (first === '{') {
+    const end = findMatchingDelimiter(openingTag, start, '{', '}');
+    if (end >= 0) {
+      return {
+        value: openingTag.slice(start + 1, end),
+        nextIndex: end + 1,
+      };
+    }
+  }
+  let index = start;
+  while (index < openingTag.length && !/[\s>]/.test(openingTag[index])) {
+    index += 1;
+  }
+  return {
+    value: openingTag.slice(start, index),
+    nextIndex: index,
+  };
+}
+
+function normalizeStaticAttributeValue(value) {
+  let normalized = value.trim();
+  while (normalized.length >= 2 &&
+      ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+       (normalized.startsWith("'") && normalized.endsWith("'")) ||
+       (normalized.startsWith('`') && normalized.endsWith('`')))) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized.toLowerCase();
 }
 
 function isInsideUnquotedUrl(value, index) {
@@ -530,6 +675,10 @@ function scanMarkupState(initialState, value, endIndex) {
 
 function isCssFile(extension) {
   return extension === '.css' || extension === '.scss' || extension === '.less';
+}
+
+function isMarkupFile(extension) {
+  return ['.html', '.astro', '.vue'].includes(extension);
 }
 
 function isLikelyInlineStyle(value) {

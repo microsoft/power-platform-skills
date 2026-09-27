@@ -337,8 +337,22 @@ Each state may define:
 - `targets` — the component root, compound form parts, portals, open menus,
   dialogs, tooltips, validation messages, or other separately rendered nodes.
 - `computed` — exact computed-style expectations by direction.
+- `attributes` — exact DOM attribute expectations such as preserved `dirname`
+  metadata (`selector`, `name`, and string `expected`).
 - `focusOrder` — expected keyboard Tab sequence.
 - `nonOverlapping` — selector pairs that must not geometrically overlap.
+
+For each native free-form input or textarea, include empty, RTL-valued,
+LTR-valued, clear-after-RTL, and clear-after-LTR states. Each clear state must
+first `fill` its non-empty value and then `fill` `""`; otherwise it only
+retests initial emptiness. Use `computed` checks for the control's `direction`
+property. Empty and cleared states expect the active UI direction. Hebrew or
+Arabic values expect RTL under both UI directions; English, Hindi, Spanish,
+and other LTR-script values expect LTR under both UI directions. Also preserve
+and inspect any native `dirname` attribute needed for submitted direction
+metadata. A machine-oriented control instead remains explicitly LTR, with the
+required adjacent `bidi-fixed` directive in source, while its label, hint,
+error, and field container remain locale-directed.
 
 A target normally uses `"expectedDirection": "inherit"`. A specific
 direction-fixed value uses `"ltr"` or `"rtl"`. Set `expectVisible: false` for

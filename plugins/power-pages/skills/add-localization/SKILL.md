@@ -517,11 +517,20 @@ implementation.
 
 Localized form labels, placeholders, hints, helper text, validation messages,
 prefixes, suffixes, icons, and open menus follow the active UI direction and
-use logical alignment. Free-form multilingual values use `dir="auto"`.
-Machine-oriented email addresses, URLs, code, paths, GUIDs, and identifiers may
-remain LTR only when classified as direction-fixed and accompanied by the
-adjacent `bidi-fixed: <specific reason>; verify=ltr,rtl` directive required by
-the shared standard; their surrounding field UI remains direction-aware.
+use logical alignment. Native free-form inputs and textareas use adaptive
+`dir`: active UI direction while empty, `auto` while populated, and active UI
+direction again after clearing. Preserve or add `dirname` where submitted
+direction metadata is appropriate; do not remove existing mixed-direction
+submission metadata.
+Machine-oriented email addresses, telephone numbers, URLs, code, paths, GUIDs,
+and identifiers may remain LTR only when classified as direction-fixed and
+accompanied by the adjacent
+`bidi-fixed: <specific reason>; verify=ltr,rtl` directive required by the
+shared standard; their surrounding field UI remains direction-aware.
+Verify empty, RTL-valued, LTR-valued, clear-after-RTL, and clear-after-LTR
+free-form states under both UI directions. Each clear state must first enter
+the corresponding non-empty value. Populated direction must follow the entered
+value rather than the active locale.
 
 For unknown or third-party components, prefer the package's public locale and
 direction API. If none exists, use a documented wrapper or supported theme

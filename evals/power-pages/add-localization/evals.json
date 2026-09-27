@@ -51,6 +51,8 @@
         "Configures runtime selection without page reload",
         "Persists only the browser-local locale preference",
         "Sets lang and rtl direction for Arabic",
+        "Repairs native free-form inputs and textareas so empty, clear-after-RTL, and clear-after-LTR controls follow the active UI direction while populated controls use automatic value direction, preserving dirname metadata",
+        "Keeps email, telephone, URL, path, code, GUID, and identifier controls explicitly LTR with adjacent bidi-fixed documentation while their surrounding field UI follows the locale",
         "Flags RTL layout areas for manual visual review"
       ]
     },
