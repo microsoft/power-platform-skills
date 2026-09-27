@@ -66,14 +66,40 @@ Classify inserted content at its rendering boundary:
 - Translated UI content inherits the active document direction.
 - Unknown or user-authored content such as names, comments, titles, and search
   queries uses `<bdi>` or `dir="auto"`.
-- Machine-oriented values such as URLs, email addresses, source code, file
-  paths, GUIDs, and Latin identifiers use an isolated explicit direction,
-  normally `dir="ltr"`.
+- Machine-oriented values such as URLs, email addresses, telephone numbers,
+  source code, file paths, GUIDs, and Latin identifiers use an isolated
+  explicit direction, normally `dir="ltr"`.
 - Never reverse strings. Format numbers, dates, currency, percentages, and
   relative time with `Intl` APIs for the active locale.
 
-Use `dir="auto"` on free-form multilingual inputs. Use the `dirname` form
-attribute when the submitted value's detected direction must be preserved.
+Free-form native inputs and textareas need adaptive direction rather than a
+permanent `dir="auto"`:
+
+- While the value is empty, set the control's native `dir` attribute to the
+  active UI locale direction. Browsers do not consistently derive an empty
+  control's base direction from its localized placeholder.
+- While the value is non-empty, set `dir="auto"` so the entered value's first
+  strong character determines direction.
+- On clear, restore the active UI locale direction immediately. Also update an
+  empty control when the active locale changes.
+- Preserve or add `dirname` when form submission needs the browser-resolved
+  value direction. Do not replace or remove existing mixed-direction metadata.
+
+Keep this as one reusable control-direction helper or component behavior when
+the application has multiple free-form fields:
+
+```js
+function freeFormDirection(value, uiDirection) {
+  return value.length === 0 ? uiDirection : 'auto';
+}
+```
+
+Bind the result to the native `dir` attribute using the framework's normal
+reactive mechanism: `dir={freeFormDirection(value, uiDirection)}` in React,
+`:dir="freeFormDirection(value, uiDirection)"` in Vue,
+`[attr.dir]="freeFormDirection(value, uiDirection)"` in Angular, or an
+`input` listener that updates `element.dir` in Astro/plain JavaScript. The
+value, not the placeholder, selects automatic direction once populated.
 
 References:
 
@@ -120,11 +146,14 @@ Treat a form field as a compound surface rather than checking only its input:
 - Localized labels, placeholders, hints, helper text, validation messages,
   prefixes, suffixes, and field icons inherit the active UI locale and use
   logical alignment such as `text-align: start`.
-- Use `dir="auto"` for free-form multilingual values. The surrounding
-  localized field UI still follows the active document direction.
-- Keep email addresses, URLs, code, file paths, GUIDs, and identifiers LTR only
-  when their machine-oriented semantics require it. The label, hint, error,
-  placement, and focus behavior remain direction-aware.
+- Give free-form native inputs and textareas adaptive direction: active UI
+  direction while empty, `auto` while populated, and active UI direction again
+  after clearing. The surrounding localized field UI always follows the active
+  document direction.
+- Keep email addresses, telephone numbers, URLs, code, file paths, GUIDs, and
+  identifiers LTR only when their machine-oriented semantics require it. The
+  label, hint, error, placement, and focus behavior remain direction-aware.
+- Preserve or add `dirname` where submitted direction metadata is useful.
 - Include select menus, autocomplete/listbox panels, validation summaries,
   autofill, native control affordances, and disabled/read-only states when the
   field supports them.
@@ -148,6 +177,22 @@ or element. It requires a specific semantic reason and does not exempt the
 surrounding component from LTR and RTL verification. Do not use it for
 localized labels, placeholders, hints, helper text, errors, or other ordinary
 UI prose.
+
+Verify free-form controls in all behaviorally distinct states:
+
+| State | Expected native/computed direction |
+|---|---|
+| Empty under an RTL UI locale | RTL |
+| Empty under an LTR UI locale | LTR |
+| Hebrew or Arabic value | RTL |
+| English, Hindi, Spanish, or another LTR-script value | LTR |
+| Cleared after RTL content | Active UI locale direction |
+| Cleared after LTR content | Active UI locale direction |
+
+The populated checks must run under both UI directions so they prove that the
+entered value, rather than the surrounding locale, controls the result. Model
+clear-after-RTL and clear-after-LTR as distinct rendered states: each state
+must enter its non-empty value before clearing, not merely start empty.
 
 Reference: https://www.w3.org/International/questions/qa-html-dir
 

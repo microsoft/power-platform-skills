@@ -459,6 +459,116 @@ test('accepts one adjacent documented fixed-direction exception', (t) => {
   assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
 });
 
+test('blocks permanent auto direction on native free-form controls', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Message.tsx', `
+    export const Message = () => (
+      <textarea
+        dir="auto"
+        dirname="message.dir"
+        placeholder="Type a message"
+      />
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/Search.vue', `
+    <input :dir="'auto'" placeholder="Search" />
+  `);
+  writeProjectFile(projectRoot, 'src/comment.component.html', `
+    <textarea [attr.dir]="'auto'"></textarea>
+    <input [dir]="'auto'" />
+  `);
+  writeProjectFile(projectRoot, 'src/LongForm.vue', `
+    <textarea
+      v-bind:dir="'auto'"
+      placeholder="Details"></textarea>
+  `);
+  writeProjectFile(projectRoot, 'src/plain.html', `
+    <input dir=auto placeholder="Name">
+  `);
+  writeProjectFile(projectRoot, 'src/NotDirection.tsx', `
+    export const NotDirection = () => (
+      <>
+        <input aria-label={"Example text: dir='auto'"} />
+        <input-field dir="auto" />
+        <textarea-wrapper dir="auto" />
+      </>
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/TemplateDirection.tsx', `
+    export const TemplateDirection = () => <input dir={\`auto\`} />;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  const findings = result.findings.filter(
+    (item) => item.rule === 'static-auto-control-direction'
+  );
+  assert.equal(findings.length, 7, JSON.stringify(result.findings));
+  assert.ok(findings.every((item) =>
+    /active UI direction while empty/.test(item.message)
+  ));
+});
+
+test('accepts adaptive free-form direction and documented machine controls', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Message.tsx', `
+    const freeFormDirection = (value, uiDirection) =>
+      value.length === 0 ? uiDirection : 'auto';
+    export const Message = ({ value, uiDirection }) => (
+      <textarea
+        dir={freeFormDirection(value, uiDirection)}
+        dirname="message.dir"
+        value={value}
+      />
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/Search.vue', `
+    <input :dir="query.length === 0 ? uiDirection : 'auto'" v-model="query" />
+  `);
+  writeProjectFile(projectRoot, 'src/comment.component.html', `
+    <textarea
+      [attr.dir]="comment.length === 0 ? uiDirection : 'auto'"
+      dirname="comment.dir"></textarea>
+  `);
+  writeProjectFile(projectRoot, 'src/Contact.astro', `
+    <textarea id="message" dirname="message.dir"></textarea>
+    <script>
+      const control = document.querySelector('#message');
+      const syncDirection = () => {
+        control.dir = control.value.length === 0
+          ? document.documentElement.dir
+          : 'auto';
+      };
+      control.addEventListener('input', syncDirection);
+      new MutationObserver(syncDirection).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['dir'],
+      });
+      syncDirection();
+    </script>
+  `);
+  writeProjectFile(projectRoot, 'src/Email.astro', `
+    <!-- bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl -->
+    <input type="email" dir="ltr" dirname="email.dir" />
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('ignores commented controls after apostrophes in HTML text', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/form.html', `
+    <p>Don't submit the archived example.</p>
+    <!--
+      <textarea dir="auto" placeholder="Old example"></textarea>
+    -->
+    <textarea :dir="message.length === 0 ? uiDirection : 'auto'"></textarea>
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
 test('rejects vague, non-adjacent, and mismatched fixed-direction exceptions', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'src/invalid.css', `

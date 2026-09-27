@@ -190,6 +190,11 @@ test('rejects malformed nested checks instead of silently weakening coverage', (
     property: 'text-align',
     expected: { rtl: 42 },
   }];
+  state.attributes = [{
+    selector: '.target',
+    name: '',
+    expected: 42,
+  }];
   spec.components[0].manualChecks = 'mirror the icon';
   spec.transitions = [{
     name: 'invalid',
@@ -208,6 +213,8 @@ test('rejects malformed nested checks instead of silently weakening coverage', (
   assert.ok(errors.some((error) => /externalOpaque must be boolean/.test(error)));
   assert.ok(errors.some((error) => /focusOrder must be an array/.test(error)));
   assert.ok(errors.some((error) => /expected\.rtl must be a string/.test(error)));
+  assert.ok(errors.some((error) => /attributes\[0\]\.name is required/.test(error)));
+  assert.ok(errors.some((error) => /attributes\[0\]\.expected must be a string/.test(error)));
   assert.ok(errors.some((error) => /manualChecks must be an array/.test(error)));
   assert.ok(errors.some((error) => /unknown viewport "tablet"/.test(error)));
   assert.ok(errors.some((error) => /preserve must be an array/.test(error)));
@@ -976,6 +983,87 @@ test('accepts an intentionally absent restricted target', async () => {
 
   assert.equal(report.summary.failed, 0);
   assert.equal(report.summary.errors, 0);
+});
+
+test('reports missing direction submission metadata as blocking', async () => {
+  const spec = validSpec();
+  spec.components[0].states[0].targets = [{
+    selector: '#message',
+    expectedDirection: 'inherit',
+  }];
+  spec.components[0].states[0].attributes = [{
+    selector: '#message',
+    name: 'dirname',
+    expected: 'message.dir',
+  }];
+
+  class Locator {
+    first() { return this; }
+    async count() { return 1; }
+    async textContent() { return 'Home'; }
+    async getAttribute() { return null; }
+    async evaluate(fn) {
+      if (String(fn).includes('getComputedStyle')) return 'start';
+      return {
+        exists: true,
+        visible: true,
+        direction: 'ltr',
+        textAlign: 'start',
+        overflowX: 'visible',
+        overflowY: 'visible',
+        clipped: false,
+        outsideViewport: false,
+        rect: {
+          left: 0,
+          top: 0,
+          right: 100,
+          bottom: 40,
+          width: 100,
+          height: 40,
+        },
+      };
+    }
+  }
+  class Page {
+    constructor() {
+      this.keyboard = { press: async () => {} };
+      this.locale = 'en-US';
+      this.direction = 'ltr';
+    }
+    on() {}
+    async goto() {}
+    async waitForTimeout() {}
+    locator() { return new Locator(); }
+    async evaluate(fn, arg) {
+      const source = String(fn);
+      if (source.includes('document.documentElement.lang =')) {
+        this.locale = arg.locale;
+        this.direction = arg.direction;
+      } else if (source.includes('lang: document.documentElement.lang')) {
+        return { lang: this.locale, direction: this.direction };
+      } else if (source.includes('horizontalOverflow')) {
+        return { horizontalOverflow: false, overflowPixels: 0 };
+      }
+    }
+    async close() {}
+  }
+
+  const report = await runRenderedBidirectionalAudit({
+    url: 'http://localhost:4173',
+    spec,
+    chromium: {
+      launch: async () => ({
+        newPage: async () => new Page(),
+        close: async () => {},
+      }),
+    },
+  });
+
+  assert.ok(report.findings.some(
+    (finding) => finding.rule === 'attribute-mismatch' &&
+      /Expected dirname="message.dir"/.test(finding.message)
+  ));
+  assert.ok(report.summary.errors > 0);
 });
 
 test('checks every selector match for locales excluded from rendered activation', async () => {
