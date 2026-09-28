@@ -623,6 +623,7 @@ transaction while they are still listed in `unavailableLocales`:
 ```bash
 node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
   --begin \
+  --profile standard \
   --projectRoot "<PROJECT_ROOT>" \
   --locales "<NEW_LOCALE[,NEW_LOCALE]>"
 ```
@@ -650,16 +651,34 @@ implementation. Do not persist the specification as a component manifest.
 Use stable semantic selectors or add focused `data-bidi-id` verification
 anchors where necessary.
 
+Set `maxConcurrency: 3` unless project evidence requires a lower value.
+Classify each component state as `reload`, `resettable`, or `isolated`.
+`reload` is the safe default. Use `resettable` only when the specification can
+provide deterministic `reset` actions that restore the same baseline while
+preserving route, locale, localized content, and unavailable-locale
+boundaries. Use `isolated` for authentication, destructive submission,
+reload-sensitive initialization, or global state. Grouping then reuses one
+page per route/viewport/locale, and independent groups run concurrently;
+runtime transition sequences remain serial.
+
 Reuse the project's Playwright dependency. If neither `playwright` nor
 `playwright-core` is installed, add `playwright` as a development dependency;
 do not download a separate bundled browser when a supported system browser is
 available.
 
-The specification must include every currently available real locale,
-including every transaction target. Exclude pre-existing unavailable locales
+Set `verificationProfile: "standard"`. The specification must include every
+currently available real locale, including every transaction target, because
+each receives a locale smoke check. Exclude pre-existing unavailable locales
 from activation and list them in `unavailableLocaleChecks` with every selector
 surface that must remain hidden. The CLI reconciles both sets with
-`.powerpages-localization.json`. The specification must cover:
+`.powerpages-localization.json`.
+
+Select one representative LTR locale and one representative RTL locale for
+the component matrix. Prefer newly added real locales, then the target with
+the greatest measured text expansion, then the default/existing locale. Use a
+pseudo direction only when no real locale exists. Record optional
+`textExpansion` ratios and any explicit `representativeLocaleIds` override in
+the temporary specification. The specification must cover:
 
 - The default locale and every newly added locale independently.
 - Application-driven activation plus representative localized-content
@@ -669,14 +688,14 @@ surface that must remain hidden. The CLI reconciles both sets with
 - `html[lang]` and `html[dir]`.
 - Browser console has no localization errors.
 - One RTL locale when configured.
-- Every representative route in one LTR and one RTL locale at desktop and
-  narrow/mobile viewports when the configured set is mixed.
-- Every applicable state and viewport in the classified component scope.
-  Direction-neutral components require an inheritance check; direction-aware
-  components require LTR and RTL checks; direction-fixed components require a
-  semantic reason and surrounding-UI checks; unknown/third-party components
-  require rendered checks for supported open states and out-of-subtree
-  overlays.
+- Every representative route in the selected LTR and RTL locales.
+- Risk-based component coverage. Direction-neutral components default to low
+  risk and use the primary state/viewport. Direction-aware components default
+  to medium risk and use all applicable states/viewports in both directions.
+  Direction-fixed and unknown/third-party components default to high risk and
+  use all applicable states/viewports in both directions, including supported
+  open states and out-of-subtree overlays. Escalate uncertain components; do
+  not lower risk merely to reduce the matrix.
 - Script font loading, mixed-direction names/comments/URLs/identifiers,
   locale-aware dates/numbers/percentages, directional icons, calendars, and
   any audited complex component.
@@ -688,11 +707,13 @@ is mixed. For a same-direction set, add a browser-only pseudo-opposite locale
 so this localization change cannot introduce a future LTR/RTL regression.
 
 For static modes, verify equivalent locale URLs/builds. For runtime modes, set
-`runtimeSwitching: true`, set `defaultLocaleId`, and include two round trips for
-every real non-default locale: default -> locale -> default and locale ->
-default -> locale. Do not require every possible locale pair, and do not use
-pseudo locales for application-switch transitions. Preserve route, form state,
-focus, and application state without page reload. Use bare `preserve`
+`runtimeSwitching: true`, set `defaultLocaleId`, include default -> locale ->
+default for every real non-default locale, and include locale -> default ->
+locale for the representative real locales. Extensive verification adds the
+reverse sequence for every real non-default locale. Do not require every
+possible locale pair, and do not use pseudo locales for application-switch
+transitions. Preserve route, form state, focus, and application state without
+page reload. Use bare `preserve`
 selectors only for form controls; declare text, attribute, or property
 preservation evidence for tabs, panels, counters, and other non-form state.
 Every real locale, including the default, needs a reusable application
@@ -727,9 +748,14 @@ Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
 means the runner or specification failed. Either outcome moves the transaction
 to `remediation-required`; immediately restore each target to
 `unavailableLocales` and the managed availability module before retrying.
-Delete the temporary specification after the report is written. Fix every
-rendered error and rerun affected cases. Give every review finding explicit
-evidence and a proposed disposition for the Phase 7 maker decision.
+Delete the temporary specification after the report is written. A blocking
+error fails the new-locale transaction and restores fail-closed availability;
+after fixing it, begin a new standard transaction because targeted evidence
+alone cannot approve a new locale. For repair or reconfiguration of already
+available locales, rerun affected cases with
+`verificationProfile: "targeted"` and exact `targetCaseIds` instead of an
+unchanged full matrix. Give every review finding explicit evidence and a
+proposed disposition for the Phase 7 maker decision.
 
 Re-run the static audit after remediation and reconcile its exact current
 findings with the rendered report. Update each locale's provisional readiness before Phase 7, then derive the
@@ -771,7 +797,9 @@ pre-implementation plan is scope, not evidence; report the implementation and
 rendered checks that satisfied each direction-aware, direction-fixed, and
 unknown/third-party entry.
 Include the rendered report path, passed/review/failed case totals, and
-failure/review screenshots. The run specification is temporary workflow input,
+failure/review screenshots. State the verification profile, representative
+LTR/RTL locales, locale-smoke count, component-case count, and generated
+manual-review checklist. The run specification is temporary workflow input,
 not a new project inventory.
 
 Classify each newly added or regression-tested locale as:
@@ -782,6 +810,37 @@ Classify each newly added or regression-tested locale as:
 - **Pending remediation** — build/runtime failure, incorrect `lang`/`dir`,
   unreadable text, unreachable critical controls, or serious accessibility
   failure remains; keep the affected locale unavailable.
+
+<!-- not-a-gate: verification-depth selection configures evidence collection within the already approved implementation scope -->
+After standard verification passes, always offer the verification-depth
+choice before transaction finalization. When the report contains manual-review
+items for high-risk components in non-representative locales, first show each
+locale, route, component, states, and viewports. Use `AskUserQuestion` with:
+
+- **Continue with standard verification (Recommended)** — when a manual
+  checklist exists, require the maker to confirm that they completed it and
+  checked translated labels/values, expansion, formatting, clipping, and
+  usability.
+- **Run extensive automated verification** — first return each transaction
+  target's provisional readiness entry to `pending-remediation`; keep it
+  exposed only because the transaction still blocks completion and
+  deployment. Then invoke:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --extend --profile extensive --projectRoot "<PROJECT_ROOT>"
+```
+
+Then rebuild the temporary specification with
+`verificationProfile: "extensive"` and rerun the rendered audit. Extensive
+verification covers every declared locale, component, state, and viewport and
+requires both runtime round trips for every real non-default locale. Any
+extensive error returns the transaction to fail-closed remediation.
+
+In repair or reconfiguration mode, use targeted verification for a known
+affected case set, standard verification for normal completion, and extensive
+verification only when the maker explicitly requests the full regression
+matrix. Targeted verification alone cannot approve a newly added locale.
 
 <!-- gate: add-localization:7.review | category=plan | cancel-leaves=localized-site-files -->
 
@@ -830,14 +889,19 @@ status or availability, finalize the transaction:
 ```bash
 node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
   --finalize \
+  [--manual-review-completed] \
   --projectRoot "<PROJECT_ROOT>"
 ```
 
+Pass `--manual-review-completed` only after the maker chose that standard-path
+option and completed the generated checklist. Extensive runs do not use it.
 Finalization succeeds only when the normal manifest invariant and all
-localization checks pass. Then rerun the independent validator without
-`--verification`, the project build, and the locale activation cases affected
-by that change. Do not complete the workflow until the transaction file is
-gone and the final manifest, selector/detection boundaries, and actual
+localization checks pass. Rebuild only when source, resources, dependencies,
+build configuration, or locale availability changed after the successful
+build; readiness status and finding-disposition metadata alone do not require
+another build. Rerun only locale activation cases affected by final
+availability changes. Do not complete the workflow until the transaction file
+is gone and the final manifest, selector/detection boundaries, and actual
 rendered availability agree. If the maker saves a pending locale, do not offer
 deployment in Phase 8.
 

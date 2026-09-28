@@ -22,8 +22,16 @@ const {
 const CLI_PATH = path.join(__dirname, '..', 'validate-site-integrity.js');
 
 test('parses an optional project root without consuming other options', () => {
-  assert.deepEqual(parseArgs([]), {});
+  assert.deepEqual(parseArgs([]), { skipLocalization: false });
   assert.equal(parseArgs(['--projectRoot', '.']).projectRoot, path.resolve('.'));
+  assert.equal(
+    parseArgs(['--skip-localization']).skipLocalization,
+    true
+  );
+  assert.throws(
+    () => parseArgs(['--skip-localization', '--skip-localization']),
+    /may be specified only once/
+  );
   assert.throws(
     () => parseArgs(['--projectRoot']),
     /"--projectRoot" requires a value/

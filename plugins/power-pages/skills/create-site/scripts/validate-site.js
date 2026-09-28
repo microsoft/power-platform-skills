@@ -10,9 +10,6 @@ const {
   detectFramework,
   detectSiteLanguage,
 } = require('../../../scripts/lib/localization-config');
-const {
-  validateSiteIntegrity,
-} = require('../../../scripts/lib/site-integrity');
 
 runValidation((cwd) => {
   const configPath = findPath(cwd, 'powerpages.config.json');
@@ -86,10 +83,6 @@ runValidation((cwd) => {
       errors.push(`Document language is invalid:\n  ${siteLanguage.conflicts.join('\n  ')}`);
     }
   }
-
-  // 8. Reuse lifecycle validation so exact blockers isolated behind unavailable
-  // locales do not prevent completion of the remaining available site.
-  errors.push(...validateSiteIntegrity(projectRoot).errors);
 
   if (errors.length > 0) {
     block('Power Pages site validation failed:\n- ' + errors.join('\n- '));

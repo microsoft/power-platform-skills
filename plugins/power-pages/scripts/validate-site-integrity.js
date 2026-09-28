@@ -13,9 +13,28 @@ const {
 } = require('./lib/site-integrity');
 
 const USAGE =
-  'Usage: validate-site-integrity.js [--projectRoot <path>]';
+  'Usage: validate-site-integrity.js [--projectRoot <path>] [--skip-localization]';
 
-const parseArgs = (argv) => parseOptionalProjectRootArgs(argv, USAGE);
+function parseArgs(argv) {
+  let skipLocalization = false;
+  const remaining = [];
+  for (const arg of argv) {
+    if (arg === '--skip-localization') {
+      if (skipLocalization) {
+        throw new Error(
+          'Argument "--skip-localization" may be specified only once.'
+        );
+      }
+      skipLocalization = true;
+    } else {
+      remaining.push(arg);
+    }
+  }
+  return {
+    ...parseOptionalProjectRootArgs(remaining, USAGE),
+    skipLocalization,
+  };
+}
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -26,7 +45,9 @@ function main() {
     return 0;
   }
 
-  const result = validateSiteIntegrity(projectRoot);
+  const result = validateSiteIntegrity(projectRoot, {
+    skipLocalization: args.skipLocalization,
+  });
   if (result.skipped) {
     process.stdout.write(`[power-pages] Site integrity skipped: ${result.reason}\n`);
     return 0;

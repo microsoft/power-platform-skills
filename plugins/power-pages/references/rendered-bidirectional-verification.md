@@ -29,7 +29,7 @@ a loopback-only development server:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
-  --begin --projectRoot "<PROJECT_ROOT>" --locales "ar-SA"
+  --begin --profile standard --projectRoot "<PROJECT_ROOT>" --locales "ar-SA"
 
 node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" \
   --projectRoot "<PROJECT_ROOT>" --verification
@@ -56,6 +56,8 @@ Use schema version 1:
 ```json
 {
   "version": 1,
+  "verificationProfile": "standard",
+  "maxConcurrency": 3,
   "runtimeSwitching": true,
   "defaultLocaleId": "en",
   "viewports": [
@@ -67,6 +69,7 @@ Use schema version 1:
       "id": "en",
       "locale": "en-US",
       "direction": "ltr",
+      "textExpansion": 1,
       "activate": [
         { "type": "click", "selector": "[data-locale='en-US']" }
       ],
@@ -78,6 +81,7 @@ Use schema version 1:
       "id": "ar",
       "locale": "ar-SA",
       "direction": "rtl",
+      "textExpansion": 1.2,
       "activate": [
         {
           "type": "activate-locale",
@@ -96,6 +100,7 @@ Use schema version 1:
       "id": "contact-email",
       "name": "Contact email field",
       "classification": "direction-fixed",
+      "risk": "high",
       "reason": "Email addresses preserve LTR character order",
       "route": "/contact",
       "selector": "[data-bidi-id='contact-email']",
@@ -103,6 +108,7 @@ Use schema version 1:
       "states": [
         {
           "name": "invalid",
+          "isolation": "resettable",
           "setup": [
             {
               "type": "fill",
@@ -113,6 +119,13 @@ Use schema version 1:
               "type": "press",
               "selector": "[data-bidi-id='contact-email'] input",
               "key": "Tab"
+            }
+          ],
+          "reset": [
+            {
+              "type": "fill",
+              "selector": "[data-bidi-id='contact-email'] input",
+              "value": ""
             }
           ],
           "targets": [
@@ -177,10 +190,71 @@ Use schema version 1:
 }
 ```
 
+## Verification profiles
+
+`standard` is the default localization workflow profile. It separates checks
+whose behavior varies by locale from checks whose behavior varies primarily by
+writing direction:
+
+- Every real locale receives application-driven activation, localized-content,
+  exact `lang`/`dir`, resource/console, and formatting smoke coverage.
+- The component matrix uses one representative LTR locale and one
+  representative RTL locale. Prefer a newly added real locale, then greater
+  measured text expansion, then the default/existing locale. Use a pseudo
+  direction only when no real locale exists.
+- `direction-neutral` components default to low risk and use their primary
+  state and viewport. `direction-aware` components default to medium risk and
+  use all declared states/viewports. `direction-fixed` and
+  `unknown-third-party` components default to high risk and use all declared
+  states/viewports.
+- High-risk components in non-representative locales become explicit maker
+  review items rather than an automatic full Cartesian matrix.
+
+Set `risk` to `low`, `medium`, or `high` only when implementation evidence
+justifies overriding the classification default. Unknown components remain
+high risk. `textExpansion` is the target/source visible-text ratio used to
+choose between same-direction target locales.
+
+`extensive` runs every declared component, state, viewport, and locale. Offer
+it after standard verification passes and before transaction finalization.
+`targeted` accepts `targetCaseIds` and is for repair reruns after the complete
+standard or extensive baseline exists; it is not sufficient to approve a new
+locale by itself.
+
+## Grouping and concurrency
+
+Component cases are grouped by route, viewport, and locale. Independent locale
+smoke cases and component groups run through a bounded worker pool. The
+default `maxConcurrency` is `3`; specifications may set an integer from `1`
+through `8`. Use `1` when the local development server or application cannot
+serve independent browser contexts concurrently. Runtime locale-transition
+sequences remain serial because they verify persistence, request ordering, and
+state preservation.
+
+State isolation controls navigation reuse:
+
+- Omitted or `reload`: reuse the browser page object, but navigate and activate
+  the locale again before the state. This preserves the previous clean-state
+  behavior.
+- `resettable`: after checking the state, execute its required non-empty
+  `reset` actions. The runner verifies that reset preserved the route origin,
+  active locale, localized-content evidence, and unavailable-locale
+  boundaries. A successful reset allows the next resettable state in the same
+  route/viewport/locale group to skip navigation and locale activation.
+- `isolated`: use a group containing only that case. Choose this for
+  authentication changes, destructive submission, reload-sensitive startup,
+  or global state that cannot be reliably reset.
+
+Reset actions cannot navigate or activate/change a locale. Do not mark a state
+`resettable` merely for performance: its reset must restore the same baseline
+that a fresh route navigation would provide.
+
 When `runtimeSwitching` is `true`, `defaultLocaleId` identifies the real
-default locale. For every real non-default locale, provide both default ->
-locale -> default and locale -> default -> locale sequences. This verifies
-each locale independently without requiring every possible locale pair.
+default locale. Standard verification requires default -> locale -> default
+for every real non-default locale and the reverse locale -> default -> locale
+sequence for representative locales. Extensive verification requires both
+sequences for every real non-default locale. This verifies each locale
+independently without requiring every possible locale pair.
 Pseudo locales do not participate in runtime transition pairs. Static
 localization modes set `runtimeSwitching` to `false` and use locale-specific
 navigation actions. Runtime switching requires
@@ -202,6 +276,25 @@ selector that resolves to a non-form element is a blocking specification
 error rather than an empty comparison that can pass without evidence.
 Explicit value, checked, attribute, and property evidence must also exist on
 the selected element; a misspelled or inapplicable field is blocking.
+
+## Evidence reuse
+
+Reports include a fingerprint of source, localization resources, package
+metadata, build configuration, and locale availability. Readiness status,
+timestamps, and finding disposition metadata do not invalidate otherwise
+identical rendered evidence.
+
+Create-site may reuse a successful add-localization report:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --reuse-report "<REPORT_JSON>"
+```
+
+The command rejects failed or stale evidence. If accessibility remediation or
+any other edit changes a fingerprinted input, rebuild the current
+specification and run affected cases instead of claiming reuse.
 
 ## Locale activation and pseudo directions
 

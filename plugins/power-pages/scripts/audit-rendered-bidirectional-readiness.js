@@ -12,6 +12,14 @@ const {
   runRenderedBidirectionalAudit,
 } = require('./lib/rendered-bidirectional-readiness');
 const {
+  resolveVerificationProfile,
+} = require('./lib/localization-verification-profile');
+const {
+  computeVerificationInputFingerprint,
+  createVerificationEvidence,
+  validateReusableVerificationReport,
+} = require('./lib/verification-evidence');
+const {
   beginLocalizationVerificationAudit,
   endLocalizationVerificationAudit,
   markLocalizationVerificationFailed,
@@ -33,16 +41,19 @@ const ARGUMENTS = new Map([
   ['--spec-inline', 'specInline'],
   ['--evidence-dir', 'evidenceDir'],
   ['--output', 'output'],
+  ['--reuse-report', 'reuseReport'],
 ]);
 const PATH_ARGUMENTS = new Set([
   'projectRoot',
   'specPath',
   'evidenceDir',
   'output',
+  'reuseReport',
 ]);
 const USAGE =
-  'Usage: audit-rendered-bidirectional-readiness.js --url <base-url> ' +
-  '--projectRoot <path> (--spec <json-file> | --spec-inline <json>) ' +
+  'Usage: audit-rendered-bidirectional-readiness.js --projectRoot <path> ' +
+  '((--url <base-url> (--spec <json-file> | --spec-inline <json>)) | ' +
+  '--reuse-report <report-json>) ' +
   '[--evidence-dir <path>] [--output <report-json>]';
 
 function parseArgs(argv) {
@@ -65,9 +76,11 @@ function parseArgs(argv) {
       : value;
     index += 1;
   }
-  if (!parsed.url || !parsed.projectRoot ||
-      (!parsed.specPath && !parsed.specInline) ||
-      (parsed.specPath && parsed.specInline)) {
+  const specCount = Number(Boolean(parsed.specPath)) +
+    Number(Boolean(parsed.specInline));
+  if (!parsed.projectRoot ||
+      (!parsed.reuseReport && !parsed.url) ||
+      (parsed.reuseReport ? specCount !== 0 : specCount !== 1)) {
     throw new Error(USAGE);
   }
   return parsed;
@@ -106,6 +119,30 @@ function loadPlaywright(projectRoot) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   recoveryContext.projectRoot = args.projectRoot;
+  if (args.reuseReport) {
+    const report = JSON.parse(fs.readFileSync(args.reuseReport, 'utf8'));
+    const reuseErrors = validateReusableVerificationReport(
+      args.projectRoot,
+      report
+    );
+    if (reuseErrors.length > 0) {
+      throw new Error(`Rendered verification evidence cannot be reused:\n- ${
+        reuseErrors.join('\n- ')
+      }`);
+    }
+    report.verification = {
+      ...report.verification,
+      reused: true,
+      reusedAt: new Date().toISOString(),
+    };
+    const json = `${JSON.stringify(report, null, 2)}\n`;
+    if (args.output) {
+      fs.mkdirSync(path.dirname(args.output), { recursive: true });
+      fs.writeFileSync(args.output, json);
+    }
+    process.stdout.write(json);
+    return;
+  }
   const spec = JSON.parse(
     args.specInline ?? fs.readFileSync(args.specPath, 'utf8')
   );
@@ -131,6 +168,12 @@ async function main() {
       );
     }
     if (transaction) {
+      if (resolveVerificationProfile(spec) !==
+          (transaction.verificationProfile || 'extensive')) {
+        throw new Error(
+          'Rendered run specification profile must match the active localization transaction.'
+        );
+      }
       const transactionErrors = validateTransactionAgainstManifest(
         transaction,
         manifest,
@@ -160,6 +203,7 @@ async function main() {
     );
   }
   let auditLeaseStarted = false;
+  const inputFingerprint = computeVerificationInputFingerprint(args.projectRoot);
   try {
     if (transaction) {
       beginLocalizationVerificationAudit(
@@ -177,6 +221,17 @@ async function main() {
       browserLaunchOptions: detectBrowserLaunchOptions(),
       evidenceDir: args.evidenceDir,
     });
+    const completedFingerprint =
+      computeVerificationInputFingerprint(args.projectRoot);
+    if (completedFingerprint !== inputFingerprint) {
+      throw new Error(
+        'Project verification inputs changed while the rendered audit was running.'
+      );
+    }
+    result.verification.evidence = createVerificationEvidence(
+      args.projectRoot,
+      spec
+    );
     if (transaction && result.summary.errors > 0) {
       markLocalizationVerificationFailed(args.projectRoot, transaction.runId);
     }
@@ -187,7 +242,11 @@ async function main() {
     }
     process.stdout.write(json);
     if (transaction && result.summary.errors === 0) {
-      markLocalizationVerificationPassed(args.projectRoot, transaction.runId);
+      markLocalizationVerificationPassed(
+        args.projectRoot,
+        transaction.runId,
+        result.verification
+      );
     }
     process.exitCode = result.summary.errors > 0 ? 1 : 0;
   } catch (error) {

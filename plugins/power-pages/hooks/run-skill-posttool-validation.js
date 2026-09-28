@@ -70,14 +70,18 @@ process.stdin.on('end', () => {
       debug(`[power-pages hook] Validator exited with code ${validatorStatus}\n`);
     }
 
-    // A skill-specific validator knows its own artifacts, but cannot enforce
-    // cross-cutting localization and direction invariants. Run the shared pass
-    // only after that validator succeeds so its error remains the primary result.
+    // add-localization's validator already performs the complete localization
+    // pass. Its shared integrity backstop skips only that duplicate work while
+    // retaining an independent source-wide bidirectional check.
     if (validatorStatus === 0 && modifiesVisibleSource(skillName)) {
       const integrityPath = path.join(__dirname, '..', 'scripts', 'validate-site-integrity.js');
+      const integrityArgs = [integrityPath, '--projectRoot', cwd];
+      if (skillName === 'add-localization') {
+        integrityArgs.push('--skip-localization');
+      }
       const integrity = spawnSync(
         process.execPath,
-        [integrityPath, '--projectRoot', cwd],
+        integrityArgs,
         { encoding: 'utf8', cwd }
       );
       if (integrity.stdout) process.stdout.write(integrity.stdout);

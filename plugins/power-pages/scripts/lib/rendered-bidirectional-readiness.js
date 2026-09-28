@@ -5,6 +5,14 @@ const path = require('path');
 const {
   resolveLocale,
 } = require('./localization-config');
+const {
+  COMPONENT_RISKS,
+  VERIFICATION_PROFILES,
+  buildManualReviewChecklist,
+  resolveRepresentatives,
+  resolveVerificationProfile,
+  selectComponentDimensions,
+} = require('./localization-verification-profile');
 
 const CLASSIFICATIONS = new Set([
   'direction-neutral',
@@ -37,6 +45,9 @@ const ACTION_TYPES = new Set([
   'use-current',
   'wait',
 ]);
+const STATE_ISOLATION = new Set(['isolated', 'reload', 'resettable']);
+const DEFAULT_MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 8;
 
 function validateRunSpec(spec, localizationContext = null) {
   const errors = [];
@@ -44,9 +55,23 @@ function validateRunSpec(spec, localizationContext = null) {
     return ['The rendered bidirectional run specification must be an object.'];
   }
   if (spec.version !== 1) errors.push('version must be 1.');
+  const verificationProfile = resolveVerificationProfile(spec);
+  if (!VERIFICATION_PROFILES.has(verificationProfile)) {
+    errors.push(
+      'verificationProfile must be standard, extensive, or targeted when provided.'
+    );
+  }
   if (spec.runtimeSwitching !== undefined &&
       typeof spec.runtimeSwitching !== 'boolean') {
     errors.push('runtimeSwitching must be boolean when provided.');
+  }
+  if (spec.maxConcurrency !== undefined &&
+      (!Number.isInteger(spec.maxConcurrency) ||
+       spec.maxConcurrency < 1 ||
+       spec.maxConcurrency > MAX_CONCURRENCY)) {
+    errors.push(
+      `maxConcurrency must be an integer from 1 through ${MAX_CONCURRENCY}.`
+    );
   }
   const viewports = Array.isArray(spec.viewports) ? spec.viewports : [];
   const locales = Array.isArray(spec.locales) ? spec.locales : [];
@@ -108,6 +133,10 @@ function validateRunSpec(spec, localizationContext = null) {
     validateActions(locale?.activate, `${prefix}.activate`, errors);
     if (locale?.pseudo !== undefined && typeof locale.pseudo !== 'boolean') {
       errors.push(`${prefix}.pseudo must be boolean when provided.`);
+    }
+    if (locale?.textExpansion !== undefined &&
+        (!Number.isFinite(locale.textExpansion) || locale.textExpansion < 0)) {
+      errors.push(`${prefix}.textExpansion must be a non-negative number.`);
     }
     const activation = asArray(locale?.activate);
     if (locale?.pseudo === true) {
@@ -171,6 +200,48 @@ function validateRunSpec(spec, localizationContext = null) {
   if (!directions.has('ltr') || !directions.has('rtl')) {
     errors.push('locales must include at least one LTR and one RTL verification locale.');
   }
+  if (spec.representativeLocaleIds !== undefined) {
+    if (!spec.representativeLocaleIds ||
+        typeof spec.representativeLocaleIds !== 'object' ||
+        Array.isArray(spec.representativeLocaleIds)) {
+      errors.push('representativeLocaleIds must be an object when provided.');
+    } else {
+      for (const direction of ['ltr', 'rtl']) {
+        const localeId = spec.representativeLocaleIds[direction];
+        if (localeId === undefined) continue;
+        const locale = locales.find((candidate) => candidate.id === localeId);
+        if (!locale) {
+          errors.push(
+            `representativeLocaleIds.${direction} references unknown locale "${localeId}".`
+          );
+        } else if (locale.direction !== direction) {
+          errors.push(
+            `representativeLocaleIds.${direction} must reference a ${direction} locale.`
+          );
+        }
+      }
+    }
+  }
+  if (spec.localeSmoke !== undefined) {
+    if (!spec.localeSmoke ||
+        typeof spec.localeSmoke !== 'object' ||
+        Array.isArray(spec.localeSmoke)) {
+      errors.push('localeSmoke must be an object when provided.');
+    } else {
+      if (!isNonEmpty(spec.localeSmoke.route) ||
+          !spec.localeSmoke.route.startsWith('/')) {
+        errors.push('localeSmoke.route must start with "/".');
+      }
+      if (!viewportNames.has(spec.localeSmoke.viewport)) {
+        errors.push('localeSmoke.viewport must reference a configured viewport.');
+      }
+    }
+  }
+  if (verificationProfile === 'targeted') {
+    validateStringArray(spec.targetCaseIds, 'targetCaseIds', errors, 1);
+  } else if (spec.targetCaseIds !== undefined) {
+    errors.push('targetCaseIds is valid only for targeted verification.');
+  }
 
   if (spec.unavailableLocaleChecks !== undefined &&
       !Array.isArray(spec.unavailableLocaleChecks)) {
@@ -199,6 +270,9 @@ function validateRunSpec(spec, localizationContext = null) {
     if (!CLASSIFICATIONS.has(component?.classification)) {
       errors.push(`${prefix}.classification is invalid.`);
     }
+    if (component?.risk !== undefined && !COMPONENT_RISKS.has(component.risk)) {
+      errors.push(`${prefix}.risk must be low, medium, or high.`);
+    }
     if (!isNonEmpty(component?.route) || !component.route.startsWith('/')) {
       errors.push(`${prefix}.route must start with "/".`);
     }
@@ -212,6 +286,33 @@ function validateRunSpec(spec, localizationContext = null) {
       const statePrefix = `${prefix}.states[${stateIndex}]`;
       if (!isNonEmpty(state?.name)) errors.push(`${statePrefix}.name is required.`);
       validateActions(state?.setup, `${statePrefix}.setup`, errors);
+      if (state?.isolation !== undefined &&
+          !STATE_ISOLATION.has(state.isolation)) {
+        errors.push(
+          `${statePrefix}.isolation must be isolated, reload, or resettable.`
+        );
+      }
+      validateActions(state?.reset, `${statePrefix}.reset`, errors);
+      if (state?.isolation === 'resettable' &&
+          (!Array.isArray(state.reset) || state.reset.length === 0)) {
+        errors.push(
+          `${statePrefix}.reset must contain at least one action for resettable states.`
+        );
+      }
+      if (state?.isolation !== 'resettable' && state?.reset !== undefined) {
+        errors.push(
+          `${statePrefix}.reset is valid only when isolation is resettable.`
+        );
+      }
+      if (state?.isolation === 'resettable' &&
+          asArray(state.reset).some((action) =>
+            ['activate-locale', 'navigate', 'set-document', 'use-current']
+              .includes(action.type)
+          )) {
+        errors.push(
+          `${statePrefix}.reset cannot navigate or change the active locale.`
+        );
+      }
       if (state?.targets !== undefined && !Array.isArray(state.targets)) {
         errors.push(`${statePrefix}.targets must be an array.`);
       }
@@ -442,23 +543,64 @@ function validateRunSpec(spec, localizationContext = null) {
           'manifest defaultLocale.'
         );
       }
+      const representatives = new Set(
+        Object.values(resolveRepresentatives(spec, localizationContext))
+      );
       for (const locale of locales.filter(
         (candidate) => !candidate.pseudo && candidate.id !== spec.defaultLocaleId
       )) {
         const outward = `${spec.defaultLocaleId},${locale.id},${spec.defaultLocaleId}`;
         const returnTrip = `${locale.id},${spec.defaultLocaleId},${locale.id}`;
-        if (!transitionSequences.includes(outward)) {
+        if (verificationProfile !== 'targeted' &&
+            !transitionSequences.includes(outward)) {
           errors.push(
             `runtimeSwitching requires ${spec.defaultLocaleId} -> ${locale.id} -> ` +
             `${spec.defaultLocaleId}.`
           );
         }
-        if (!transitionSequences.includes(returnTrip)) {
+        if (verificationProfile === 'extensive' &&
+            !transitionSequences.includes(returnTrip)) {
           errors.push(
             `runtimeSwitching requires ${locale.id} -> ${spec.defaultLocaleId} -> ` +
             `${locale.id}.`
           );
         }
+        if (verificationProfile === 'standard' &&
+            representatives.has(locale.id) &&
+            !transitionSequences.includes(returnTrip)) {
+          errors.push(
+            `standard runtimeSwitching requires representative locale ` +
+            `${locale.id} -> ${spec.defaultLocaleId} -> ${locale.id}.`
+          );
+        }
+      }
+    }
+  }
+  if (verificationProfile === 'targeted' &&
+      Array.isArray(spec.targetCaseIds)) {
+    const knownCaseIds = new Set();
+    for (const component of components) {
+      for (const state of asArray(component.states)) {
+        for (const viewportName of asArray(component.viewports)) {
+          for (const locale of locales) {
+            knownCaseIds.add(
+              `${component.id}--${state.name}--${viewportName}--${locale.id}`
+            );
+          }
+        }
+      }
+    }
+    const smokeViewport =
+      spec.localeSmoke?.viewport || viewports[0]?.name;
+    for (const locale of locales.filter((candidate) => !candidate.pseudo)) {
+      knownCaseIds.add(`locale-smoke--${smokeViewport}--${locale.id}`);
+    }
+    for (const transition of spec.transitions || []) {
+      knownCaseIds.add(`transition--${transition.name}`);
+    }
+    for (const caseId of spec.targetCaseIds) {
+      if (!knownCaseIds.has(caseId)) {
+        errors.push(`targetCaseIds references unknown case "${caseId}".`);
       }
     }
   }
@@ -525,26 +667,115 @@ function validateActions(actions, prefix, errors) {
   }
 }
 
-function buildVerificationCases(spec) {
+function buildVerificationCases(spec, localizationContext = null) {
   const viewportMap = new Map(spec.viewports.map((viewport) => [viewport.name, viewport]));
+  const localeMap = new Map(spec.locales.map((locale) => [locale.id, locale]));
+  const representatives = resolveRepresentatives(spec, localizationContext);
   const cases = [];
   for (const component of spec.components) {
-    for (const state of component.states) {
-      for (const viewportName of component.viewports) {
-        for (const locale of spec.locales) {
+    const dimensions = selectComponentDimensions(
+      component,
+      spec,
+      representatives
+    );
+    for (const state of dimensions.states) {
+      for (const viewportName of dimensions.viewports) {
+        for (const localeId of dimensions.localeIds) {
+          const locale = localeMap.get(localeId);
+          if (!locale) continue;
           cases.push({
             id: `${component.id}--${state.name}--${viewportName}--${locale.id}`,
             component,
             state,
             viewport: viewportMap.get(viewportName),
             locale,
+            risk: dimensions.risk,
             spec,
           });
         }
       }
     }
   }
-  return cases;
+  if (resolveVerificationProfile(spec) !== 'targeted') return cases;
+  const targetCaseIds = new Set(spec.targetCaseIds || []);
+  return cases.filter((verificationCase) =>
+    targetCaseIds.has(verificationCase.id)
+  );
+}
+
+function buildLocaleSmokeCases(spec, localizationContext = null) {
+  const profile = resolveVerificationProfile(spec);
+  if (!['standard', 'targeted'].includes(profile)) return [];
+  const representatives = new Set(
+    Object.values(resolveRepresentatives(spec, localizationContext))
+  );
+  const route = spec.localeSmoke?.route || spec.components[0]?.route;
+  const viewportName =
+    spec.localeSmoke?.viewport || spec.viewports[0]?.name;
+  const viewport = spec.viewports.find(
+    (candidate) => candidate.name === viewportName
+  );
+  const targetCaseIds = new Set(spec.targetCaseIds || []);
+  return spec.locales
+    .filter((locale) =>
+      !locale.pseudo &&
+      (profile === 'targeted' || !representatives.has(locale.id))
+    )
+    .map((locale) => ({
+      id: `locale-smoke--${viewportName}--${locale.id}`,
+      route,
+      viewport,
+      locale,
+      spec,
+    }))
+    .filter((smokeCase) =>
+      profile !== 'targeted' || targetCaseIds.has(smokeCase.id)
+    );
+}
+
+function buildVerificationGroups(verificationCases) {
+  const groups = new Map();
+  for (const verificationCase of verificationCases) {
+    const { component, state, viewport, locale } = verificationCase;
+    // Isolated states retain the old one-page-per-case behavior. Other states
+    // can safely share a page object; reload remains the default preparation
+    // unless the spec supplies a reset action that restores a known baseline.
+    const key = state.isolation === 'isolated'
+      ? `isolated:${verificationCase.id}`
+      : [
+          component.route,
+          viewport.name,
+          locale.id,
+        ].join('\0');
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        route: component.route,
+        viewport,
+        locale,
+        cases: [],
+      });
+    }
+    groups.get(key).cases.push(verificationCase);
+  }
+  return [...groups.values()];
+}
+
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, () => runWorker())
+  );
+  return results;
 }
 
 async function runRenderedBidirectionalAudit(options) {
@@ -566,20 +797,69 @@ async function runRenderedBidirectionalAudit(options) {
   });
   const findings = [];
   const results = [];
+  const representatives = resolveRepresentatives(
+    options.spec,
+    options.localizationContext
+  );
+  const smokeCases = buildLocaleSmokeCases(
+    options.spec,
+    options.localizationContext
+  );
+  const verificationGroups = buildVerificationGroups(
+    buildVerificationCases(options.spec, options.localizationContext)
+  );
+  const maxConcurrency =
+    options.spec.maxConcurrency || DEFAULT_MAX_CONCURRENCY;
 
   try {
-    for (const verificationCase of buildVerificationCases(options.spec)) {
-      const result = await runVerificationCase(
-        browser,
-        baseUrl,
-        verificationCase,
-        options.evidenceDir,
-        requiredOrigin
-      );
-      results.push(result);
-      findings.push(...result.findings);
+    const independentTasks = [
+      ...smokeCases.map((smokeCase) => ({
+        type: 'locale-smoke',
+        value: smokeCase,
+      })),
+      ...verificationGroups.map((group) => ({
+        type: 'component-group',
+        value: group,
+      })),
+    ];
+    const taskResults = await runWithConcurrency(
+      independentTasks,
+      maxConcurrency,
+      async (task) => {
+        if (task.type === 'locale-smoke') {
+          return [await runLocaleSmokeCase(
+            browser,
+            baseUrl,
+            task.value,
+            options.evidenceDir,
+            requiredOrigin
+          )];
+        }
+        return runVerificationGroup(
+          browser,
+          baseUrl,
+          task.value,
+          options.evidenceDir,
+          requiredOrigin
+        );
+      }
+    );
+    for (const taskResult of taskResults) {
+      for (const result of taskResult) {
+        results.push(result);
+        findings.push(...result.findings);
+      }
     }
+    // Runtime transitions deliberately remain serial. They verify persistence,
+    // request ordering, and state preservation, so overlapping sequences would
+    // make timing-sensitive failures harder to attribute.
+    const targetCaseIds = new Set(options.spec.targetCaseIds || []);
     for (const transition of options.spec.transitions || []) {
+      const transitionId = `transition--${transition.name}`;
+      if (resolveVerificationProfile(options.spec) === 'targeted' &&
+          !targetCaseIds.has(transitionId)) {
+        continue;
+      }
       const result = await runTransitionCase(
         browser,
         baseUrl,
@@ -598,20 +878,39 @@ async function runRenderedBidirectionalAudit(options) {
   return {
     url: baseUrl,
     runAt: new Date().toISOString(),
+    verification: {
+      profile: resolveVerificationProfile(options.spec),
+      representativeLocaleIds: representatives,
+      localeSmokeCount: results.filter(
+        (result) => result.type === 'locale-smoke'
+      ).length,
+      componentCaseCount: results.filter(
+        (result) => result.type === 'component-state'
+      ).length,
+      componentGroupCount: verificationGroups.length,
+      maxConcurrency,
+      transitionCaseCount: results.filter(
+        (result) => result.type === 'locale-transition'
+      ).length,
+      manualReview: buildManualReviewChecklist(
+        options.spec,
+        representatives
+      ),
+    },
     summary: summarizeFindings(findings, results),
     findings,
     results,
   };
 }
 
-async function runVerificationCase(
+async function runLocaleSmokeCase(
   browser,
   baseUrl,
-  verificationCase,
+  smokeCase,
   evidenceDir,
   requiredOrigin
 ) {
-  const { component, state, viewport, locale } = verificationCase;
+  const { locale, route, viewport } = smokeCase;
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
   });
@@ -623,24 +922,181 @@ async function runVerificationCase(
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
   try {
-    await page.goto(`${baseUrl}${component.route}`, {
+    await page.goto(`${baseUrl}${route}`, {
       waitUntil: 'networkidle',
       timeout: 20000,
     });
     await assertPageOrigin(page, requiredOrigin);
     await verifyUnavailableLocaleChecks(
       page,
-      verificationCase.spec.unavailableLocaleChecks || [],
-      verificationCase.id,
+      smokeCase.spec.unavailableLocaleChecks || [],
+      smokeCase.id,
       findings
     );
     await executeActions(page, locale.activate || [], baseUrl, requiredOrigin);
-    await verifyUnavailableLocaleChecks(
-      page,
-      verificationCase.spec.unavailableLocaleChecks || [],
-      verificationCase.id,
-      findings
-    );
+    await page.waitForTimeout(100);
+    await assertPageOrigin(page, requiredOrigin);
+    await assertDocumentLocale(page, locale, findings, smokeCase.id);
+    await assertLocaleEvidence(page, locale, findings, smokeCase.id);
+    for (const message of consoleErrors) {
+      findings.push(makeFinding(
+        smokeCase.id,
+        'browser-console-error',
+        'error',
+        message,
+        'html'
+      ));
+    }
+  } catch (error) {
+    findings.push(makeFinding(
+      smokeCase.id,
+      'locale-smoke-failure',
+      'error',
+      error.message,
+      'html'
+    ));
+  }
+
+  const screenshot = findings.length > 0
+    ? await captureEvidence(page, evidenceDir, smokeCase.id)
+    : null;
+  await page.close();
+  return {
+    id: smokeCase.id,
+    type: 'locale-smoke',
+    route,
+    viewport: viewport.name,
+    locale: locale.locale,
+    direction: locale.direction,
+    status: findings.some((finding) => finding.severity === 'error')
+      ? 'failed'
+      : findings.length > 0 ? 'review' : 'passed',
+    screenshot,
+    findings,
+  };
+}
+
+async function runVerificationGroup(
+  browser,
+  baseUrl,
+  group,
+  evidenceDir,
+  requiredOrigin
+) {
+  const page = await browser.newPage({
+    viewport: {
+      width: group.viewport.width,
+      height: group.viewport.height,
+    },
+  });
+  const consoleErrors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => consoleErrors.push(error.message));
+  const results = [];
+  let reusableBaseline = false;
+
+  try {
+    for (const verificationCase of group.cases) {
+      const consoleStart = consoleErrors.length;
+      const canReset =
+        verificationCase.state.isolation === 'resettable' &&
+        !verificationCase.locale.pseudo;
+      try {
+        let initializationFindings = [];
+        if (!reusableBaseline || !canReset) {
+          initializationFindings = await initializeVerificationPage(
+            page,
+            baseUrl,
+            verificationCase,
+            requiredOrigin
+          );
+        }
+        const outcome = await runVerificationCaseOnPage(
+          page,
+          baseUrl,
+          verificationCase,
+          evidenceDir,
+          requiredOrigin,
+          consoleErrors,
+          consoleStart,
+          initializationFindings
+        );
+        results.push(outcome.result);
+        reusableBaseline = canReset && outcome.resetSucceeded;
+      } catch (error) {
+        const findings = [makeFinding(
+          verificationCase.id,
+          'rendered-case-failure',
+          'error',
+          error.message,
+          verificationCase.component.selector
+        )];
+        const screenshot = await captureEvidence(
+          page,
+          evidenceDir,
+          verificationCase.id
+        );
+        results.push(buildVerificationCaseResult(
+          verificationCase,
+          findings,
+          screenshot
+        ));
+        reusableBaseline = false;
+      }
+    }
+  } finally {
+    await page.close();
+  }
+  return results;
+}
+
+async function initializeVerificationPage(
+  page,
+  baseUrl,
+  verificationCase,
+  requiredOrigin
+) {
+  const { component, locale } = verificationCase;
+  await page.goto(`${baseUrl}${component.route}`, {
+    waitUntil: 'networkidle',
+    timeout: 20000,
+  });
+  await assertPageOrigin(page, requiredOrigin);
+  const initializationFindings = [];
+  await verifyUnavailableLocaleChecks(
+    page,
+    verificationCase.spec.unavailableLocaleChecks || [],
+    verificationCase.id,
+    initializationFindings
+  );
+  await executeActions(page, locale.activate || [], baseUrl, requiredOrigin);
+  await verifyUnavailableLocaleChecks(
+    page,
+    verificationCase.spec.unavailableLocaleChecks || [],
+    verificationCase.id,
+    initializationFindings
+  );
+  return initializationFindings;
+}
+
+async function runVerificationCaseOnPage(
+  page,
+  baseUrl,
+  verificationCase,
+  evidenceDir,
+  requiredOrigin,
+  consoleErrors,
+  consoleStart,
+  initializationFindings
+) {
+  const { component, state, viewport, locale } = verificationCase;
+  const findings = [...initializationFindings];
+  let screenshot = null;
+  let resetSucceeded = state.isolation !== 'resettable';
+
+  try {
     await executeActions(page, state.setup || [], baseUrl, requiredOrigin);
     await verifyUnavailableLocaleChecks(
       page,
@@ -700,15 +1156,6 @@ async function runVerificationCase(
       ));
     }
     await assertPageOrigin(page, requiredOrigin);
-    for (const message of consoleErrors) {
-      findings.push(makeFinding(
-        verificationCase.id,
-        'browser-console-error',
-        'error',
-        message,
-        component.selector
-      ));
-    }
   } catch (error) {
     findings.push(makeFinding(
       verificationCase.id,
@@ -719,10 +1166,98 @@ async function runVerificationCase(
     ));
   }
 
-  const screenshot = findings.length > 0
-    ? await captureEvidence(page, evidenceDir, verificationCase.id)
-    : null;
-  await page.close();
+  if (findings.length > 0) {
+    screenshot = await captureEvidence(
+      page,
+      evidenceDir,
+      verificationCase.id
+    );
+  }
+  if (state.isolation === 'resettable') {
+    try {
+      const findingCountBeforeReset = findings.length;
+      await executeActions(
+        page,
+        state.reset,
+        baseUrl,
+        requiredOrigin
+      );
+      await verifyUnavailableLocaleChecks(
+        page,
+        verificationCase.spec.unavailableLocaleChecks || [],
+        verificationCase.id,
+        findings
+      );
+      await assertPageOrigin(page, requiredOrigin);
+      await assertDocumentLocale(
+        page,
+        locale,
+        findings,
+        verificationCase.id
+      );
+      await assertLocaleEvidence(
+        page,
+        locale,
+        findings,
+        verificationCase.id
+      );
+      resetSucceeded = findings.length === findingCountBeforeReset;
+      if (!resetSucceeded && !screenshot) {
+        screenshot = await captureEvidence(
+          page,
+          evidenceDir,
+          verificationCase.id
+        );
+      }
+    } catch (error) {
+      findings.push(makeFinding(
+        verificationCase.id,
+        'rendered-case-reset-failure',
+        'error',
+        `The declared state reset failed: ${error.message}`,
+        component.selector
+      ));
+      if (!screenshot) {
+        screenshot = await captureEvidence(
+          page,
+          evidenceDir,
+          verificationCase.id
+        );
+      }
+    }
+  }
+  for (const message of consoleErrors.slice(consoleStart)) {
+    findings.push(makeFinding(
+      verificationCase.id,
+      'browser-console-error',
+      'error',
+      message,
+      component.selector
+    ));
+  }
+  if (state.isolation === 'resettable' &&
+      findings.some((finding) => finding.rule === 'browser-console-error')) {
+    resetSucceeded = false;
+  }
+  if (findings.length > 0 && !screenshot) {
+    screenshot = await captureEvidence(
+      page,
+      evidenceDir,
+      verificationCase.id
+    );
+  }
+  return {
+    resetSucceeded,
+    result: buildVerificationCaseResult(
+      verificationCase,
+      findings,
+      screenshot
+    ),
+  };
+}
+
+function buildVerificationCaseResult(verificationCase, findings, screenshot) {
+  const { component, state, viewport, locale } = verificationCase;
   return {
     id: verificationCase.id,
     type: 'component-state',
@@ -1529,8 +2064,11 @@ function isNonEmpty(value) {
 }
 
 module.exports = {
+  buildLocaleSmokeCases,
+  buildVerificationGroups,
   buildVerificationCases,
   runRenderedBidirectionalAudit,
+  runWithConcurrency,
   summarizeFindings,
   validateRunSpec,
 };

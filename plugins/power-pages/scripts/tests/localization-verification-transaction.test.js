@@ -9,6 +9,7 @@ const {
   abandonLocalizationVerificationAudit,
   beginLocalizationVerificationAudit,
   beginLocalizationVerification,
+  extendLocalizationVerification,
   finalizeLocalizationVerification,
   markLocalizationVerificationFailed,
   markLocalizationVerificationPassed,
@@ -66,6 +67,19 @@ function writeManifest(projectRoot, value) {
     '.powerpages-localization.json',
     `${JSON.stringify(value, null, 2)}\n`
   );
+}
+
+function verificationEvidence(profile = 'extensive', manualReview = []) {
+  return {
+    profile,
+    representativeLocaleIds: { ltr: 'en', rtl: 'ar' },
+    manualReview,
+    evidence: {
+      schemaVersion: 1,
+      inputFingerprint: 'a'.repeat(64),
+      specFingerprint: 'b'.repeat(64),
+    },
+  };
 }
 
 test('begins an exclusive verification transaction from a fail-closed manifest', (t) => {
@@ -152,7 +166,11 @@ test('failure wins if successful and failed outcomes race for one run', (t) => {
   const projectRoot = createTempProject(t);
   writeManifest(projectRoot, manifest());
   const transaction = beginLocalizationVerification(projectRoot, ['ar-SA']);
-  markLocalizationVerificationPassed(projectRoot, transaction.runId);
+  markLocalizationVerificationPassed(
+    projectRoot,
+    transaction.runId,
+    verificationEvidence()
+  );
 
   const failed = markLocalizationVerificationFailed(
     projectRoot,
@@ -162,7 +180,11 @@ test('failure wins if successful and failed outcomes race for one run', (t) => {
   assert.equal(failed.state, 'remediation-required');
   assert.equal(failed.verifiedAt, undefined);
   assert.throws(
-    () => markLocalizationVerificationPassed(projectRoot, transaction.runId),
+    () => markLocalizationVerificationPassed(
+      projectRoot,
+      transaction.runId,
+      verificationEvidence()
+    ),
     /must be in-progress/
   );
 });
@@ -172,7 +194,11 @@ test('blocks finalization while the rendered audit is active or abandoned', (t) 
   writeManifest(projectRoot, manifest());
   const transaction = beginLocalizationVerification(projectRoot, ['ar-SA']);
   beginLocalizationVerificationAudit(projectRoot, transaction.runId);
-  markLocalizationVerificationPassed(projectRoot, transaction.runId);
+  markLocalizationVerificationPassed(
+    projectRoot,
+    transaction.runId,
+    verificationEvidence()
+  );
 
   assert.throws(
     () => finalizeLocalizationVerification(projectRoot),
@@ -217,13 +243,33 @@ test('transaction manager rejects unknown and duplicate arguments', () => {
     ]),
     /"--projectRoot" may be specified only once/
   );
+  assert.throws(
+    () => parseManagerArgs([
+      '--extend',
+      '--projectRoot', '.',
+      '--profile', 'standard',
+    ]),
+    /requires --profile extensive/
+  );
+  assert.deepEqual(
+    parseManagerArgs([
+      '--finalize',
+      '--projectRoot', '.',
+      '--manual-review-completed',
+    ]).manualReviewCompleted,
+    true
+  );
 });
 
 test('finalizes a successful verification only after the manifest is ready', (t) => {
   const projectRoot = createTempProject(t);
   writeManifest(projectRoot, manifest());
   beginLocalizationVerification(projectRoot, ['ar-SA']);
-  markLocalizationVerificationPassed(projectRoot);
+  markLocalizationVerificationPassed(
+    projectRoot,
+    null,
+    verificationEvidence()
+  );
   writeManifest(projectRoot, manifest({
     unavailableLocales: [],
     bidirectionalReadiness: {
@@ -251,6 +297,54 @@ test('finalizes failed verification only after fail-closed availability is resto
   finalizeLocalizationVerification(projectRoot);
 
   assert.ok(!fs.existsSync(path.join(projectRoot, TRANSACTION_FILE)));
+});
+
+test('requires manual review before finalizing standard verification', (t) => {
+  const projectRoot = createTempProject(t);
+  writeManifest(projectRoot, manifest());
+  const transaction = beginLocalizationVerification(
+    projectRoot,
+    ['ar-SA'],
+    'standard'
+  );
+  markLocalizationVerificationPassed(
+    projectRoot,
+    transaction.runId,
+    verificationEvidence('standard', [{
+      locale: 'ar-SA',
+      componentId: 'calendar',
+    }])
+  );
+
+  assert.throws(
+    () => finalizeLocalizationVerification(projectRoot),
+    /requires the maker to complete/
+  );
+  const finalized = finalizeLocalizationVerification(projectRoot, {
+    manualReviewCompleted: true,
+  });
+  assert.ok(finalized.manualReviewCompletedAt);
+});
+
+test('extends verified standard verification to the extensive profile', (t) => {
+  const projectRoot = createTempProject(t);
+  writeManifest(projectRoot, manifest());
+  const transaction = beginLocalizationVerification(
+    projectRoot,
+    ['ar-SA'],
+    'standard'
+  );
+  markLocalizationVerificationPassed(
+    projectRoot,
+    transaction.runId,
+    verificationEvidence('standard')
+  );
+
+  const extended = extendLocalizationVerification(projectRoot, 'extensive');
+
+  assert.equal(extended.state, 'in-progress');
+  assert.equal(extended.verificationProfile, 'extensive');
+  assert.equal(extended.verification, undefined);
 });
 
 test('does not promote a remediation-required transaction without a new audit', (t) => {

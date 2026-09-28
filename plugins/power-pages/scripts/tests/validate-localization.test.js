@@ -86,7 +86,16 @@ test('finalizes an active verification only after full localization validation',
     },
   });
   beginLocalizationVerification(projectRoot, ['fr-FR']);
-  markLocalizationVerificationPassed(projectRoot);
+  markLocalizationVerificationPassed(projectRoot, null, {
+    profile: 'extensive',
+    representativeLocaleIds: { ltr: 'en', rtl: 'pseudo-rtl' },
+    manualReview: [],
+    evidence: {
+      schemaVersion: 1,
+      inputFingerprint: 'a'.repeat(64),
+      specFingerprint: 'b'.repeat(64),
+    },
+  });
   const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   manifest.unavailableLocales = [];

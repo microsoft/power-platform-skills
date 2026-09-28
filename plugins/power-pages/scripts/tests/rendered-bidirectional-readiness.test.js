@@ -6,8 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
+  buildLocaleSmokeCases,
+  buildVerificationGroups,
   buildVerificationCases,
   runRenderedBidirectionalAudit,
+  runWithConcurrency,
   summarizeFindings,
   validateRunSpec,
 } = require('../lib/rendered-bidirectional-readiness');
@@ -15,6 +18,9 @@ const {
   beginLocalizationVerification,
   readLocalizationVerificationTransaction,
 } = require('../lib/localization-verification-transaction');
+const {
+  createVerificationEvidence,
+} = require('../lib/verification-evidence');
 const { createTempProject, writeProjectFile } = require('./test-utils');
 
 const cliPath = path.join(__dirname, '..', 'audit-rendered-bidirectional-readiness.js');
@@ -404,6 +410,242 @@ test('expands every applicable state, viewport, and locale into a separate case'
   );
 });
 
+test('validates bounded concurrency and explicit resettable state isolation', () => {
+  const spec = validSpec();
+  spec.maxConcurrency = 9;
+  spec.components[0].states[0].isolation = 'resettable';
+  spec.components[0].states[0].reset = [{
+    type: 'navigate',
+    url: '/',
+  }];
+
+  const errors = validateRunSpec(spec);
+
+  assert.ok(errors.some((error) => /maxConcurrency must be an integer/.test(error)));
+  assert.ok(errors.some((error) => /cannot navigate or change the active locale/.test(error)));
+});
+
+test('groups compatible cases by route, viewport, and locale', () => {
+  const spec = validSpec();
+  spec.components[0].states.push({
+    name: 'focused',
+    isolation: 'isolated',
+  });
+  const groups = buildVerificationGroups(buildVerificationCases(spec));
+
+  assert.equal(groups.length, 8);
+  assert.deepEqual(
+    groups.map((group) => group.cases.length).sort(),
+    [1, 1, 1, 1, 1, 1, 1, 1]
+  );
+
+  spec.components[0].states[1].isolation = 'reload';
+  const reusableGroups = buildVerificationGroups(buildVerificationCases(spec));
+  assert.equal(reusableGroups.length, 4);
+  assert.deepEqual(
+    reusableGroups.map((group) => group.cases.length).sort(),
+    [2, 2, 2, 2]
+  );
+});
+
+test('bounded worker pool preserves task order and concurrency limit', async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const results = await runWithConcurrency(
+    [30, 5, 20, 10],
+    2,
+    async (delay, index) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      active -= 1;
+      return index;
+    }
+  );
+
+  assert.deepEqual(results, [0, 1, 2, 3]);
+  assert.equal(maximumActive, 2);
+});
+
+test('resettable states reuse one navigation per route, viewport, and locale', async () => {
+  const spec = validSpec();
+  spec.maxConcurrency = 1;
+  spec.locales[1] = {
+    id: 'ar',
+    locale: 'ar-SA',
+    direction: 'rtl',
+    activate: [{ type: 'click', selector: '[data-locale="ar-SA"]' }],
+    expect: [{ selector: 'h1', text: 'مرحبا' }],
+  };
+  spec.locales[0].activate = [{
+    type: 'click',
+    selector: '[data-locale="en-US"]',
+  }];
+  spec.components[0].states = [
+    {
+      name: 'empty',
+      isolation: 'resettable',
+      setup: [{ type: 'fill', selector: '#field', value: '' }],
+      reset: [{ type: 'fill', selector: '#field', value: '' }],
+    },
+    {
+      name: 'filled',
+      isolation: 'resettable',
+      setup: [{ type: 'fill', selector: '#field', value: 'Ada' }],
+      reset: [{ type: 'fill', selector: '#field', value: '' }],
+    },
+  ];
+  spec.components[0].viewports = ['desktop'];
+
+  let newPageCount = 0;
+  let navigationCount = 0;
+  class Locator {
+    constructor(page, selector) {
+      this.page = page;
+      this.selector = selector;
+    }
+    first() { return this; }
+    async count() { return 1; }
+    async click() {
+      const arabic = this.selector.includes('ar-SA');
+      this.page.locale = arabic ? 'ar-SA' : 'en-US';
+      this.page.direction = arabic ? 'rtl' : 'ltr';
+    }
+    async fill() {}
+    async textContent() {
+      return this.page.direction === 'rtl' ? 'مرحبا' : 'Home';
+    }
+    async getAttribute() { return null; }
+    async evaluate() {
+      return {
+        visible: true,
+        direction: this.page.direction,
+        textAlign: 'start',
+        overflowX: 'visible',
+        overflowY: 'visible',
+        clipped: false,
+        outsideViewport: false,
+        rect: {
+          left: 0,
+          top: 0,
+          right: 100,
+          bottom: 40,
+          width: 100,
+          height: 40,
+        },
+      };
+    }
+  }
+  class Page {
+    constructor() {
+      this.locale = 'en-US';
+      this.direction = 'ltr';
+    }
+    on() {}
+    async goto() { navigationCount += 1; }
+    url() { return 'http://localhost:4173/'; }
+    async waitForTimeout() {}
+    locator(selector) { return new Locator(this, selector); }
+    async evaluate(fn) {
+      const source = String(fn);
+      if (source.includes('lang: document.documentElement.lang')) {
+        return { lang: this.locale, direction: this.direction };
+      }
+      if (source.includes('horizontalOverflow')) {
+        return { horizontalOverflow: false, overflowPixels: 0 };
+      }
+    }
+    async close() {}
+  }
+  const browser = {
+    async newPage() {
+      newPageCount += 1;
+      return new Page();
+    },
+    async close() {},
+  };
+  const report = await runRenderedBidirectionalAudit({
+    url: 'http://localhost:4173',
+    spec,
+    chromium: { launch: async () => browser },
+  });
+
+  assert.equal(report.summary.errors, 0);
+  assert.equal(report.verification.componentCaseCount, 4);
+  assert.equal(report.verification.componentGroupCount, 2);
+  assert.equal(newPageCount, 2);
+  assert.equal(navigationCount, 2);
+});
+
+test('standard profile uses representative directions and locale smoke coverage', () => {
+  const spec = validSpec();
+  spec.verificationProfile = 'standard';
+  spec.locales.splice(1, 0, {
+    id: 'es',
+    locale: 'es-ES',
+    direction: 'ltr',
+    textExpansion: 1.5,
+    activate: [{ type: 'click', selector: '[data-locale="es-ES"]' }],
+    expect: [{ selector: 'h1', text: 'Inicio' }],
+  });
+  spec.components[0].classification = 'unknown-third-party';
+  spec.components[0].states[0].targets = [{
+    selector: '[data-bidi-id="search-form"]',
+    expectedDirection: 'inherit',
+  }];
+
+  const context = {
+    verificationLocales: ['es-ES'],
+    defaultLocale: 'en-US',
+  };
+  const cases = buildVerificationCases(spec, context);
+  const smokeCases = buildLocaleSmokeCases(spec, context);
+
+  assert.deepEqual(
+    new Set(cases.map((item) => item.locale.id)),
+    new Set(['es', 'pseudo-rtl'])
+  );
+  assert.deepEqual(smokeCases.map((item) => item.locale.id), ['en']);
+});
+
+test('standard runtime switching requires reverse round trips only for representatives', () => {
+  const spec = pendingRuntimeSpec();
+  spec.verificationProfile = 'standard';
+  spec.locales.push({
+    id: 'fr',
+    locale: 'fr-FR',
+    direction: 'ltr',
+    activate: [{ type: 'click', selector: '[data-locale="fr-FR"]' }],
+    expect: [{ selector: 'h1', text: 'Accueil' }],
+  });
+  spec.transitions.push({
+    name: 'en-fr-en',
+    route: '/',
+    sequence: ['en', 'fr', 'en'],
+  });
+
+  assert.deepEqual(validateRunSpec(spec), []);
+});
+
+test('targeted profile can rerun a non-representative locale case', () => {
+  const spec = validSpec();
+  spec.locales.splice(1, 0, {
+    id: 'es',
+    locale: 'es-ES',
+    direction: 'ltr',
+    activate: [{ type: 'click', selector: '[data-locale="es-ES"]' }],
+    expect: [{ selector: 'h1', text: 'Inicio' }],
+  });
+  spec.verificationProfile = 'targeted';
+  spec.targetCaseIds = ['search-form--empty--desktop--en'];
+
+  assert.deepEqual(validateRunSpec(spec), []);
+  assert.deepEqual(
+    buildVerificationCases(spec).map((verificationCase) => verificationCase.id),
+    ['search-form--empty--desktop--en']
+  );
+});
+
 test('summarizes failed, review, and passed rendered cases', () => {
   const findings = [
     { severity: 'error' },
@@ -534,6 +776,58 @@ test('CLI exits 2 for an invalid run specification', (t) => {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Invalid rendered bidirectional run specification/);
+});
+
+test('CLI reuses a successful report while verification inputs are unchanged', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'package.json', '{}');
+  writeProjectFile(projectRoot, 'src/App.tsx', 'export const App = null;');
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/bidirectional-evidence/run/report.json',
+    JSON.stringify({
+      summary: {
+        cases: 2,
+        passed: 2,
+        review: 0,
+        failed: 0,
+        errors: 0,
+        reviewFindings: 0,
+      },
+      verification: {
+        profile: 'standard',
+        evidence: createVerificationEvidence(projectRoot, validSpec()),
+      },
+      findings: [],
+      results: [],
+    })
+  );
+
+  const reused = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--projectRoot', projectRoot,
+      '--reuse-report', reportPath,
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(reused.status, 0, reused.stderr);
+  assert.equal(JSON.parse(reused.stdout).verification.reused, true);
+
+  fs.writeFileSync(path.join(projectRoot, 'src/App.tsx'), 'export const App = 1;');
+  const stale = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--projectRoot', projectRoot,
+      '--reuse-report', reportPath,
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(stale.status, 2);
+  assert.match(stale.stderr, /evidence is stale/);
 });
 
 test('CLI argument errors mark an active verification transaction failed', (t) => {

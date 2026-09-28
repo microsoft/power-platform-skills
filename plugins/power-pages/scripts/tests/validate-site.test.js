@@ -65,7 +65,7 @@ test('create-site validator blocks a direction mismatch', (t) => {
   assert.match(result.stderr, /resolves to "rtl"/);
 });
 
-test('create-site validator blocks direction-sensitive physical CSS', (t) => {
+test('create-site validator leaves cross-cutting bidi checks to the shared hook', (t) => {
   const projectRoot = createProject(
     t,
     '<html lang="en-US" dir="ltr"><body><div id="root"></div></body></html>'
@@ -73,8 +73,7 @@ test('create-site validator blocks direction-sensitive physical CSS', (t) => {
   writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
 
   const result = runValidator(projectRoot);
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /Bidirectional readiness.*directional-physical-css/);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('create-site validator allows an exact blocker isolated behind an unavailable locale', (t) => {
