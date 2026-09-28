@@ -6,6 +6,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, Skill
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** - read first.
 
 # Create Mobile Prototype
@@ -59,6 +61,10 @@ data/auth integration layer.
   `/design-to-app`.
 - `--no-design` - skip the interactive picker only. App-specific semantic
   tokens are still mandatory.
+
+- `--from-screenshot <path[,path...]>` - optional structural screenshot input.
+  Normalize it to `<PROJECT_DIR>/design-intake.md` before planning. Retain
+  `--from-design-intake` as a compatibility alias for `--design-intake`.
 
 Do not accept an environment argument. A request to choose an environment
 belongs to `/create-mobile-app` or `/prototype-to-real-app`.
@@ -123,12 +129,38 @@ paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
 and validation stages. Ask Proceed / Revise / Cancel before planning.
 
+### Reference intake override
+
+When a screenshot or design intake is supplied, create and validate
+`<PROJECT_DIR>/design-intake.md` before Step 3 using
+`skills/design-system/references/reference-intake.md`. A chat attachment must
+be persisted to a safe local path so nested agents can read it. Add a `## Visual
+Reference` block to `brief.md` containing its paths, requested fidelity, and
+the intake path.
+
+For “match this screen” requests, default to `strict-structural`; reserve
+`directional` for broad inspiration only. Do not continue without a validated
+intake for `high` or `strict-structural` fidelity. The intake must bind the
+reference's hierarchy, normalized geometry, media prominence, navigation
+silhouette, required motifs, and forbidden drift. A generic retail/template
+layout is not an acceptable fallback.
+
+The Gate 1 visual reference must be forwarded verbatim to the planner. It is
+not an optional design-vibe answer.
+
 ### Step 3 - Plan In Prototype Mode
 
 Spawn `mobile-app:native-app-planner` with:
 
 ```text
 Requirements: <brief verbatim>
+Gate 1 product experience (approved):
+- reference sources: <validated local paths or NOT SUPPLIED>
+- requested reference fidelity: <directional | high | strict-structural | none>
+- design intake: <PROJECT_DIR>/design-intake.md or NOT SUPPLIED
+- reference intent: preserve hierarchy, media prominence, navigation
+  silhouette, required motifs, and forbidden drift with original assets/copy
+  when a reference is present
 Working directory: <absolute PROJECT_DIR>
 Plugin root: <absolute plugin root>
 Dataverse planning mode: prototype
@@ -254,6 +286,17 @@ Run `/design-system` in orchestrator mode unless `--no-design`. Pass
 `--no-design`, require app-specific semantic aliases/tokens; never leave the raw
 Tamagui starter palette as the product design.
 
+For a planned prototype, this invocation is overridden by the approved-plan
+fast path; do not reopen a generic style decision:
+
+```text
+/design-system --working-dir <PROJECT_DIR> --skip-planning \\
+  --plan <PROJECT_DIR>/native-app-plan.md
+```
+
+This is mandatory for `high`/`strict-structural` fidelity so the Reference
+Contract and `design-intake.md` remain authoritative.
+
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
 `/create-mobile-app` brand-token integration contract, then type-check.
 
@@ -301,8 +344,10 @@ Run in this order from `PROJECT_DIR`:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-composition.js" --project-root "$PROJECT_DIR" --report app
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
@@ -360,6 +405,24 @@ native capabilities, screens, validation result, and preview path.
 
 Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
 or crawl routes in a browser. Return the Metro URL/QR handoff to the user.
+
+### Step 10.5 - Native reference QA
+
+After a native dev client connects, invoke `/visual-qa` with the plan and
+design intake. Pass `--full` for `high` or `strict-structural` fidelity and
+the approved target platforms. For high/strict reference fidelity, invoke:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-visual-qa-evidence.js" \\
+  --project-root "$PROJECT_DIR" \\
+  --plan "$PROJECT_DIR/native-app-plan.md" \\
+  --manifest "<visual-qa session manifest path>"
+```
+
+If the device is unavailable, return `DONE_WITH_CONCERNS: native reference
+evidence missing`; never report a screenshot match as `DONE`. A failing evidence
+gate requires a focused visual repair and recapture. Static HTML preview is not
+a replacement for this step.
 
 ## Graduation Contract
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0.3.0 — skills and agents for planning, prototyping, building,
+> **Status:** v0.3.4 — skills and agents for planning, prototyping, building,
 > native visual QA, prototype graduation, and deployment. The latest Expo
 > standalone template snapshot is bundled under `template/`. Read
 > [README.md](./README.md) for the command list.
@@ -85,6 +85,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
             they never add a fifth prompt or select design from industry.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
 13. **Lifecycle state** — Mock/real mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Conversion uses `prototype → transitioning → dataverse`; only `/sync-from-plan --target-data-mode dataverse` commits the final mode after cleanup and validation. The legacy `.code-apps-native/state.json` path is migration input only.
+14. **Plugin update notification** — Immediately after the frontmatter of every `user-invocable: true` skill, run `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before proceeding. The check is best-effort and must never block the requested workflow. Keep it in public skills rather than a global hook so unrelated plugin workflows remain isolated.
 
 ## Decisions made
 

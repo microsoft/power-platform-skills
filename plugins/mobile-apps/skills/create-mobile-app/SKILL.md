@@ -6,6 +6,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, Enter
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
 
 # Create Power Apps Code App (Native)
@@ -2388,6 +2390,14 @@ Invoke the design skill against the project:
 ```
 Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
 
+For high/strict reference fidelity, also require the skill to read
+`native-app-plan.md`, `design-intake.md` when present, and
+`brand/design-system.md`. It may refine spacing, typography, accessibility, and
+interaction states, but must preserve hierarchy, media prominence, navigation
+silhouette, required motifs, and forbidden drift. Re-run
+`validate-experience-contract`, `validate-screen-composition`,
+`validate-color-contrast`, and `tsc` after any change.
+
 This is an implementation pass against the already approved Gate 3 contract.
 It must not run discovery, ask for a style choice, or create another approval.
 
@@ -2503,6 +2513,20 @@ Handle the literal first line:
   claiming visual completion.
 
 Do not substitute `/preview-screens` or source inspection for this step.
+
+For high/strict reference fidelity, `DONE_WITH_CONCERNS` and `BLOCKED` are
+completion blockers, not a normal Step 13 success state. After a `DONE` result,
+run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-visual-qa-evidence.js" \\
+  --project-root "<working_dir>" \\
+  --plan "<working_dir>/native-app-plan.md" \\
+  --manifest "<visual-qa session manifest path>"
+```
+
+A non-zero result requires repair/recapture before the app is described as a
+reference match.
 
 ### Step 12.5 — Optional debug handoff
 

@@ -157,6 +157,11 @@ From the planner prompt extract:
   Gate 1. When present, create a structured design intake using
   `reference-fidelity.md`; the resulting Reference Contract is binding at Gate
   3 and takes priority over industry defaults.
+  For screenshot sources, read
+  `skills/design-system/references/reference-intake.md`. If the safe local
+  source or valid `design-intake.md` is unavailable, return `NEEDS_CONTEXT:` for
+  that artifact; do not silently downgrade to `reference fidelity: none`, a
+  generic retail composition, or an industry-derived design.
 - **Legacy industry input** — accept `Industry confirmed: <slug>` from older
   callers as `industry_context` only. It does not infer or override the approved
   product archetype, workflow capabilities, operating context, or visual

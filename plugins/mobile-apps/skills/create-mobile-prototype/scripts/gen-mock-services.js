@@ -35,6 +35,29 @@ const CONNECTOR_SERVICE_NAMES = {
 };
 
 const DOMAIN_PACKS = {
+  inflightRetail: {
+    match: /inflight|onboard|flight passenger|cabin market|travel accessories|beauty products?|watches|onboard merchandise/,
+    products: [
+      { name: 'CloudRest Travel Pillow', sku: 'TRV-101', short: 'Memory-foam neck support that packs into its own pouch.', description: 'A soft contoured travel pillow with a washable cover and compact carry pouch for comfortable rest in your seat.', imageUrl: 'https://images.unsplash.com/photo-1565026057447-bc90a3dceb87?auto=format&fit=crop&w=900&q=85', alt: 'Soft grey travel pillow folded beside a carry pouch', price: 34, stock: 8, featured: true, badge: 'Cabin favourite' },
+      { name: 'Altitude Hydration Mist', sku: 'BTY-110', short: 'A fine facial mist for dry cabin air.', description: 'A refreshing alcohol-free face mist with aloe and glycerin in a carry-on friendly 50 ml bottle.', imageUrl: 'https://images.unsplash.com/photo-1571781926291-c477ebfd024b?auto=format&fit=crop&w=900&q=85', alt: 'Clear facial mist bottle beside green leaves', price: 18, stock: 12, featured: true, badge: 'Cabin care' },
+      { name: 'Meridian Steel Watch', sku: 'WAT-150', short: 'Brushed steel case with a clean midnight dial.', description: 'A refined three-hand watch with a 40 mm stainless-steel case, mineral glass, and adjustable link bracelet.', imageUrl: 'https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=900&q=85', alt: 'Stainless steel watch with a dark round dial', price: 185, stock: 3, featured: true, badge: 'Duty-free value' },
+      { name: 'Universal Cabin Adapter', sku: 'TRV-204', short: 'Compact multi-region adapter with dual USB-C charging.', description: 'A carry-on friendly adapter for common international outlets with two USB-C ports for use after landing.', imageUrl: 'https://images.unsplash.com/photo-1624823183493-ed5832f48f18?auto=format&fit=crop&w=900&q=85', alt: 'Compact white universal travel power adapter', price: 29, stock: 5, featured: false, badge: 'Travel essential' },
+      { name: 'Overnight Recovery Set', sku: 'BTY-226', short: 'Three-step mini skincare ritual for arrival-ready skin.', description: 'A cleanser, hydration serum, and overnight cream in a reusable clear flight pouch, each within cabin liquid limits.', imageUrl: 'https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=900&q=85', alt: 'Minimal skincare bottles arranged on a pale stone surface', price: 46, stock: 4, featured: false, badge: 'Travel exclusive' },
+      { name: 'Aero Chronograph', sku: 'WAT-264', short: 'Aviation-inspired chronograph with a leather strap.', description: 'A precise chronograph with luminous markers, a date window, and a stitched leather strap in a presentation case.', imageUrl: 'https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=900&q=85', alt: 'Chronograph watch with a brown leather strap', price: 240, stock: 1, featured: true, badge: 'Last one onboard' },
+      { name: 'QuietFlight Headphones', sku: 'TRV-318', short: 'Fold-flat over-ear headphones with soft cabin cushions.', description: 'Comfortable over-ear headphones with passive noise isolation, a detachable cable, and a slim protective case.', imageUrl: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=900&q=85', alt: 'Black over-ear headphones on a light background', price: 79, stock: 3, featured: true, badge: 'Onboard pick' },
+      { name: 'Mineral SPF 50', sku: 'BTY-332', short: 'Lightweight mineral sun protection for your destination.', description: 'A fragrance-free mineral sunscreen with a sheer finish in a compact 40 ml tube.', imageUrl: 'https://images.unsplash.com/photo-1556229010-6c3f2c9ca5f8?auto=format&fit=crop&w=900&q=85', alt: 'Small sunscreen tube on a warm neutral background', price: 24, stock: 2, featured: true, badge: 'Only 2 left' },
+      { name: 'Solstice Mesh Watch', sku: 'WAT-378', short: 'Slim profile with a flexible polished mesh bracelet.', description: 'A lightweight 36 mm watch with a sunray dial, quick-adjust mesh bracelet, and understated hour markers.', imageUrl: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=85', alt: 'Minimal silver watch with a mesh bracelet', price: 145, stock: 6, featured: false, badge: 'New onboard' },
+      { name: 'Foldaway Travel Tote', sku: 'TRV-422', short: 'Lightweight extra bag that folds into a palm-sized pocket.', description: 'A water-resistant zip tote with a luggage-handle sleeve, designed for purchases and extra layers after landing.', imageUrl: 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?auto=format&fit=crop&w=900&q=85', alt: 'Structured travel tote with handles on a neutral surface', price: 42, stock: 7, featured: false, badge: '' },
+      { name: 'Rose Hand Balm', sku: 'BTY-448', short: 'Rich hand balm with a subtle rose scent.', description: 'A fast-absorbing hand balm with shea butter in a 30 ml aluminium tube, sized for a seat pocket or handbag.', imageUrl: 'https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=900&q=85', alt: 'Rose-toned hand cream tube among cosmetic products', price: 16, stock: 0, featured: false, badge: 'Sold out' },
+      { name: 'Horizon Travel Watch', sku: 'WAT-482', short: 'Easy-read travel watch with a soft silicone strap.', description: 'A durable everyday watch with clear numerals, a second-time-zone bezel, and a comfortable silicone strap.', imageUrl: 'https://images.unsplash.com/photo-1508057198894-247b23fe5ade?auto=format&fit=crop&w=900&q=85', alt: 'Dark travel watch with a clear dial and silicone strap', price: 95, stock: 0, featured: false, badge: 'Sold out' },
+    ],
+    rowCounts: { product: 12, cartitem: 2, order: 2, orderline: 4 },
+    titles: ['CloudRest Travel Pillow', 'Altitude Hydration Mist', 'Meridian Steel Watch', 'Universal Cabin Adapter'],
+    people: ['Guest passenger', 'Cabin crew'],
+    locations: ['Seat 14A', 'Seat 22C', 'Forward galley', 'Mid-cabin galley'],
+    categories: ['Travel Accessories', 'Beauty', 'Watches'],
+    notes: ['Please deliver after meal service.', 'Collect when the aisle is clear.'],
+  },
   grocery: {
     match: /grocery|pantry|recipe|receipt|supermarket|shopping list|expiry/,
     titles: ['Milk top-up', 'Free-range eggs', 'Spinach rescue', 'Coffee refill', 'Pantry restock', 'Weekend basket', 'Receipt review', 'Budget watch'],
@@ -270,6 +293,30 @@ function resolveLookupTarget(field, entities) {
 
 function textValue(field, entity, index, pack) {
   const name = field.name.toLowerCase();
+  const product = pack.products?.[index % pack.products.length];
+  const entityName = entity.logicalName.toLowerCase();
+  if (product && /cr_product$/.test(entityName)) {
+    if (field.primaryName || /(^|_)name$/.test(name)) return product.name;
+    if (/sku/.test(name)) return product.sku;
+    if (/shortdescription/.test(name)) return product.short;
+    if (/description/.test(name)) return product.description;
+    if (/imagealttext/.test(name)) return product.alt;
+    if (/imageurl/.test(name)) return product.imageUrl;
+    if (/badge/.test(name)) return product.badge;
+  }
+  if (product && /cr_cartitem$/.test(entityName) && (field.primaryName || /(^|_)name$/.test(name))) {
+    return product.name;
+  }
+  if (product && /cr_orderline$/.test(entityName)) {
+    if (field.primaryName || /(^|_)name$/.test(name)) return product.name;
+    if (/productnamesnapshot/.test(name)) return product.name;
+    if (/skusnapshot/.test(name)) return product.sku;
+    if (/imageurlsnapshot/.test(name)) return product.imageUrl;
+  }
+  if (pack.products && /cr_order$/.test(entityName)) {
+    if (field.primaryName || /ordernumber/.test(name)) return `CM-${2401 + index}`;
+    if (/seatnumber/.test(name)) return ['14A', '22C'][index % 2];
+  }
   if (field.primaryName || /(^|_)(name|title|subject)$/.test(name)) return pack.titles[index % pack.titles.length];
   if (/email/.test(name)) return `user${index + 1}@example.com`;
   if (/phone/.test(name)) return `+1-555-01${String(index).padStart(2, '0')}`;
@@ -292,13 +339,40 @@ function fieldValue(field, entity, index, entities, rowsByEntity, pack) {
   }
 
   if (field.type === 'number') {
+    const product = pack.products?.[index % pack.products.length];
+    const entityName = entity.logicalName.toLowerCase();
+    const quantity = [1, 2, 1, 1][index % 4];
+    if (product && /cr_product$/.test(entityName) && /price/.test(field.name)) return product.price;
+    if (product && /cr_product$/.test(entityName) && /stockquantity/.test(field.name)) return product.stock;
+    if (product && /cr_cartitem$/.test(entityName) && /quantity/.test(field.name)) return quantity;
+    if (product && /cr_orderline$/.test(entityName) && /unitpricesnapshot/.test(field.name)) return product.price;
+    if (product && /cr_orderline$/.test(entityName) && /(^|_)quantity$/.test(field.name)) return quantity;
+    if (product && /cr_orderline$/.test(entityName) && /linetotal/.test(field.name)) return product.price * quantity;
+    if (pack.products && /cr_order$/.test(entityName) && /subtotal/.test(field.name)) {
+      const orderCount = pack.rowCounts?.order || 1;
+      const lineCount = pack.rowCounts?.orderline || pack.products.length;
+      return Array.from({ length: lineCount }, (_, lineIndex) => lineIndex)
+        .filter((lineIndex) => lineIndex % orderCount === index)
+        .reduce((total, lineIndex) => {
+          const lineProduct = pack.products[lineIndex % pack.products.length];
+          return total + lineProduct.price * [1, 2, 1, 1][lineIndex % 4];
+        }, 0);
+    }
     if (/amount|total|cost|price|budget|revenue/i.test(field.name)) return [42.5, 128.99, 319.45, 875, 1499.95, 12.75, 64.2, 240][index % 8];
     if (/quantity|count|stock|available|variance/i.test(field.name)) return [0, 3, 12, 48, 96, 5, 21, 64][index % 8];
     return index + 1;
   }
-  if (field.type === 'boolean') return index % 3 !== 1;
+  if (field.type === 'boolean') {
+    const product = pack.products?.[index % pack.products.length];
+    if (product && /cr_product$/.test(entity.logicalName) && /isfeatured/.test(field.name)) return product.featured;
+    return index % 3 !== 1;
+  }
   if (field.type === 'date') return dateValue(index, field.name);
   if (field.type === 'choice' && field.options.length) {
+    if (pack.products && /cr_order$/.test(entity.logicalName)) {
+      if (/status/.test(field.name) && !/payment/.test(field.name)) return index === 0 ? 100000000 : 100000003;
+      if (/simulatedpaymentstate/.test(field.name)) return 100000000;
+    }
     const option = field.options[index % field.options.length];
     return typeof option === 'object' && option !== null ? option.value : option;
   }
@@ -312,14 +386,16 @@ function fieldValue(field, entity, index, entities, rowsByEntity, pack) {
 }
 
 function generateSeeds(entities, contextText) {
+  const pack = domainPack(contextText);
   const rowsByEntity = new Map();
   for (const entity of entities) {
-    rowsByEntity.set(entity.logicalName, Array.from({ length: 8 }, (_, index) => ({
+    const entityKey = entity.logicalName.replace(/^[^_]+_/, '');
+    const rowCount = pack.rowCounts?.[entityKey] || 8;
+    rowsByEntity.set(entity.logicalName, Array.from({ length: rowCount }, (_, index) => ({
       [entity.primaryKey]: deterministicGuid(`${entity.logicalName}-${index}`),
     })));
   }
 
-  const pack = domainPack(contextText);
   for (const entity of entities) {
     const rows = rowsByEntity.get(entity.logicalName);
     for (let index = 0; index < rows.length; index += 1) {
@@ -377,8 +453,18 @@ function seedValueIsCompatible(field, value, previousField, validIdsByEntity, en
   return typeof value === 'string';
 }
 
+function violatesDomainSeedInvariant(field, entity, value, pack) {
+  return Boolean(
+    pack.products
+    && /cr_order$/.test(entity.logicalName)
+    && /simulatedpaymentstate/.test(field.name)
+    && value !== 100000000
+  );
+}
+
 function mergeExistingSeeds(projectDir, entities, contextText) {
   const generatedRows = generateSeeds(entities, contextText);
+  const pack = domainPack(contextText);
   const previous = loadPreviousPrototype(projectDir, entities);
   const validIdsByEntity = new Map();
 
@@ -419,6 +505,7 @@ function mergeExistingSeeds(projectDir, entities, contextText) {
           if (field.name === entity.primaryKey) continue;
           const existingValue = existingRow?.[field.name];
           if (Object.prototype.hasOwnProperty.call(existingRow || {}, field.name)
+            && !violatesDomainSeedInvariant(field, entity, existingValue, pack)
             && seedValueIsCompatible(
               field,
               existingValue,
@@ -509,10 +596,17 @@ function renderConnectorStub(connector) {
 function renderStrictService(entity) {
   // Generated row schemas are interfaces without index signatures. Reflect.get
   // keeps user-selected orderBy fields strict-mode compatible without emitting
-  // a broad Record assertion into every generated service.
+  // a broad Record assertion into every generated service. `load()` also
+  // narrows the nullable module store before update indexes it; TypeScript does
+  // not carry the earlier load() call's narrowing across a separate statement.
   return renderService(entity)
     .replace('(left as Record<string, unknown>)[field]', 'Reflect.get(left, field)')
-    .replace('(right as Record<string, unknown>)[field]', 'Reflect.get(right, field)');
+    .replace('(right as Record<string, unknown>)[field]', 'Reflect.get(right, field)')
+    .replace(
+      '    const index = load().findIndex',
+      '    const currentRows = load();\n    const index = currentRows.findIndex',
+    )
+    .replaceAll('rows[index]', 'currentRows[index]');
 }
 
 function renderDataSourcesInfo(entities, connectors) {

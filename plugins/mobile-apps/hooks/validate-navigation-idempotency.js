@@ -110,7 +110,14 @@ function hasNavigation(content) {
   return /router\.(push|navigate|replace)\s*\(/.test(content);
 }
 
+function hasUserTriggeredNavigation(content) {
+  return hasNavigation(content) && /\bonPress\s*=/.test(content);
+}
+
 function hasNavigationTapGuard(content) {
+  if (/\buseNavigationGuard\s*\(/.test(content) && /\brunNavigation\s*\(/.test(content)) {
+    return true;
+  }
   const lockMention = /\bisNavigating\b/.test(content);
   if (!lockMention) return false;
 
@@ -187,7 +194,7 @@ if (require.main === module) {
       errors.push('Async save flow detected without a submit busy lock (`isSubmitting`/`isPending`).');
     }
 
-    if (hasNavigation(content) && !hasNavigationTapGuard(content)) {
+    if (hasUserTriggeredNavigation(content) && !hasNavigationTapGuard(content)) {
       warnings.push('Navigation calls found with no clear `isNavigating` duplicate-tap guard.');
     }
 
@@ -209,4 +216,5 @@ module.exports = {
   hasSubmitLock,
   hasAsyncSave,
   hasNavigationTapGuard,
+  hasUserTriggeredNavigation,
 };

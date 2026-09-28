@@ -6,9 +6,32 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 # Design React Native App
 
 Create a cohesive, accessible, and production-ready design for a React Native application. Implement the design in the user's project when one is available.
+
+## Reference-contract mode
+
+When an existing project has `native-app-plan.md` with reference fidelity
+`high` or `strict-structural`, this skill is a constrained refinement pass:
+
+1. Read `native-app-plan.md`, `design-intake.md`, `brand/design-system.md`,
+   `brand/tokens.ts`, and the affected screen specs before editing.
+2. Preserve the Reference Contract's hierarchy, normalized first-viewport
+   geometry, media prominence, navigation silhouette, required motifs, and
+   forbidden drift. Do not replace a reference-led Home with a generic catalog,
+   dashboard, search surface, or product grid.
+3. Polish only spacing, typography, accessibility, responsive behavior, and
+   interaction states unless the approved plan itself changes.
+4. Use bundled or user-provided assets for offline/brand-critical media. Do not
+   introduce Unsplash imagery when the Reference Contract requires local media.
+5. Run the product-experience, composition, contrast, and TypeScript gates
+   supplied by the orchestrator after edits.
+
+Do not ask for a new visual direction in this mode: the approved reference is
+the direction.
 
 ## Understand the request
 

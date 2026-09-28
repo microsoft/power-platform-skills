@@ -6,6 +6,8 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Visual QA
@@ -44,6 +46,29 @@ Write under `<working_dir>/.visual-qa/`:
 - `report.md` — concise human-readable findings and fixes.
 - `captures/` — screenshot paths returned by Expo MCP or copied validated native
   screenshots. Do not overwrite prior sessions; use an ISO timestamp directory.
+
+For `high`/`strict-structural` fidelity, use this machine-readable manifest
+shape before returning `DONE`:
+
+```json
+{
+  "schemaVersion": 1,
+  "referenceFidelity": "high | strict-structural",
+  "captureMatrix": [
+    { "screen": "Home", "platform": "ios", "dynamicType": "default", "result": "pass" },
+    { "screen": "Home", "platform": "android", "dynamicType": "default", "result": "pass" },
+    { "screen": "Home", "platform": "ios | android", "dynamicType": "large", "result": "pass" }
+  ],
+  "referenceChecks": [
+    { "requirement": "<hierarchy, motif, or forbidden-drift item>", "result": "pass" }
+  ],
+  "findings": [],
+  "missingCoverage": []
+}
+```
+
+`referenceChecks` covers every hierarchy, motif, and forbidden-drift item in
+the Reference Contract. Partial platform or Dynamic Type coverage is not pass.
 
 ## Phase 0 — Contract and Static Preflight
 
@@ -230,6 +255,18 @@ Return the literal first line:
 
 Then include report and capture paths. Update `mobile-app-status.json` visual-QA
 fields and append the result to `memory-bank.md` Design history.
+
+Before returning `DONE` for `high` or `strict-structural` fidelity, run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-visual-qa-evidence.js" \\
+  --project-root "<working_dir>" \\
+  --plan "<plan_path>" \\
+  --manifest "<working_dir>/.visual-qa/<session>/manifest.json"
+```
+
+A failing evidence gate means `DONE_WITH_CONCERNS` or `BLOCKED`, not `DONE`.
+Include the output in `report.md`.
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \

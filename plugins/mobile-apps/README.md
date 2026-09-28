@@ -2,7 +2,7 @@
 
 This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
 
-> **Plugin status:** v0.3.0. The template records source and compatibility in
+> **Plugin status:** v0.3.4. The template records source and compatibility in
 > `.powerapps-native/version.json`; plan status/rendering and Product Experience
 > validation follow the canonical four-gate architecture described below.
 

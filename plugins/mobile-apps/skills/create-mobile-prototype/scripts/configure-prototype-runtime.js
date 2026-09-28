@@ -67,15 +67,17 @@ function ensureImport(contents, importLine, anchor) {
   const anchorIndex = contents.indexOf(anchor);
   if (anchorIndex < 0) fail(`cannot patch import; anchor not found: ${anchor}`);
   const lineEnd = contents.indexOf('\n', anchorIndex);
-  return `${contents.slice(0, lineEnd + 1)}${importLine}\n${contents.slice(lineEnd + 1)}`;
+  const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  return `${contents.slice(0, lineEnd + 1)}${importLine}${newline}${contents.slice(lineEnd + 1)}`;
 }
 
 function patchIndex(contents) {
   contents = ensureImport(contents, "import { dataMode, prototypeEntryRoute } from '../src/config/dataMode';", "from '@microsoft/power-apps-native-host';");
   if (contents.includes('if (dataMode === \'prototype\')')) return contents;
-  const anchor = '  const { isLoading, isSignedIn } = useAuth();\n';
-  if (!contents.includes(anchor)) fail('app/index.tsx auth-state anchor not found');
-  return contents.replace(anchor, `${anchor}\n  if (dataMode === 'prototype') {\n    return <Redirect href={prototypeEntryRoute} />;\n  }\n`);
+  const anchor = /^(\s*const \{ isLoading, isSignedIn \} = useAuth\(\);)(\r?\n)/m;
+  if (!anchor.test(contents)) fail('app/index.tsx auth-state anchor not found');
+  return contents.replace(anchor, (_match, statement, newline) =>
+    `${statement}${newline}${newline}  if (dataMode === 'prototype') {${newline}    return <Redirect href={prototypeEntryRoute} />;${newline}  }${newline}`);
 }
 
 function patchAppLayout(contents) {
@@ -94,6 +96,14 @@ function packageDisplayName(packageJson) {
     .join(' ');
 }
 
+function publicRoute(route) {
+  const segments = String(route || '')
+    .split('/')
+    .filter(Boolean)
+    .filter((segment) => !/^\(.+\)$/.test(segment));
+  return `/${segments.join('/')}`;
+}
+
 if (!fs.existsSync(packagePath) || !fs.existsSync(indexPath) || !fs.existsSync(appLayoutPath)) {
   fail('project must contain package.json, app/index.tsx, and app/(app)/_layout.tsx');
 }
@@ -102,8 +112,9 @@ const packageJson = readJson(packagePath);
 const existingBackup = fs.existsSync(backupPath) ? readJson(backupPath) : null;
 
 if (mode === 'prototype') {
-  const entryRoute = entryRouteArg || '/(app)/home';
-  if (!entryRoute.startsWith('/(app)/')) fail('prototype entry route must start with /(app)/');
+  const requestedEntryRoute = entryRouteArg || '/(app)/home';
+  if (!requestedEntryRoute.startsWith('/')) fail('prototype entry route must be absolute');
+  const entryRoute = publicRoute(requestedEntryRoute);
 
   if (!existingBackup) {
     writeJson(backupPath, {
@@ -127,7 +138,9 @@ if (mode === 'prototype') {
     appId: null,
     appDisplayName: packageDisplayName(packageJson),
     region: 'prod',
-    environmentId: '00000000-0000-0000-0000-000000000000',
+    // The host treats every non-empty environment value, including an all-zero
+    // GUID, as requiring Power Platform auth and blocks on an empty client ID.
+    environmentId: '',
     description: 'Local mock-data prototype',
     buildPath: './dist',
     buildEntryPoint: 'index.html',

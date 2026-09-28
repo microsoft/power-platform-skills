@@ -9,7 +9,7 @@ const test = require('node:test');
 
 const script = path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-prototype', 'scripts', 'configure-prototype-runtime.js');
 
-function makeProject(t) {
+function makeProject(t, lineEnding = '\n') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-runtime-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const files = {
@@ -20,7 +20,7 @@ function makeProject(t) {
   for (const [relativePath, contents] of Object.entries(files)) {
     const filePath = path.join(root, relativePath);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, contents);
+    fs.writeFileSync(filePath, contents.replace(/\n/g, lineEnding));
   }
   return root;
 }
@@ -37,15 +37,30 @@ test('enables a no-auth local prototype runtime idempotently', (t) => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.match(packageJson.scripts.predev, /prototype mode/);
   assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /dataMode: 'prototype' \| 'dataverse' = 'prototype'/);
-  assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /\/\(app\)\/inspections/);
+  const dataMode = fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8');
+  assert.match(dataMode, /prototypeEntryRoute = "\/inspections"/);
+  assert.doesNotMatch(dataMode, /\/\(app\)\/inspections/);
   assert.match(fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8'), /dataMode === 'prototype'/);
   assert.match(fs.readFileSync(path.join(root, 'app/(app)/_layout.tsx'), 'utf8'), /dataMode !== 'prototype'/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8')).databaseReferences, {});
+  const powerConfig = JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8'));
+  assert.equal(powerConfig.environmentId, '');
+  assert.deepEqual(powerConfig.connectionReferences, {});
+  assert.deepEqual(powerConfig.databaseReferences, {});
   assert.equal(fs.existsSync(path.join(root, 'src/generated/connectorSchemas.ts')), true);
 
   const second = run(root, 'prototype', '/(app)/inspections');
   assert.equal(second.status, 0, second.stderr);
   assert.equal((fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8').match(/dataMode === 'prototype'/g) || []).length, 1);
+});
+
+test('enables a prototype runtime in CRLF templates without mixing line endings', (t) => {
+  const root = makeProject(t, '\r\n');
+  const result = run(root, 'prototype', '/(app)/home');
+  assert.equal(result.status, 0, result.stderr);
+
+  const index = fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8');
+  assert.match(index, /dataMode === 'prototype'/);
+  assert.doesNotMatch(index, /(?<!\r)\n/);
 });
 
 test('switches to Dataverse mode and restores the original predev command', (t) => {

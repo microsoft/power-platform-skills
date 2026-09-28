@@ -105,6 +105,44 @@ Approved in the structured schema contract.
   assert.deepEqual(manifest.connectors, ['sharepointonline']);
 });
 
+test('generates internally consistent persisted orders for inflight retail prototypes', (t) => {
+  const root = makeProject(t, {
+    'brief.md': 'An inflight retail app for flight passengers buying travel accessories, beauty products, and watches.',
+    'native-app-plan.md': '## Data Model\n\nApproved.\n\n## Connectors\n\nNone.\n',
+    '.tmp/dataverse-schema-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      tables: [{
+        logicalName: 'cr_order',
+        displayName: 'Onboard Order',
+        plannedDecision: 'create',
+        dependencyTier: 0,
+        serviceRequired: true,
+        columns: [
+          { logicalName: 'cr_ordernumber', displayName: 'Order Number', type: 'string', primaryName: true, requiredLevel: 'ApplicationRequired' },
+          { logicalName: 'cr_status', displayName: 'Status', type: 'choice', options: [{ value: 100000000, label: 'Confirmed' }, { value: 100000003, label: 'Delivered' }] },
+          { logicalName: 'cr_simulatedpaymentstate', displayName: 'Simulated Payment State', type: 'choice', options: [{ value: 100000000, label: 'Simulated approved - no charge' }, { value: 100000001, label: 'Simulated declined' }] },
+        ],
+      }],
+    }),
+  });
+
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+  const orders = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_order.seed.json'), 'utf8'));
+  assert.deepEqual(new Set(orders.map((order) => order.cr_status)), new Set([100000000, 100000003]));
+  assert.deepEqual(new Set(orders.map((order) => order.cr_simulatedpaymentstate)), new Set([100000000]));
+
+  orders[1].cr_simulatedpaymentstate = 100000001;
+  fs.writeFileSync(
+    path.join(root, 'src/generated/services/Cr_order.seed.json'),
+    `${JSON.stringify(orders, null, 2)}\n`,
+  );
+  const regenerated = run(root);
+  assert.equal(regenerated.status, 0, regenerated.stderr);
+  const repaired = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_order.seed.json'), 'utf8'));
+  assert.deepEqual(new Set(repaired.map((order) => order.cr_simulatedpaymentstate)), new Set([100000000]));
+});
+
 test('supports the legacy Markdown entity blocks from the test branch', (t) => {
   const root = makeProject(t, {
     'native-app-plan.md': `
