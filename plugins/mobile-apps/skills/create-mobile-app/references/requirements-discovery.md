@@ -12,9 +12,10 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "photo", "attach", "image", "camera" | Camera capability; storage target is resolved at the architecture gate |
 | "pick file", "upload PDF", "import document", "attach file" | Document-picker capability; storage target is resolved at the architecture gate |
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability; retention target is resolved at the architecture gate |
-| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
+| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability; storage target is resolved at the architecture gate |
 | "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/power-apps-native-bglocation`) + Dataverse location table (default `msdyn_locationrecords`) |
+| Explicit request for Microsoft's barcode/QR control or `@microsoft/power-apps-native-barcode-scanner` | `native-barcode-scanner` from the OOB controls reference; generic scan requests retain the existing Expo flow |
 | "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |
 | "share", "send to", "export" | Sharing capability |
 | "secure", "credentials", "token", "PIN" | Secure-store capability |
@@ -24,7 +25,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "Teams", "chat", "message" | Teams connector |
 | "report", "dashboard", "history", "view all" | Read/list screens |
 
-Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
+Resolve every native signal against the live `template/package.json` plus the allowlisted Microsoft OOB controls in [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md). Microsoft OOB controls can be planned with an on-demand app dependency addition; do not exclude them just because the template omits them. For any other absent native package or any runtime-banned package, surface a transparency note instead of pretending support exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical planning gate.
 
 Apply the shared
 [`connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
@@ -32,8 +33,8 @@ contract during feature inference.
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.
-- Native PDF viewing supports HTTPS URLs and local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+.
-- Local generated PDFs require `expo-print`; preview requires native PDF viewer 0.2.9+, while sharing requires `expo-sharing`.
+- Native PDF viewing supports HTTPS URLs and local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer`.
+- Local generated PDFs require `expo-print`; preview requires native PDF viewer, while sharing requires `expo-sharing`.
 - Retained generated PDFs use a Dataverse File column or child
   Evidence/Attachment table only when Dataverse is approved; otherwise use an
   approved connector-owned or on-device/share-only target.

@@ -22,10 +22,10 @@ Generate or verify a local PDF report wrapper for app-owned PDFs created from re
 | Generate/export/print a report from app data | This helper: `expo-print` -> local PDF URI |
 | Share the generated local PDF from the device | Add share method only if `expo-sharing` is already in `package.json` |
 | Retain the generated PDF in Dataverse | Create/update parent row first, then upload to a Dataverse File column with generated services |
-| Open an existing HTTPS or local file PDF in the Power Apps native viewer | `/add-native pdf-viewer`, only if `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ is already present |
+| Open an existing HTTPS or local file PDF in the Power Apps native viewer | `/add-native pdf-viewer`; its helper adds `@microsoft/power-apps-native-pdf-viewer` as an app dependency when missing |
 | Pick/import/upload a user-selected PDF | `/add-native document-picker` or host `<FilePicker>` for Dataverse File columns |
 
-Local generated PDFs are usually `file://` URIs and can be passed to `openHttpsPdf(...)` with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+.
+Local generated PDFs are usually `file://` URIs and can be passed to `openHttpsPdf(...)` with `@microsoft/power-apps-native-pdf-viewer`.
 
 ## Steps
 
@@ -186,7 +186,7 @@ if (!share.ok) {
 }
 ```
 
-If `expo-sharing` is absent, screens may still call `createPdfReport(...)`, preview the returned `file://` URI through native PDF viewer 0.2.9+, or upload it to a Dataverse File column through generated services. They must not render a Share button.
+If `expo-sharing` is absent, screens may still call `createPdfReport(...)`, preview the returned `file://` URI through native PDF viewer, or upload it to a Dataverse File column through generated services. They must not render a Share button.
 
 ### 5. Optional Dataverse upload
 
@@ -252,7 +252,7 @@ Required package : expo-print
 Optional share   : expo-sharing <present | absent>
 Wrapper          : src/native/pdfReport.ts
 Output           : local PDF file URI
-Native viewer    : optional; 0.2.9+ can open the generated file:// URI
+Native viewer    : optional; can open the generated file:// URI
 Type-check       : PASS
 Native rebuild   : not performed by this skill
 ```

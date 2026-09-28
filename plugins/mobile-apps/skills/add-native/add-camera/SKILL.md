@@ -17,6 +17,8 @@ model: sonnet
 
 **Internal helper.** Users should invoke `/add-native camera`, `/add-native image-picker`, `/add-native barcode-scanner`, or `/add-native qr-scanner`; `/add-native` routes here after resolving the capability.
 
+**Microsoft scanner boundary:** use this Expo flow for generic barcode/QR requests and existing embedded scanner screens. If the user explicitly requests the Microsoft scanner control, use the mapping in [Microsoft OOB controls](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md) and route to `add-barcode-scanner` instead; do not install that package from this camera helper.
+
 Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
 
 This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template. If they're missing, STOP and tell the user the template doesn't ship them yet.

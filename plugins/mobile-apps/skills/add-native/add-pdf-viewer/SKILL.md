@@ -1,6 +1,6 @@
 ---
 name: add-pdf-viewer
-description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS and file URI PDF viewing with @microsoft/power-apps-native-pdf-viewer 0.2.9+.
+description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS and file URI PDF viewing with @microsoft/power-apps-native-pdf-viewer.
 user-invocable: false
 disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
@@ -13,7 +13,7 @@ model: sonnet
 
 **Internal helper.** Users should invoke `/add-native pdf-viewer`, `/add-native pdf-control`, or `/add-native @microsoft/power-apps-native-pdf-viewer`; `/add-native` routes here after resolving the capability.
 
-Generate or verify the native PDF viewer wrapper and show how to call its **native React Native API**. Version 0.2.9 and later support HTTPS PDF URLs and local `file://` URIs. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
+Generate or verify the native PDF viewer wrapper and show how to call its **native React Native API** for HTTPS PDF URLs and local `file://` URIs supported by the installed package. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
 
 ## Steps
 
@@ -25,13 +25,15 @@ test -f app.config.js && test -f power.config.json && test -f package.json && te
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
-### 2. Verify package is already present
+### 2. Ensure the app dependency and inspect its API
+
+Run [Microsoft control dependency setup](${PLUGIN_ROOT}/skills/add-native/references/oob-controls.md) for `@microsoft/power-apps-native-pdf-viewer`. When missing, add it to the app's runtime `dependencies` and update the lockfile with the approved dependency spec from the control reference before writing the wrapper. Reuse an existing compatible installation without upgrading it.
 
 ```bash
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } let v; try { v=require('./node_modules/' + m + '/package.json').version; } catch { console.error('MISSING_INSTALL: cannot verify the installed ' + m + ' version. Run the project package install first.'); process.exit(1); } const [major,minor,patch]=v.split('.').map(Number); if (!(major > 0 || minor > 2 || (minor === 2 && patch >= 9))) { console.error('UNSUPPORTED_VERSION: ' + m + ' ' + v + ' does not support file:// URIs. Version 0.2.9+ is required.'); process.exit(1); } console.log('OK: native PDF viewer ' + v + ' supports https:// and file://');"
+node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' must be a runtime dependency after Microsoft control dependency setup.'); process.exit(1); } let installed; try { installed=require('./node_modules/' + m + '/package.json'); } catch { console.error('MISSING_INSTALL: cannot read the installed ' + m + ' metadata. Complete dependency setup first.'); process.exit(1); } console.log('PRESENT: ' + m + ' ' + installed.version + ' (informational only; API and native runtime support are separate checks)');"
 ```
 
-If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Version 0.2.9+ must already be part of the app's native build.
+If the package is missing or its installation metadata cannot be read, STOP before generating imports. Do not reject an installed version or range because it differs from the OOB reference. Read the installed package's exported types/documentation to confirm `NativePdfViewer` and the requested HTTPS/file URI behavior; report a missing API or unsupported input as that specific limitation, not a version error. Do not run `npx expo install`/`pod install` or edit `app.config.js`. Package presence does not prove that the running native binary contains the viewer.
 
 ### 3. Write or verify `src/native/pdfViewer.ts`
 
@@ -126,7 +128,7 @@ Notes:
 - Use `@microsoft/power-apps-native-pdf-viewer` only for this native PDF viewing use case.
 - Use `expo-document-picker` for picking/importing/uploading a local PDF or document.
 - Use `/add-native pdf-report` for generated local PDFs. That helper requires `expo-print` and adds sharing behavior only when `expo-sharing` is already present.
-- Generated local PDFs from `expo-print` may be opened by native PDF viewer 0.2.9+ as `file://` URIs.
+- Generated local PDFs from `expo-print` may be opened by native PDF viewer as `file://` URIs.
 - Share and Print are built into the native viewer; there are no separate JS share/print calls.
 - The wrapper returns `{ ok: true } | { ok: false }`; handle every non-ok reason in UI.
 
@@ -140,7 +142,7 @@ Fix any TypeScript errors before rebuilding.
 
 ### 6. Native rebuild note
 
-This skill does not install native code. If the package was just added outside the skill, the app needs a native rebuild outside this workflow. If the package was already in the build, Metro hot reload is enough for wrapper edits.
+This skill can install the app dependency, but cannot add native code to a running binary. Follow the shared setup's runtime boundary: preserve `NATIVE_MODULE_MISSING` and require a compatible player/runtime if the native viewer is absent. Do not claim a native rebuild or device check occurred. Metro hot reload is sufficient for wrapper-only edits only when native support is already in the build.
 
 ### 7. Do not use HostingSDK / PCF
 
@@ -158,11 +160,14 @@ Tell the user:
 
 ```text
 PDF viewer added
-Package present   : @microsoft/power-apps-native-pdf-viewer
+Package/version   : @microsoft/power-apps-native-pdf-viewer@<version>
+Dependency action : <added / moved to runtime dependencies / already present>
+Manifest/lockfile : <changed files / unchanged>
 Wrapper           : src/native/pdfViewer.ts
-URL support       : HTTPS and file:// (0.2.9+)
+URL support       : HTTPS and file:// (verify installed API)
 Type-check        : PASS
 Native rebuild    : not performed by this skill
+Native runtime    : <verified separately / not verified>
 Usage             : openHttpsPdf(...)
 HostingSDK / PCF  : not used
 ```
