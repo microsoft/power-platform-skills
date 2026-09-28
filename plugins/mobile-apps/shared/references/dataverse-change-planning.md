@@ -1,6 +1,6 @@
 # Dataverse planning for scoped changes
 
-Use this contract from `setup-datamodel` and standalone
+Use this contract from `setup-datamodel`, `edit-app`, and standalone
 `add-dataverse` when proposing Dataverse schema or a new table binding. It
 adapts the existing create-flow planning helpers to the owner's current delta;
 it does not invoke `/create-mobile-app` or add another approval gate.
@@ -9,8 +9,8 @@ it does not invoke `/create-mobile-app` or add another approval gate.
 
 Retain one absolute `working_dir`, the current request, the existing plan, and
 the owner's planning/implementation mode across every call and retry.
-Planning is not implementation approval, including after a request to inspect
-or propose a data-model change.
+Planning is not implementation approval, including after an entry-mode choice
+or an edit-impact preview.
 
 - Connector-only, native/design-only, removal-only, and retained-service-only
   refresh requests skip this workflow. Use their existing scoped workflows;
@@ -160,8 +160,9 @@ Never import creation's Gate 1/2 prompts into this owner.
 
 For `--plan-only`, return the validated proposal (or explicit blocker) at the
 owner's proposal boundary. `setup-datamodel` and `add-dataverse` do not save the
-live plan. None of these modes grants implementation approval or mints an
-execution receipt.
+live plan; `edit-app` may save plan documents only after its explicit
+plan-document approval. None of these modes grants implementation approval or
+mints an execution receipt.
 
 ## 5. Carry the accepted scope into implementation
 
@@ -176,9 +177,9 @@ never recalculate these approval hashes after discovering a mismatch.
 
 The existing five-artifact operation-manifest fast path remains
 creation-receipt-owned. Its receipt requires `workflow: create-mobile-app`
-and four approvals. Do not fabricate those approvals for data-only changes, weaken
+and four approvals. Do not fabricate those approvals for setup/edit, weaken
 receipt validation, or pass a partially populated fast-path argument set.
-Data-only changes use the scoped standalone execution path with their real approval.
+Setup/edit use the scoped standalone execution path with their real approval.
 On resume without matching approval context, return `NEEDS_CONTEXT`; an old
 plan or scratch artifact does not grant permission.
 

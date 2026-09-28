@@ -10,20 +10,17 @@ model: opus
 
 # Set Up Data Model + Connectors
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before any project read or the workflow below.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
-This standalone data-only workflow does not require a complete app plan.
-It proposes and approves only the current schema/connector delta; preserve
-existing app sections without invoking full-app planning or screen generation.
-When called by an owner, retain its explicit current request, absolute root,
-phase, and scope, and return proposals or verified results to that owner.
+This standalone workflow implements the data-only choice or a project without
+a complete app plan, subject to the shared missing-plan safeguards.
 
 Combined orchestrator for standalone data source planning. Designs the Dataverse schema, plans connectors, gets approval on both, then delegates execution to `/add-dataverse` and `/add-connector`.
 
 | Use this skill when | Use `/add-dataverse` directly when |
 |---|---|
-| Standalone schema + connector design (initialized app; data plan optional) | The plan already exists and you just need to apply tables + generate services |
+| Standalone schema + connector design (project may or may not exist yet) | The plan already exists and you just need to apply tables + generate services |
 | You have an existing ER diagram (image / Mermaid / text) to import | `/create-mobile-app` is invoking this as a sub-step with approved scoped context |
 | Re-planning the schema or connectors mid-project | You only need to add a single table or a single connector |
 
@@ -196,9 +193,8 @@ If the user provided no requirements context, ask:
 For an existing data-only plan, compare current bindings with the proposal before
 writing it. Apply [data-source-removal.md](../../shared/references/data-source-removal.md)
 to classify and approve removals explicitly. Omitted tables are not automatic
-deletions; retain anything required by existing consumers. Report their required
-changes separately; the user may request existing `/edit-app` for consumer work,
-but this workflow does not invoke it automatically.
+deletions; retain anything required by existing consumers or route the feature
+through `/edit-app` for their planned update.
 
 For a Dataverse proposal from any path, require the current normalized contract
 and snapshot to pass `validate-dataverse-planning-decisions.js` with exit `0`
@@ -214,12 +210,7 @@ manifest, or invoke Phases 5–7. A scratch proposal is not an applied plan.
 Approval to review the proposal does not override `--plan-only`; implementation
 requires a separate request without that flag and approval of its exact delta.
 
-Present the full plan for this data-source delta — data model + connectors —
-together in a single `EnterPlanMode` block. Distinguish retained context from
-additions, refreshes, and explicitly approved retirements. A current
-implementation-phase owner may supply the exact data approval instead; validate
-that it matches this proposal and return scope changes to that owner before
-writing. A saved plan or `--skip-planning` alone is not approval.
+Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
 ```
 ## Plan: Data Sources
@@ -360,8 +351,7 @@ For each explicitly approved retirement, invoke the matching leaf with
 `--working-dir "<working_dir>"`, and its `approved_scope`.
 Follow [data-source-removal.md](../../shared/references/data-source-removal.md).
 This standalone data-only flow does not edit consumers: if any remain, stop and
-report their integration work to the user or current owner instead of breaking
-them. The user may separately request `/edit-app`; never route there automatically.
+return their integration work to `/edit-app` instead of breaking them.
 Verify the CLI cleanup and reconcile the actual remaining generated-service
 snapshot and app manifest before the summary. No retirement set means skip.
 Preserve each leaf's `offlineRetirement` outcome from the shared removal contract,
@@ -449,7 +439,7 @@ Type-check: PASS
 Next steps:
   /add-datasource   — add more data sources
   /add-native       — add device capabilities
-  /edit-app         — separately request consumer/screen changes if needed
+  /edit-app         — integrate these services into app screens
 ─────────────────────────────────────────────
 ```
 
