@@ -5,8 +5,7 @@ name: mobile-apps-script-tests
 
 on:
     pull_request:
-        branches:
-            - main
+        # Cover stacked PRs too; the path filter keeps this workflow plugin-scoped.
         paths:
             - "plugins/mobile-apps/**"
             - ".github/workflows/mobile-apps-script-tests.yml"
