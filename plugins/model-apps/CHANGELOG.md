@@ -23,6 +23,11 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
 - **A `/genpage` update checks its target in about half the time.** The two listings that prove the
   page exists and is in the app now run together (measured: 10.6 s before, 5.6 s after), because a
   pac call no longer blocks the process while it runs.
+- **The vendored SDK is refreshed.** A business rule condition of *contains data* or *does not contain
+  data* is now sent as the unary condition the platform's own designer writes, instead of a binary
+  condition with an empty right-hand side. The SDK also gains generative pages as an artifact of its
+  own; the plugin still deploys pages through `pac`, so the bundle leaves out the TypeScript compiler
+  that path would load and stays under 1 MB.
 
 ### Fixed
 
