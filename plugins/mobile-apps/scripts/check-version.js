@@ -97,7 +97,7 @@ function checkForUpdate({
   env = process.env,
 } = {}) {
   // Git canonicalizes symlinked paths (for example macOS /var -> /private/var).
-  // Use the same canonical base before deriving paths consumed by `git show`.
+  // Resolve the filesystem path before reading the installed manifest.
   const resolvedPluginRoot = fs.realpathSync(pluginRoot);
   const pluginJsonPath = firstExistingPath(resolvedPluginRoot, PLUGIN_MANIFEST_PATHS);
   if (!pluginJsonPath) return null;
@@ -108,8 +108,13 @@ function checkForUpdate({
   // Skills run from the user's app directory, so resolve Git from the installed
   // plugin instead of accidentally inspecting the user's unrelated repository.
   const gitRoot = runGit(resolvedPluginRoot, ['rev-parse', '--show-toplevel'], 5000).trim();
+  // Ask Git for the repository-relative prefix instead of comparing absolute
+  // paths whose drive-letter casing or separators can differ on Windows.
+  const pluginPrefix = runGit(resolvedPluginRoot, ['rev-parse', '--show-prefix'], 5000)
+    .trim()
+    .replace(/\\/g, '/');
   const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) =>
-    path.relative(gitRoot, path.join(resolvedPluginRoot, manifestPath)).replace(/\\/g, '/')
+    path.posix.join(pluginPrefix, manifestPath)
   );
 
   try {

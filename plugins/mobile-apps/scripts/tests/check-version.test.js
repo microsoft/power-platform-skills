@@ -69,6 +69,18 @@ function collectSkillFiles(root) {
   return files;
 }
 
+function normalizeLineEndings(content) {
+  return content.replace(/\r\n?/g, '\n');
+}
+
+test('normalizeLineEndings makes Windows skill frontmatter parseable', () => {
+  const content = '---\r\nuser-invocable: true\r\n---\r\n\r\n# Skill\r\n';
+  const normalized = normalizeLineEndings(content);
+
+  assert.match(normalized, /^user-invocable: true$/m);
+  assert.notEqual(normalized.indexOf('\n---\n', 4), -1);
+});
+
 test('compareSemver compares major, minor, and patch versions', () => {
   assert.equal(compareSemver('1.2.0', '1.2.0'), 0);
   assert.equal(compareSemver('1.2', '1.2.0'), 0);
@@ -143,12 +155,12 @@ test('checkForUpdate returns null when the installed version is current', (t) =>
 test('every public skill runs or owns the plugin check before its workflow', () => {
   const skillsRoot = path.join(pluginRoot, 'skills');
   const publicSkills = collectSkillFiles(skillsRoot).filter((skillPath) =>
-    /^user-invocable: true$/m.test(fs.readFileSync(skillPath, 'utf8'))
+    /^user-invocable: true$/m.test(normalizeLineEndings(fs.readFileSync(skillPath, 'utf8')))
   );
 
   assert.ok(publicSkills.length > 0);
   for (const skillPath of publicSkills) {
-    const content = fs.readFileSync(skillPath, 'utf8');
+    const content = normalizeLineEndings(fs.readFileSync(skillPath, 'utf8'));
     if (/^name: check-updates$/m.test(content)) {
       assert.match(content, /^## Step 1: Check The Plugin$/m);
       continue;
