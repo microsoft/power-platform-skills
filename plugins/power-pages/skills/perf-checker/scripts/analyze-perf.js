@@ -72,7 +72,7 @@ const SHORT_POLL_INTERVAL_MS = 10000;
 
 // Directories we never descend into for ANY scan.
 const ALWAYS_SKIP_DIRS = new Set([
-  'node_modules', '.git', '.github', '.vs', '.vscode', 'coverage', '.idea',
+  'node_modules', '.git', '.github', '.vs', '.vscode', 'coverage', '.idea', 'docs',
 ]);
 // Additional directories skipped for SOURCE-content scans (FetchXML / Web API):
 // these hold compiled/minified output — the actionable location is the source,
@@ -1205,11 +1205,9 @@ function loadSiteSettingsMap(projectRoot, rel) {
     try {
       records = loadSiteSettings(dir);
     } catch {
-      return {
-        map,
-        source: relDir,
-        layout: 'per-record',
-      }; // malformed YAML shouldn't abort the whole analysis
+      // If the site-settings metadata can't be parsed, skip settings-based rules rather than
+      // emitting "missing setting" findings that could drive unsafe auto-fixes.
+      return { map, source: null, layout: null };
     }
     for (const r of records) {
       if (typeof r.name === 'string') {
@@ -1335,19 +1333,21 @@ function analyze(projectRoot) {
       const isWebPage = base.includes('webpage') || relPath.includes('/web-pages/');
       if (isWebFile || isWebPage) {
         const which = isWebFile ? 'web file' : 'web page';
+        const trackingKind = isWebFile ? 'file' : 'page';
         const tag = isWebFile ? 'PERF-WEBFILE-TRACKING' : 'PERF-WEBPAGE-TRACKING';
-        const trackMatch = content.match(/(?:adx_)?enabletracking\s*:/i);
+        const trackMatch = content.match(/((?:adx_)?enabletracking)\s*:/i);
+        const trackingField = trackMatch ? trackMatch[1] : 'adx_enabletracking';
         findings.push(finding({
           tag,
           severity: SEVERITY.INFO,
-          title: `Deprecated page tracking enabled on a ${which}`,
+          title: `Deprecated ${trackingKind} tracking enabled on a ${which}`,
           location: `${relPath}:${trackMatch ? lineOf(content, trackMatch.index) : 1}`,
           details:
             `This ${which} has Enable Tracking (deprecated) turned on, which Site Checker flags as ` +
             'a performance risk. The feature is retired on portal versions 9.3.4.x and later.',
-          fix: `Set enabletracking to false on this ${which}.`,
+          fix: `Set ${trackingField} to false on this ${which}.`,
           autoFixAvailable: true,
-          fixAction: { type: 'set-yaml-field', field: 'adx_enabletracking', value: 'false' },
+          fixAction: { type: 'set-yaml-field', field: trackingField, value: 'false' },
         }));
       }
     }

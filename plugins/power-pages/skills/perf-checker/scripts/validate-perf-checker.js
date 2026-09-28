@@ -81,8 +81,9 @@ runValidation((cwd) => {
     approve(); // Can't read it — fail open rather than block on I/O.
   }
 
-  if (content.length < MIN_REPORT_BYTES) {
-    block(`Performance report ${reports[reports.length - 1]} is suspiciously small (${content.length} bytes) — the render likely failed. Re-run /power-pages:perf-checker.`);
+  const reportBytes = Buffer.byteLength(content, 'utf8');
+  if (reportBytes < MIN_REPORT_BYTES) {
+    block(`Performance report ${reports[reports.length - 1]} is suspiciously small (${reportBytes} bytes) — the render likely failed. Re-run /power-pages:perf-checker.`);
   }
   if (UNREPLACED_PLACEHOLDER.test(content)) {
     block(`Performance report ${reports[reports.length - 1]} has unreplaced template placeholders — the report data was not populated. Re-run the render step in /power-pages:perf-checker.`);
