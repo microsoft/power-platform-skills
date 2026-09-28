@@ -79,7 +79,7 @@ test('does not let plan approval bypass a known native package block', (t) => {
 test('allows the template-shipped expo-haptics version', (t) => {
   const templatePackage = JSON.parse(fs.readFileSync(TEMPLATE_PACKAGE, 'utf8'));
   const hapticsVersion = templatePackage.dependencies?.['expo-haptics'];
-  assert.strictEqual(hapticsVersion, '55.0.14');
+  assert.strictEqual(hapticsVersion, '55.0.16');
 
   const projectRoot = makeProject('expo-haptics', hapticsVersion);
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
