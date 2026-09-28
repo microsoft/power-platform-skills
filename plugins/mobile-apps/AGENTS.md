@@ -84,6 +84,38 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 16. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
 17. **Plugin update notification** — Immediately after the frontmatter of every `user-invocable: true` skill except `/check-updates`, run `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before proceeding. The check is best-effort and must never block the requested workflow. `/check-updates` owns its explicit plugin-version check in Step 1 and must not run a duplicate startup check.
 
+16. **Data-source operations preserve scope and app identity** — Before data
+    work, follow [Data-source invocation scope](shared/shared-instructions.md#data-source-invocation-scope).
+    Standalone workflows approve the current delta; child calls carry the owner,
+    phase, absolute root, and exact approved operations. Neither a flag nor an
+    old plan grants approval. Every shell/file operation uses the same root;
+    follow [app-working-directory.md](shared/references/app-working-directory.md)
+    for Bash and PowerShell guards.
+17. **Data-source retirement is app-local and CLI-owned** — After approved
+    consumer edits, use the supported removal command to update registrations,
+    schemas, and generated models/services, then regenerate the runtime schema
+    map. Never turn a removed plan row into server-table deletion. Follow
+    [data-source-removal.md](shared/references/data-source-removal.md)
+    for shared-reference safety, inventory/offline reconciliation, and no-op
+    detection; successful exit alone is insufficient.
+18. **Seed scope is not the schema inventory** — Orchestrated `/add-sample-data`
+    calls pass an approved `--tables` allowlist and retiring-table exclusions.
+    Lookup fanout, prototype seeds, media uploads, and retries cannot widen that
+    scope. Preserve transitional manifest entries until verified removal.
+19. **Offline retirement survives addition checks** — Preserve per-table
+    `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
+    `in-sync` never clears a pending profile decision/migration. App-binding
+    approval is not permission to delete offline profile items or server data.
+20. **Data-only planning shares creation's helpers, not its gates** —
+    Setup/standalone proposals use compact hash-bound evidence, snapshot-only
+    architect context, and decision validation before the existing approval.
+    The same checks apply to diagrams and inline fallbacks. Preapproval
+    environment resolution uses `--no-cache --require-tenant`; never downgrade
+    to the persistent resolver. Follow
+    [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
+    Do not fabricate the four-approval create-only execution receipt for a
+    data-only change.
+
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
