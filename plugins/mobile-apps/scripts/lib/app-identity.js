@@ -139,9 +139,6 @@ function projectTarget(projectRoot) {
 function readProjectTelemetryContext(projectRoot, options = {}) {
   try {
     const target = projectTarget(projectRoot);
-    const context = {};
-    if (target.environmentId) context.environmentId = target.environmentId;
-    if (target.tenantId) context.tenantId = target.tenantId;
     if (
       !options.lifecycle ||
       !options.runId ||
@@ -149,7 +146,7 @@ function readProjectTelemetryContext(projectRoot, options = {}) {
       !target.environmentId ||
       !target.tenantId
     ) {
-      return context;
+      return {};
     }
 
     const { directory } = options.lifecycle.readRun({
@@ -160,10 +157,18 @@ function readProjectTelemetryContext(projectRoot, options = {}) {
     const organization = readJsonFile(
       path.join(directory, `environment-${target.environmentId}.json`),
     );
-    if (organization?.tenantId === target.tenantId && guid(organization.orgId)) {
-      context.orgId = organization.orgId;
+    if (
+      organization?.environmentId !== target.environmentId ||
+      organization.tenantId !== target.tenantId ||
+      !guid(organization.orgId)
+    ) {
+      return {};
     }
-    return context;
+    return {
+      environmentId: target.environmentId,
+      tenantId: target.tenantId,
+      orgId: organization.orgId,
+    };
   } catch {
     return {};
   }

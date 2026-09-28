@@ -309,6 +309,7 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
       'invalid_error_class',
       'invalid_clock',
       'children_pending',
+      'lock_timeout',
     ]);
     return {
       status: 'unavailable',

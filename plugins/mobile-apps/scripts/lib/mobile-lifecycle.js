@@ -9,6 +9,9 @@ const os = require('node:os');
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const DEFAULT_LOCK_TIMEOUT_MS = 5000;
+const DEFAULT_LOCK_RETRY_MS = 10;
+const LOCK_DIRECTORY = '.lifecycle.lock';
 
 function normalizePolicy(input) {
   if (!input || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.pluginName || '')) {
@@ -70,6 +73,36 @@ function writeExclusive(filename, value) {
   }
 }
 
+function acquireRunLock(directory, options = {}) {
+  const timeoutMs = Number.isSafeInteger(options.lockTimeoutMs) && options.lockTimeoutMs >= 0
+    ? options.lockTimeoutMs
+    : DEFAULT_LOCK_TIMEOUT_MS;
+  const retryMs = Number.isSafeInteger(options.lockRetryMs) && options.lockRetryMs > 0
+    ? options.lockRetryMs
+    : DEFAULT_LOCK_RETRY_MS;
+  const lockPath = path.join(directory, LOCK_DIRECTORY);
+  const startedAt = Date.now();
+
+  while (true) {
+    try {
+      fs.mkdirSync(lockPath, { mode: 0o700 });
+      return () => {
+        try {
+          fs.rmdirSync(lockPath);
+        } catch {
+          // A release failure only disables later telemetry for this run.
+        }
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() - startedAt >= timeoutMs) throw new Error('lock_timeout');
+      // Never steal a lock based on age: an active process may legitimately be
+      // scanning a large run. Telemetry fails open after the bounded timeout.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
+    }
+  }
+}
+
 function clockReading(options) {
   return {
     wallMs: options.now === undefined ? Date.now() : options.now,
@@ -105,6 +138,32 @@ function readSpan(policy, options) {
   return { directory, run, record };
 }
 
+function persistSpan(policy, options, context) {
+  const { clock, directory, parentSpanId, run, spanId } = context;
+  let attempt = 1;
+  if (options.retryOf) {
+    const prior = readSpan(policy, {
+      ...options,
+      runId: run.runId,
+      spanId: options.retryOf,
+    }).record;
+    if (prior.parentSpanId !== parentSpanId || prior.skillName !== options.skillName ||
+        prior.checkpointName !== (options.checkpointName || null) ||
+        !fs.existsSync(path.join(directory, `${prior.spanId}.end.json`))) throw new Error('invalid_retry');
+    attempt = prior.attempt + 1;
+  }
+  const record = { schemaVersion: 2, runId: run.runId, spanId, parentSpanId: parentSpanId || null,
+    spanType: options.checkpointName ? 'checkpoint' : 'skill',
+    skillName: options.skillName, checkpointName: options.checkpointName || null,
+    sessionId: run.sessionId, attempt, eventId: crypto.randomUUID(),
+    startedMonotonicMs: clock.monotonicMs, startedUptimeMs: clock.uptimeMs,
+    startedAtMs: clock.wallMs, time: new Date(clock.wallMs).toISOString(), state: 'started' };
+  // One immutable file per span avoids lost updates when independent agents run
+  // concurrently. Project/process paths never enter the event record.
+  writeExclusive(path.join(directory, `${spanId}.start.json`), record);
+  return record;
+}
+
 function beginSpan(policy, options) {
   const { skillName, checkpointName } = options;
   if (!policy.trackedSkillNames.has(skillName) || policy.exemptSkillNames.has(skillName)) {
@@ -114,50 +173,56 @@ function beginSpan(policy, options) {
     throw new Error('invalid_checkpoint');
   }
   const clock = clockReading(options);
-  const now = clock.wallMs;
-  if (!Number.isSafeInteger(now) || now < 0) throw new Error('invalid_clock');
+  if (!Number.isSafeInteger(clock.wallMs) || clock.wallMs < 0) throw new Error('invalid_clock');
   const spanId = crypto.randomUUID();
-  let runId = options.runId;
-  let parentSpanId = options.parentSpanId;
-  let directory;
-  let run;
+  const runId = options.runId;
+  const parentSpanId = options.parentSpanId;
+
   if (runId || parentSpanId) {
     if (!runId || !parentSpanId) throw new Error('missing_parent');
-    const parent = readSpan(policy, { ...options, spanId: parentSpanId });
-    ({ directory, run } = parent);
-    if (fs.existsSync(path.join(directory, `${requireGuid(parentSpanId)}.end.json`))) {
-      throw new Error('parent_finished');
+    const initialParent = readSpan(policy, { ...options, spanId: parentSpanId });
+    const release = acquireRunLock(initialParent.directory, options);
+    try {
+      const parent = readSpan(policy, { ...options, spanId: parentSpanId });
+      if (fs.existsSync(path.join(parent.directory, `${parent.record.spanId}.end.json`))) {
+        throw new Error('parent_finished');
+      }
+      if (checkpointName && parent.record.skillName !== skillName) {
+        throw new Error('invalid_parent');
+      }
+      return persistSpan(policy, options, {
+        clock,
+        directory: parent.directory,
+        parentSpanId: parent.record.spanId,
+        run: parent.run,
+        spanId,
+      });
+    } finally {
+      release();
     }
-    if (checkpointName && parent.record.skillName !== skillName) {
-      throw new Error('invalid_parent');
-    }
-  } else {
-    if (checkpointName) throw new Error('missing_parent');
-    pruneRuns(policy, options.configDir, now);
-    runId = crypto.randomUUID();
-    directory = runDirectory(policy, options.configDir, runId);
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    run = { schemaVersion: 2, runId, rootSpanId: spanId, scopeKey: scopeKey(options.projectRoot),
-      sessionId: GUID.test(options.sessionId || '') ? options.sessionId : runId, startedAtMs: now };
-    writeExclusive(path.join(directory, 'run.json'), run);
   }
-  let attempt = 1;
-  if (options.retryOf) {
-    const prior = readSpan(policy, { ...options, runId, spanId: options.retryOf }).record;
-    if (prior.parentSpanId !== parentSpanId || prior.skillName !== skillName ||
-        prior.checkpointName !== (checkpointName || null) ||
-        !fs.existsSync(path.join(directory, `${prior.spanId}.end.json`))) throw new Error('invalid_retry');
-    attempt = prior.attempt + 1;
-  }
-  const record = { schemaVersion: 2, runId, spanId, parentSpanId: parentSpanId || null,
-    spanType: checkpointName ? 'checkpoint' : 'skill', skillName, checkpointName: checkpointName || null,
-    sessionId: run.sessionId, attempt, eventId: crypto.randomUUID(),
-    startedMonotonicMs: clock.monotonicMs, startedUptimeMs: clock.uptimeMs,
-    startedAtMs: now, time: new Date(now).toISOString(), state: 'started' };
-  // One immutable file per span avoids lost updates when independent agents run
-  // concurrently. Project/process paths never enter the event record.
-  writeExclusive(path.join(directory, `${spanId}.start.json`), record);
-  return record;
+
+  if (checkpointName) throw new Error('missing_parent');
+  pruneRuns(policy, options.configDir, clock.wallMs);
+  const newRunId = crypto.randomUUID();
+  const directory = runDirectory(policy, options.configDir, newRunId);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const run = {
+    schemaVersion: 2,
+    runId: newRunId,
+    rootSpanId: spanId,
+    scopeKey: scopeKey(options.projectRoot),
+    sessionId: GUID.test(options.sessionId || '') ? options.sessionId : newRunId,
+    startedAtMs: clock.wallMs,
+  };
+  writeExclusive(path.join(directory, 'run.json'), run);
+  return persistSpan(policy, options, {
+    clock,
+    directory,
+    parentSpanId: null,
+    run,
+    spanId,
+  });
 }
 
 function finishSpan(policy, options) {
@@ -165,52 +230,63 @@ function finishSpan(policy, options) {
   if (options.errorClass && !policy.errorClasses.has(options.errorClass)) {
     throw new Error('invalid_error_class');
   }
-  const { directory, record } = readSpan(policy, options);
-  const endPath = path.join(directory, `${record.spanId}.end.json`);
-  if (fs.existsSync(endPath)) {
-    const previous = readJson(endPath);
-    validateEnd(policy, record, previous);
-    if (previous.state !== options.state) throw new Error('already_finished');
-    return previous;
-  }
-  if (options.state === 'completed') {
-    const spans = listSpans(policy, options);
-    const byId = new Map(spans.map((span) => [span.spanId, span]));
-    for (const candidate of spans) {
-      if (candidate.spanId === record.spanId || candidate.state !== 'started') continue;
-      let parent = candidate.parentSpanId;
-      const visited = new Set();
-      while (parent && !visited.has(parent)) {
-        if (parent === record.spanId) throw new Error('children_pending');
-        visited.add(parent);
-        parent = byId.get(parent)?.parentSpanId;
+  const initial = readSpan(policy, options);
+  const release = acquireRunLock(initial.directory, options);
+  try {
+    const { directory, record } = readSpan(policy, options);
+    const endPath = path.join(directory, `${record.spanId}.end.json`);
+    if (fs.existsSync(endPath)) {
+      const previous = readJson(endPath);
+      validateEnd(policy, record, previous);
+      if (previous.state !== options.state) throw new Error('already_finished');
+      return previous;
+    }
+    if (options.state === 'completed') {
+      const spans = listSpans(policy, options);
+      const byId = new Map(spans.map((span) => [span.spanId, span]));
+      for (const candidate of spans) {
+        if (candidate.spanId === record.spanId || candidate.state !== 'started') continue;
+        let parent = candidate.parentSpanId;
+        const visited = new Set();
+        while (parent && !visited.has(parent)) {
+          if (parent === record.spanId) throw new Error('children_pending');
+          visited.add(parent);
+          parent = byId.get(parent)?.parentSpanId;
+        }
       }
     }
-  }
-  const clock = clockReading(options);
-  const now = clock.wallMs;
-  if (!Number.isSafeInteger(now) || now < 0) throw new Error('invalid_clock');
-  const wallElapsed = now - record.startedAtMs;
-  const hasMonotonic = Number.isSafeInteger(record.startedMonotonicMs) && Number.isSafeInteger(clock.monotonicMs);
-  const monotonicElapsed = hasMonotonic ? clock.monotonicMs - record.startedMonotonicMs : wallElapsed;
-  const uptimeElapsed = Number.isSafeInteger(record.startedUptimeMs) && Number.isSafeInteger(clock.uptimeMs)
-    ? clock.uptimeMs - record.startedUptimeMs : wallElapsed;
-  const measured = wallElapsed >= 0 && monotonicElapsed >= 0 && uptimeElapsed >= 0 &&
-    Math.abs(wallElapsed - monotonicElapsed) <= 2000 && Math.abs(wallElapsed - uptimeElapsed) <= 2000;
-  const result = { ...record, eventId: crypto.randomUUID(), state: options.state,
-    time: new Date(now).toISOString(),
-    timingStatus: options.state === 'skipped' ? 'not_applicable' : measured ? 'measured' : 'clock_invalid' };
-  if (measured && options.state !== 'skipped') result.durationMs = monotonicElapsed;
-  if (options.errorClass) result.errorClass = options.errorClass;
-  try {
-    // Exclusive creation makes duplicate finishes idempotent. A retry returns
-    // the same event ID so replay can be deduplicated without inventing a span.
+    const clock = clockReading(options);
+    const now = clock.wallMs;
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('invalid_clock');
+    const wallElapsed = now - record.startedAtMs;
+    const hasMonotonic = Number.isSafeInteger(record.startedMonotonicMs) &&
+      Number.isSafeInteger(clock.monotonicMs);
+    const monotonicElapsed = hasMonotonic ? clock.monotonicMs - record.startedMonotonicMs : wallElapsed;
+    const uptimeElapsed = Number.isSafeInteger(record.startedUptimeMs) &&
+      Number.isSafeInteger(clock.uptimeMs)
+      ? clock.uptimeMs - record.startedUptimeMs
+      : wallElapsed;
+    const measured = wallElapsed >= 0 && monotonicElapsed >= 0 && uptimeElapsed >= 0 &&
+      Math.abs(wallElapsed - monotonicElapsed) <= 2000 &&
+      Math.abs(wallElapsed - uptimeElapsed) <= 2000;
+    const result = {
+      ...record,
+      eventId: crypto.randomUUID(),
+      state: options.state,
+      time: new Date(now).toISOString(),
+      timingStatus: options.state === 'skipped'
+        ? 'not_applicable'
+        : measured
+          ? 'measured'
+          : 'clock_invalid',
+    };
+    if (measured && options.state !== 'skipped') result.durationMs = monotonicElapsed;
+    if (options.errorClass) result.errorClass = options.errorClass;
     writeExclusive(endPath, result);
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    return finishSpan(policy, options);
+    return result;
+  } finally {
+    release();
   }
-  return result;
 }
 
 function resumeSpan(policy, options) {

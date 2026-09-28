@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const {
@@ -360,6 +360,99 @@ test('successful parent completion requires every child to finish', (context) =>
   assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
 });
 
+test('run lock serializes child creation with parent completion across processes', async (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const ikeyPath = path.join(configDir, 'ikey.json');
+  const cli = path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
+  const env = {
+    ...process.env,
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+  };
+  const runCli = (args) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cli, ...args], {
+      cwd: projectRoot,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const root = lifecycle.beginSpan({
+      projectRoot,
+      configDir,
+      skillName: 'create-mobile-app',
+    });
+    const [childResult, parentResult] = await Promise.all([
+      runCli([
+        'create-mobile-app|gather_app_requirements|started',
+        '--run-id', root.runId,
+        '--parent-span-id', root.spanId,
+        '--project-root', projectRoot,
+      ]),
+      runCli([
+        '--finish', 'completed',
+        '--run-id', root.runId,
+        '--span-id', root.spanId,
+        '--project-root', projectRoot,
+      ]),
+    ]);
+    assert.equal(childResult.code, 0, childResult.stderr);
+    assert.equal(parentResult.code, 0, parentResult.stderr);
+
+    const report = lifecycle.reportRun({ projectRoot, configDir, runId: root.runId });
+    const rootSpan = report.spans.find((span) => span.spanId === root.spanId);
+    const openChild = report.spans.some(
+      (span) => span.parentSpanId === root.spanId && span.state === 'incomplete',
+    );
+    assert.equal(
+      rootSpan.state === 'completed' && openChild,
+      false,
+      'a completed parent must never gain an incomplete child',
+    );
+  }
+});
+
+test('run lock times out instead of writing through another process lock', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+  });
+  const lockPath = path.join(
+    lifecycle.runDirectory(configDir, root.runId),
+    '.lifecycle.lock',
+  );
+  fs.mkdirSync(lockPath);
+  try {
+    assert.throws(() => lifecycle.beginSpan({
+      projectRoot,
+      configDir,
+      runId: root.runId,
+      parentSpanId: root.spanId,
+      skillName: 'create-mobile-app',
+      checkpointName: 'gather_app_requirements',
+      lockTimeoutMs: 0,
+    }), /lock_timeout/);
+  } finally {
+    fs.rmdirSync(lockPath);
+  }
+});
+
 test('verified Dataverse context excludes user identity and token claims', (context) => {
   const projectRoot = tempProject(context);
   const configDir = path.join(projectRoot, 'config');
@@ -398,6 +491,25 @@ test('verified Dataverse context excludes user identity and token claims', (cont
     lifecycle,
     runId: root.runId,
   };
+  assert.deepEqual(readProjectTelemetryContext(projectRoot, options), {});
+  assert.deepEqual(readProjectTelemetryContext(projectRoot), {});
+  let unverified;
+  emitLifecycle({
+    configDir,
+    env: {},
+    eventStreamName: 'event',
+    sessionId: root.sessionId,
+  }, root, {
+    cwd: projectRoot,
+    emit: (value) => {
+      unverified = value;
+    },
+    readAiAgent: () => ({}),
+  });
+  assert.equal(unverified.data.orgId, undefined);
+  assert.equal(unverified.data.tenantId, undefined);
+  assert.equal(unverified.data.eventInfo.environmentId, undefined);
+
   assert.equal(recordVerifiedDataverseOrganization({
     ...options,
     environmentUrl,
