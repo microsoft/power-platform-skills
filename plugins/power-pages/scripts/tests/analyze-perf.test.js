@@ -568,6 +568,7 @@ test('analyze() wires list pagination and webpage-as-API checks into the project
 
   fs.mkdirSync(path.join(root, 'lists'), { recursive: true });
   fs.mkdirSync(path.join(root, 'web-templates', 'data-api'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'web-templates', 'liquid-api'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'lists', 'Unpaged.list.yml'),
     'adx_entitylistid: 11111111-1111-4111-8111-111111111111\nadx_name: Unpaged\n',
@@ -581,11 +582,18 @@ test('analyze() wires list pagination and webpage-as-API checks into the project
       '{ "items": [{% for row in rows.results.entities %}"{{ row.fullname }}"{% unless forloop.last %},{% endunless %}{% endfor %}] }',
     ].join('\n'),
   );
+  fs.writeFileSync(
+    path.join(root, 'web-templates', 'liquid-api', 'Liquid.webtemplate.source.liquid'),
+    [
+      '{% assign rows = entities["contacts"] %}',
+      '{ "items": [{% for row in rows %}"{{ row.fullname }}"{% unless forloop.last %},{% endunless %}{% endfor %}] }',
+    ].join('\n'),
+  );
 
   const result = analyze(root);
   const found = tags(result.findings);
   assert.ok(found.includes('PERF-LIST-NO-PAGING'));
-  assert.ok(found.includes('PERF-WEBPAGE-AS-API'));
+  assert.equal(found.filter((tag) => tag === 'PERF-WEBPAGE-AS-API').length, 2);
   const coverage = Object.fromEntries(
     result.details.entries.map((entry) => [entry.key, entry.value]),
   );

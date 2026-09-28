@@ -1298,6 +1298,8 @@ function analyze(projectRoot) {
     const content = readSafe(abs);
     if (content == null) continue;
     const relPath = rel(abs);
+    const wantsWebpageApi =
+      /\.(?:webtemplate\.source|webpage\.copy)\.(?:html?|liquid)$/i.test(relPath);
 
     if (wantsFetch) {
       fetchxmlFilesScanned += 1;
@@ -1315,10 +1317,16 @@ function analyze(projectRoot) {
       for (const f of scanClientScript(content, relPath)) findings.push(f);
     }
     if (wantsHtml) {
-      // Render-blocking <head> scripts — declarative HTML pages only.
+      // Render-blocking <head> scripts — declarative HTML pages only. Keep this
+      // outside the broader Web API/client-script scan so JSX/template literals
+      // that happen to contain a `<head>` snippet are not treated as served HTML.
       for (const f of scanHtmlHead(content, relPath)) findings.push(f);
-      // Headerless JSON/XML templates backed by FetchXML are a legacy custom-API
-      // pattern; keep this separate from the native `/_api/` rules above.
+    }
+    if (wantsWebpageApi) {
+      // Headerless JSON/XML templates backed by FetchXML or entity/list data are
+      // a legacy custom-API pattern. Keep this separate from the native `/_api/`
+      // rules and from the HTML-only <head> scan so `.liquid` templates are
+      // checked without treating them as served HTML documents.
       for (const f of scanWebpageApiContent(content, relPath)) findings.push(f);
     }
     if (wantsStyle) {
