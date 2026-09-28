@@ -16,10 +16,32 @@ const {
   isTransmissionOptedOut,
   telemetryOptOutEnvVarName,
 } = require('./telemetry/lib/user-config');
+const {
+  TELEMETRY_ERROR_CLASSES,
+  TELEMETRY_STATES,
+  TRACKED_SKILL_NAMES,
+  isKnownTelemetryEvent,
+  isTelemetryStaticInfo,
+} = require('./mobileapp-hook-utils');
 
 const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 const DEFAULT_LOCAL_DIR = path.join(os.homedir(), '.power-platform-skills');
 const RESERVED_META_FIELDS = new Set(['eventName', 'eventType', 'severity']);
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SOURCES = new Set(['prompt', 'pretool', 'checkpoint']);
+const ID_FIELDS = ['appInstanceId', 'environmentId', 'runId', 'spanId', 'parentSpanId'];
+const AGENT_NAMES = new Set([
+  'GitHub Copilot',
+  'Copilot CLI',
+  'Claude Code',
+  'Codex',
+  'OpenCode',
+  'Hermes',
+  'OpenClaw',
+]);
+const TRACKED_SKILLS = new Set(TRACKED_SKILL_NAMES);
+const ERROR_CLASSES = new Set(TELEMETRY_ERROR_CLASSES);
+const STATES = new Set(TELEMETRY_STATES);
 
 function readPriorEvents(projectRoot, env = process.env) {
   const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
@@ -123,11 +145,108 @@ function readIkeyConfig(env) {
 }
 
 function sanitizeData(data) {
-  if (!data || typeof data !== 'object') return {};
+  if (
+    !data ||
+    data.pluginName !== 'mobile-app' ||
+    !TRACKED_SKILLS.has(data.skillName) ||
+    !isKnownTelemetryEvent(data.skillName, data.eventName)
+  ) {
+    return {};
+  }
+
   const filtered = pick(data, Object.keys(FIELD_TYPES));
   for (const key of RESERVED_META_FIELDS) {
-    if (typeof data[key] === 'string') filtered[key] = data[key];
+    if (typeof data[key] === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(data[key])) {
+      filtered[key] = data[key];
+    }
   }
+  delete filtered.errorDescription;
+  delete filtered.pacCliVersion;
+
+  for (const name of ['pluginVersion', 'nodeVersion', 'aiAgentVersion', 'osVersion']) {
+    if (
+      filtered[name] !== undefined &&
+      !/^(?:unknown|v?\d[\dA-Za-z.+_-]{0,63})$/.test(filtered[name])
+    ) {
+      delete filtered[name];
+    }
+  }
+  if (
+    filtered.osName !== undefined &&
+    !['Windows', 'Mac', 'Linux'].includes(filtered.osName)
+  ) {
+    delete filtered.osName;
+  }
+  if (filtered.aiAgentName !== undefined && !AGENT_NAMES.has(filtered.aiAgentName)) {
+    delete filtered.aiAgentName;
+  }
+  for (const name of ['sessionId', 'correlationId']) {
+    if (
+      filtered[name] !== undefined &&
+      !/^[A-Za-z0-9_-]{1,128}$/.test(filtered[name])
+    ) {
+      delete filtered[name];
+    }
+  }
+  if (!ERROR_CLASSES.has(filtered.errorClass)) delete filtered.errorClass;
+  for (const name of ['orgId', 'tenantId']) {
+    if (typeof filtered[name] !== 'string' || !GUID.test(filtered[name])) {
+      delete filtered[name];
+    }
+  }
+  if (
+    typeof data.durationMs !== 'number' ||
+    !Number.isSafeInteger(data.durationMs) ||
+    data.durationMs < 0
+  ) {
+    delete filtered.durationMs;
+  }
+
+  const source = data.eventInfo &&
+    typeof data.eventInfo === 'object' &&
+    !Array.isArray(data.eventInfo)
+    ? data.eventInfo
+    : {};
+  const eventInfo = {};
+  for (const name of ID_FIELDS) {
+    if (typeof source[name] === 'string' && GUID.test(source[name])) {
+      eventInfo[name] = source[name].toLowerCase();
+    }
+  }
+  if (source.appInstanceId === null) eventInfo.appInstanceId = null;
+  if (SOURCES.has(source.invocationSource)) {
+    eventInfo.invocationSource = source.invocationSource;
+  }
+  if (isTelemetryStaticInfo(source.additionalInfo)) {
+    eventInfo.additionalInfo = source.additionalInfo;
+  }
+  if (['enabled', 'disabled'].includes(source.appInsightsSelection)) {
+    eventInfo.appInsightsSelection = source.appInsightsSelection;
+  }
+  if (source.schemaVersion === 2) {
+    if (
+      !eventInfo.runId ||
+      !eventInfo.spanId ||
+      !['skill', 'checkpoint'].includes(source.spanType) ||
+      !STATES.has(source.state) ||
+      !GUID.test(filtered.correlationId || '') ||
+      !GUID.test(filtered.sessionId || '')
+    ) {
+      return {};
+    }
+    eventInfo.schemaVersion = 2;
+    eventInfo.spanType = source.spanType;
+    eventInfo.state = source.state;
+    if (Number.isSafeInteger(source.attempt) && source.attempt > 0) {
+      eventInfo.attempt = source.attempt;
+    }
+    if (['measured', 'clock_invalid', 'not_applicable'].includes(source.timingStatus)) {
+      eventInfo.timingStatus = source.timingStatus;
+    }
+    if (source.timingStatus !== 'measured') delete filtered.durationMs;
+  }
+
+  filtered.eventInfo = eventInfo;
   return filtered;
 }
 
@@ -146,6 +265,10 @@ function buildNormalEventData(data, time) {
     device_Id: 'react-native',
     event_Name: data.eventName || '',
     session_Id: data.sessionId || '',
+    ...(data.tenantId ? { tenantId: data.tenantId } : {}),
+    ...(data.eventInfo?.environmentId
+      ? { environmentId: data.eventInfo.environmentId }
+      : {}),
     severity: data.severity || 'Info',
     timestamp: time,
     customDimensions: JSON.stringify(dimensions),
@@ -200,11 +323,16 @@ async function dispatch(raw, env) {
     return;
   }
 
-  const data = sanitizeData(event.data);
-  const time = new Date().toISOString();
+  const replaying = Array.isArray(event.replay);
+  if (replaying && event.data?.pluginName !== 'mobile-app') return;
+  const data = replaying ? { pluginName: 'mobile-app' } : sanitizeData(event.data);
+  if (!data.pluginName) return;
+  const time = typeof event.time === 'string' && Number.isFinite(Date.parse(event.time))
+    ? new Date(event.time).toISOString()
+    : new Date().toISOString();
   const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
-  if (!Array.isArray(event.replay)) {
-    appendLocal({ time, name: event.name, data }, { configDir });
+  if (!replaying) {
+    appendLocal({ time, name: cfg.event_stream_name, data }, { configDir });
   }
   if (isTransmissionOptedOut(configDir, data.pluginName, env)) return;
 
@@ -239,9 +367,17 @@ async function dispatch(raw, env) {
   }
   if (!iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl) return;
 
+  records = records.flatMap((record) => {
+    const filtered = sanitizeData(record.data);
+    return filtered.pluginName &&
+      typeof record.time === 'string' &&
+      Number.isFinite(Date.parse(record.time))
+      ? [{ data: filtered, time: new Date(record.time).toISOString() }]
+      : [];
+  });
   if (!records.length) return;
   const body = records.map(record => JSON.stringify(
-    buildEnvelope(sanitizeData(record.data), record.time, iKey, cfg.event_stream_name),
+    buildEnvelope(record.data, record.time, iKey, cfg.event_stream_name),
   )).join('\n') + '\n';
   const headers = {
     'Content-Type': 'application/x-json-stream; charset=utf-8',
@@ -302,6 +438,7 @@ module.exports = {
   buildEnvelope,
   buildNormalEventData,
   fireAndForget,
-  readPriorEvents,
   flushPriorEvents,
+  readPriorEvents,
+  sanitizeData,
 };

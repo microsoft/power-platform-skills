@@ -104,7 +104,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **PAC + agent (when available, otherwise omitted):**
 
-- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in. Power Pages uses `orgId` for Artemis region routing; Model Apps can include both fields if enabled. Mobile Apps excludes both and routes from its prepared project environment instead.
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID. Power Pages reads these from `pac auth who` and uses `orgId` for Artemis region routing; Model Apps can include both fields if enabled. Mobile Apps derives them only from its selected project environment and a successful request to that target.
 - `pacCliVersion` — semver from `pac --version`
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
@@ -124,20 +124,27 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
   - `invocationSource` — one of `prompt`, `pretool`, or `checkpoint`.
   - `appInstanceId` — a random per-project UUID, or `null` outside a prepared project.
-  - `additionalInfo` — optional author-defined checkpoint metadata, restricted to `snake_case` and at most 64 characters.
+  - `additionalInfo` — optional author-defined checkpoint metadata from a fixed allowlist.
   - `appInsightsSelection` — `enabled` or `disabled`, emitted by the `/setup-app-insights` skill.
+  - `schemaVersion` — `2` for measured lifecycle records.
+  - `runId`, `spanId`, `parentSpanId` — random UUIDs that correlate a measured skill run and its nested work. `parentSpanId` is omitted on the root span.
+  - `spanType` — `skill` or `checkpoint`.
+  - `state` — `started`, `completed`, `failed`, `blocked`, `cancelled`, `skipped`, or `needs_context`.
+  - `attempt` — positive retry number.
+  - `timingStatus` — `measured`, `clock_invalid`, or `not_applicable`.
+  - `environmentId` — selected Power Platform environment GUID when the prepared project identifies one.
 
-  Mobile Apps does not add Dataverse organization or tenant IDs, or an Entra user object ID.
+  Measured lifecycle events can also use the shared top-level `durationMs`, `outcome`, and `errorClass` fields. Mobile restricts `errorClass` to fixed categories and never sends `errorDescription`.
 
   The shared dispatcher used by Power Pages and Model Apps sends `eventInfo` as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value. The Mobile Apps custom dispatcher serializes the sanitized event fields into the Power Apps `event` stream's `customDimensions`; its local mirror also keeps the structured object.
 
-  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schemas above. Power Pages `framework` is restricted to its closed set and describes only the scaffold, not a user, project, or site. Mobile Apps `appInstanceId` is randomly generated and is not derived from an app name, environment, tenant, organization, or user. Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schemas above. The Mobile Apps dispatcher applies its own nested-field allowlist before local logging and transmission. Power Pages `framework` is restricted to its closed set and describes only the scaffold, not a user, project, or site. Mobile Apps `appInstanceId` is randomly generated and is not derived from an app name, environment, tenant, organization, or user. Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
 
   `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
 ## What is NEVER sent
 
-File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, business records, document contents, usernames, email addresses, hostnames, or credentials. Mobile Apps also never sends Entra user/object IDs or Dataverse user IDs.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
@@ -149,7 +156,7 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 - **Enabled plugins are default-on for transmission.** There is no first-run
   prompt. A plugin that ships `disabled: true` remains hard-off regardless of a
   user's saved telemetry choice.
-- **Identifiers.** Power Pages, and Model Apps if enabled, can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`) when PAC is signed in. Power Pages can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it. Mobile Apps excludes all three identity fields. The local diagnostic mirror retains the same fields as the event produced by each plugin.
+- **Identifiers.** Power Pages, and Model Apps if enabled, can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`) when PAC is signed in. Power Pages can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it. Mobile Apps can include selected environment, tenant, and organization GUIDs, but never an Entra user/object ID or Dataverse user ID. Organization identifiers are identifying metadata and are not anonymous user counts. The local diagnostic mirror retains the same fields as the event produced by each plugin.
 - **Authenticated scenario.** When an adopter has the authentication or project-environment context required by its routing implementation, the resolved cloud and geo select the corresponding configured regional collector. Depending on the adopter's documented schema, the transmitted event may include End User Pseudonymous Information (EUPI) or Organization Identifiable Information (OII).
 - **Unauthenticated or unresolved scenario.** When PAC provides no authentication context, the organization, tenant, and Entra user object ID fields are absent. Destination behavior when routing context is unavailable is adopter-specific: configurations with a default region use that configured destination, while configurations that require a resolved project cluster retain the event in the local mirror and do not transmit it until a valid cluster is available. The event can still contain the allowlisted operational and system metadata and separately documented non-identity plugin-specific fields.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
@@ -174,6 +181,7 @@ shared/telemetry/
 ├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
 │  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
+│  ├─ lifecycle.js           # durable, plugin-scoped run/span state and timing
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started

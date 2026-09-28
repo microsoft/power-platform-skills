@@ -394,15 +394,30 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
   const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n---)/)?.[1];
   assert.ok(checkpointSection, 'shared instructions must define the checkpoint policy');
   assert.match(checkpointSection, /frontmatter `name`/);
-  assert.match(checkpointSection, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js" "<skill-name>\|<checkpoint-name>\|<state>" \|\| true/);
-  for (const state of ['started', 'completed', 'failed', 'skipped']) {
+  assert.match(checkpointSection, /--begin "<skill-name>"/);
+  assert.match(checkpointSection, /--finish <completed\|failed\|blocked\|cancelled>/);
+  assert.match(checkpointSection, /--execute "<skill-name>\|<checkpoint-name>"/);
+  assert.match(checkpointSection, /Support ID: <runId>/);
+  for (const state of [
+    'started',
+    'completed',
+    'failed',
+    'blocked',
+    'cancelled',
+    'skipped',
+    'needs_context',
+  ]) {
     assert.ok(checkpointSection.includes(`\`${state}\``), `shared policy must explain ${state}`);
   }
-  assert.match(checkpointSection, /only `skipped`, without `started`/);
-  assert.match(checkpointSection, /author-written `snake_case` values of at most 64 characters/);
-  assert.match(checkpointSection, /never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data/);
+  assert.match(checkpointSection, /only `skipped` without `started`/);
+  assert.match(
+    checkpointSection,
+    /author-written `snake_case` values of at most\s+64 characters/,
+  );
+  assert.match(checkpointSection, /Never include prompts, raw errors,\s+paths, names, URLs, record contents, command output, or runtime payloads/);
   assert.match(checkpointSection, /fail-open/);
-  assert.match(checkpointSection, /Do not duplicate emissions/);
+  assert.match(checkpointSection, /missing terminal event remains incomplete/);
+  assert.match(checkpointSection, /do not append `\|\| true`/);
 });
 
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
@@ -650,8 +665,10 @@ test('Mobile control wrapper updates preference with accurate disclosure', (t) =
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
-  assert.match(status.stdout, /does not record PAC CLI version/);
-  assert.match(status.stdout, /organization or Entra tenant IDs/);
+  assert.match(status.stdout, /event\/run\/span IDs/);
+  assert.match(status.stdout, /verified environment, tenant, and Dataverse organization/);
+  assert.match(status.stdout, /does not collect an\s+Entra user\/object ID, Dataverse user ID, username, or email address/);
+  assert.match(status.stdout, /No business records, file contents, emails, tokens, or raw errors/);
   assert.doesNotMatch(status.stdout, /when PAC is signed in/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {

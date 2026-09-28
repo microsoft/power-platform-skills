@@ -16,21 +16,87 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ## Workflow Checkpoints
 
-Only steps with this marker directly below the heading emit checkpoint telemetry:
+Every tracked operational skill uses the measured lifecycle below. The `telemetry`
+preference skill is exempt. Host prompt and Skill hooks remain activity observations;
+they are not measured workflow starts or proof of completion.
+
+At workflow entry, use the invoked top-level skill's frontmatter `name` and actual
+project root. Start once, retain the returned `runId` and skill `spanId` as
+`RUN_ID` and `SKILL_SPAN_ID`, and include `Support ID: <runId>` in the final
+summary when a measured run was created:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
+  --begin "<skill-name>" --project-root "<working_dir>"
+```
+
+A nested skill uses the supplied run ID and caller span by adding `--run-id`
+and `--parent-span-id`; its returned span is a new skill invocation. Pass both
+IDs as orchestration context when invoking another Skill or Task, not as Power
+Apps CLI flags. Never infer a parent from a process or session ID. On resume,
+use `--resume "<skill-span-id>" --run-id "<run-id>" --project-root "<working_dir>"`
+instead of starting a second run. An expired or unavailable context is
+unmeasured, not permission to invent IDs or pair unrelated runs.
+
+Only steps with this marker directly below the heading emit ordinary checkpoints:
 
 ```markdown
 **Telemetry checkpoint: `<static_snake_case_name>`**
 ```
 
-Run from the app directory using the invoked top-level skill's frontmatter `name` and the exact checkpoint marker. `${PLUGIN_ROOT}` is the installed plugin directory.
+For agent work or approval waiting, start immediately before the work with the
+exact marker and retain the returned step `spanId` as `STEP_SPAN_ID`. Finish
+that same span afterward:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>" || true
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
+  "<skill-name>|<checkpoint-name>|started" \
+  --run-id "$RUN_ID" --parent-span-id "$SKILL_SPAN_ID" \
+  --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
+  "<skill-name>|<checkpoint-name>|completed" \
+  --run-id "$RUN_ID" --span-id "$STEP_SPAN_ID" \
+  --project-root "<working_dir>"
 ```
 
-- Emit `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. When a valid branch bypasses the work, emit only `skipped`, without `started`. Do not duplicate emissions already embedded in a command block.
-- Keep checkpoint names and optional info fixed, author-written `snake_case` values of at most 64 characters. Use precise verb-object names without lifecycle suffixes. Append `|<optional-info>` only when a static classification is needed; never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data.
-- Keep telemetry fail-open and secondary to the workflow. Ignore emitter output, never retry or inspect the emitter, and never change the work when emission fails. Do not emit checkpoints for unmarked steps.
+For one foreground command, prefer the wrapper so timing and outcome come from
+the real process. Supply an executable plus separate arguments, not a shell
+command string. Use a real executable or `node <script>` on Windows, not a
+`.cmd` shim. Do not wrap persistent servers, watchers, or interactive sign-in:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
+  --execute "<skill-name>|<checkpoint-name>" --run-id "$RUN_ID" \
+  --parent-span-id "$SKILL_SPAN_ID" --project-root "<working_dir>" \
+  -- node "<script-path>" "<argument>"
+```
+
+The wrapper preserves the command's exit code; do not append `|| true`. Its
+command, arguments, stdout, and stderr never enter telemetry. For multi-command
+phases, use the explicit start/finish pair and report the aggregate outcome.
+
+- Emit `started` immediately before work, then `completed`, `failed`, `blocked`,
+  or `cancelled` as observed. A missing terminal event remains incomplete,
+  never zero-duration or successful. A rejected approval finishes the wait;
+  the subsequent revision is a separate attempt, not an automatic failure.
+- For a valid bypass, emit only `skipped` without `started`, using `--run-id`
+  and `--parent-span-id` without `--span-id`. Retry with a new start and
+  `--retry-of "<prior-step-span-id>"`; do not overwrite the previous attempt.
+- When context is needed, close only that attempt with `needs_context` and keep
+  the workflow open for resume. End the skill with
+  `--finish <completed|failed|blocked|cancelled>` plus its run and skill span
+  IDs only after the owning workflow actually ends. `DONE_WITH_CONCERNS`
+  remains completed, with concerns surfaced separately.
+- Checkpoint names are registered author-written `snake_case` values of at most
+  64 characters. Optional `|<optional-info>` and `--error-class` values must
+  come from the helper's fixed allowlists. Never include prompts, raw errors,
+  paths, names, URLs, record contents, command output, or runtime payloads.
+- The command wrapper supplies the measured run and span IDs to child
+  Dataverse calls for principal attribution to that exact step. Bare operations
+  without that verified span must not borrow an account ID from another step.
+- Keep telemetry fail-open and secondary to the workflow. If context creation
+  or emission fails, continue the actual work without fabricated measurements.
+  Never retry or inspect the emitter, and do not emit unmarked checkpoints.
 
 ---
 

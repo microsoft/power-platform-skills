@@ -1,0 +1,462 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const test = require('node:test');
+
+const {
+  createTelemetryContext,
+  emitLifecycle,
+  lifecycle,
+} = require('../lib/mobile-telemetry');
+const { sanitizeData } = require('../lib/mobile-telemetry-dispatcher');
+const {
+  readProjectTelemetryContext,
+  recordVerifiedDataverseOrganization,
+} = require('../lib/app-identity');
+const { runCommand } = require('../emit-telemetry-checkpoint');
+
+const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+const provisioned = {
+  instrumentationKey: 'test-mobile-key',
+  collector_url: 'https://example.invalid/OneCollector/1.0/',
+  event_stream_name: 'MobileAppsTestEvent',
+  disabled: false,
+};
+
+function tempProject(context) {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-lifecycle-'));
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  return projectRoot;
+}
+
+function telemetryContext(projectRoot) {
+  const configDir = path.join(projectRoot, 'config');
+  const ikeyPath = path.join(configDir, 'ikey.json');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
+  return createTelemetryContext(
+    { session_id: '11111111-1111-4111-8111-111111111111' },
+    {
+      env: {
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+      },
+    },
+  );
+}
+
+test('durable lifecycle spans preserve identity and measured time', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+    now: 1000,
+  });
+  const step = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    checkpointName: 'gather_app_requirements',
+    now: 1500,
+  });
+  const resumed = lifecycle.resumeSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: step.spanId,
+  });
+  assert.equal(resumed.sessionId, root.sessionId);
+
+  const completed = lifecycle.finishSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: step.spanId,
+    state: 'completed',
+    now: 4500,
+  });
+  assert.equal(completed.durationMs, 3000);
+  assert.equal(completed.timingStatus, 'measured');
+  assert.notEqual(completed.eventId, step.eventId);
+  assert.deepEqual(
+    lifecycle.finishSpan({
+      projectRoot,
+      configDir,
+      runId: root.runId,
+      spanId: step.spanId,
+      state: 'completed',
+      now: 9000,
+    }),
+    completed,
+  );
+});
+
+test('durable lifecycle rejects unknown checkpoints and cross-project context', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+    now: 1000,
+  });
+  assert.throws(
+    () => lifecycle.beginSpan({
+      projectRoot,
+      configDir,
+      skillName: 'create-mobile-app',
+      runId: root.runId,
+      parentSpanId: root.spanId,
+      checkpointName: 'customer_private_data',
+    }),
+    /invalid_checkpoint/,
+  );
+  assert.throws(
+    () => lifecycle.finishSpan({
+      projectRoot: tempProject(context),
+      configDir,
+      runId: root.runId,
+      spanId: root.spanId,
+      state: 'completed',
+    }),
+    /invalid_context/,
+  );
+  const completed = lifecycle.finishSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: root.spanId,
+    state: 'completed',
+    now: 500,
+  });
+  assert.equal(completed.timingStatus, 'clock_invalid');
+  assert.equal(completed.durationMs, undefined);
+});
+
+test('lifecycle events filter dynamic customer content before dispatch', (context) => {
+  const projectRoot = tempProject(context);
+  const telemetry = telemetryContext(projectRoot);
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir: telemetry.configDir,
+    skillName: 'create-mobile-app',
+    now: 1000,
+  });
+  const completed = lifecycle.finishSpan({
+    projectRoot,
+    configDir: telemetry.configDir,
+    runId: root.runId,
+    spanId: root.spanId,
+    state: 'completed',
+    now: 2500,
+  });
+  let captured;
+  const event = emitLifecycle(telemetry, completed, {
+    cwd: projectRoot,
+    emit: (value) => {
+      captured = value;
+    },
+    readAiAgent: () => ({}),
+  });
+  assert.equal(captured, event);
+  assert.equal(event.time, '1970-01-01T00:00:02.500Z');
+  assert.equal(event.data.durationMs, 1500);
+  assert.equal(event.data.eventInfo.runId, root.runId);
+
+  const filtered = sanitizeData({
+    ...event.data,
+    aiAgentName: 'private@example.com',
+    aiAgentVersion: 'customer secret',
+    osVersion: '/private/host',
+    errorDescription: 'customer document contents',
+    errorClass: 'private.customer@example.com',
+    objectId: '33333333-3333-4333-8333-333333333333',
+    tenantId: 'not-an-id',
+    eventInfo: {
+      ...event.data.eventInfo,
+      aadObjectId: '33333333-3333-4333-8333-333333333333',
+      identitySource: 'dataverse',
+      principalType: 'user',
+      userId: '55555555-5555-4555-8555-555555555555',
+      prompt: 'private prompt',
+      filePath: '/private/customer-file',
+      email: 'private@example.com',
+      nested: { token: 'secret' },
+    },
+  });
+  assert.equal(filtered.errorDescription, undefined);
+  assert.equal(filtered.errorClass, undefined);
+  assert.equal(filtered.tenantId, undefined);
+  assert.equal(filtered.objectId, undefined);
+  assert.equal(filtered.eventInfo.aadObjectId, undefined);
+  assert.equal(filtered.eventInfo.identitySource, undefined);
+  assert.equal(filtered.eventInfo.principalType, undefined);
+  assert.equal(filtered.eventInfo.userId, undefined);
+  assert.doesNotMatch(JSON.stringify(filtered), /private|customer|secret|33333333|55555555/);
+});
+
+test('command wrapper preserves exit code without recording command content', (context) => {
+  const projectRoot = tempProject(context);
+  const telemetry = telemetryContext(projectRoot);
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir: telemetry.configDir,
+    skillName: 'create-mobile-app',
+  });
+  const emitted = [];
+  const result = runCommand([
+    '--execute',
+    'create-mobile-app|validate_fresh_template',
+    '--run-id',
+    root.runId,
+    '--parent-span-id',
+    root.spanId,
+    '--project-root',
+    projectRoot,
+    '--',
+    'private-executable',
+    'customer-secret',
+  ], {
+    createTelemetryContext: () => telemetry,
+    emitLifecycle: (_telemetry, span) => emitted.push(span),
+    spawnSync: (command, args, options) => {
+      assert.equal(command, 'private-executable');
+      assert.deepEqual(args, ['customer-secret']);
+      assert.equal(options.shell, false);
+      assert.equal(options.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID, root.runId);
+      assert.ok(options.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID);
+      return { status: 7 };
+    },
+  });
+  assert.equal(result.exitCode, 7);
+  assert.equal(emitted.length, 2);
+  assert.equal(emitted[1].state, 'failed');
+
+  const report = lifecycle.reportRun({
+    projectRoot,
+    configDir: telemetry.configDir,
+    runId: root.runId,
+  });
+  assert.equal(report.supportId, root.runId);
+  assert.doesNotMatch(JSON.stringify(report), /private-executable|customer-secret/);
+});
+
+test('checkpoint CLI carries lifecycle context across fresh processes', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const ikeyPath = path.join(configDir, 'ikey.json');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
+  const env = {
+    ...process.env,
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+  };
+  const cli = path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js');
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, [cli, ...args], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      env,
+      timeout: 10000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  const root = run(
+    '--begin',
+    'create-mobile-app',
+    '--project-root',
+    projectRoot,
+  );
+  const step = run(
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id',
+    root.runId,
+    '--parent-span-id',
+    root.spanId,
+    '--project-root',
+    projectRoot,
+  );
+  const completedStep = run(
+    'create-mobile-app|gather_app_requirements|completed',
+    '--run-id',
+    root.runId,
+    '--span-id',
+    step.spanId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(completedStep.state, 'completed');
+  assert.equal(completedStep.runId, root.runId);
+
+  const completedRoot = run(
+    '--finish',
+    'completed',
+    '--run-id',
+    root.runId,
+    '--span-id',
+    root.spanId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(completedRoot.state, 'completed');
+
+  const report = run(
+    '--report',
+    '--run-id',
+    root.runId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(report.supportId, root.runId);
+  assert.equal(report.state, 'completed');
+  assert.deepEqual(
+    report.spans.map((span) => span.state).sort(),
+    ['completed', 'completed'],
+  );
+});
+
+test('successful parent completion requires every child to finish', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+  });
+  const child = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'create-mobile-app',
+    checkpointName: 'gather_app_requirements',
+  });
+  const finishRoot = {
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: root.spanId,
+    state: 'completed',
+  };
+  assert.throws(() => lifecycle.finishSpan(finishRoot), /children_pending/);
+  lifecycle.finishSpan({
+    ...finishRoot,
+    spanId: child.spanId,
+    state: 'cancelled',
+    errorClass: 'user_cancelled',
+  });
+  assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
+});
+
+test('verified Dataverse context excludes user identity and token claims', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const environmentId = '11111111-1111-4111-8111-111111111111';
+  const tenantId = '22222222-2222-4222-8222-222222222222';
+  const orgId = '44444444-4444-4444-8444-444444444444';
+  const environmentUrl = 'https://contoso.crm.dynamics.com';
+  fs.writeFileSync(
+    path.join(projectRoot, 'power.config.json'),
+    JSON.stringify({ environmentId }),
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, '.resolved-environment.json'),
+    JSON.stringify({
+      environmentId,
+      tenantId,
+      environmentUrl,
+      displayName: 'PRIVATE CUSTOMER NAME',
+    }),
+  );
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+  });
+  const token = `header.${Buffer.from(JSON.stringify({
+    oid: '33333333-3333-4333-8333-333333333333',
+    tid: tenantId,
+    exp: Math.floor(Date.now() / 1000) + 300,
+    scp: 'user_impersonation',
+    preferred_username: 'private@example.com',
+  })).toString('base64url')}.signature`;
+  const options = {
+    projectRoot,
+    configDir,
+    lifecycle,
+    runId: root.runId,
+  };
+  assert.equal(recordVerifiedDataverseOrganization({
+    ...options,
+    environmentUrl,
+    token,
+    whoAmI: {
+      OrganizationId: orgId,
+      UserId: '55555555-5555-4555-8555-555555555555',
+    },
+  }), true);
+  assert.deepEqual(readProjectTelemetryContext(projectRoot, options), {
+    environmentId,
+    tenantId,
+    orgId,
+  });
+  let captured;
+  const event = emitLifecycle({
+    configDir,
+    env: {},
+    eventStreamName: 'event',
+    sessionId: root.sessionId,
+  }, root, {
+    cwd: projectRoot,
+    emit: (value) => {
+      captured = value;
+    },
+    readAiAgent: () => ({}),
+  });
+  assert.equal(captured, event);
+  assert.equal(event.data.orgId, orgId);
+  assert.equal(event.data.tenantId, tenantId);
+  assert.equal(event.data.eventInfo.environmentId, environmentId);
+  assert.equal(event.data.eventInfo.aadObjectId, undefined);
+  assert.equal(event.data.eventInfo.userId, undefined);
+
+  const runDirectory = lifecycle.runDirectory(configDir, root.runId);
+  const recorded = fs.readdirSync(runDirectory)
+    .map((name) => fs.readFileSync(path.join(runDirectory, name), 'utf8'))
+    .join('\n');
+  assert.doesNotMatch(
+    recorded,
+    /PRIVATE|private@example|signature|user_impersonation|55555555|33333333/,
+  );
+});
+
+test('mobile telemetry reuses canonical helpers without parallel modules', () => {
+  const lib = path.join(PLUGIN_ROOT, 'scripts', 'lib');
+  for (const obsolete of [
+    'mobile-telemetry-fields.js',
+    'mobile-telemetry-identity.js',
+    'mobile-telemetry-lifecycle.js',
+  ]) {
+    assert.equal(fs.existsSync(path.join(lib, obsolete)), false, obsolete);
+  }
+  assert.equal(
+    fs.existsSync(path.join(PLUGIN_ROOT, 'scripts', 'planning-timings.js')),
+    false,
+  );
+  assert.equal(
+    fs.existsSync(path.join(lib, 'telemetry', 'lib', 'lifecycle.js')),
+    true,
+  );
+});
