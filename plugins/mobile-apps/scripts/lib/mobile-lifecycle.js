@@ -11,7 +11,10 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const DEFAULT_LOCK_TIMEOUT_MS = 5000;
 const DEFAULT_LOCK_RETRY_MS = 10;
+const DEFAULT_LOCK_INITIALIZATION_GRACE_MS = 1000;
 const LOCK_DIRECTORY = '.lifecycle.lock';
+const LOCK_OWNER_FILE = 'owner.json';
+const LOCK_RECOVERY_DIRECTORY = '.lifecycle.lock.recovery';
 
 function normalizePolicy(input) {
   if (!input || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.pluginName || '')) {
@@ -77,6 +80,104 @@ function writeExclusive(filename, value) {
   }
 }
 
+function processIsAlive(pid, options) {
+  if (typeof options.isProcessAlive === 'function') return options.isProcessAlive(pid);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+
+function readLockOwner(lockPath) {
+  try {
+    const owner = readJson(path.join(lockPath, LOCK_OWNER_FILE));
+    if (
+      Number.isSafeInteger(owner.pid) &&
+      owner.pid > 0 &&
+      typeof owner.token === 'string' &&
+      GUID.test(owner.token) &&
+      Number.isSafeInteger(owner.acquiredAtMs)
+    ) {
+      return owner;
+    }
+  } catch {
+    // Missing or malformed metadata is handled after the initialization grace.
+  }
+  return null;
+}
+
+function writeLockOwner(lockPath, token) {
+  fs.writeFileSync(path.join(lockPath, LOCK_OWNER_FILE), JSON.stringify({
+    pid: process.pid,
+    token,
+    acquiredAtMs: Date.now(),
+  }), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+}
+
+function releaseOwnedLock(lockPath, token) {
+  try {
+    const owner = readLockOwner(lockPath);
+    if (owner?.token === token) fs.rmSync(lockPath, { recursive: true });
+  } catch {
+    // A release failure is recovered when the owner process is no longer live.
+  }
+}
+
+function initializationGraceElapsed(lockPath, options) {
+  const graceMs = Number.isSafeInteger(options.lockInitializationGraceMs) &&
+    options.lockInitializationGraceMs >= 0
+    ? options.lockInitializationGraceMs
+    : DEFAULT_LOCK_INITIALIZATION_GRACE_MS;
+  return Date.now() - fs.statSync(lockPath).mtimeMs >= graceMs;
+}
+
+function acquireRecoveryLock(recoveryPath, options) {
+  const token = crypto.randomUUID();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      fs.mkdirSync(recoveryPath, { mode: 0o700 });
+      try {
+        writeLockOwner(recoveryPath, token);
+      } catch (error) {
+        fs.rmSync(recoveryPath, { recursive: true, force: true });
+        throw error;
+      }
+      return () => releaseOwnedLock(recoveryPath, token);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const owner = readLockOwner(recoveryPath);
+      if (owner && processIsAlive(owner.pid, options)) return null;
+      if (!owner && !initializationGraceElapsed(recoveryPath, options)) return null;
+      fs.rmSync(recoveryPath, { recursive: true, force: true });
+    }
+  }
+  return null;
+}
+
+function tryRecoverRunLock(directory, options) {
+  const lockPath = path.join(directory, LOCK_DIRECTORY);
+  const recoveryPath = path.join(directory, LOCK_RECOVERY_DIRECTORY);
+  const releaseRecovery = acquireRecoveryLock(recoveryPath, options);
+  if (!releaseRecovery) return false;
+
+  try {
+    if (!fs.existsSync(lockPath)) return true;
+    const owner = readLockOwner(lockPath);
+    if (owner && processIsAlive(owner.pid, options)) return false;
+    if (!owner && !initializationGraceElapsed(lockPath, options)) return false;
+
+    // Only one process can hold the recovery directory, and no new owner can
+    // acquire the stable lock path until this stale directory is removed.
+    fs.rmSync(lockPath, { recursive: true, force: true });
+    return true;
+  } finally {
+    releaseRecovery();
+  }
+}
+
 function acquireRunLock(directory, options = {}) {
   const timeoutMs = Number.isSafeInteger(options.lockTimeoutMs) && options.lockTimeoutMs >= 0
     ? options.lockTimeoutMs
@@ -85,23 +186,23 @@ function acquireRunLock(directory, options = {}) {
     ? options.lockRetryMs
     : DEFAULT_LOCK_RETRY_MS;
   const lockPath = path.join(directory, LOCK_DIRECTORY);
+  const token = crypto.randomUUID();
   const startedAt = Date.now();
 
   while (true) {
     try {
       fs.mkdirSync(lockPath, { mode: 0o700 });
-      return () => {
-        try {
-          fs.rmdirSync(lockPath);
-        } catch {
-          // A release failure only disables later telemetry for this run.
-        }
-      };
+      try {
+        writeLockOwner(lockPath, token);
+      } catch (error) {
+        fs.rmSync(lockPath, { recursive: true, force: true });
+        throw error;
+      }
+      return () => releaseOwnedLock(lockPath, token);
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
+      if (tryRecoverRunLock(directory, options)) continue;
       if (Date.now() - startedAt >= timeoutMs) throw new Error('lock_timeout');
-      // Never steal a lock based on age: an active process may legitimately be
-      // scanning a large run. Telemetry fails open after the bounded timeout.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
     }
   }
@@ -301,9 +402,41 @@ function finishSpan(policy, options) {
 }
 
 function resumeSpan(policy, options) {
-  const { directory, record } = readSpan(policy, options);
-  if (fs.existsSync(path.join(directory, `${record.spanId}.end.json`))) throw new Error('already_finished');
-  return record;
+  const initial = readSpan(policy, options);
+  const release = acquireRunLock(initial.directory, options);
+  try {
+    const { directory, run, record } = readSpan(policy, options);
+    if (record.spanType !== 'skill') throw new Error('invalid_resume');
+    const end = readJsonIfPresent(path.join(directory, `${record.spanId}.end.json`));
+    if (!end) throw new Error('invalid_resume');
+    validateEnd(policy, record, end);
+    if (end.state !== 'needs_context') throw new Error('invalid_resume');
+    if (
+      record.parentSpanId &&
+      fs.existsSync(path.join(directory, `${record.parentSpanId}.end.json`))
+    ) {
+      throw new Error('parent_finished');
+    }
+    const clock = clockReading(options);
+    if (!Number.isSafeInteger(clock.wallMs) || clock.wallMs < 0) {
+      throw new Error('invalid_clock');
+    }
+    return persistSpan(policy, {
+      ...options,
+      skillName: record.skillName,
+      checkpointName: null,
+      additionalInfo: record.additionalInfo,
+      retryOf: record.spanId,
+    }, {
+      clock,
+      directory,
+      parentSpanId: record.parentSpanId,
+      run,
+      spanId: crypto.randomUUID(),
+    });
+  } finally {
+    release();
+  }
 }
 
 function listSpans(policy, options) {
@@ -357,7 +490,17 @@ function pruneRuns(policy, configDir, now = Date.now()) {
 
 function reportRun(policy, options) {
   const { record: run } = readRun(policy, options);
-  const spans = listSpans(policy, options).map((span) => ({
+  const rawSpans = listSpans(policy, options);
+  const initialRoot = rawSpans.find((span) => span.spanId === run.rootSpanId);
+  const currentRoot = rawSpans
+    .filter((span) => span.spanType === 'skill' &&
+      span.parentSpanId === null &&
+      span.skillName === initialRoot?.skillName)
+    .sort((left, right) =>
+      right.attempt - left.attempt ||
+      right.startedAtMs - left.startedAtMs ||
+      right.spanId.localeCompare(left.spanId))[0];
+  const spans = rawSpans.map((span) => ({
     spanId: span.spanId, parentSpanId: span.parentSpanId, skill: span.skillName,
     step: span.checkpointName, type: span.spanType, attempt: span.attempt,
     state: span.state === 'started' ? 'incomplete' : span.state,
@@ -368,7 +511,7 @@ function reportRun(policy, options) {
     ...(policy.isAdditionalInfo(span.additionalInfo) ? { additionalInfo: span.additionalInfo } : {}),
   }));
   return { schemaVersion: 2, supportId: run.runId, runId: run.runId,
-    state: spans.find((span) => span.spanId === run.rootSpanId)?.state || 'incomplete', spans };
+    state: currentRoot?.state === 'started' ? 'incomplete' : currentRoot?.state || 'incomplete', spans };
 }
 
 function createLifecycle(input) {

@@ -35,7 +35,9 @@ and `--parent-span-id`; its returned span is a new skill invocation. Pass both
 IDs as orchestration context when invoking another Skill or Task, not as Power
 Apps CLI flags. Never infer a parent from a process or session ID. On resume,
 use `--resume "<skill-span-id>" --run-id "<run-id>" --project-root "<working_dir>"`
-instead of starting a second run. An expired or unavailable context is
+instead of starting a second run, then replace `SKILL_SPAN_ID` with the newly
+returned span ID. Resume is valid only after `needs_context`; it creates a new
+immutable attempt in the same run. An expired or unavailable context is
 unmeasured, not permission to invent IDs or pair unrelated runs.
 
 Only steps with this marker directly below the heading emit ordinary checkpoints:

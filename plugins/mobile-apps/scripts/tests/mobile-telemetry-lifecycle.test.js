@@ -67,13 +67,12 @@ test('durable lifecycle spans preserve identity and measured time', (context) =>
     checkpointName: 'gather_app_requirements',
     now: 1500,
   });
-  const resumed = lifecycle.resumeSpan({
+  assert.throws(() => lifecycle.resumeSpan({
     projectRoot,
     configDir,
     runId: root.runId,
     spanId: step.spanId,
-  });
-  assert.equal(resumed.sessionId, root.sessionId);
+  }), /invalid_resume/);
 
   const completed = lifecycle.finishSpan({
     projectRoot,
@@ -386,6 +385,60 @@ test('checkpoint CLI carries lifecycle context across fresh processes', (context
     report.spans.map((span) => span.state).sort(),
     ['completed', 'completed'],
   );
+
+  const paused = run(
+    '--begin',
+    'create-mobile-app',
+    '--project-root',
+    projectRoot,
+  );
+  const pause = run(
+    '--finish',
+    'needs_context',
+    '--run-id',
+    paused.runId,
+    '--span-id',
+    paused.spanId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(pause.state, 'needs_context');
+
+  const resumed = run(
+    '--resume',
+    paused.spanId,
+    '--run-id',
+    paused.runId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(resumed.state, 'started');
+  assert.notEqual(resumed.spanId, paused.spanId);
+  const resumedComplete = run(
+    '--finish',
+    'completed',
+    '--run-id',
+    paused.runId,
+    '--span-id',
+    resumed.spanId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(resumedComplete.state, 'completed');
+  const resumedReport = run(
+    '--report',
+    '--run-id',
+    paused.runId,
+    '--project-root',
+    projectRoot,
+  );
+  assert.equal(resumedReport.state, 'completed');
+  assert.deepEqual(
+    resumedReport.spans
+      .map((span) => [span.attempt, span.state])
+      .sort((left, right) => left[0] - right[0]),
+    [[1, 'needs_context'], [2, 'completed']],
+  );
 });
 
 test('successful parent completion requires every child to finish', (context) => {
@@ -512,6 +565,43 @@ test('run lock times out instead of writing through another process lock', (cont
   } finally {
     fs.rmdirSync(lockPath);
   }
+});
+
+test('run lock recovers when its recorded owner process is dead', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+  });
+  const runDirectory = lifecycle.runDirectory(configDir, root.runId);
+  const lockPath = path.join(runDirectory, '.lifecycle.lock');
+  const recoveryPath = path.join(runDirectory, '.lifecycle.lock.recovery');
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+    pid: 424242,
+    token: '11111111-1111-4111-8111-111111111111',
+    acquiredAtMs: Date.now() - 5000,
+  }));
+  fs.mkdirSync(recoveryPath);
+  fs.writeFileSync(path.join(recoveryPath, 'owner.json'), JSON.stringify({
+    pid: 434343,
+    token: '22222222-2222-4222-8222-222222222222',
+    acquiredAtMs: Date.now() - 5000,
+  }));
+
+  const child = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'create-mobile-app',
+    checkpointName: 'gather_app_requirements',
+    isProcessAlive: () => false,
+  });
+  assert.equal(child.parentSpanId, root.spanId);
+  assert.equal(fs.existsSync(lockPath), false);
 });
 
 test('verified Dataverse context excludes user identity and token claims', (context) => {

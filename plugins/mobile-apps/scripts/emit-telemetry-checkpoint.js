@@ -287,9 +287,7 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
     } else if (args.finish) {
       span = telemetry.lifecycle.finishSpan({ ...options, state: args.finish });
     } else if (args.resume) {
-      return publicContext(
-        telemetry.lifecycle.resumeSpan({ ...options, spanId: args.resume }),
-      );
+      span = telemetry.lifecycle.resumeSpan({ ...options, spanId: args.resume });
     } else {
       return emitTrackedCheckpoint(args.payload, context, { ...args, ...overrides, cwd });
     }
@@ -306,6 +304,7 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
       'parent_finished',
       'invalid_parent',
       'invalid_retry',
+      'invalid_resume',
       'already_finished',
       'invalid_state',
       'invalid_error_class',
