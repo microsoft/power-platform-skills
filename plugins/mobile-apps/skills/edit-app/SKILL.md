@@ -98,7 +98,14 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 **Telemetry checkpoint: `assess_app_health_and_drift`**
 
+Before any project read or command, execute
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve the absolute `working_dir` once, bind every shell call to it with the
+fail-closed guard, and use absolute paths for file tools. Forward that same root
+to every data child; a previous `cd` or inherited launch cwd is not a handoff.
+
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
 test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
@@ -182,6 +189,7 @@ Infer from `$ARGUMENTS` when possible, but do not mutate files until you have a 
 First inspect the app so questions can use real options instead of abstractions:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 find app -name '*.tsx' -not -name '_layout.tsx' -not -name '+not-found.tsx' | sort
 ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
 ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\.ts$||'
@@ -551,6 +559,8 @@ answers, and return to the approval gate if an unresolved choice changes scope.
    reconciliation before scoped mutations; no partial create-only fast-path
    flags or fabricated create receipt. It refreshes the affected services,
    updates verified inventory, and leaves generated services compiling.
+   Pass `offline_reconciliation_owner: edit-app`; Step 5.6 owns the offline
+   check, so the leaf returns its verified delta without prompting twice.
    After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`;
    do not continue to screens until clean.
 2. **Sample Data** — seed only the explicit table allowlist approved in Step 3.
@@ -593,6 +603,7 @@ Context:
   orchestrator: edit-app
   working_dir: <working_dir>
   phase: implementation
+  offline_reconciliation_owner: edit-app
   planning_snapshot: <SNAPSHOT_PATH>
   architect_evidence: <ARCHITECT_EVIDENCE_PATH>
   schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
@@ -632,7 +643,7 @@ or seed a transitional retiring table to satisfy its coverage rules.
 Run this after any data-source/schema/connector mutation and before any screen-builder prompt:
 
 ```bash
-cd <working_dir>
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 for svc in src/generated/services/*.ts; do
   [ -e "$svc" ] || continue
   name=$(basename "$svc" .ts)
@@ -651,7 +662,7 @@ Do not ask the user to run these follow-up skills manually. This skill is the or
 
 #### Step 5.6 — Offline profile reconciliation
 
-If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's complete scoped `/add-dataverse --skip-planning` handoff names `offline_reconciliation_owner: edit-app`, so this orchestrator owns the check instead of the leaf's Step 8.5. The flag alone is not enough. Skip when no Data Model mutation occurred in this edit.
 
 For mixed addition/removal edits, intersect any returned additions with the
 approved retained/added Dataverse set before offering/applying profile changes.
@@ -661,10 +672,23 @@ manifest entry remains until Step 6.5.
 Run the local, no-network delta check:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+Capture the exit status and stdout/stderr and follow the failure dispatch in
+[offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)
+before continuing: a non-zero exit, `status: error`, malformed/missing JSON,
+or unknown status skips mutation helpers and ends with `DONE_WITH_CONCERNS`
+for already-applied changes (otherwise `BLOCKED`), never a clean success.
+For valid `no-manifest` / `no-profile` / `in-sync`, continue silently.
+For `delta`, obtain approval and execute the reference's **Scoped helper
+handoffs** with `orchestrator: edit-app`, the same absolute `working_dir`,
+`phase: implementation`, and the exact approved environment/profile/table
+scope. Pass `--working-dir "<working_dir>"` to each helper along with its table
+and column arguments, then re-check through the same failure dispatch.
+Record the outcome in the Step 8 memory-bank entry without clearing pending
+`offlineRetirement` outcomes.
 
 These statuses concern additions only. Preserve any `offlineRetirement` outcomes
 from earlier attempts, and collect the removal leaf's updated outcomes in
@@ -720,6 +744,7 @@ Shared scaffold algorithm:
 Run the navigation/skeleton gate before screen-builder work:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
@@ -787,6 +812,7 @@ Run verification after mutations. Batch-fix root causes, then rerun the failed g
 Required gates, selected by what changed:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas      # if any data source/schema/connector changed
 npx tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
@@ -795,12 +821,14 @@ npm run check-routes --if-present
 If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node scripts/check-routes.js
 ```
 
 When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
 node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```

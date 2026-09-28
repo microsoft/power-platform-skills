@@ -264,6 +264,7 @@ Context:
   orchestrator: setup-datamodel
   working_dir: <working_dir>
   phase: implementation
+  offline_reconciliation_owner: setup-datamodel
   planning_snapshot: <SNAPSHOT_PATH>
   architect_evidence: <ARCHITECT_EVIDENCE_PATH>
   schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
@@ -304,6 +305,8 @@ includes the verified API/dataset/connection identity in `approved_scope`.
 Do not infer the registered name from the connector display label. The refresh
 branch must return without connection creation or `add-data-source`.
 
+**Added source only:**
+
 ```
 Invoke skill: /add-connector
 
@@ -317,6 +320,25 @@ Context:
 Arguments:
   --working-dir "<working_dir>"
   --connector <api-name>
+```
+
+**Retained-source refresh only:** use this separate handoff, never the add block.
+
+```text
+Invoke skill: /add-connector
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: setup-datamodel
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <refresh operation, exact registered name, verified API/dataset/resource and connection ID/reference>
+
+Arguments:
+  --working-dir "<working_dir>"
+  --connector <verified-api-id>
+  --refresh
+  --data-source-name "<registered-name>"
 ```
 
 Run sequentially. Skip if `## Connectors` is "None".
@@ -340,16 +362,36 @@ App-binding cleanup and offline-profile migration have separate completion state
 
 **Telemetry checkpoint: `reconcile_offline_profile`**
 
-If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip the addition check when Phase 2 chose Path C (no Dataverse), but never discard a recorded `offlineRetirement` outcome.
+If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Phase 5 passes a complete scoped handoff with `offline_reconciliation_owner: setup-datamodel`; together with `--skip-planning`, that makes this orchestrator the owner instead of running the leaf's Step 8.5 check twice. The flag alone is not enough. Skip the addition check when Phase 2 chose Path C (no Dataverse), but never discard a recorded `offlineRetirement` outcome.
 
 Run the local, no-network delta check:
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → no addition work; continue to Phase 7 with the existing `offlineRetirement` outcomes unchanged (do not nag when no profile exists). `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Declined or incomplete addition work remains a separate concern.
+Capture the exit status and stdout/stderr. Before any status dispatch or
+Phase 7 summary, a non-zero exit, `status: error`, missing/malformed JSON, or
+unknown status follows the failure path in
+[offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md):
+surface the error, record `offline_reconciliation: failed` with existing
+retirement outcomes intact, skip mutation helpers, and return
+`DONE_WITH_CONCERNS` for already-applied data changes (otherwise `BLOCKED`).
+Do not claim completed reconciliation or continue to the clean success summary.
+
+For a valid successful check, branch on the JSON `status`: `no-manifest` /
+`no-profile` / `in-sync` means no addition work; continue to Phase 7 with the
+existing `offlineRetirement` outcomes unchanged (do not nag when no profile
+exists). For `delta`, obtain offline-update approval, then use the reference's
+**Scoped helper handoffs** with `orchestrator: setup-datamodel`,
+`working_dir: <working_dir>`, `phase: implementation`, and the exact approved
+environment/profile/table/filter-or-column scope. Pass
+`--working-dir "<working_dir>" --table <logicalName>` to
+`add-table-to-offline-profile` for `missingTables[]`, or those same arguments
+plus `--columns "add:<newColumns>"` to `edit-offline-profile` for
+`tablesWithNewColumns[]`. Re-check to `in-sync` using the same failure path.
+Declined or incomplete addition work remains a separate concern.
 
 These offline helpers also inherit the same absolute `working_dir`; no new root
 discovery is permitted during reconciliation.

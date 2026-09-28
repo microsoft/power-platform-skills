@@ -117,7 +117,7 @@ owner approval. Proposal-only calls return here without adding the flow.
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx power-apps add-flow --flow-id <flow-guid> --non-interactive
+npx --no-install power-apps add-flow --flow-id <flow-guid> --non-interactive
 ```
 
 To remove a flow later, use the removal branch, which verifies consumers and
@@ -157,18 +157,18 @@ environment-specific Connections URL from `power.config.json` `environmentId`:
 
 | Connector shape | Examples | Required discovery | Add command |
 | --- | --- | --- | --- |
-| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>` |
-| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `list-datasets`, then `list-tables` | `npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'` |
-| SQL stored procedure | SQL Server | `list-datasets`, then `list-sqlStoredProcedures` if needed | `npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'` |
+| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>` |
+| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `list-datasets`, then `list-tables` | `npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'` |
+| SQL stored procedure | SQL Server | `list-datasets`, then `list-sqlStoredProcedures` if needed | `npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'` |
 
 **For action-style connectors, print before starting:**
-> "→ Running `npx power-apps add-data-source` for <connector>. ~10–30 seconds (writes generated services + connector schemas)."
+> "→ Running `npx --no-install power-apps add-data-source` for <connector>. ~10–30 seconds (writes generated services + connector schemas)."
 
 Then run:
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
 ```
 
 **For table-based connectors, discover datasets and tables first:**
@@ -186,7 +186,7 @@ Add one data source per approved table:
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
 ```
 
 **For SQL stored procedures, discover procedures only when the user asks to invoke a stored procedure rather than a table:**
@@ -201,7 +201,7 @@ the current approved scope; proposal-only discovery returns without adding it.
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
+npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
 
 **Parameter reference:**

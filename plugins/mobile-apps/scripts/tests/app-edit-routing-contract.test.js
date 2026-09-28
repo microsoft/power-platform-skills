@@ -320,11 +320,11 @@ test('connector discovery examples use the installed CLI without changing genera
 });
 
 for (const [label, discoveryVerb, addCommand, approval, proposalOnly] of [
-  ['flow', 'list-flows', 'npx power-apps add-flow',
+  ['flow', 'list-flows', 'npx --no-install power-apps add-flow',
     /Resolve the exact flow ID and approve its app binding, or reuse matching current\s+owner approval/, /Proposal-only calls return here without adding the flow/],
-  ['table', 'list-datasets', 'npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset',
+  ['table', 'list-datasets', 'npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset',
     /Approve\s+the exact selected bindings before generation, or reuse matching current owner\s+approval/, /proposal-only discovery returns without adding sources/],
-  ['procedure', 'list-sqlStoredProcedures', 'npx power-apps add-data-source --api-id shared_sql',
+  ['procedure', 'list-sqlStoredProcedures', 'npx --no-install power-apps add-data-source --api-id shared_sql',
     /Approve the exact procedure binding before generation if it was not already in\s+the current approved scope/, /proposal-only discovery returns without adding it/],
 ]) {
   test(`connector ${label} discovery returns through approval before a separate guarded mutation`, () => {

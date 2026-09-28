@@ -358,6 +358,65 @@ az() { record_call az "$@"; }
   });
 }
 
+for (const file of ['agents/data-model-architect.md', 'skills/list-connections/SKILL.md']) {
+  const content = read(path.join(pluginRoot, file));
+  for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`${file} guards every project operation (${eolName})`, () => {
+      assertRootBinding(content.replace(/\n/g, eol), appRootLink);
+      for (const block of shellBlocks(content)) {
+        assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1)), appRootLink));
+      }
+    });
+  }
+  test(`${file} executes from the owner root and blocks missing roots`, (t) => {
+    const { directory, owner, caller } = fixture(t);
+    const trace = path.join(owner, 'helper-calls.jsonl');
+    const probes = `
+node() { "$REAL_NODE" -e 'require("node:fs").appendFileSync("helper-calls.jsonl", JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1) }) + "\\n")' -- "$@"; }
+npx() { node "$@"; }
+`;
+    const blocks = shellBlocks(content);
+    assert.ok(blocks.length >= 3);
+    for (const block of blocks) {
+      const materialize = (root) => block
+        .replaceAll('"<working_dir>"', shellQuote(root.replaceAll('\\', '/')))
+        .replaceAll(/<[^>]+>/g, 'fixture');
+      const succeeded = run(`${probes}\n${materialize(owner)}`, owner, caller);
+      assert.equal(succeeded.status, 0, `${block}\n${succeeded.stderr}`);
+      const before = fs.readFileSync(trace, 'utf8');
+      const failed = run(`${probes}\n${materialize(path.join(directory, 'missing app'))}`, owner, caller);
+      assert.equal(failed.status, 1);
+      assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
+      assert.equal(fs.readFileSync(trace, 'utf8'), before);
+      assert.equal(fs.existsSync(path.join(caller, 'helper-calls.jsonl')), false);
+    }
+    const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const call of calls) {
+      assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
+    }
+    if (file.startsWith('agents/')) {
+      const resolver = calls.find((call) => call.args.some((arg) => arg.endsWith('/resolve-environment.js')));
+      assert.ok(resolver);
+      assert.ok(resolver.args.includes('--no-cache'));
+      assert.ok(resolver.args.includes('--require-tenant'));
+    } else {
+      assert.ok(calls.every((call) => call.args[0] === '--no-install'));
+    }
+  });
+}
+
+test('connector execution and referenced examples always use the installed local CLI', () => {
+  for (const file of ['skills/add-connector/SKILL.md', 'skills/list-connections/SKILL.md', 'shared/connector-reference.md']) {
+    const blocks = shellBlocks(read(path.join(pluginRoot, file)));
+    const commands = blocks.flatMap((block) => [...block.matchAll(/^\s*npx[^\n]*\bpower-apps\b[^\n]*/gm)]
+      .map((match) => match[0].trim()));
+    assert.ok(commands.length >= 3, file);
+    for (const command of commands) {
+      assert.match(command, /^npx --no-install power-apps /, `${file}: ${command}`);
+    }
+  }
+});
+
 const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
   encoding: 'utf8',
 });
