@@ -58,7 +58,7 @@ If `pa connection create` fails because browser-based connection creation is dis
 1. Construct the URL using the active environment ID from `power.config.json`:
    `https://make.powerapps.com/environments/<environment-id>/connections`
 2. Direct the user to **+ New connection** → search for the connector → sign in / consent.
-3. Capture the connection ID from the portal or rerun `$PA connection create --connector <apiId> --json` if the connector can now complete.
+3. Capture the connection ID from the portal or rerun `$PA connection create --connector <apiId> --json` from the same guarded app root if the connector can now complete.
 
 ### Step 3 — Add the data source
 

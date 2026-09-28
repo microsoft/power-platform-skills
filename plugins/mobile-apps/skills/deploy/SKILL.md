@@ -166,10 +166,16 @@ If a native packaging step fails, surface the error and STOP. If the app renders
 
 This is the final chance to catch schema that never made it into the Mobile Offline Profile before it ships — a table added to the data model but not the profile never syncs to devices, and a new column arrives blank offline. Validate that every schema change is covered **before** pushing.
 
+For this offline gate, first resolve the approved app's absolute `working_dir`
+using [app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)
+before running the check below or any helper. Bind every offline check, file
+read, and helper call to that same root.
+
 Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-profile.json`):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
 Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)):
@@ -194,7 +200,7 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 
 Options:
 
-- **Update the offline profile now (recommended)** — read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for each `missingTables[]` entry (or once with `--all-new`), then read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry. Follow the ordering in the reconciliation reference, then re-run the delta check; when it reports `in-sync`, continue to Step 3.
+- **Update the offline profile now (recommended)** — use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: deploy`, absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table scope. Read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir "<working_dir>" --table <t>` for each approved `missingTables[]` entry, then `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>` for each approved `tablesWithNewColumns[]` entry. Re-run the guarded delta check; when it reports `in-sync`, continue to Step 3.
 - **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
 
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).
