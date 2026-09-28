@@ -37,18 +37,17 @@ For a source that remains in use but whose server schema changed, use the CLI's
 `pa app refresh data-source` instead. Hiding a field or dropping it from a screen spec
 does not mean deleting its server column or unregistering the whole table.
 
-After current data-scope approval, `--refresh` or an approved refresh
+After entry consent and mutation approval, `--refresh` or an approved refresh
 operation selects this branch in the data-source leaves. It is skill-only:
 do not pass `--refresh` to the CLI. A refresh-only call returns from this branch
 without running the normal add workflow, creating a connection, or changing
 server schema. `--plan-only` or a planning-phase handoff returns the proposed
-refresh without executing it. Standalone calls preview and approve the exact
-retained registration before execution; existing app configuration is not consent.
-Mixed requests are split into separately scoped add/refresh/remove
+refresh without executing it.
+Mixed requests are split by the owner into separately scoped add/refresh/remove
 calls; conflicting operation flags return `NEEDS_CONTEXT`.
 
 Resolve `--data-source-name` against `power.config.json` and `.power/schemas/`
-in the resolved absolute `working_dir`. Match the approved API, dataset/table or
+in the owner's absolute `working_dir`. Match the approved API, dataset/table or
 procedure, and connection binding as applicable. Require one unambiguous stored
 registration; never guess from a display label or silently add an absent source.
 If the CLI's name-only selector could refresh unrelated registrations, STOP.
@@ -72,20 +71,17 @@ and verify the runtime schema map and type-check. Report missing/partial results
 as failures; do not repair generator output by hand or retry through addition.
 For Dataverse, also run the existing service verifier for the exact logical
 tables and update their app-inventory facts only from verified metadata.
-Refresh the existing Generated Services snapshot, or record verified service
-facts in memory-bank when no plan exists. Return generator-owned outputs
-separately from authored files; do not require a full-app plan for a refresh.
-No refresh authorizes retiring another source.
+Refresh the Generated Services snapshot and return generator-owned outputs
+separately from authored files. No refresh authorizes retiring another source.
 
 Sources: [Power Apps CLI reference](https://learn.microsoft.com/power-apps/developer/code-apps/reference/cli#pa-app-remove-data-source)
 and [connecting to data](https://learn.microsoft.com/power-apps/developer/code-apps/how-to/connect-to-data#add-a-connection-to-a-code-app).
 
 ## 1. Plan the removal, do not infer permission from absence
 
-Compare the current request and any proposed data delta with actual local
-configuration/schemas. Read existing Data Model, Connectors, Screens, and
-Generated Services sections when present; a full app plan is not a prerequisite
-for standalone retirement. Classify each source as retain, add, refresh, or
+Before the owner writes the new plan, compare the old and proposed Data Model,
+Connectors, Screens, and Generated Services sections with the actual local
+configuration/schemas. Classify each source as retain, add, refresh, or
 candidate removal. A missing row in a planner's output is a candidate, not consent.
 
 For each candidate, resolve the exact stored data-source name, API ID, and
@@ -100,24 +96,19 @@ an identity helper, relationship lookup, or background tracker is still used.
 Dynamic or ambiguous usage is a blocker to automatic removal, not proof of disuse.
 
 Present the candidate list, dependent app files to change, and preserved server
-data to the standalone user or in the current owner's mutation preview.
-Require explicit approval. Never mutate configuration/generated files during
-planning or `--plan-only`; return the proposal before execution even if an earlier
-scope was approved.
+data in the owner's mutation preview. Require explicit approval. Never mutate
+configuration/generated files during planning or `--plan-only`.
 
 ## 2. Retire consumers before unregistering
 
-The responsible app workflow adds/refreshes replacement sources first, then
-updates or removes the approved consumers and verifies they no longer depend
-on the retiring source.
+The app owner adds/refreshes replacement sources first, then updates or removes
+the approved consumers and verifies they no longer depend on the retiring source.
 Keep the old binding available until those source edits are complete.
 
 Only then call the appropriate leaf in removal mode, with the exact approved
-removal list and, for a child call, complete `MOBILE_APP_ORCHESTRATING=1` context.
-A leaf call must not mix addition and removal; do not run the normal add workflow or create a connection
-before removing one. Standalone removal must stop if consumers remain.
-Report that consumer work to the user; existing `/edit-app` may be requested
-separately, but do not automatically invoke it or promise consumer migration.
+removal list and `MOBILE_APP_ORCHESTRATING=1` context. A leaf call must not mix
+addition and removal; do not run the normal add workflow or create a connection
+before removing one. Implementation-only removal must stop if consumers remain.
 Use the skill-only `--remove` argument or explicit removal intent to select this
 branch; do not pass `--remove` to the Power Apps CLI.
 If a replacement collides with the old registration and cannot be staged safely,
@@ -191,9 +182,7 @@ Return manual `writtenFiles` separately from CLI/generator-owned outputs.
 
 ## 5. Reconcile the app inventory
 
-Refresh the existing Generated Services snapshot after removal, or report the
-verified remaining services in memory-bank when no plan exists; do not create
-a full-app plan or screen workflow just to retire a binding. Update the
+Refresh the owner's Generated Services snapshot after removal. Update the
 app-local `.datamodel-manifest.json` only after verifying the remaining Dataverse
 services; remove retired app-inventory entries while preserving verified facts
 for retained tables. If no Dataverse bindings remain, retain a valid empty
@@ -237,5 +226,4 @@ retention or the approved migration is verified. A later addition-only
 Do not infer permission to remove server profile items from app-binding approval.
 
 Update memory-bank with removed/retained sources, verification, and any partial
-failure. Return verified data-layer results and remaining concerns to the user
-or current owner; consumer integration and preview work are separate requests.
+failure. In orchestrated mode return to the owner for final validation/preview.

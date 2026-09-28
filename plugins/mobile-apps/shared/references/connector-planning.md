@@ -1,8 +1,8 @@
 # Connector Planning Reference
 
 Shared logic for inferring and confirming Power Platform connectors from app
-requirements. Used by `native-app-planner` and `setup-datamodel`.
-Discovery and proposal are not implementation.
+requirements. Used by `native-app-planner`, `setup-datamodel`, and the read-only
+planning phase of `/edit-app`. Discovery and proposal are not implementation.
 
 ---
 
@@ -115,5 +115,4 @@ At execution time, each confirmed connector maps to a skill invocation:
 
 Invoke these skills only in the implementation phase with
 `MOBILE_APP_ORCHESTRATING=1` and the explicit approved context from
-[Data-source invocation scope](../shared-instructions.md#data-source-invocation-scope).
-Forward it when a router delegates.
+[app-edit-routing.md](app-edit-routing.md). Forward it when a router delegates.

@@ -10,6 +10,7 @@ const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').repl
 const skill = (name) => read(`skills/${name}/SKILL.md`);
 const setup = skill('setup-datamodel');
 const seed = skill('add-sample-data');
+const edit = skill('edit-app');
 const create = skill('create-mobile-app');
 
 for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
@@ -149,6 +150,11 @@ test('data-model proposals and actual inventory keep separate lifecycle ownershi
   assert.match(setup, /verified materialized\nmanifest is updated after execution\/verification/);
   assert.match(setup, /return a non-success status rather than claiming the plan is fully applied/);
   assert.match(setup, /Connector-only work without Dataverse does\nnot require or create a Dataverse manifest/);
+  const plan = section(edit, '### Step 4', '### Step 5');
+  assert.match(plan, /saved plan describes approved intent, not successful application/);
+  assert.match(plan, /never replay stale scratch output for an unrelated edit/);
+  assert.match(plan, /manifest\.json` only from verified schema\/service outcomes/);
+  assert.match(plan, /Record any failure and\nremaining operations in memory-bank/);
 });
 
 test('setup plan-only exits before saving or applying every proposal path', () => {
@@ -192,7 +198,7 @@ test('direct Dataverse requests cannot replay an unrelated existing plan', () =>
   const dataverse = skill('add-dataverse');
   const plan = section(dataverse, '### Step 2 — Resolve plan', '#### Step 2a');
   const gate = section(plan, '**Resolve the current request', 'Before reading plan content');
-  assert.match(gate, /direct\nstandalone invocation must compare its requested/);
+  assert.match(gate, /direct\nimplementation-only invocation must compare its requested/);
   assert.match(gate, /Present and approve\nthat exact delta/);
   assert.match(gate, /do not apply other pending rows/);
   assert.match(gate, /`NEEDS_CONTEXT` without mutation/);
@@ -231,6 +237,9 @@ test('offline retirement survives no-op addition checks, summaries, and resume',
   assert.match(offline, /existing `offlineRetirement` outcomes unchanged/);
   assert.match(summary, /`pending` returns `DONE_WITH_CONCERNS`, not a clean `DONE`/);
   assert.match(summary, /whether to retain or remove that coverage is pending/);
+  assert.match(edit, /Carry each leaf's `offlineRetirement` status into Step 8/);
+  assert.match(edit, /If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS`/);
+  assert.match(edit, /Never remove profile entries automatically/);
 });
 
 test('sample seeding resolves a required explicit scope before auth or discovery', () => {
@@ -243,13 +252,6 @@ test('sample seeding resolves a required explicit scope before auth or discovery
   assert.match(scope, /return without cloud calls or writes/);
   assert.match(scope, /overlaps `retiringTables`, stop/);
   assert.match(scope, /Do not silently drop unknown\nnames/);
-  assert.match(scope, /For `--plan-only` or a planning-phase handoff/);
-  assert.match(scope, /media policy before Step 5\. Planning approval is not insertion approval/);
-  assert.match(scope, /Do not generate media files, insert\/update\/upload records, or change the app\nplan, manifest, or seeded-data history on this path/);
-  const discovery = section(seed, '### Step 1', '### Step 2');
-  assert.match(discovery, /^node "\$\{PLUGIN_ROOT\}\/scripts\/resolve-environment\.js" "\$environment_id" --no-cache --require-tenant$/m);
-  assert.match(discovery, /Incomplete or conflicting identity returns `NEEDS_CONTEXT`/);
-  assert.match(discovery, /Do not remove the safety flags, select another\nenvironment, or persist resolver output to recover/);
   assert.ok(seed.indexOf('### Step 0') < seed.indexOf('### Step 1'));
 });
 
@@ -274,13 +276,31 @@ test('lookup dependencies never implicitly expand seed scope', () => {
 
 test('seed preview does not treat row counts or cancellation as insertion approval', () => {
   const preview = section(seed, '#### Step 4d', '### Step 5');
-  assert.match(preview, /For `--plan-only` or a planning-phase handoff, return the preview and STOP here/);
-  assert.match(preview, /neither an earlier approval nor a populated manifest overrides that boundary/);
   assert.match(preview, /exact seed tables\/count policy and\nany media writes are already approved/);
   assert.match(preview, /Otherwise obtain explicit approval/);
   assert.match(preview, /Row counts prevent duplicate volume; they are not consent/);
   assert.match(preview, /Cancellation stops/);
   assert.doesNotMatch(preview, /No confirmation prompt/);
+});
+
+test('seed proposal-only calls stop before media generation, insertion, and history writes', () => {
+  const scope = section(seed, '### Step 0', '## Prototype Seed Reuse');
+  const preview = section(seed, '#### Step 4d', '### Step 5');
+  assert.match(scope, /For `--plan-only` or a planning-phase handoff/);
+  assert.match(scope, /media policy before Step 5\. Planning approval is not insertion approval/);
+  assert.match(scope, /Do not generate media files, insert\/update\/upload records, or change the app\nplan, manifest, or seeded-data history on this path/);
+  assert.match(preview, /For `--plan-only` or a planning-phase handoff, return the preview and STOP here/);
+  assert.match(preview, /neither an earlier approval nor a populated manifest overrides that boundary/);
+});
+
+test('seed environment discovery stays non-persisting and bound to the selected app', () => {
+  const discovery = section(seed, '### Step 1', '### Step 2');
+  assert.match(discovery, /node -p "require\('\.\/power\.config\.json'\)\.environmentId \|\| ''"/);
+  assert.match(discovery, /^node "\$\{PLUGIN_ROOT\}\/scripts\/resolve-environment\.js" "\$environment_id" --no-cache --require-tenant$/m);
+  assert.match(discovery, /Capture the \*\*environment URL\*\*, \*\*environment ID\*\*, and \*\*tenant ID\*\*/);
+  assert.match(discovery, /require a match with the selected app and any supplied\s+owner context/);
+  assert.match(discovery, /Incomplete or conflicting identity returns `NEEDS_CONTEXT`/);
+  assert.match(discovery, /Do not remove the safety flags, select another\nenvironment, or persist resolver output to recover/);
 });
 
 test('batches, prototype seeds, media, and retries all honor the same allowlist', () => {
@@ -295,6 +315,20 @@ test('batches, prototype seeds, media, and retries all honor the same allowlist'
   assert.match(media, /must still be in `seedTables` and outside\n`retiringTables`/);
   assert.match(resume, /Reconfirm the current approved `seedTables` and retirement exclusions/);
   assert.match(resume, /never retry a retiring table/);
+});
+
+test('edit passes a seed allowlist and excludes the approved retirement set', () => {
+  const approval = section(edit, '### Step 3', '### Step 4');
+  const execution = section(edit, '### Step 5', '#### Step 5.5');
+  assert.match(approval, /Exact sample-data table allowlist and count\/media policy/);
+  assert.match(execution, /Distinguish `createdThisEdit` from historical\n\s+manifest `status: new`/);
+  assert.match(execution, /Empty scope means skip/);
+  const handoff = execution.slice(execution.indexOf('Invoke skill: /add-sample-data'));
+  assert.match(handoff, /MOBILE_APP_ORCHESTRATING=1/);
+  assert.match(handoff, /working_dir: <working_dir>/);
+  assert.match(handoff, /--tables "<approved-seed-table-logical-names>"/);
+  assert.match(handoff, /--exclude-tables "<retiring-table-logical-names-or-empty>"/);
+  assert.match(handoff, /required parent outside\nthe allowlist returns `NEEDS_CONTEXT`/);
 });
 
 test('creation supplies a bounded sample-data handoff too', () => {

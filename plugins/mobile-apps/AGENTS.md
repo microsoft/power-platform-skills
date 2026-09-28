@@ -95,7 +95,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     consumer edits, use the supported removal command to update registrations,
     schemas, and generated models/services, then regenerate the runtime schema
     map. Never turn a removed plan row into server-table deletion. Follow
-    [data-source-removal.md](shared/references/data-source-removal.md)
+    [`shared/references/data-source-removal.md`](shared/references/data-source-removal.md)
     for shared-reference safety, inventory/offline reconciliation, and no-op
     detection; successful exit alone is insufficient.
 20. **Seed scope is not the schema inventory** — Orchestrated `/add-sample-data`
@@ -106,15 +106,28 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
     `in-sync` never clears a pending profile decision/migration. App-binding
     approval is not permission to delete offline profile items or server data.
-22. **Data-only planning shares creation's helpers, not its gates** —
-    Setup/standalone proposals use compact hash-bound evidence, snapshot-only
-    architect context, and decision validation before the existing approval.
+22. **Dataverse change planning shares creation's helpers, not its gates** —
+    Setup/edit/standalone proposals use compact hash-bound evidence, required
+    snapshot-only architect context, and decision validation before the owner's existing approval.
     The same checks apply to diagrams and inline fallbacks. Preapproval
     environment resolution uses `--no-cache --require-tenant`; never downgrade
     to the persistent resolver. Follow
     [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
-    Do not fabricate the four-approval create-only execution receipt for a
-    data-only change.
+    Accepted contract/plan hashes travel in the existing scoped context; do not
+    fabricate the four-approval create-only execution receipt for an edit.
+23. **Feature entry points share one edit owner** — Direct native, connector,
+    data-model, and design requests on existing apps choose implementation-only,
+    full integration, or cancellation before costly work. Approved children
+    reuse their current owner/root/phase/scope and never recurse into another
+    edit. Follow [app-edit-routing.md](shared/references/app-edit-routing.md);
+    the choice enters a workflow, not permission to mutate.
+24. **Shared entry policy is not copied into every skill** — Every new public
+    app workflow starts with a read-first link to `shared/shared-instructions.md`
+    and allows `Read`. The shared preflight classifies feature work before
+    operational commands; leaves only link to it. Invocation discovery tests
+    cover newly added skills automatically. These static checks verify the
+    instruction contract, not model compliance; do not claim smaller-model or
+    host reliability without agent-run evidence.
 
 ## Telemetry
 

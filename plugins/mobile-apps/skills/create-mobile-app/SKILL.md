@@ -14,6 +14,16 @@ model: opus
 
 Top-level orchestrator. Owns the user-visible flow; delegates planning to the `native-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
 
+For every child skill handoff, pass the invocation-scoped
+[app-edit-routing.md](../../shared/references/app-edit-routing.md) context:
+`MOBILE_APP_ORCHESTRATING=1`, `orchestrator: create-mobile-app`, the absolute
+`working_dir`, current `phase`, and the exact approved scope/answers for
+implementation. Forward it through routers and native helpers; do not persist it
+or rely on an earlier shell export. The plan exists before the app is fully built,
+so children must use this context rather than mistake creation for a standalone
+edit. Design/configuration children still own any approval explicitly delegated
+to their phase; this marker never skips those gates.
+
 ## Workflow
 
 Resume/template checks → prerequisites → requirements (iOS + Android fixed) →
@@ -1740,15 +1750,26 @@ Invoke skill: /design-system
 Environment:
   CODE_APPS_NATIVE_ORCHESTRATING=1
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: create-mobile-app
+  working_dir: <working_dir>
+  phase: design
+  approved_scope: <confirmed app intent; design-system owns its design approval>
+
 Arguments:
-  --working-dir <working_dir>
+  --working-dir '<working_dir>'
 ```
 
 The `Environment` block is load-bearing, and follows the nested-skill handoff `/edit-app` already
 uses. `/design-system` and its style picker gate every browser opener on that variable; without it
 they detect a standalone run and open tabs over the build plan.
 
-The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
+The scoped `MOBILE_APP_ORCHESTRATING=1` context identifies the owner and approval
+boundary; `CODE_APPS_NATIVE_ORCHESTRATING=1` separately suppresses nested browser
+openers. The skill collects brand inputs, presents the cost picker (a/b/c/d),
+runs the internal style picker, writes approved brand artifacts, and returns
+with status.
 
 As soon as `/design-system` returns, replace the note — the user has answered and the run is
 working again:
@@ -2355,6 +2376,13 @@ Read the `## Native Capabilities` section from `native-app-plan.md`. For each ca
 ```
 Invoke skill: /add-native
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: create-mobile-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved capability row, storage target, and screen requirements>
+
 Arguments:
   --working-dir <working_dir>
   --capability <name>
@@ -2396,6 +2424,12 @@ summary. Re-run `npx --no-install tsc --noEmit` after Tamagui config changes.
 **Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
 exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
 into the host themes so `useTheme()` and `useThemeTokens()` cannot drift:
+
+If the approved design includes a custom dark palette, apply the reference's
+**Approved dark palette** branch first: import `darkTokens` from
+`brand/tokens.dark.ts` in `tamagui.config.ts` and derive `appDarkTheme` from
+`darkTokens.color`. The provider mapping below then consumes that resolved theme;
+do not leave the base accent-only dark declaration in place.
 
 ```tsx
 import {
@@ -2446,9 +2480,11 @@ const brandedDarkTheme: ThemeTokens = {
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-The generated schema has one brand palette, so the exported dark app theme
-retains Config v5 dark surfaces and text while carrying brand accents and
-statuses. For runtime theme switching, use `useThemeControl()` from
+Without an approved custom dark palette, the exported dark app theme retains
+Config v5 dark surfaces and text while carrying brand accents and statuses.
+With an approved custom dark palette, `appDarkTheme` instead resolves the full
+`darkTokens.color` palette, including its surfaces and text, and the provider
+mapping above uses that same resolved theme. For runtime theme switching, use `useThemeControl()` from
 `@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors

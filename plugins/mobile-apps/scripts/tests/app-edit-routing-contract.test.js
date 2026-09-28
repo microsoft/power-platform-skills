@@ -4,23 +4,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { isInvocable, readInvocationMetadata } = require('../lib/mobileapp-hook-utils');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 // Windows checkouts can use CRLF; the prose contracts should not depend on Git's EOL setting.
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
 const skill = (name) => read(`skills/${name}/SKILL.md`);
 const shared = read('shared/shared-instructions.md');
+const routing = read('shared/references/app-edit-routing.md');
 const removal = read('shared/references/data-source-removal.md');
+const edit = skill('edit-app');
 const create = skill('create-mobile-app');
 const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
-const dataSkills = [
-  'add-datasource',
-  'setup-datamodel',
-  'add-dataverse',
-  'add-connector',
-  'add-sharepoint',
-  'add-sample-data',
-];
 
 function section(text, start, end) {
   const startIndex = text.indexOf(start);
@@ -31,9 +26,9 @@ function section(text, start, end) {
 }
 
 for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
-  test(`Markdown reader preserves the same data contracts with ${name} line endings`, (t) => {
-    const file = 'shared/shared-instructions.md';
-    const content = '# Shared Instructions\n\n## Data-source invocation scope\nfirst\nsecond\n\n## Version Check\n';
+  test(`Markdown reader preserves the same contracts with ${name} line endings`, (t) => {
+    const file = 'shared/references/app-edit-routing.md';
+    const content = '# Routing\n\n## Direct requests\nfirst\nsecond\n\n## Orchestrated calls\n';
     t.mock.method(fs, 'readFileSync', (filePath, encoding) => {
       assert.equal(filePath, path.join(pluginRoot, file));
       assert.equal(encoding, 'utf8');
@@ -41,7 +36,7 @@ for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     });
     const actual = read(file);
     assert.equal(actual, content);
-    assert.match(section(actual, '## Data-source invocation scope', '## Version Check'), /first\nsecond/);
+    assert.match(section(actual, '## Direct requests', '## Orchestrated calls'), /first\nsecond/);
   });
 }
 
@@ -54,18 +49,34 @@ function assertSharedEntry(content, name) {
   assert.match(content.match(/^allowed-tools: (.+)$/m)?.[1] || '', /\bRead\b/, `${name}: allow reading policy`);
 }
 
-for (const name of dataSkills) {
-  test(`${name} starts with the shared data-scope preflight`, () => {
+// Discover invocable skills instead of allowing new entry points to escape a
+// fixed list. This verifies instructions, not whether a model obeys them.
+const invocableSkills = fs.readdirSync(path.join(pluginRoot, 'skills'), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && isInvocable(readInvocationMetadata(
+    path.join(pluginRoot, 'skills', entry.name, 'SKILL.md'),
+  )))
+  .map((entry) => entry.name)
+  .sort();
+
+for (const name of invocableSkills) {
+  test(`${name} starts with the shared entry preflight`, () => {
     const content = skill(name);
+    // The cross-plugin telemetry preference wrapper has no app workflow.
+    if (name === 'telemetry') {
+      assert.match(content, /\*\*Workflow:.*telemetry-workflow\.md/);
+      return;
+    }
     assertSharedEntry(content, name);
-    const entry = section(content, '**Invocation scope:**', '\n\n');
-    assert.match(entry, /shared-instructions\.md#data-source-invocation-scope/);
-    assert.ok(content.indexOf('**Invocation scope:**') < content.indexOf('## Workflow'));
-    assert.doesNotMatch(content, /#app-feature-entry-points|(?:app-edit-routing|native-artifact-compatibility)\.md/);
+    if (content.includes('**Entry routing:**')) {
+      const entry = content.split('**Entry routing:**')[1].split('\n\n')[0];
+      assert.match(entry, /shared-instructions\.md#app-feature-entry-points/);
+      assert.doesNotMatch(entry, /Offer|implementation-only|full integration|cancel/);
+      assert.ok(content.indexOf('**Entry routing:**') < content.indexOf('**Telemetry checkpoint:'));
+    }
   });
 }
 
-test('data workflows cannot omit, defer, or disable reading shared policy', () => {
+test('a future skill cannot omit, defer, or disable reading shared policy', () => {
   const valid = '---\nallowed-tools: Read, Bash\n---\n\n**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first.\n\n## Workflow\n';
   assert.doesNotThrow(() => assertSharedEntry(valid, 'data-workflow'));
   assert.doesNotThrow(() => assertSharedEntry(valid.replace('**Shared instructions:', `${pluginCheck}\n\n**Shared instructions:`), 'data-workflow'));
@@ -76,74 +87,180 @@ test('data workflows cannot omit, defer, or disable reading shared policy', () =
   assert.throws(() => assertSharedEntry(valid.replace('Read, Bash', 'Bash'), 'data-workflow'));
 });
 
-test('shared data scope precedes operational work and does not turn caller markers into approval', () => {
-  const scope = section(shared, '## Data-source invocation scope', '## Version Check');
-  assert.match(scope, /before any workflow commands or app\/cloud writes/);
-  assert.match(scope, /cannot be loaded, STOP/);
-  assert.match(scope, /Resolve the current requested operation before discovery or mutation/);
-  assert.match(scope, /An existing plan or inventory is context, not permission to replay every row/);
-  assert.match(scope, /Standalone calls keep the data workflow's own approval and validation gates/);
-  assert.match(scope, /MOBILE_APP_ORCHESTRATING=1/);
-  for (const field of ['orchestrator', 'working_dir', 'phase', 'approved_scope']) {
-    assert.ok(scope.includes(`\`${field}\``));
-  }
-  assert.match(scope, /including routers and retries/);
-  assert.match(scope, /do not persist it, rely on a prior shell export, or infer\napproval from a flag alone/);
-  assert.match(scope, /expanded or conflicting scope returns `NEEDS_CONTEXT`/);
-  assert.match(scope, /Older callers without a complete approved handoff must establish current scope\nthrough the leaf's approval gate/);
-  assert.match(scope, /`--plan-only` or a planning-phase handoff never authorizes mutating leaves/);
-  assert.match(scope, /Propagate the mode and current scoped context through routers/);
+test('shared policy classifies future feature skills before operational commands', () => {
+  const shared = read('shared/shared-instructions.md');
+  const preflight = section(shared, '## App feature entry points', '## Version Check');
+  assert.match(preflight, /before any workflow commands or app\/cloud writes/);
+  assert.match(preflight, /cannot be loaded, STOP/);
+  assert.match(preflight, /applies to new skills too/);
+  assert.match(preflight, /read and execute \[app-edit-routing\.md\]/);
+  assert.match(preflight, /Do not repeat or narrow the\n\s+choices in individual skills/);
+  assert.match(preflight, /Pure operational\/configuration requests/);
+  assert.match(preflight, /`--plan-only` or a planning-phase handoff never authorizes mutating leaves/);
+  assert.match(routing, /includes future feature skills/);
 });
 
-test('shared prompt defaults cannot override explicit data approval gates', () => {
-  const policy = section(shared, '## Execution Style', '## Inline Shell');
+test('direct requests preserve intent and do not infer implementation-only work', () => {
+  assert.match(routing, /original request,\nall arguments, supplied answers/);
+  assert.match(routing, /Naming a capability, connector, table, or package does not establish/);
+  assert.match(routing, /Do not infer this mode merely because the user did not mention screens/);
+  assert.match(routing, /Do not re-scaffold over the app/);
+  assert.match(routing, /UI integration was intentionally\nnot performed/);
+});
+
+test('the entry choice precedes costly work and requires explicit integration consent', () => {
+  const direct = section(routing, '## Direct requests', '## Orchestrated calls');
+  assert.match(direct, /before loading\nor invoking `\/edit-app`/);
+  assert.match(direct, /Do not run health\/type checks, scan\nall screens\/services/);
+  assert.match(direct, /precedes operational version\/auth checks/);
+  for (const choice of ['Implementation only', 'Full app integration', 'Cancel']) {
+    assert.ok(direct.includes(`| ${choice} |`));
+  }
+  assert.match(direct, /costs more than implementation-only work/);
+  assert.match(direct, /Silence, dismissal, or an ambiguous answer is not\nconsent/);
+  assert.match(direct, /Only after \*\*Full app integration\*\* is selected/);
+  assert.match(direct, /Stop without invoking `\/edit-app`, running implementation commands, or changing files/);
+});
+
+test('shared prompt defaults cannot override explicit consent gates', () => {
+  const policy = section(
+    read('shared/shared-instructions.md'),
+    '## Execution Style',
+    '## Inline Shell',
+  );
   assert.match(policy, /Explicit approval gates take precedence/);
-  assert.match(policy, /plan\/mutation, data-source removal, and deployment/);
+  assert.match(policy, /entry-choice, plan\/mutation, data-source removal, and deployment/);
   assert.match(policy, /Cancellation or dismissal stops the pending operation/);
   assert.match(policy, /empty or ambiguous answer requires clarification/);
   assert.match(policy, /already-approved scoped child calls do not repeat approvals/);
-  assert.match(policy, /expanded scope returns to the owner for a new decision/);
   assert.doesNotMatch(policy, /empty\/cancel answer auto-proceeds|empty answer proceeds|default-yes/);
 });
 
-test('shared connector setup requires approved implementation and preserves supplied bindings', () => {
-  const connector = section(shared, '## Connector Reference', '## Safety Guardrails');
+test('shared connector setup follows entry consent and approved implementation', () => {
+  const connector = section(
+    read('shared/shared-instructions.md'),
+    '## Connector Reference',
+    '## Safety Guardrails',
+  );
   assert.doesNotMatch(connector, /Always run `\/list-connections` first/);
+  assert.match(connector, /entry-choice gate precedes `\/list-connections`/);
   assert.match(connector, /only in the approved implementation phase/);
   assert.match(connector, /Reuse a supplied connection ID or reference/);
   assert.match(connector, /Do not invoke it during planning, `--plan-only`, cancellation, or removal-only work/);
-  assert.match(connector, /Approved data child calls reuse their scoped handoff without repeating\napproval/);
   assert.match(connector, /Direct operational `\/list-connections` requests keep their own workflow/);
 });
 
-test('data routers preserve the current request and proposal-only context without granting approval', () => {
-  const router = skill('add-datasource');
-  assert.match(router, /Forward the absolute `working_dir`, current request, owner\/phase\/scope,\n\s+supplied answers, and `--plan-only` or planning-phase status unchanged on every\n\s+handoff/);
-  assert.match(router, /a saved plan or router choice is not consent to mutate/);
-  assert.match(router, /Conflicting add\/refresh\/remove scopes return to the owner for separate calls/);
-  const connector = skill('add-connector');
-  assert.match(connector, /same `\$ARGUMENTS`, absolute `working_dir`,\ncurrent request, owner\/phase\/scope, and proposal-only mode/);
-  assert.match(connector, /Do not continue this\nskill's workflow.*or infer execution approval from this routing decision/);
+test('implementation-only choice is forwarded rather than silently escalated', () => {
+  const direct = section(routing, '## Direct requests', '## Orchestrated calls');
+  assert.match(direct, /forward\n`--implementation-only` through any router/);
+  assert.match(direct, /Do not silently escalate\nto `\/edit-app`/);
+  assert.match(direct, /entry choice approves entering that workflow, not its mutations/);
+  assert.match(direct, /explicit approval for data-source removals/);
 });
 
-test('creation passes scoped approval and the app root to data leaves', () => {
+test('current approved create and edit handoffs do not repeat the entry question', () => {
+  const orchestrated = section(routing, '## Orchestrated calls', '## Conditional impact');
+  assert.match(orchestrated, /Check valid caller context before the entry-choice gate/);
+  assert.match(orchestrated, /approved\n`\/create-mobile-app` or `\/edit-app` child call skips the entry question/);
+  assert.match(orchestrated, /Do not add a second integration\/cost question/);
+  assert.match(edit, /Reuse\n`entry_choice: full-integration`/);
+  assert.match(edit, /direct `\/edit-app` invocation also needs no entry-choice menu/);
+});
+
+test('orchestration context is scoped, forwarded, and not an approval bypass', () => {
+  assert.match(routing, /MOBILE_APP_ORCHESTRATING=1/);
+  for (const field of ['orchestrator', 'working_dir', 'phase', 'approved_scope']) {
+    assert.ok(routing.includes(`\`${field}\``));
+  }
+  assert.match(routing, /Routers forward the same context/);
+  assert.match(routing, /internal\nnative helpers inherit it/);
+  assert.match(routing, /never\ndelegates back to `\/edit-app`/);
+  assert.match(routing, /A bare\/stale environment value or `--skip-planning` without a matching current/);
+  assert.match(routing, /Do not persist the marker/);
+});
+
+test('create calls native and data leaves without routing its partial app into edit', () => {
   for (const [start, end, expected] of [
+    ['Invoke skill: /add-native', 'Run sequentially.', /approved capability row/],
     ['Invoke skill: /add-dataverse', '`/add-dataverse` validates', /bound operation-manifest artifacts/],
     ['### Step 10 — Add connectors', '### Step 10b', /connector row and supplied/],
   ]) {
     const handoff = section(create, start, end);
     assert.match(handoff, /MOBILE_APP_ORCHESTRATING=1/);
     assert.match(handoff, /orchestrator: create-mobile-app/);
-    assert.match(handoff, /working_dir: <working_dir>|`working_dir`/);
-    assert.match(handoff, /--working-dir "?<working_dir>"?/);
     assert.match(handoff, /phase: implementation/);
     assert.match(handoff, expected);
   }
+  assert.match(create, /children must use this context rather than mistake creation for a standalone\nedit/);
 });
 
 test('connector-owned actions and SharePoint schemas do not imply Dataverse schema', () => {
   assert.match(skill('add-connector'), /Action connectors do not imply Dataverse Data Model changes/);
   assert.match(skill('add-sharepoint'), /Keep SharePoint list\/library schemas in Connectors, not the Dataverse\nData Model/);
+});
+
+test('edit planning defers connector and design execution until approval', () => {
+  const planning = section(edit, '### Step 2 — Re-plan', '### Step 3 — Gate');
+  const design = section(edit, '**If the user picks (d) Design:**', '### Step 2 — Re-plan');
+  assert.match(planning, /Do not execute connector skills, create connections, or generate services/);
+  assert.doesNotMatch(planning, /read and execute `\/add-/);
+  assert.match(design, /Steps 2-4 before executing `\/design-system` in Step 5/);
+  assert.match(design, /during `--plan-only`/);
+  assert.match(edit, /inspection-only gate/);
+  assert.match(edit, /Run only operations in the approved delta/);
+  assert.match(edit, /If `--plan-only` is present, do not invoke the configuration skill/);
+});
+
+test('edit validates scoped Dataverse planning before its existing gate and preserves docs-only approval', () => {
+  const planning = section(edit, '### Step 2 — Re-plan', '### Step 3 — Gate');
+  const gate = section(edit, '### Step 3 — Gate', '### Step 4 — Write');
+  const save = section(edit, '### Step 4 — Write', '### Step 5 — Apply');
+  assert.ok(planning.indexOf('dataverse-change-planning.md') < planning.indexOf('Spawn agent:'));
+  assert.match(planning, /structured Dataverse context\/revision signals[\s\S]*before generic retry limits/);
+  assert.match(planning, /Every Data Model result, including inline output, must pass[\s\S]*`DONE` alone never authorizes Step 3/);
+  assert.match(gate, /require exit `0` from\n`validate-dataverse-planning-decisions\.js`[\s\S]*before showing this gate/);
+  assert.ok(gate.indexOf('validate-dataverse-planning-decisions.js') < gate.indexOf('Show the user'));
+  assert.match(gate, /no extra create-flow approval gate/);
+  assert.match(gate, /If cancel → STOP, leave the plan and app untouched/);
+  assert.match(gate, /`--plan-only`[\s\S]*"Approve and save plan only"[\s\S]*stop after Step 4/);
+  assert.match(save, /preserve all other sections verbatim/);
+  assert.match(save, /`--plan-only`[\s\S]*`plan_only: true`[\s\S]*and stop/);
+  assert.match(save, /A plan-only save does not create this implementation approval context/);
+  assert.ok(save.indexOf('and stop') < save.indexOf('freeze the shared workflow'));
+  assert.doesNotMatch(planning, /Invoke skill: \/add-dataverse|--approval-receipt|--operation-manifest/);
+});
+
+test('planning-phase edit children return to their owner before the direct docs-only approval path', () => {
+  const gate = section(edit, '### Step 3 — Gate', '### Step 4 — Write');
+  const childReturn = section(gate, 'If this is a planning-phase handoff from another owner', 'Show the user');
+  const directGate = gate.slice(gate.indexOf('Show the user'));
+  assert.match(childReturn, /return the validated\nproposal and concerns to that owner now/);
+  assert.match(childReturn, /without saving the live plan or\nopening an implementation gate/);
+  assert.match(childReturn, /Do not turn the caller's planning consent\ninto approval to apply the edit/);
+  assert.match(childReturn, /A direct `--plan-only` request retains the\nexplicit plan-document approval below/);
+  assert.doesNotMatch(childReturn, /Approve and apply|Approve and save plan only|Invoke skill:|--skip-planning/);
+  const validation = gate.indexOf('validate-dataverse-planning-decisions.js');
+  const returnToOwner = gate.indexOf('If this is a planning-phase handoff');
+  const localGate = gate.indexOf('Show the user');
+  assert.ok(validation >= 0 && validation < returnToOwner && returnToOwner < localGate);
+  assert.match(directGate, /If cancel → STOP, leave the plan and app untouched/);
+  assert.match(directGate, /If `\$ARGUMENTS` includes `--plan-only`, change option \(a\) to "Approve and save plan only" and stop after Step 4/);
+  assert.ok(directGate.indexOf('Approve this edit') < directGate.indexOf('Approve and save plan only'));
+});
+
+test('connector and native intent do not unconditionally create Dataverse schema', () => {
+  for (const expected of [
+    /Teams\/email action or profile lookup/,
+    /SQL\/Excel\/SharePoint data/,
+    /not automatically Dataverse/,
+    /missing generated services/,
+    /Ask about retention rather than assuming/,
+  ]) {
+    assert.match(routing, expected);
+  }
+  assert.match(edit, /\*\*Data Model is conditional\.\*\*/);
+  assert.match(edit, /Preserve unaffected Data Model content verbatim/);
+  assert.match(edit, /ask about retention, then update Data Model only if/);
 });
 
 test('setup-datamodel saves every approved path and passes scope to its leaves', () => {
@@ -180,7 +297,6 @@ test('setup validates all Dataverse proposal paths before the one combined appro
   assert.ok(validate >= 0 && validate < proposalExit && proposalExit < approval && approval < save);
   assert.match(gate, /Connector-only, retirement-only, and refresh-only proposals[\s\S]*must not reuse stale schema-planning artifacts/);
   assert.match(gate, /Revisions repeat validation, not broad discovery or another\napproval ceremony/);
-  assert.match(gate, /A saved plan or `--skip-planning` alone is not approval/);
   assert.doesNotMatch(planning, /EnterPlanMode|ExitPlanMode|--approval-receipt/);
 });
 
@@ -191,7 +307,7 @@ test('connector aliases and operations preserve dedicated routing and dependency
   assert.match(connector, /actions\/functions follow the discovery-only branch/);
   assert.doesNotMatch(connector, /npx expo install <missing-package>/);
   assert.match(connector, /Do not install\nnative packages absent from the template/);
-  assert.match(connector, /Standalone removal must stop if\nit would leave broken consumers/);
+  assert.match(connector, /implementation-only removal must stop if it would leave broken consumers/);
 });
 
 test('Dataverse discovery executes before connector setup and ends the leaf', () => {
@@ -203,6 +319,58 @@ test('Dataverse discovery executes before connector setup and ends the leaf', ()
   assert.match(identify, /Do not enter Step 3/);
   assert.ok(identify.indexOf('find-dataverse-api') < identify.indexOf('| Connector API name'));
   assert.doesNotMatch(setup, /find-dataverse-api/);
+});
+
+test('connector discovery examples use the installed CLI without changing generation forms', () => {
+  const connector = skill('add-connector');
+  for (const verb of ['list-flows', 'list-datasets', 'list-tables', 'list-sqlStoredProcedures']) {
+    assert.match(connector, new RegExp(`^npx --no-install power-apps ${verb}\\b`, 'm'));
+    assert.doesNotMatch(connector, new RegExp(`^npx power-apps ${verb}\\b`, 'm'));
+  }
+});
+
+for (const [label, discoveryVerb, addCommand, approval, proposalOnly] of [
+  ['flow', 'list-flows', 'npx power-apps add-flow',
+    /Resolve the exact flow ID and approve its app binding, or reuse matching current\s+owner approval/, /Proposal-only calls return here without adding the flow/],
+  ['table', 'list-datasets', 'npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset',
+    /Approve\s+the exact selected bindings before generation, or reuse matching current owner\s+approval/, /proposal-only discovery returns without adding sources/],
+  ['procedure', 'list-sqlStoredProcedures', 'npx power-apps add-data-source --api-id shared_sql',
+    /Approve the exact procedure binding before generation if it was not already in\s+the current approved scope/, /proposal-only discovery returns without adding it/],
+]) {
+  test(`connector ${label} discovery returns through approval before a separate guarded mutation`, () => {
+    const connector = skill('add-connector');
+    const blocks = [...connector.matchAll(/^```bash\n([\s\S]*?)\n```/gm)];
+    const discovery = blocks.find((block) => block[1].includes(`npx --no-install power-apps ${discoveryVerb}`));
+    const addition = blocks.find((block) => block[1].includes(addCommand));
+    assert.ok(discovery, `${label}: documented discovery block`);
+    assert.ok(addition, `${label}: documented registration block`);
+    assert.ok(addition.index > discovery.index, 'Discovery and mutation must be separate, ordered calls');
+    const guard = 'cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }';
+    assert.ok(discovery[1].startsWith(`${guard}\n`));
+    assert.ok(addition[1].startsWith(`${guard}\n`));
+    assert.doesNotMatch(discovery[1], /^npx (?:--no-install )?power-apps (?:add-flow|add-data-source)\b/m);
+    const gate = connector.slice(discovery.index + discovery[0].length, addition.index);
+    assert.match(gate, approval);
+    assert.match(gate, proposalOnly);
+  });
+}
+
+test('SharePoint proposal and binding approvals precede implementation', () => {
+  const sharepoint = skill('add-sharepoint');
+  const plan = section(sharepoint, '### Step 2:', '### Step 3:');
+  assert.match(plan, /For `--plan-only` or a planning-phase handoff/);
+  assert.match(plan, /bindings, any schema changes, and unresolved choices, then STOP before\s+implementation/);
+  assert.match(plan, /Do not create connections\/lists, generate services, or update\s+the app plan or memory-bank/);
+  assert.match(plan, /Missing discovery access is not permission to\s+create a connection/);
+  assert.ok(plan.indexOf('For `--plan-only`') < plan.indexOf('**If lists already exist:**'));
+  const binding = section(sharepoint, '### Step 6:', '### Step 7:');
+  assert.match(binding, /obtain explicit approval to create a connection with the\s+command below/);
+  assert.ok(binding.indexOf('obtain explicit approval') < binding.indexOf('```bash'));
+  const add = section(sharepoint, '### Step 9:', '### Step 10:');
+  assert.match(add, /Confirm approval covers this environment, connection\s+ID\/reference, site, and list\/library before registration/);
+  assert.match(add, /Obtain approval for\s+newly resolved bindings; return a changed child scope to its owner/);
+  assert.match(add, /A picker\s+selection alone is not execution approval/);
+  assert.ok(add.indexOf('Confirm approval') < add.indexOf('```bash'));
 });
 
 test('generic connector preserves supplied IDs and references before resolving a missing binding', () => {
@@ -233,6 +401,17 @@ test('SharePoint reuses supplied bindings and emits the matching registration fo
   assert.match(section(sharepoint, '### Step 8:', '### Step 9:'), /Skip this picker/);
 });
 
+test('every explicit create/edit child context includes its working directory', () => {
+  for (const [name, content] of [['create-mobile-app', create], ['edit-app', edit]]) {
+    const contexts = [...content.matchAll(/(?:Context|Environment):\n([\s\S]*?)\nArguments:\n([\s\S]*?)\n```/g)];
+    assert.ok(contexts.length > 0, `${name} handoff coverage`);
+    for (const [, context, args] of contexts) {
+      assert.match(context, /working_dir: <working_dir>/, name);
+      assert.match(args, /--working-dir "?<working_dir>"?/, name);
+    }
+  }
+});
+
 test('connector-only summary does not claim a nonexistent Dataverse manifest', () => {
   const summary = section(skill('setup-datamodel'), '### Phase 7', '## Reference');
   assert.match(summary, /Manifest as `not applicable`/);
@@ -240,32 +419,51 @@ test('connector-only summary does not claim a nonexistent Dataverse manifest', (
   assert.doesNotMatch(summary, /Manifest\s+:\s+\.datamodel-manifest\.json/);
 });
 
-test('existing Dataverse plans are checked against the requested delta rather than replayed', () => {
+test('existing native wrappers and Dataverse plans are checked against the requested delta', () => {
+  assert.match(skill('add-native'), /inspect its exports against the approved capability\ncontract/);
+  assert.doesNotMatch(skill('add-native'), /regeneration skipped — wrapper already exists/);
   const dataverse = skill('add-dataverse');
   assert.match(dataverse, /restrict schema writes to the exact `approved_scope` delta/);
   assert.match(dataverse, /flag alone must not suppress standalone reconciliation/);
-  assert.match(dataverse, /If the request adds nothing, verify the existing outcome and report a no-op/);
   assert.doesNotMatch(dataverse, /empty\/cancel input auto-proceeds/);
 });
 
+test('design changes return screen impact and use the existing host theme integration', () => {
+  const design = skill('design-system');
+  const refresh = read('skills/design-system/references/refresh-flow.md');
+  assert.doesNotMatch(design, /\/tweak-screen|src\/theme\/ThemeProvider\.tsx/);
+  assert.match(design, /runtime wiring, affected screen changes, and final verification/);
+  assert.match(design, /Drift detection \(Mode A\/B/);
+  assert.match(refresh, /before either spec or token write/i);
+  assert.match(refresh, /Cancellation leaves both artifacts unchanged/);
+  assert.match(refresh, /paired pre-write snapshot/);
+  assert.match(refresh, /screen constraints/);
+});
+
+test('configuration-only workflows retain their own approvals and return to their caller', () => {
+  assert.match(routing, /Do not route a\npure operational request through app planning/);
+  assert.match(skill('setup-app-insights'), /MOBILE_APP_ORCHESTRATING=1 AND explicit edit-app caller context/);
+  assert.match(skill('setup-app-insights'), /Configuration approval remains owned by Step 3/);
+});
+
 test('data-source removal is an explicit app-only retirement, not server deletion', () => {
-  assert.match(removal, /shared-instructions\.md#data-source-invocation-scope/);
-  assert.doesNotMatch(removal, /#app-feature-entry-points|(?:app-edit-routing|native-artifact-compatibility)\.md/);
-  assert.match(removal, /does not authorize deleting the server table,\s+its columns\/records/);
+  assert.match(removal, /does not authorize deleting the server table, its columns\/records/);
   assert.match(removal, /A missing row in a planner's output is a candidate, not consent/);
   assert.match(removal, /lookup\/identity reads, and offline requirements/);
   assert.match(removal, /Dynamic or ambiguous usage is a blocker/);
-  assert.match(removal, /Never mutate\s+configuration\/generated files during\s+planning or `--plan-only`/);
+  assert.match(removal, /Never mutate\nconfiguration\/generated files during planning or `--plan-only`/);
 });
 
-test('data-source retirement requires consumers to be retired before unregistering', () => {
-  const consumers = section(removal, '## 2.', '## 3.');
-  assert.match(consumers, /responsible app workflow adds\/refreshes replacement sources first/);
-  assert.match(consumers, /updates or removes the approved consumers and verifies they no longer depend\s+on the retiring source/);
-  assert.match(consumers, /Keep the old binding available until those source edits are complete/);
-  assert.match(consumers, /Only then call the appropriate leaf in removal mode/);
-  assert.match(consumers, /removal must stop if consumers remain/);
-  assert.match(consumers, /cannot be staged safely,\nreturn the conflict to the owner for an explicit migration plan/);
+test('retired consumers are updated before the edit unregisters their sources', () => {
+  const mutations = section(edit, '### Step 5 — Apply app mutations', '### Step 6 — Rebuild');
+  const consumers = section(edit, '### Step 6 — Rebuild', '### Step 6.5 — Unregister');
+  const retirement = section(edit, '### Step 6.5 — Unregister', '### Step 7 — Verify');
+  assert.match(mutations, /Step 5 applies additions\/refreshes, not removals/);
+  assert.match(mutations, /Never add a retiring table to the offline profile/);
+  assert.match(consumers, /Pass the approved retiring service\/source list/);
+  assert.match(retirement, /After Step 6 updates\/removes the\nconsumers/);
+  assert.match(retirement, /Refresh the Generated Services snapshot again/);
+  assert.match(retirement, /no-op, partial cleanup, or remaining consumer blocks completion/);
 });
 
 for (const name of ['add-connector', 'add-dataverse', 'add-sharepoint']) {
@@ -299,6 +497,8 @@ test('refresh preserves registration identity and never falls back to an add', (
   assert.match(refresh, /preserve unrelated registration identities/);
   assert.match(refresh, /do not repair generator output by hand or retry through addition/);
   assert.match(skill('add-datasource'), /--refresh --data-source-name "<registered-name>"/);
+  assert.match(skill('debug-app'), /--refresh --data-source-name "<registered-name>"/);
+  assert.match(edit, /do not route refreshes through addition/);
 });
 
 test('the router and data-only orchestrator retain the removal operation', () => {
@@ -327,6 +527,8 @@ test('schema-map generation is distinct from service refresh and removal', () =>
   assert.match(removal, /\$PA app refresh data-source --name '<registered-name>'/);
   assert.match(removal, /npm run generate-schemas\nnpx --no-install tsc --noEmit/);
   assert.match(removal, /including when the\nlast source was removed/);
+  assert.match(skill('debug-app'), /do not resurrect retired sources during repair/i);
+  assert.doesNotMatch(skill('debug-app'), /tell the user to re-run `npm run generate-schemas`; if the error reproduces/);
 });
 
 test('verified removal reconciles the app inventory without faking offline cleanup', () => {
@@ -381,4 +583,18 @@ test('README explains data-source commands without internal execution mechanics'
   assert.match(examples, /--remove --data-source-name/);
   assert.match(examples, /never deletes server tables/);
   assert.doesNotMatch(examples, /compact live-metadata|working_dir|PowerShell|Bash|schema map|allowlist|offline-profile-delta/);
+});
+
+test('all mobile instruction files use the mobile-specific orchestration marker', () => {
+  function inspect(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) inspect(file);
+      else if (entry.name.endsWith('.md')) {
+        assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /CODE_APPS_NATIVE_ORCHESTRATING/, file);
+      }
+    }
+  }
+  inspect(path.join(pluginRoot, 'skills'));
+  inspect(path.join(pluginRoot, 'shared'));
 });

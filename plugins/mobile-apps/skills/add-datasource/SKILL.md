@@ -12,10 +12,8 @@ model: sonnet
 
 # Add Data Source
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before any project read or the workflow below. Resolve the absolute app root
-before reading memory-bank. Routing selects a data workflow, not implementation
-approval or a full-app integration workflow.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 Router skill that understands the user's goal and connects them to the right data source — without requiring them to know Power Platform terminology.
 
@@ -50,12 +48,8 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 **Note:** Dedicated skills for Teams, Excel, OneDrive, Office 365, and Azure DevOps are planned for v1. Until then, `/add-connector` handles all of them — it covers every connector the platform supports and generates the same `src/generated/` service layer.
 
 **Important routing rules:**
-- Forward the absolute `working_dir`, current request, owner/phase/scope,
-  supplied answers, and `--plan-only` or planning-phase status unchanged on every
-  handoff. Standalone calls use the selected leaf's own approval and verification
-  gates; a saved plan or router choice is not consent to mutate.
 - For refreshes, forward the exact registered identity, `--refresh`,
-  `--data-source-name`, proposal-only status, and current approved scope to the matching leaf.
+  `--data-source-name`, mode, and current approved scope to the matching leaf.
   Never convert a refresh into an add or request a new connection.
   Conflicting add/refresh/remove scopes return to the owner for separate calls.
 - For removals, forward the approved identities and scope unchanged to the
@@ -67,7 +61,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 - When the user wants to **store or query structured business data** with custom schema, route to `/add-dataverse`.
 
 4. If the approved scope includes multiple capabilities, invoke each skill in
-   sequence and return the combined results to the user or current owner. Do not independently
+   sequence and return the combined results to the owner. Do not independently
    expand a connector request into schema or screen changes.
 
 ### When the User Isn't Sure

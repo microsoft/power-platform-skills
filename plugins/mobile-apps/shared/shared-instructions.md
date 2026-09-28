@@ -4,32 +4,35 @@
 
 All skills reference this single file. When new shared instructions are added, update this file only — no changes needed to individual skills.
 
-## Data-source invocation scope
+## App feature entry points
 
 Read this shared file before any workflow commands or app/cloud writes. If it
 cannot be loaded, STOP and report the missing prerequisite; do not proceed from
-a remembered or copied fragment. Before data-source work, bind the invocation through
+a remembered or copied fragment. This preflight applies to new skills too, not
+only the currently named feature leaves.
+
+For native or data-source feature work, bind the invocation through
 [app-working-directory.md](references/app-working-directory.md) before reading
 even the minimal local app markers. A child's launch directory is not its app root.
 
-Resolve the current requested operation before discovery or mutation: schema
-change/new binding, retained-source refresh, retirement, or sample seeding.
-An existing plan or inventory is context, not permission to replay every row.
-Standalone calls keep the data workflow's own approval and validation gates.
-They do not start a full-app integration wizard or automatically edit screens.
+Classify the current request from supplied intent, caller context, and minimal
+local app markers before version/auth checks, metadata discovery, or planners:
 
-For every data child handoff, including routers and retries, pass
-`MOBILE_APP_ORCHESTRATING=1`, the owning `orchestrator`, absolute `working_dir`,
-current `phase`, and exact `approved_scope` with supplied answers. The marker is
-invocation-scoped: do not persist it, rely on a prior shell export, or infer
-approval from a flag alone. Approved children reuse that same current scope and
-return to their owner; expanded or conflicting scope returns `NEEDS_CONTEXT`.
-Older callers without a complete approved handoff must establish current scope
-through the leaf's approval gate rather than silently applying the saved plan.
+- Native capability, connector/data-source, data-model, or design feature work:
+  read and execute [app-edit-routing.md](references/app-edit-routing.md).
+  It alone owns the implementation-only/full-integration/cancel entry-choice
+  gate, forwarding, and approved-child exceptions. Do not repeat or narrow the
+  choices in individual skills.
+- Direct `/edit-app` and fresh creation keep their own approval workflows.
+  Approved child calls carry `MOBILE_APP_ORCHESTRATING=1` and matching owner,
+  absolute working directory, phase, and scope; a marker alone is not approval.
+- Pure operational/configuration requests (connection management, diagnostics,
+  publishing, telemetry, sample seeding, offline administration) keep their own
+  scoped approvals; they do not authorize an unrelated feature integration.
 
 `--plan-only` or a planning-phase handoff never authorizes mutating leaves,
-connection creation, generated services, seeding, or schema writes.
-Return the proposal before implementation; only a
+connection creation, generated services, native wrappers, brand tokens, or
+dependency installation. Return the proposal before implementation; only a
 workflow's explicit plan-document approval may save planning documents.
 Propagate the mode and current scoped context through routers; missing or
 conflicting context returns `NEEDS_CONTEXT` before mutation.
@@ -50,7 +53,7 @@ to recover a planning failure. Scratch planning artifacts are allowed.
 For scoped Dataverse proposals, follow
 [dataverse-change-planning.md](references/dataverse-change-planning.md).
 It reuses creation's compact-evidence helpers without importing the create
-wizard or its approval gates into setup/standalone data planning.
+wizard or its approval gates into setup/edit.
 
 ---
 
@@ -58,7 +61,10 @@ wizard or its approval gates into setup/standalone data planning.
 
 **📋 [version-check.md](./version-check.md)**
 
-Run at the start of every skill execution (at most once per day). Notifies the user if a tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
+Run at the start of operational skill work (at most once per day). For direct
+feature requests, first capture the lightweight entry choice below; do not run
+version/auth checks before the user chooses to proceed. Notifies the user if a
+tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
 
 ---
 
@@ -232,14 +238,17 @@ All non-Dataverse connectors require a connection ID or connection reference
 before `pa app add data-source`. Read this reference before implementing
 any `/add-*` connector operation.
 
-Resolve connections only in the approved implementation phase, before adding
-the data source.
+For feature requests, the entry-choice gate precedes `/list-connections` and
+all connection discovery/creation. After the mode is selected, resolve connections
+only in the approved implementation phase, before adding the data source.
 Reuse a supplied connection ID or reference for the confirmed connector/environment;
 invoke `/list-connections` only when lookup or creation is needed.
 Do not invoke it during planning, `--plan-only`, cancellation, or removal-only work.
-Approved data child calls reuse their scoped handoff without repeating
-approval. Direct operational `/list-connections` requests keep their own workflow;
-they do not authorize unrelated app changes.
+Selecting full integration alone does not approve connection creation.
+
+Approved creation/edit child calls reuse their scoped handoff without repeating
+the entry question. Direct operational `/list-connections` requests keep their own workflow;
+they do not require full app integration or authorize unrelated feature changes.
 
 ## Safety Guardrails
 
@@ -445,14 +454,14 @@ When a skill is invoked from another skill (e.g., `/create-mobile-app` calls `/a
 - Do not announce steps before executing them. Proceed directly through the workflow.
 - Within the current approved phase, do not ask separately for read-only operations
   (Glob, Grep, Read, `node scripts/resolve-environment.js <environment-id-or-url>`).
-  This does not authorize mutation or discovery outside the current data scope.
+  This does not authorize discovery or costly scans before the entry-choice gate.
 - For multi-step operations, use `manage_todo_list` to give the user visibility.
 - After completing each step, update the memory bank — don't batch updates at the end.
 
 ### When to use `AskUserQuestion` — and when NOT to
 
 **Explicit approval gates take precedence** over the efficiency rules below:
-plan/mutation, data-source removal, and deployment gates require
+entry-choice, plan/mutation, data-source removal, and deployment gates require
 the user's explicit selection or approval. A recommended option, one viable
 path, stored preference, or deterministic recovery is not consent. Reuse approval
 only for the same current operation: already-approved scoped child calls do not repeat approvals,

@@ -87,7 +87,9 @@ Input: pre-structured design spec (Claude Design, Tokens Studio, Style Dictionar
 Processing:
   1. Validate: ≤200 KB, .md/.mdx/.json
   2. Auto-detect format by markers
-  3. Near-direct passthrough → SKIP Sub-steps 3 AND 4
+  3. Prepare spec + matching token candidate without copying into brand/
+  4. Skip style/spec generation, not Sub-step 3.5's approval + backup boundary
+  5. Apply the approved replacement (or first-time draft), then Sub-steps 5–7 (confirmation before initial history)
 Cost: ~0-2k tokens (mostly deterministic)
 ```
 
@@ -296,7 +298,7 @@ Token values masked. Failures logged with reason.
 When multiple flags are passed, apply in priority order:
 
 ```
-1. --design-spec    (highest — near-direct passthrough, skips Sub-steps 3+4)
+1. --design-spec    (highest — near-direct passthrough, never skips Sub-step 3.5's write boundary)
 2. --brand-doc      (locks direction, skips Sub-step 3)
 3. --from-figma     (locks palette + typography + components)
 4. --from-code-app  (highest fidelity sibling)

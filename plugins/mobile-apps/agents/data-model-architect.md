@@ -31,7 +31,7 @@ or standalone `/add-dataverse` with a prompt that includes:
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
-- **Scoped change context** (setup/standalone) — current delta, retained
+- **Scoped change context** (setup/edit/standalone) — current delta, retained
   native/connector constraints, `phase: planning`, and the proposal-only mode.
   Existing plan rows are context, not permission to recreate unrelated tables.
 - **Normalized Dataverse foreground planning snapshot path (validation only)** —
@@ -53,7 +53,7 @@ or standalone `/add-dataverse` with a prompt that includes:
 ## Hard Rules
 
 - **Read-only.** You MUST NOT run `pa app add data-source --connector dataverse --org-url <env-url> --table <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
-- **Scoped proposals preserve the owner.** For setup/standalone change
+- **Scoped proposals preserve the owner.** For setup/edit/standalone change
   planning, use [dataverse-change-planning.md](../shared/references/dataverse-change-planning.md).
   Return the proposed delta and required dependencies in `_dm_section.md` and
   the normalized contract; do not copy unrelated historical creation rows into
@@ -188,9 +188,9 @@ If validation succeeds, this path is mandatory:
 If either required artifact is missing, invalid, or mismatched, return
 `NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`. Do not fall back to
 live discovery from `required` mode. The legacy live path below remains only
-for callers that omit the new planning mode entirely (including the existing
-`/edit-app` path). Setup/standalone data planning must not omit `required` to
-bypass missing evidence. The `cross-entity-audit` short circuit remains separate.
+for older external callers that omit the planning mode entirely. Bundled
+setup/edit/standalone planning must not omit `required` to bypass missing
+evidence. The `cross-entity-audit` short circuit remains separate.
 
 ## Step 1 — Resolve Target Environment
 
