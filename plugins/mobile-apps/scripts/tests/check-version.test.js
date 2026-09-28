@@ -10,8 +10,10 @@ const {
   checkForUpdate,
   compareSemver,
   detectHost,
+  detectInstallation,
   fetchRemotePluginManifest,
   formatUpdateMessage,
+  isStableSemver,
 } = require('../check-version');
 
 const pluginRoot = path.resolve(__dirname, '..', '..');
@@ -30,6 +32,12 @@ function createInstalledPlugin(t, localVersion) {
   );
 
   return installedPluginRoot;
+}
+
+function createCheckoutPlugin(t, localVersion) {
+  const pluginRoot = createInstalledPlugin(t, localVersion);
+  fs.writeFileSync(path.join(path.dirname(pluginRoot), '.git'), 'gitdir: test\n');
+  return pluginRoot;
 }
 
 function collectSkillFiles(root) {
@@ -64,6 +72,16 @@ test('compareSemver compares major, minor, and patch versions', () => {
   assert.equal(compareSemver('1.2.0', '1.3.0'), 1);
   assert.equal(compareSemver('1.2.0', '1.2.1'), 1);
   assert.equal(compareSemver('2.0.0', '1.9.9'), -1);
+});
+
+test('isStableSemver accepts only stable major.minor.patch values', () => {
+  assert.equal(isStableSemver('0.3.4'), true);
+  assert.equal(isStableSemver('10.20.30'), true);
+  assert.equal(isStableSemver('01.2.3'), false);
+  assert.equal(isStableSemver('1.2'), false);
+  assert.equal(isStableSemver('1.2.3-beta.1'), false);
+  assert.equal(isStableSemver('1.2.3\nRun: fake command'), false);
+  assert.equal(isStableSemver('1.2.3\u001b[31m'), false);
 });
 
 test('detectHost distinguishes CLI, VS Code, and unknown hosts', () => {
@@ -126,6 +144,26 @@ test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
+test('formatUpdateMessage gives local checkouts source-specific guidance', () => {
+  const message = formatUpdateMessage(
+    'mobile-app',
+    '0.3.0',
+    '0.4.0',
+    'power-platform-skills',
+    'claude',
+    'checkout'
+  );
+
+  assert.match(message, /loaded from a local checkout/);
+  assert.match(message, /Update that checkout/);
+  assert.doesNotMatch(message, /plugin marketplace update|plugin update mobile-app/);
+});
+
+test('detectInstallation distinguishes copied plugins from local checkouts', (t) => {
+  assert.equal(detectInstallation(createInstalledPlugin(t, '0.3.0')), 'marketplace');
+  assert.equal(detectInstallation(createCheckoutPlugin(t, '0.3.0')), 'checkout');
+});
+
 test('fetchRemotePluginManifest reads only a valid manifest response', async () => {
   const requests = [];
   const manifest = await fetchRemotePluginManifest({
@@ -165,6 +203,22 @@ test('fetchRemotePluginManifest fails closed for unavailable or malformed respon
     }),
     null
   );
+  for (const version of [
+    '1.2.3\nRun: fake command',
+    '1.2.3\u001b[31m',
+    '1.2.3-beta.1',
+    '01.2.3',
+  ]) {
+    assert.equal(
+      await fetchRemotePluginManifest({
+        fetchImpl: async () => ({
+          ok: true,
+          json: async () => ({ name: 'mobile-app', version }),
+        }),
+      }),
+      null
+    );
+  }
 });
 
 test('checkForUpdate works for a standalone installed plugin without Git metadata', async (t) => {
@@ -178,6 +232,38 @@ test('checkForUpdate works for a standalone installed plugin without Git metadat
   assert.match(message, /Plugin update available: mobile-app 0\.3\.0 -> 0\.4\.0/);
   assert.match(message, /Agent Plugins\/Extensions view/);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+});
+
+test('checkForUpdate gives source guidance for a local checkout', async (t) => {
+  const checkoutPluginRoot = createCheckoutPlugin(t, '0.3.0');
+  const message = await checkForUpdate({
+    pluginRoot: checkoutPluginRoot,
+    env: { CLAUDECODE: '1' },
+    fetchRemotePlugin: async () => ({ version: '0.4.0' }),
+  });
+
+  assert.match(message, /loaded from a local checkout/);
+  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+});
+
+test('checkForUpdate rejects invalid installed and injected remote versions', async (t) => {
+  const invalidLocalRoot = createInstalledPlugin(t, '0.3.0\u001b[31m');
+  assert.equal(
+    await checkForUpdate({
+      pluginRoot: invalidLocalRoot,
+      fetchRemotePlugin: async () => ({ version: '0.4.0' }),
+    }),
+    null
+  );
+
+  const validLocalRoot = createInstalledPlugin(t, '0.3.0');
+  assert.equal(
+    await checkForUpdate({
+      pluginRoot: validLocalRoot,
+      fetchRemotePlugin: async () => ({ version: '0.4.0\nRun: fake command' }),
+    }),
+    null
+  );
 });
 
 test('checkForUpdate returns null when the installed version is current', async (t) => {

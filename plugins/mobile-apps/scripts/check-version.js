@@ -19,6 +19,11 @@ const PLUGIN_MANIFEST_PATHS = [
   '.plugin/plugin.json',
   '.claude-plugin/plugin.json',
 ];
+const STABLE_SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+function isStableSemver(version) {
+  return typeof version === 'string' && STABLE_SEMVER_PATTERN.test(version);
+}
 
 function compareSemver(localVersion, remoteVersion) {
   const localParts = localVersion.split('.').map(Number);
@@ -49,14 +54,32 @@ function detectHost(env = process.env) {
   return 'ui';
 }
 
+function detectInstallation(pluginRoot) {
+  let current = fs.realpathSync(pluginRoot);
+  while (true) {
+    if (fs.existsSync(path.join(current, '.git'))) return 'checkout';
+    const parent = path.dirname(current);
+    if (parent === current) return 'marketplace';
+    current = parent;
+  }
+}
+
 function formatUpdateMessage(
   pluginName,
   localVersion,
   remoteVersion,
   marketplaceName,
-  host = detectHost()
+  host = detectHost(),
+  installation = 'marketplace'
 ) {
   let message = `\nPlugin update available: ${pluginName} ${localVersion} -> ${remoteVersion}.\n`;
+
+  if (installation === 'checkout') {
+    return (
+      message +
+      'This plugin is loaded from a local checkout. Update that checkout, restart or reload the host, and rerun this skill.'
+    );
+  }
 
   if (host === 'vscode') {
     return (
@@ -108,7 +131,7 @@ async function fetchRemotePluginManifest({
     if (!response.ok) return null;
 
     const manifest = await response.json();
-    return manifest && typeof manifest.version === 'string' ? manifest : null;
+    return manifest && isStableSemver(manifest.version) ? manifest : null;
   } catch {
     return null;
   } finally {
@@ -127,20 +150,21 @@ async function checkForUpdate({
   if (!pluginJsonPath) return null;
 
   const localPlugin = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
-  if (!localPlugin.version) return null;
+  if (!isStableSemver(localPlugin.version)) return null;
 
   // Marketplace installs contain only the plugin directory, so remote manifest
   // discovery must not depend on a parent Git checkout or an origin/main ref.
   const remotePlugin = await fetchRemotePlugin();
-  if (!remotePlugin?.version) return null;
+  if (!isStableSemver(remotePlugin?.version)) return null;
   if (compareSemver(localPlugin.version, remotePlugin.version) <= 0) return null;
 
   return formatUpdateMessage(
-    localPlugin.name || 'mobile-app',
+    localPlugin.name === 'mobile-app' ? localPlugin.name : 'mobile-app',
     localPlugin.version,
     remotePlugin.version,
     marketplaceName,
-    detectHost(env)
+    detectHost(env),
+    detectInstallation(resolvedPluginRoot)
   );
 }
 
@@ -148,8 +172,10 @@ module.exports = {
   checkForUpdate,
   compareSemver,
   detectHost,
+  detectInstallation,
   fetchRemotePluginManifest,
   formatUpdateMessage,
+  isStableSemver,
 };
 
 if (require.main === module) {
