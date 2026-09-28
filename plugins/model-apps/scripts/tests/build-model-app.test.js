@@ -420,6 +420,9 @@ test('destructive gate: refusal writes the approval record without changing the 
     assert.deepStrictEqual(record.formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
     assert.deepStrictEqual(record.sitemapRemovals, ['entity:new_ticket']);
     assert.match(record.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    // The run id makes two builds' records differ even when they list the same removals in the same
+    // millisecond, which is what lets a build tell its own record from another's by content.
+    assert.match(record.runId, /^[0-9a-f-]{36}$/);
   } finally {
     cleanupTestWorkspace(workspaceDir);
   }
@@ -644,6 +647,254 @@ test('destructive gate: a data-stage apply does not consume an approval record',
     assert.strictEqual(rerun.ok, false);
     assert.strictEqual(ran, false, 'full run halts before writes');
     assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'new field is still reviewed after the partial run');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+// --- The record binds the run that showed it, and only that run consumes it ------------------------
+const ticketState = (fields, def) => ({ collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(fields), def }], sitemap: null });
+const ticketDef = () => Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+// Another build's record, as that build would write it, with its own run id.
+const OTHER_RECORD = JSON.stringify({ schemaVersion: 1, generatedAt: '2026-01-02T00:00:00.000Z', runId: 'another-build', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] }, null, 2) + '\n';
+const rawRecord = (dir) => fs.readFileSync(approvalRecordPath(dir), 'utf8');
+
+test('destructive gate: a failed approved apply with nothing to remove still binds the retry to that empty list', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('failed-empty-list');
+  try {
+    const def = ticketDef();
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], def),
+      runBuild: async () => { throw new Error('app-shell failed after the forms phase kept new_midrun'); },
+    }), /app-shell failed/);
+    const recorded = readApprovalRecord(workspaceDir);
+    assert.deepStrictEqual([recorded.formRemovals, recorded.sitemapRemovals], [{}, []], 'the empty gate-time list is recorded before any write');
+
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name', 'new_midrun'], def), runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'the retry halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e)), 'the field the failed run kept is shown before it can be removed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful approved apply with nothing to remove leaves no record behind', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('empty-list-consumed');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved data-stage apply with nothing to remove writes no record', async () => {
+  // The data stage runs no prune pass, so it can keep nothing, and an empty record would only make the
+  // next full apply ask again about removals nobody was ever shown.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('data-stage-empty');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir, phases: ['solution', 'data-model', 'sample-data'] }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful plain apply consumes the record it started with', async () => {
+  // A maker who was refused, then changed the spec so that nothing is removed, rebuilds without
+  // --allow-destructive. The old list no longer describes anything, so it goes.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('plain-consumes-seen');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a finishing build leaves a record another build wrote while it ran', async () => {
+  // Two builds share a workspace. This one started with nothing to remove; meanwhile another build,
+  // with an edited spec, refused and recorded its list. Consuming that record would leave the other
+  // build's approved re-run bound to nothing.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('other-build-record');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()),
+      runBuild: async () => { fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8'); return { ok: true, created: {}, skipped: { layout: [] } }; },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD, "the other build's record is left exactly as written");
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a finishing build that kept a field does not overwrite a record another build wrote', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-other-record');
+  try {
+    const logs = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()),
+      runBuild: async () => {
+        fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8');
+        return { ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } };
+      },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD, "the other build's record is not replaced");
+    assert.ok(logs.some((l) => /another build/.test(l)), 'the log says why the record was left alone');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts before any write when the record changed after it was read', async () => {
+  // This build compared its removals with the record it read. If another build replaces that record
+  // before this one persists its own, the comparison no longer means anything.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-changed');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk,
+      discoverOpDiffState: async () => { fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8'); return ticketState(['new_name', 'new_priority'], ticketDef()); },
+      runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing is written');
+    assert.ok(r.errors.some((e) => /changed while this build was starting/.test(e)), JSON.stringify(r.errors));
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a record the build cannot lock is left in place, and an approved build halts', async () => {
+  // The record's check and change happen under the workspace lease. A lease another writer holds
+  // (the test holds it here) means the record may be changing under this build.
+  const { acquireLease, releaseLease } = require('../lib/apply-snapshot-store.js');
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('lease-held');
+  const lease = acquireLease(workspaceDir);
+  assert.strictEqual(lease.ok, true);
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const before = rawRecord(workspaceDir);
+    const logs = [];
+    const plain = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, sleep: async () => {}, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(plain.ok, true, 'the build itself still succeeds');
+    assert.strictEqual(rawRecord(workspaceDir), before, 'the record is not consumed without the lease');
+    assert.ok(logs.some((l) => /could not lock/.test(l)), 'the log says the record was left');
+
+    let ran = false;
+    const approved = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, sleep: async () => {}, discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()), runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(approved.ok, false);
+    assert.strictEqual(ran, false, 'an approved build does not mutate without recording what it may remove');
+    assert.ok(approved.errors.some((e) => /could not lock the workspace/.test(e)), JSON.stringify(approved.errors));
+    assert.strictEqual(rawRecord(workspaceDir), before);
+  } finally {
+    releaseLease(lease);
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+// Fail on one file only, for the duration of `fn`: the build's other reads and writes are real.
+async function withFsFault(method, isTarget, code, fn) {
+  const original = fs[method];
+  fs[method] = function faulty(target, ...rest) {
+    if (isTarget(String(target), ...rest)) { const err = new Error(`${code}: injected on ${path.basename(String(target))}`); err.code = code; throw err; }
+    return original.call(this, target, ...rest);
+  };
+  try { return await fn(); } finally { fs[method] = original; }
+}
+const isApprovalFile = (p) => path.basename(p) === 'destructive-approval.json';
+
+test('destructive gate: a record that cannot be read is never consumed, even when it was unreadable at the start too', async () => {
+  // Two unreadable reads say nothing about whether the file is the same one: it may have been replaced
+  // in between. Only a record whose bytes this build read and matched is its to consume.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('unreadable-record');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: {}, sitemapRemovals: [] });
+    const logs = [];
+    const r = await withFsFault('readFileSync', isApprovalFile, 'EACCES', () => buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    }));
+    assert.strictEqual(r.ok, true, 'a plain build is not stopped by an unreadable record');
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), true, 'the unreadable record is left');
+    assert.ok(logs.some((l) => /could not be read/.test(l)), 'the log says why it was left');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts when the record becomes unreadable before its list is recorded', async () => {
+  // Read fine at the start (and compared), unreadable by the time this build would replace it: what is
+  // on disk may no longer be what it compared with, and it must not be written over blind.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-turns-unreadable');
+  const original = fs.readFileSync;
+  let fault = false;
+  fs.readFileSync = function faulty(target, ...rest) {
+    if (fault && isApprovalFile(String(target))) { const err = new Error('EACCES: injected'); err.code = 'EACCES'; throw err; }
+    return original.call(this, target, ...rest);
+  };
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const before = original.call(fs, approvalRecordPath(workspaceDir), 'utf8');
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk,
+      discoverOpDiffState: async () => { fault = true; return ticketState(['new_name', 'new_priority'], ticketDef()); },
+      runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing runs unbound');
+    assert.ok(r.errors.some((e) => /could not be read while this build was starting/.test(e)), JSON.stringify(r.errors));
+    fs.readFileSync = original;
+    assert.strictEqual(fs.readFileSync(approvalRecordPath(workspaceDir), 'utf8'), before, 'the record is not written over');
+  } finally {
+    fs.readFileSync = original;
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts before any write when its list cannot be recorded', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-write-fails');
+  try {
+    let ran = false;
+    const r = await withFsFault('renameSync', (from, to) => isApprovalFile(String(to)), 'ENOSPC', () => buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()), runBuild: async () => { ran = true; return { ok: true }; },
+    }));
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing runs unbound');
+    assert.ok(r.errors.some((e) => /could not record what this run may remove/.test(e) && /ENOSPC/.test(e)), JSON.stringify(r.errors));
   } finally {
     cleanupTestWorkspace(workspaceDir);
   }

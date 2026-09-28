@@ -13,6 +13,8 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
@@ -204,8 +206,11 @@ function destructiveApprovalPath(workspaceDir) {
 //     "schemaVersion": 1,
 //     "generatedAt": "2026-01-01T00:00:00.000Z",
 //     "formRemovals": { "<form-id>": { "label": "form \"Main\" (new_table)", "fields": ["new_field"] } },
-//     "sitemapRemovals": ["entity:new_table", "url:https://contoso.crm.dynamics.com/help"]
+//     "sitemapRemovals": ["entity:new_table", "url:https://contoso.crm.dynamics.com/help"],
+//     "runId": "<the build that wrote it>"
 //   }
+// `runId` makes every record's bytes unique, so a record's content fingerprint says which build wrote
+// it (see approvalFingerprint). Reading ignores it.
 // Treat every malformed shape as unreadable: guessing at a damaged approval would widen destructive
 // authority, which is exactly what this file is meant to prevent.
 function normalizeApprovalRecord(value) {
@@ -228,31 +233,48 @@ function normalizeApprovalRecord(value) {
   };
 }
 
+// One read yields both the record and the fingerprint of the bytes it was parsed from, so the record a
+// build compares with and the one it later claims as "the record I saw" cannot differ.
 function readApprovalRecord(workspaceDir) {
   const file = destructiveApprovalPath(workspaceDir);
-  if (!file || !fs.existsSync(file)) return { exists: false, file, record: null };
+  if (!file) return { exists: false, file, record: null, fingerprint: null };
+  let raw;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const record = normalizeApprovalRecord(parsed);
-    if (!record) throw new Error('record has an unsupported shape');
-    return { exists: true, file, record };
+    raw = fs.readFileSync(file);
   } catch (err) {
-    return { exists: true, file, error: err };
+    if (err && err.code === 'ENOENT') return { exists: false, file, record: null, fingerprint: null };
+    return { exists: true, file, error: err, fingerprint: `unreadable:${(err && err.code) || 'error'}` };
+  }
+  const fingerprint = sha256(raw);
+  try {
+    const record = normalizeApprovalRecord(JSON.parse(raw.toString('utf8')));
+    if (!record) throw new Error('record has an unsupported shape');
+    return { exists: true, file, record, fingerprint };
+  } catch (err) {
+    return { exists: true, file, error: err, fingerprint };
   }
 }
 
-function writeApprovalRecord(workspaceDir, removals) {
+// The content fingerprint of the record on disk, or null when there is none. A file that cannot be
+// read gets a fingerprint no build ever wrote, so an owner check never consumes or replaces it.
+function approvalFingerprint(workspaceDir) {
+  return readApprovalRecord(workspaceDir).fingerprint;
+}
+
+// Writes atomically and returns the fingerprint of what it wrote.
+function writeApprovalRecord(workspaceDir, removals, runId) {
   const file = destructiveApprovalPath(workspaceDir);
-  if (!file) return;
+  if (!file) return null;
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const record = { schemaVersion: 1, generatedAt: new Date().toISOString(), ...removals };
+  const text = JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), ...removals, runId }, null, 2) + '\n';
   const tmp = path.join(workspaceDir, `.${DESTRUCTIVE_APPROVAL_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
   try {
-    fs.writeFileSync(tmp, JSON.stringify(record, null, 2) + '\n', 'utf8');
+    fs.writeFileSync(tmp, text, 'utf8');
     fs.renameSync(tmp, file);
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort cleanup only */ }
   }
+  return sha256(text);
 }
 
 function deleteApprovalRecord(workspaceDir) {
@@ -339,6 +361,48 @@ async function buildModelApp(spec, opts, deps) {
   let authorizedFormRemovals;
   let authorizedSitemapRemovals;
   let currentDestructiveApproval;
+  // The approval record binds the run that SHOWED a list. Two builds can share a workspace, so this run
+  // consumes or replaces only a record it found at its start (`seen`) or wrote itself (`owned`), by
+  // content fingerprint, and does the check and the change under the workspace lease the apply snapshot
+  // uses (lib/apply-snapshot-store.js). Without that, a build that finished with nothing kept deleted
+  // the record another build had just written for its refusal, and that build's approved re-run was
+  // bound to nothing. Captured before any discovery, from the same read the gate compares with.
+  const approvalAtStart = opts.apply && opts.workspaceDir ? readApprovalRecord(opts.workspaceDir) : { exists: false, fingerprint: null };
+  const approvalRun = { id: randomUUID(), seen: approvalAtStart.fingerprint, owned: new Set() };
+  // What a record on disk is to this run: 'none'; 'ours' (the one it started with, or one it wrote);
+  // 'unreadable', whose content is unknown, so it never proves ownership (two unreadable reads say
+  // nothing about whether it is the same file); or 'foreign', another build's.
+  const approvalOwnership = (fingerprint) => {
+    if (fingerprint === null) return 'none';
+    if (typeof fingerprint === 'string' && fingerprint.startsWith('unreadable:')) return 'unreadable';
+    return fingerprint === approvalRun.seen || approvalRun.owned.has(fingerprint) ? 'ours' : 'foreign';
+  };
+  // Every writer holds the lease for milliseconds, so a few short waits ride out a collision. A lease
+  // that stays held is reported, and each caller decides what is safe without it.
+  const withApprovalLease = async (fn) => {
+    const attempts = deps.approvalLeaseAttempts || 10;
+    let reason = 'held';
+    for (let i = 0; i < attempts; i += 1) {
+      const lease = applySnapshotStore.acquireLease(opts.workspaceDir);
+      if (lease.ok) {
+        try { return { locked: true, value: fn() }; } finally { applySnapshotStore.releaseLease(lease); }
+      }
+      reason = lease.reason || reason;
+      if (i < attempts - 1) await sleep(200);
+    }
+    return { locked: false, reason };
+  };
+  // Write this run's record under the lease. `ifOurs` refuses to replace another build's record, or one
+  // it cannot read.
+  const recordApproval = (record, { ifOurs = false } = {}) => withApprovalLease(() => {
+    const owner = ifOurs ? approvalOwnership(approvalFingerprint(opts.workspaceDir)) : 'none';
+    if (owner === 'unreadable' || owner === 'foreign') return owner;
+    approvalRun.owned.add(writeApprovalRecord(opts.workspaceDir, record, approvalRun.id));
+    return 'written';
+  });
+  // Only the forms and app-shell phases remove anything, and a changed-only fast apply runs neither.
+  const runsRemovalPhases = (opts.phases || PHASES).includes('forms') && (opts.phases || PHASES).includes('app-shell')
+    && !(opts.changedOnly && opts.changedOnly.fastApply);
 
   // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
@@ -379,7 +443,7 @@ async function buildModelApp(spec, opts, deps) {
     const allowDestructive = opts.allowDestructive === true;
     let state;
     let discoveryError = null;
-    const priorApproval = allowDestructive && opts.workspaceDir ? readApprovalRecord(opts.workspaceDir) : { exists: false };
+    const priorApproval = allowDestructive && opts.workspaceDir ? approvalAtStart : { exists: false };
     if (priorApproval.error) {
       const msg = `${priorApproval.file} could not be read as a destructive approval record — delete it or re-run without --allow-destructive to see the list again.`;
       log(`\n✗ ${msg}`);
@@ -441,7 +505,9 @@ async function buildModelApp(spec, opts, deps) {
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
         if (opts.workspaceDir) {
           try {
-            writeApprovalRecord(opts.workspaceDir, currentApproval);
+            // The newest refusal is the list the maker is looking at, so it replaces any older record.
+            const lock = await recordApproval(currentApproval);
+            if (!lock.locked) log(`\n⚠ could not lock the workspace to write ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason}) — re-run this refusal before approving it with --allow-destructive.`);
           } catch (err) {
             // Approval records are a safety aid for the NEXT invocation. The refusal itself is the
             // primary guard, so a disk failure must not replace the exact destructive-op list the maker
@@ -457,7 +523,10 @@ async function buildModelApp(spec, opts, deps) {
         if (priorApproval.exists) {
           const newlyUnapproved = findNewlyUnapprovedRemovals(currentApproval, priorApproval.record);
           if (newlyUnapproved.length) {
-            try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not refresh ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+            try {
+              const lock = await recordApproval(currentApproval);
+              if (!lock.locked) log(`\n⚠ could not lock the workspace to refresh ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason})`);
+            } catch (err) { log(`\n⚠ could not refresh ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
             const lines = newlyUnapproved.map((o) => `  • ${o.label} — ${formatNewRemovalDetail(o)}`);
             const msg = `refusing ${newlyUnapproved.length} destructive operation(s) that were not on the list the maker approved:\n${lines.join('\n')}`;
             log(`\n✗ ${msg}`);
@@ -465,10 +534,33 @@ async function buildModelApp(spec, opts, deps) {
             return { ok: false, errors: [msg] };
           }
         }
-        if (removals.length) {
-          // Persist the gate-time list BEFORE the first mutation. If the engine later keeps a new
-          // field and then fails, the next approved run must still be bound to what this run saw.
-          try { writeApprovalRecord(opts.workspaceDir, currentApproval); } catch (err) { log(`\n⚠ could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+        // Persist the gate-time list BEFORE the first mutation. If the engine later keeps a new field
+        // and then fails, the next approved run must still be bound to what this run saw. That holds
+        // for an EMPTY list too: with nothing recorded, a retry after a failure that kept a field
+        // another maker added would have removed it without showing it. A run without the removal
+        // phases can keep nothing, so it records only a list it actually has.
+        if (removals.length || runsRemovalPhases) {
+          let lock = null;
+          let writeError = null;
+          try { lock = await recordApproval(currentApproval, { ifOurs: true }); } catch (err) { writeError = err; }
+          // Fail closed: only a list that is verifiably on disk binds a retry. The comparison above was
+          // with the record this run read; a record some other build wrote since then (or one that can
+          // no longer be read) means that comparison no longer describes what is on disk. Either way,
+          // stop before any write rather than run unbound.
+          const halt = writeError
+            ? `could not record what this run may remove in ${DESTRUCTIVE_APPROVAL_FILE} (${(writeError && writeError.message) || writeError}) — nothing was changed; fix the workspace folder and re-run.`
+            : !lock.locked
+              ? `could not lock the workspace to record what this run may remove (${lock.reason}) — re-run once no other build or teardown of this workspace is running.`
+              : lock.value === 'unreadable'
+                ? `${DESTRUCTIVE_APPROVAL_FILE} could not be read while this build was starting — nothing was changed; check the workspace folder and re-run.`
+                : lock.value !== 'written'
+                  ? `${DESTRUCTIVE_APPROVAL_FILE} changed while this build was starting — another build may be using this workspace. Re-run once it has finished.`
+                  : null;
+          if (halt) {
+            log(`\n✗ ${halt}`);
+            if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-changed', detail: halt, ...counts });
+            return { ok: false, errors: [halt] };
+          }
         }
       }
     }
@@ -620,19 +712,36 @@ async function buildModelApp(spec, opts, deps) {
   }
   if (opts.apply && r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && opts.workspaceDir) {
     const kept = (((r.skipped || {}).unauthorizedRemovals) || []);
-    const active = opts.phases || PHASES;
-    const ranRemovalPhases = active.includes('forms') && active.includes('app-shell') && !(opts.changedOnly && opts.changedOnly.fastApply);
     if (kept.length) {
       const record = currentDestructiveApproval || { formRemovals: {}, sitemapRemovals: [] };
+      const names = kept.map((x) => `${x.form || x.formId || 'form'}:${x.field}`).join(', ');
       try {
-        writeApprovalRecord(opts.workspaceDir, record);
-        const names = kept.map((x) => `${x.form || x.formId || 'form'}:${x.field}`).join(', ');
-        log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was left for review, so the next run will ask about them before removing anything.`);
+        const lock = await recordApproval(record, { ifOurs: true });
+        if (!lock.locked) {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}), but could not lock the workspace to record them (${lock.reason}).`);
+        } else if (lock.value === 'unreadable') {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}), but ${DESTRUCTIVE_APPROVAL_FILE} could not be read, so it was left as it is.`);
+        } else if (lock.value === 'foreign') {
+          // That build's list binds its own approval; any kept field it does not name is still new to it.
+          log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was written by another build since this one started, so it was left as it is.`);
+        } else {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was left for review, so the next run will ask about them before removing anything.`);
+        }
       } catch (err) {
         log(`\n⚠ kept unauthorized form removal(s), but could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
       }
-    } else if (ranRemovalPhases) {
-      try { deleteApprovalRecord(opts.workspaceDir); } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+    } else if (runsRemovalPhases) {
+      try {
+        const lock = await withApprovalLease(() => {
+          const owner = approvalOwnership(approvalFingerprint(opts.workspaceDir));
+          if (owner !== 'ours') return owner;
+          deleteApprovalRecord(opts.workspaceDir);
+          return 'deleted';
+        });
+        if (!lock.locked) log(`\n⚠ could not lock the workspace to consume ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason}); it was left, so the next run may ask about its removals again.`);
+        else if (lock.value === 'unreadable') log(`\n⚠ left ${DESTRUCTIVE_APPROVAL_FILE}: it could not be read, so this build cannot tell whose it is.`);
+        else if (lock.value === 'foreign') log(`\n⚠ left ${DESTRUCTIVE_APPROVAL_FILE}: another build wrote it after this one started.`);
+      } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
     }
   }
   // Attach non-blocking validation advisories to the result JSON so programmatic callers see them too

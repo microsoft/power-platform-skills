@@ -142,10 +142,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
   a row-spanning cell above still reserves is kept, and so is a row that was already empty. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
   when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
-  retries and later failures stay bound to that gate-time list. A later `--allow-destructive` run may
+  retries and later failures stay bound to that gate-time list — an empty list included, when the run
+  includes the removal phases. A later `--allow-destructive` run may
   remove only that recorded set; the record is consumed only after a successful run that included both
   removal phases (`forms` and `app-shell`) and kept no field, and is otherwise kept on failure, partial
-  runs, changed-only runs, or when the fence kept a field. The gate fails closed if the record is
+  runs, changed-only runs, or when the fence kept a field. A run consumes or replaces only a record it
+  found at its start or wrote itself (each record carries its run id, compared by content fingerprint),
+  checked and changed under the workspace lease the apply snapshot uses, so two builds sharing a
+  workspace cannot consume each other's record; an approved run halts before any write if the record
+  changed after it was read, or if the lease stays held. The gate fails closed if the record is
   unreadable or if discovery fails while a record exists, because live removals cannot be compared with
   the approved list. If live state contains a new removal, the build halts, lists only that new removal,
   refreshes the record, and the engine keeps any field or sitemap target that appears during the run

@@ -32,7 +32,9 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
   meantime, or a spec edit. During a run, a field that appears is kept and reported, and a sitemap
   rewrite that would drop a target added since the approval halts before the push. The record
   survives failures, retries and partial (`--stage data`) runs, and an unreadable record, or a failed
-  preflight read while one exists, stops the run instead of widening the authority.
+  preflight read while one exists, stops the run instead of widening the authority. An approved run
+  records its list even when it removes nothing, and two builds sharing a workspace no longer consume
+  or overwrite each other's record.
 - **`prune: false` forms are no longer reported as removing fields**, and no longer make an apply
   demand `--allow-destructive` for removals that never happen.
 - **Switching a table's default Main form clears the old default.** Both forms used to stay default
