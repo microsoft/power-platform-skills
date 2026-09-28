@@ -14,7 +14,10 @@ Wire `auth.config.json` to an Entra ID app registration for a Power Apps Wrap mo
 
 This skill is manual by design:
 - Do **not** create or patch app registrations from this skill.
-- Use the public Power Apps Wrap app-registration page and then write the pasted client ID into `auth.config.json`.
+- Use the public Power Apps Wrap app-registration page to create/configure the
+  registration, then write the pasted client ID into `auth.config.json`.
+- Do not direct the user to add redirect URIs or API permissions manually.
+  Tenant-wide admin consent is not required for this Wrap registration flow.
 
 ## Workflow
 
@@ -33,6 +36,8 @@ test -f auth.config.json && test -f app.config.js && test -f power.config.json
 If this fails, stop and tell the user to run `/create-mobile-app` first or open the generated app folder.
 
 ## Step 2 — Resolve environment + tenant
+
+**Telemetry checkpoint: `resolve_registration_environment`**
 
 Use the same environment selected by the generated app. Prefer `.resolved-environment.json`, then `auth.config.json.environment`, then `power.config.json` + resolver:
 
@@ -56,6 +61,8 @@ If `TENANT_ID` is empty, stop: environment resolution failed. Do not guess the t
 
 ## Step 3 — Open Wrap app-registration page
 
+**Telemetry checkpoint: `open_wrap_app_registration`**
+
 Print the public Power Apps Wrap URL for the active environment:
 
 ```text
@@ -69,6 +76,8 @@ Open the Power Apps Wrap app-registration page for this environment:
 https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
 
 Create/register the app there, then paste the Application (client) ID here.
+The Wrap page configures the native registration. Do not add redirect URIs or
+API permissions manually; tenant-wide admin consent is not required.
 If you already have a client ID, paste it directly.
 If you cannot configure auth now, type skip.
 ```
@@ -85,6 +94,8 @@ Paste the Entra ID app registration client ID for tenant <tenant-guid> (GUID for
 - Otherwise validate GUID format before editing.
 
 ## Step 5 — Write `auth.config.json`
+
+**Telemetry checkpoint: `write_native_auth_configuration`**
 
 Update `auth.config.json`:
 - `msal.clientId` = pasted client ID
@@ -114,6 +125,8 @@ Example target shape:
 Do not touch `src/playerConfig.ts`; auth identifiers live in `auth.config.json` only.
 
 ## Step 6 — Validate JSON
+
+**Telemetry checkpoint: `validate_native_auth_configuration`**
 
 ```bash
 node -e "JSON.parse(require('fs').readFileSync('auth.config.json','utf8')); console.log('auth.config.json OK')"

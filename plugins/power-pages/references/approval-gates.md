@@ -468,15 +468,32 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (5 calls)
+### 6.13 `create-site` (20 calls: 14 gates + 6 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
+| `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
+| `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
+| `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
+| `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
+| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
+| `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Discovered solutions and website code downloaded and target env resolved — confirm importing required supporting artifacts and creating the code site | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | One discovered solution is installed but the downloaded source is newer — confirm unmanaged update import; fires per matching solution iteration | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Every supporting solution is same/newer — confirm skipping all imports and creating a new site from website code | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed for one discovered solution before its Dataverse import attempt — retry, fall back, or stop; fires per failed solution iteration | template-cache |
+| `create-site:1.5.template-clone-location` | not-a-gate | — | 1.5 | Local destination selection before cloning the template; no directory or environment state changes until the later provisioning step | — |
+| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live choice to continue editing the local clone used to create the site | — |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+
+Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
 
 ---
 
@@ -526,13 +543,16 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.17 `setup-auth` (5 calls)
+### 6.17 `setup-auth` (8 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `setup-auth:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Later"* | nothing |
 | `setup-auth:1.4.create-webroles` | gate | plan | 1.4 | No web roles found — *"Create web roles first (Recommended) / Skip"* | nothing |
 | `setup-auth:2.1.requirements` | gate | plan | 2.1 | *"Which auth features? Login+Logout+RBAC / Login+Logout only / RBAC only"* — covers the follow-up "which roles get access" sub-prompt in the same step | nothing |
+| `setup-auth:2.1.2.setup-choice` | not-a-gate | — | 2.1.2 | Guided vs "configure it for me" selection — sub-prompt; the load-bearing consent is the `2.1.2.provision-idp` gate | — |
+| `setup-auth:2.1.2.provision-idp` | gate | consent | 2.1.2 | *"Go ahead and configure the {provider} app registration in your {provider} now? Yes / No"* — the configure-it-for-you path only (offered when the provider supports it): creates/configures a real app registration in the user's Okta/Auth0/Entra External ID (or other OIDC) tenant via the provider's CLI/API. Guided setup doesn't reach this gate. | nothing |
+| `setup-auth:2.1.2.open-registration` | not-a-gate | — | 2.1.2 | Open vs Controlled registration — records `OpenRegistrationEnabled`; the load-bearing sign-off is the `2.2.plan-approval` gate | — |
 | `setup-auth:2.2.plan-approval` | gate | plan | 2.2 | *"Approve and proceed / I'd like to make changes"* | nothing |
 | `setup-auth:8.4.deploy` | gate | plan | 8.4 | *"Deploy now (Recommended) / Later"* — auth doesn't work until deployed | nothing |
 
@@ -652,7 +672,7 @@ The `### Option rules` sections in `manage-firewall` and `scan-site` retain `<!-
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Access & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
+| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Code & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
 | `security-review:5.3.next-action` | gate | plan | 5.3 | Post-report prompt — *"Walk me through the fixes / Re-run the review / Done for now"*. Drives whether remediation skills get invoked next. | nothing |
 
 ---
@@ -670,7 +690,48 @@ New skill introduced by PR #144. Orchestrates AI summarization API integration a
 
 ---
 
-### 6.30 `perf-checker` (1 loop-style gate + 1 plan gate)
+### 6.30 `scan-code` (3 gate IDs)
+
+New skill (Power Pages source & dependency security scan). Runs local static analysis and dependency/secret/license scanning, then surfaces findings. All gates are `plan` — every prompt configures a read-only scan, so cancelling never leaves behind state to undo.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `scan-code:1.agent-review-fallback` | gate | plan | 1.2 | Offer the high-token agent-driven review when a scanning tool is missing. Fires only on a missing tool, interactive mode only. | nothing |
+| `scan-code:2.scope-choice` | gate | plan | 2 (`### Scope selection`, Q1) | *"What to check? Everything / Code only / Packages only"* — selects which scanners run. Skipped in review mode and when the initial request already names the scope. | nothing |
+| `scan-code:2.depth-choice` | gate | plan | 2 (`### Scope selection`, Q2) | *"How thorough? Advanced / Basic"* — sets the code-scan depth. Asked only when code checking is included; skipped in review mode. | nothing |
+
+---
+
+### 6.31 `migrate-bootstrap` (6 calls / 5 gates + 1 sub-prompt)
+
+New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5). The engine does the bulk class renames; the skill assists with residual hierarchy/CSS fixes, then uploads (which auto-flips the runtime flag).
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `migrate-bootstrap:1.confirm-env` | gate | consent | 1 | Echoes current env — *"Use this environment / choose another"*. Migrating against the wrong environment is destructive, so confirmation is mandatory. Covers the free-text env-URL sub-prompt in the same step. | nothing |
+| `migrate-bootstrap:2.1.select-site` | gate | plan | 2.1 | Multiple websites found — *"Which website to download?"* | nothing |
+| `migrate-bootstrap:4.run-engine` | gate | consent | 4 | *"Run the Bootstrap 5 migration on `<SITE_FOLDER>`?"* — engine writes a new `<SITE_FOLDER>V5` copy and never edits the source. | nothing |
+| `migrate-bootstrap:6.residual-fixes` | gate | progress | 6 | Per-category consent — *"Apply the `<category>` fixes to `<N>` file(s)?"* — repeated per residual category; changes are local to the V5 copy. | nothing |
+| `migrate-bootstrap:7.2.upload` | gate | final | 7.2 | First outward-facing change — *"Upload `<MIGRATED_FOLDER>` to `<ENV_NAME>`?"* — publishes the Bootstrap 5 site and auto-enables the runtime flag. | nothing |
+
+---
+
+### 6.32 `migrate-webapi-selectall` (6 calls / 5 gates + 1 sub-prompt)
+
+Reviews traditional and SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `migrate-webapi-selectall:1.download-site` | gate | consent | 1 | Approves an optional site download after confirming environment, website name and ID, site type, data model, and target path. | nothing |
+| `migrate-webapi-selectall:2.confirm-scope` | gate | plan | 2 | Confirms all configuration scopes, wildcard and explicit counts, and the source call inventory before schema retrieval. | draft migration report |
+| Phase 3 environment URL | sub-prompt | — | 3.1 | Collects the environment URL only when project and PAC context cannot resolve it. This is read-only metadata input and grants no write consent. | draft migration report |
+| `migrate-webapi-selectall:4.apply-plan` | gate | consent | 4 | Approves every wildcard replacement, required source projection, selected explicit hardening, and local edits. No partial wildcard option is offered. | reviewed migration report |
+| `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment after re-confirming environment, website, site type, data model, and profile. Repeat for another target. | local migration |
+| `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
+
+---
+
+### 6.33 `perf-checker` (1 loop-style gate + 1 plan gate)
 
 Static performance-analysis skill. Scans the local codebase for performance anti-patterns (FetchXML/Web API over-fetching, disabled output caching, tracking, volume/asset issues), reports them, and offers safe auto-fixes with per-fix consent. Read-only until the Phase 4 loop, which mutates only the site-setting/tracking findings the user explicitly approves.
 
@@ -725,6 +786,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 - §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
 - §6.24a–§6.28 added — security skills introduced by PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`). The new skills use a runtime-loop prompt pattern; §6.24a documents the marker convention for that pattern. 3 gates + 2 not-a-gates.
+- §6.30 added — `scan-code` (Power Pages source & dependency security scan). 3 `plan` gates (`scan-code:1.agent-review-fallback`, `scan-code:2.scope-choice`, `scan-code:2.depth-choice`); no not-a-gates.
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.

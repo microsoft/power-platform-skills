@@ -16,6 +16,11 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+// Literal/comment blanking is shared with the plugin (scripts/lib/source-literals.js) rather than
+// re-implemented: it is a pure lexer over TSX text, not part of the thing this harness judges, and
+// two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
+// never ship, so reaching into the plugin directory here is in-repo only.
+const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -279,20 +284,115 @@ ASSERTIONS.set(
   () => skip('Rule 14 batched-setState requires AST analysis')
 );
 
+// A connector read is frequently factored into a local helper that the effect calls:
+//   const loadDocs = async () => { ... queryConnectorTable ... };
+//   useEffect(() => { loadDocs(); }, [dataReady]);
+// Scoping strictly to the effect body would miss that entirely (a false GREEN). Follow one level:
+// append the bodies of top-level declarations the effect actually calls. One level covers the shapes
+// real pages use, and going deeper without an AST costs more correctness than it buys.
+function localHelperBodies(bare) {
+  const bodies = new Map();
+  // Match the declaration NAME and stop at `:` or `=` (or `(` for a function declaration). Stopping
+  // only at `=` missed a TypeScript-annotated helper —
+  //   const loadDocs: () => Promise<void> = async () => { … }
+  // — whose annotation sits between the name and the `=`, so an uncached read inside it was invisible.
+  const decl = /(?:^|\n)\s*(?:(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]|(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\()/g;
+  let m;
+  while ((m = decl.exec(bare)) !== null) {
+    const name = m[1] || m[2];
+    // Walk to the end of the declaration. Stopping at the first balanced bracket group is wrong for
+    // `const f = async () => { … }`: the `()` closes immediately and the arrow BODY — the part that
+    // holds the fetch — would be dropped. So keep going until either the closing `}` of a real body
+    // or a depth-0 `;` (for a value declaration with no body at all).
+    let i = m.index + m[0].length - 1;
+    let depth = 0;
+    let sawBody = false;
+    for (; i < bare.length; i += 1) {
+      const c = bare[i];
+      if (c === '(' || c === '{' || c === '[') { depth += 1; if (c === '{') sawBody = true; continue; }
+      if (c === ')' || c === '}' || c === ']') {
+        depth -= 1;
+        if (depth <= 0 && sawBody && c === '}') { i += 1; break; }
+        continue;
+      }
+      if (depth <= 0 && c === ';') { i += 1; break; }
+    }
+    bodies.set(name, bare.slice(m.index, i));
+  }
+  return bodies;
+}
+
+function withCalledHelpers(callText, bare) {
+  let out = callText;
+  for (const [name, body] of localHelperBodies(bare)) {
+    if (body === callText) continue;                       // never re-append the effect itself
+    // `(?<![.\w$])` so a METHOD call on some other object — `service.loadDocs()` — does not pull in
+    // an unrelated top-level `loadDocs`, which produced a false finding.
+    if (new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(callText)) out += `\n${body}`;
+  }
+  return out;
+}
+
+// Extract the `useEffect(...)` calls (body + dependency array) that contain a match for `inner`.
+// Whole-file regexes cannot tell whether a cache, an in-flight key and a readiness dep belong to the
+// SAME effect as the fetch — an unrelated `__SomethingCache` elsewhere in the file would make an
+// entirely uncached fetch pass. Brace-matching from `useEffect(` keeps the check scoped to the
+// effect that actually performs the read, plus the local helpers that effect calls.
+//
+// Brace matching runs over LITERAL-BLANKED source: a string like `')))';` inside the effect would
+// otherwise close the call early and truncate the body (making the effect invisible), and a string
+// containing `window.__DocsInflight` would satisfy the de-dupe check without any real de-dupe.
+// Offsets in the blanked text map 1:1 onto the original, so spans stay valid.
+// Returns [{ body, deps }] where `deps` is the raw text between the `[` and `]` of the dep array.
+function effectsContaining(content, inner) {
+  const out = [];
+  const bare = blankLiterals(content);
+  const re = /\buseEffect\s*\(/g;
+  let m;
+  while ((m = re.exec(bare)) !== null) {
+    let i = m.index + m[0].length;
+    let depth = 1;              // we are inside useEffect(
+    for (; i < bare.length && depth > 0; i += 1) {
+      const c = bare[i];
+      if (c === '(' || c === '{' || c === '[') depth += 1;
+      else if (c === ')' || c === '}' || c === ']') depth -= 1;
+    }
+    const call = bare.slice(m.index, i);
+    const scope = withCalledHelpers(call, bare);
+    if (!inner.test(scope)) continue;
+    // The dependency array belongs to the useEffect call ITSELF — read it from `call`, never from
+    // the appended helper text.
+    const dep = call.match(/,\s*\[([\s\S]*?)\]\s*\)\s*;?\s*$/);
+    out.push({ body: scope, deps: dep ? dep[1] : null });
+  }
+  return out;
+}
+
+const CONNECTOR_READ = /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/;
+
 ASSERTIONS.set(
   'For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions',
   ({ files }) => {
-    const dv = files.filter((f) => isDataverseFile(f.content));
-    if (dv.length === 0) return skip('no Dataverse files');
     // Trigger only on files that READ data — queryTable / retrieveMultipleRecords
     // / retrieveRow (the read ops). Write-only pages (createRow/updateRow/
     // deleteRow only, e.g., save-on-completion game pages) aren't list/detail
-    // pages and shouldn't be expected to follow the cache pattern.
-    const fetching = dv.filter((f) =>
-      /dataApi\.(queryTable|retrieveMultipleRecords|retrieveRow|retrieve\b)/.test(f.content)
-    );
-    if (fetching.length === 0) return skip('no read operations (queryTable/retrieveRow) detected');
+    // pages and shouldn't be expected to follow the cache pattern. Connector
+    // reads have the same host double-mount behavior even without RuntimeTypes.
+    const fetching = files.filter((f) => {
+      const content = stripComments(f.content);
+      const hasDataverseRead = isDataverseFile(content) &&
+        /dataApi\.(queryTable|retrieveMultipleRecords|retrieveRow|retrieve\b)/.test(content);
+      // Only an on-mount connector read matters: the host double-mount is what the pattern fixes,
+      // so a connector call inside a click handler is not in scope.
+      const hasConnectorMountRead = effectsContaining(content, CONNECTOR_READ).length > 0;
+      return hasDataverseRead || hasConnectorMountRead;
+    });
+    if (fetching.length === 0) {
+      return skip('no Dataverse or connector read operations detected');
+    }
+    let why = '';
     const offender = fetching.find((f) => {
+      const content = stripComments(f.content);
       // Accept any of the canonical window-cache patterns:
       //   window.__foo = ...                  (direct dunderscore)
       //   window as unknown as Record<...>    (typed cast — see sample 9)
@@ -300,13 +400,41 @@ ASSERTIONS.set(
       //   (window as any).__foo               (paren-cast property access)
       //   window[CACHE_KEY] = ...              (bracket access)
       const hasCache =
-        /\bwindow\s*\.\s*__\w+/.test(f.content) ||
-        /\bwindow\s+as\s+(unknown|any)\b/.test(f.content) ||
-        /\bwindow\s*\[/.test(f.content);
-      const usesCallback = /useCallback\s*\(\s*async/.test(f.content);
-      return !hasCache || usesCallback;
+        /\bwindow\s*\.\s*__\w+/.test(content) ||
+        /\bwindow\s+as\s+(unknown|any)\b/.test(content) ||
+        /\bwindow\s*\[/.test(content);
+      const usesCallback = /useCallback\s*\(\s*async/.test(content);
+
+      const connectorEffects = effectsContaining(content, CONNECTOR_READ);
+      if (connectorEffects.length) {
+        for (const eff of connectorEffects) {
+          // MANDATORY: in-flight de-dupe. references/data-caching.md "Scope — de-dupe always, cache
+          // when it helps": the de-dupe is the fix for the double-mount, so it is never optional.
+          // The RESOLVED cache is explicitly optional (real-time dashboards drop it), so it is NOT
+          // asserted here — requiring it produced false reds on legitimate always-fresh pages.
+          const hasInflight =
+            /\[\s*[A-Z0-9_]*INFLIGHT[A-Z0-9_]*\s*\]/i.test(eff.body) ||
+            /\.\s*__\w*Inflight\b/i.test(eff.body) ||
+            /\bwindow\s*\[[^\]]*inflight[^\]]*\]/i.test(eff.body);
+          if (!hasInflight) { why = 'connector read on mount without an in-flight de-dupe'; return true; }
+
+          // MANDATORY: readiness-gated deps — the effect must not re-run on every render. Any
+          // `*Ready`-style flag anywhere in the dep list counts (e.g. `[reloadKey, dataReady]`);
+          // requiring it first was an artefact of the old whole-file regex.
+          if (eff.deps === null) { why = 'connector effect has no dependency array'; return true; }
+          if (!/\b\w*(Ready|ready)\b/.test(eff.deps)) {
+            why = `connector effect deps [${eff.deps.trim()}] are not readiness-gated`;
+            return true;
+          }
+        }
+        if (usesCallback) { why = 'uses useCallback for a data fetch'; return true; }
+        return false;
+      }
+      if (!hasCache) { why = 'missing window cache'; return true; }
+      if (usesCallback) { why = 'uses useCallback for a data fetch'; return true; }
+      return false;
     });
-    return offender ? fail(`${offender.name}: missing window cache or uses useCallback for fetch`) : pass();
+    return offender ? fail(`${offender.name}: ${why}`) : pass();
   }
 );
 

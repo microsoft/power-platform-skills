@@ -8,18 +8,18 @@
 v20.18.2
 
 `pac help`
-PAC CLI Version 2.7.4+g06bb2eb (.NET 10.0.8)
+PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8)
 
 `pac auth list`
 Index Active Kind      Name User                                          Cloud  Type            Environment       Environment Url
-[1]          UNIVERSAL      akmaloo@microsoft.com                         Public OperatingSystem
-[2]          UNIVERSAL      aurorauser14@capintegration01.onmicrosoft.com Test   User            TMSBAPEnv5ee52    https://tmsbapenv5ee52.crmtest.dynamics.com/
-[3]   *      UNIVERSAL      Aurora365-User1@auroratstgeo.onmicrosoft.com  Test   User            AuroraBAPEnv610b3 https://aurorabapenv610b3.crmtest.dynamics.com/
+[1]          UNIVERSAL      developer@contoso.com                         Public OperatingSystem
+[2]          UNIVERSAL      fabrikamusr1@fabrikamtenant01.onmicrosoft.com Test   User            FabrikamEnv001    https://fabrikamenv001.crmtest.dynamics.com/
+[3]   *      UNIVERSAL      Contoso-User001@contosotest1.onmicrosoft.com  Test   User            ContosoBAPEnv0001 https://contosobapenv0001.crmtest.dynamics.com/
 
-AskUserQuestion: Which environment should be used for the recruitment app? → [3] Aurora365-User1@auroratstgeo.onmicrosoft.com — AuroraBAPEnv610b3 (currently active)
+AskUserQuestion: Which environment should be used for the recruitment app? → [3] Contoso-User001@contosotest1.onmicrosoft.com — ContosoBAPEnv0001 (currently active)
 
 `pac auth select --index 3`
-New default profile: * UNIVERSAL : Aurora365-User1@auroratstgeo.onmicrosoft.com Test https://aurorabapenv610b3.crmtest.dynamics.com/
+New default profile: * UNIVERSAL : Contoso-User001@contosotest1.onmicrosoft.com Test https://contosobapenv0001.crmtest.dynamics.com/
 
 `pac model list-languages`
 Found 1 enabled language(s):
@@ -75,8 +75,8 @@ User response: approved
 - Files written: package.json, genpage.d.ts (features: charts)
 
 ### Decisions
-- Environment: AuroraBAPEnv610b3 (https://aurorabapenv610b3.crmtest.dynamics.com/)
-- PAC CLI: 2.7.4 (>= 2.7.0 requirement met)
+- Environment: ContosoBAPEnv0001 (https://contosobapenv0001.crmtest.dynamics.com/)
+- PAC CLI: 2.11.0 (> 2.10.0 requirement met)
 - Node: v20.18.2
 - Languages: English only — no localization code needed
 - Both target entities (contact, appointment) confirmed as Standard tables in the environment

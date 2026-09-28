@@ -1,12 +1,12 @@
 ---
 name: list-connections
-description: Use when the user asks to find, create, or look up a Power Platform connection ID or connection reference for the current environment.
+description: Use to find or create a Power Platform connection ID or reference for an Expo/React Native Power Apps mobile app.
 user-invocable: true
 allowed-tools: Bash
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
 
 # List Connections
 
@@ -19,6 +19,8 @@ Finds or creates a Power Platform connection with the Power Apps CLI. Returns th
 ---
 
 ### Step 1 — Get Connection
+
+**Telemetry checkpoint: `resolve_power_platform_connection`**
 
 Use one of the supported paths below.
 

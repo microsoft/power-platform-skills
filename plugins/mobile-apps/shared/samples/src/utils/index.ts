@@ -6,7 +6,7 @@
  *            truncate, pluralize,
  *            choiceLabel, STATUS_TONES,
  *            lookupName, formattedValue, extractSkipToken,
- *            escapeODataString, containsFilter, newId } from '@/utils';
+ *             escapeODataString, containsFilter, normalizeDataverseGuid, newId } from '@/utils';
  */
 
 export { formatDate, formatDateTime, formatRelative } from './formatters';
@@ -20,5 +20,6 @@ export {
 	extractSkiptoken,
 	escapeODataString,
 	containsFilter,
+	normalizeDataverseGuid,
 	newId,
 } from './dataverse';

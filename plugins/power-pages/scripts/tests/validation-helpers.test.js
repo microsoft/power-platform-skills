@@ -5,33 +5,162 @@ const childProcess = require('child_process');
 
 const helpersPath = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 
-test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', (t) => {
-  const originalExecSync = childProcess.execSync;
-  let capturedCommand = null;
-
-  childProcess.execSync = (command, options) => {
-    capturedCommand = command;
-    const out = 'fake-token-value\n';
-    return options && options.encoding ? out : Buffer.from(out);
-  };
-  delete require.cache[require.resolve(helpersPath)];
-
-  t.after(() => {
-    childProcess.execSync = originalExecSync;
-    delete require.cache[require.resolve(helpersPath)];
+test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', () => {
+  let captured = null;
+  const { getAuthToken } = require(helpersPath);
+  const token = getAuthToken('https://example.crm.dynamics.com', {
+    platform: 'linux',
+    execFile(file, args, options) {
+      captured = { file, args, options };
+      return 'fake-token-value\n';
+    },
   });
 
-  const { getAuthToken } = require(helpersPath);
-  const token = getAuthToken('https://example.crm.dynamics.com');
-
   assert.equal(token, 'fake-token-value');
-  assert.match(capturedCommand, /^az account get-access-token /);
-  assert.doesNotMatch(
-    capturedCommand,
-    /--allow-no-subscriptions/,
+  assert.equal(captured.file, 'az');
+  assert.deepEqual(
+    captured.args,
+    ['account', 'get-access-token', '--resource', 'https://example.crm.dynamics.com', '--query', 'accessToken', '-o', 'tsv'],
+  );
+  assert.equal(captured.options.shell, false);
+  assert.ok(
+    !captured.args.includes('--allow-no-subscriptions'),
     'az account get-access-token rejects --allow-no-subscriptions on recent CLI versions; the helper must omit it.',
   );
-  assert.match(capturedCommand, /--resource "https:\/\/example\.crm\.dynamics\.com"/);
+});
+
+test('getAuthToken invokes the Azure CLI cmd shim safely on Windows', () => {
+  const { getAuthToken } = require(helpersPath);
+  const calls = [];
+  const token = getAuthToken('https://org.crm.dynamics.com', {
+    platform: 'win32',
+    execFile(file, args, options) {
+      calls.push({ file, args, options });
+      return 'windows-token\n';
+    },
+  });
+
+  assert.equal(token, 'windows-token');
+  assert.equal(calls[0].file, 'cmd.exe');
+  assert.deepEqual(calls[0].args, [
+    '/d', '/s', '/c', 'az.cmd',
+    'account', 'get-access-token',
+    '--resource', 'https://org.crm.dynamics.com',
+    '--query', 'accessToken',
+    '-o', 'tsv',
+  ]);
+  assert.equal(calls[0].options.shell, false);
+});
+
+test('getAuthToken rejects POSIX and Windows metacharacter payloads before invoking az', () => {
+  const { getAuthToken } = require(helpersPath);
+  let calls = 0;
+  const deps = {
+    platform: 'linux',
+    execFile() {
+      calls++;
+      return 'should-not-run';
+    },
+  };
+
+  assert.equal(getAuthToken('https://org.crm.dynamics.com/;echo-marker', deps), null);
+  assert.equal(getAuthToken('https://org.crm.dynamics.com/&echo-marker%PATH%', deps), null);
+  assert.equal(calls, 0);
+});
+
+test('URL validation accepts documented Dataverse and Power Platform sovereign-cloud hosts', () => {
+  const {
+    validateDataverseEnvironmentUrl,
+    validateTokenResourceUrl,
+    validateBapUrl,
+    validateBapPollingUrl,
+  } = require(helpersPath);
+
+  const dataverseUrls = [
+    'https://org.crm9.dynamics.com',
+    'https://org.api.crm.microsoftdynamics.us',
+    'https://org.api.crm.appsplatform.us',
+    'https://org.api.crm.dynamics.cn',
+  ];
+  for (const url of dataverseUrls) {
+    assert.equal(validateDataverseEnvironmentUrl(url), url);
+  }
+  assert.equal(
+    validateDataverseEnvironmentUrl('HTTPS://ORG.CRM.DYNAMICS.COM'),
+    'https://org.crm.dynamics.com',
+  );
+  assert.equal(
+    validateDataverseEnvironmentUrl('HtTpS://Org.Api.Crm.MicrosoftDynamics.Us'),
+    'https://org.api.crm.microsoftdynamics.us',
+  );
+
+  assert.equal(
+    validateTokenResourceUrl('https://high.service.flow.microsoft.us/'),
+    'https://high.service.flow.microsoft.us/',
+  );
+  assert.equal(
+    validateTokenResourceUrl('https://high.gov.service.flow.microsoft.us/'),
+    'https://high.gov.service.flow.microsoft.us/',
+  );
+  assert.equal(
+    validateTokenResourceUrl('https://api.powerplatform.partner.microsoftonline.cn'),
+    'https://api.powerplatform.partner.microsoftonline.cn',
+  );
+  assert.equal(
+    validateBapUrl('https://dod.api.bap.microsoft.us/providers/example'),
+    'https://dod.api.bap.microsoft.us/providers/example',
+  );
+  assert.equal(
+    validateBapPollingUrl(
+      '/providers/Microsoft.BusinessAppPlatform/lifecycleOperations/op-1',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/lifecycleOperations/op-1',
+  );
+  assert.equal(
+    validateBapPollingUrl(
+      'https://api.bap.microsoft.com/lifecycleOperations/op-2',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    'https://api.bap.microsoft.com/lifecycleOperations/op-2',
+  );
+  assert.throws(
+    () => validateBapPollingUrl(
+      'https://high.api.bap.microsoft.us/lifecycleOperations/op-3',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    /different host/,
+  );
+});
+
+test('URL validation rejects malicious hosts, credentials, ports, fragments, and unsafe host characters', async () => {
+  const {
+    validateDataverseEnvironmentUrl,
+    validateTokenResourceUrl,
+    makeRequest,
+  } = require(helpersPath);
+
+  const invalid = [
+    'http://org.crm.dynamics.com',
+    'https://user:pass@org.crm.dynamics.com',
+    'https://org.crm.dynamics.com:443',
+    'HTTPS://org.crm.dynamics.com:443',
+    'https://org.crm.dynamics.com#fragment',
+    'https://org.crm.dynamics.com.attacker.invalid',
+    'https://org_crm.dynamics.com',
+    'https://org.crm.dynamics.com\n.attacker.invalid',
+  ];
+  for (const url of invalid) {
+    assert.throws(() => validateDataverseEnvironmentUrl(url));
+  }
+  assert.throws(() => validateTokenResourceUrl('https://example.invalid'));
+  assert.throws(
+    () => makeRequest({
+      url: 'https://metadata.internal.invalid/token',
+      headers: { Authorization: 'Bearer test-token' },
+    }),
+    /not an allowed Microsoft Dataverse or Power Platform endpoint/,
+  );
 });
 
 // --- findProjectRoot: EDM / data-model site awareness ------------------------
@@ -144,6 +273,16 @@ test('parseEnvironmentUrl returns null when no URL label is present (and on empt
   assert.equal(parseEnvironmentUrl(null), null);
 });
 
+test('parseActiveAuthListEnvironmentUrl extracts the active auth profile Environment Url', () => {
+  const { parseActiveAuthListEnvironmentUrl } = require(helpersPath);
+  const output = [
+    'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+    '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+    '[2]          UNIVERSAL      user@contoso.com      Public OperatingSystem OtherEnv https://other.crm.dynamics.com/',
+  ].join('\n');
+  assert.equal(parseActiveAuthListEnvironmentUrl(output), 'https://powerpagesprodev.crm.dynamics.com');
+});
+
 test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync', (t) => {
   const originalExecSync = childProcess.execSync;
   childProcess.execSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
@@ -151,6 +290,27 @@ test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync',
   // Re-require fresh so the module binds the mocked execSync.
   delete require.cache[require.resolve(helpersPath)];
   const { getEnvironmentUrl } = require(helpersPath);
-  assert.equal(getEnvironmentUrl(), 'https://orgABC.crm.dynamics.com');
+  assert.equal(getEnvironmentUrl(), 'https://orgabc.crm.dynamics.com');
+  delete require.cache[require.resolve(helpersPath)];
+});
+
+test('getEnvironmentUrl falls back to active pac auth list Environment Url when pac env who has no URL', (t) => {
+  const originalExecSync = childProcess.execSync;
+  childProcess.execSync = (command) => {
+    if (command === 'pac env who') return 'No organization selected\n';
+    if (command === 'pac auth list') {
+      return [
+        'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+        '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+      ].join('\n');
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  t.after(() => { childProcess.execSync = originalExecSync; });
+  delete require.cache[require.resolve(helpersPath)];
+
+  const { getEnvironmentUrl } = require(helpersPath);
+
+  assert.equal(getEnvironmentUrl(), 'https://powerpagesprodev.crm.dynamics.com');
   delete require.cache[require.resolve(helpersPath)];
 });

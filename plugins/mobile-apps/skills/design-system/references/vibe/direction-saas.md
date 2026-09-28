@@ -36,7 +36,7 @@ tone: professional
 
 ### Surface
 - **Background:** off-white (`#fafafa` or `#f7f8fa`) — cool-gray tint
-- **Cards:** white surface (`#ffffff`) with 1px hairline border (`#e5e7eb`) AND subtle shadow on raised cards (`shadowOpacity: 0.04, shadowRadius: 8`)
+- **Cards:** white surface (`#ffffff`) with 1px hairline border (`#e5e7eb`) AND subtle Tamagui 2 shadow on raised cards (`boxShadow="0 2px 8px rgba(17, 24, 39, 0.04)"`)
 - **Borders:** 1px hairline on cards, 0.5px separator on list rows, 1px on inputs
 - **Card spacing:** `gap="$4"` (~16pt) — comfortable, not crammed
 
@@ -45,10 +45,10 @@ tone: professional
 - **Primary accent:** indigo `#4f46e5` (or blue `#0066cc` / violet `#7c3aed` if user prefers)
 - **Accent usage:** primary buttons, active tab indicator, links, unread badges. NOT borders, NOT icons, NOT card surfaces.
 - **Status colors (DESATURATED — pill bg at saturation 3, text at saturation 10):**
-  - Success: `bg="$green3" col="$green10"` (NOT `bg="$green9" color="white"` — that looks alarming)
-  - Warning: `bg="$amber3" col="$amber10"`
-  - Error: `bg="$red3" col="$red10"`
-  - Info: `bg="$blue3" col="$blue10"`
+  - Success: `bg="$green3" color="$green10"` (NOT `bg="$green9" color="white"` — that looks alarming)
+  - Warning: `bg="$amber3" color="$amber10"`
+  - Error: `bg="$red3" color="$red10"`
+  - Info: `bg="$blue3" color="$blue10"`
 
 ### Typography
 - **Family:** Inter or SF Pro — sans-serif system font feel
@@ -60,14 +60,14 @@ tone: professional
 ### List rows
 - **Row with chevron** (the universal pattern):
   ```tsx
-  <XStack ai="center" gap="$3" px="$4" py="$3" borderBottomWidth={0.5} borderBottomColor="$borderColor">
+  <XStack items="center" gap="$3" px="$4" py="$3" borderBottomWidth={0.5} borderBottomColor="$borderColor">
     <Avatar size={36} />
     <YStack flex={1} gap="$1">
       <Text fontSize="$5" fontWeight="500" numberOfLines={1}>{item.title}</Text>
       <Text fontSize="$3" color="$color10" numberOfLines={1}>{item.meta}</Text>
     </YStack>
     <StatusPill status={item.status} />
-    <Ionicons name="chevron-forward" size={16} color="$color10" />
+    <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
   </XStack>
   ```
 - Avatar/icon left, title + meta middle, status pill + chevron right
@@ -77,8 +77,8 @@ tone: professional
 ### Empty state
 - Medium Ionicon (size 40) at top, in `$color10` (muted but readable)
 - One-line explanation in 15pt
-- Ghost (outline) button below — `<Button variant="outlined">` not `<Button theme="active">`
-- Example: `<Ionicons name="folder-open-outline" size={40} color="$color10" />` + "No projects yet" + ghost "+ Create project" button
+- Ghost (outline) button below — `<Button variant="outlined">`; Config v5 supplies the supported outlined treatment
+- Example: `<Ionicons name="folder-open-outline" size={40} color={theme.color10.val} />` + "No projects yet" + ghost "+ Create project" button
 
 ### Error state
 - Inline icon + message + retry button (subtle, not alarming)
@@ -89,7 +89,7 @@ tone: professional
 - 3–4 row skeletons matching the populated layout
 
 ### Primary action
-- **Position:** top-right `+` icon button on list screens (matches Teams / Slack / GitHub pattern), in-flow primary button with verified tokens (`bg="$blue10" color="$color1"` or brand tokens) on detail / form screens
+- **Position:** top-right `+` icon button on list screens (matches Teams / Slack / GitHub pattern), in-flow primary button with a confirmed Config v5 theme (`theme="blue"`) or shared brand button on detail / form screens
 - **Shape:** rectangular with 8pt radius (`borderRadius: 8`)
 - **Color:** indigo accent fill, white text
 - **Label:** noun-or-verb-with-object — `"Save changes"`, `"Create project"`, `"Send for approval"`. Slightly more formal than Inspection.
@@ -102,8 +102,8 @@ tone: professional
 ### Status pills
 - Desaturated background with darker text:
   ```tsx
-  <YStack bg="$green3" px="$2" py="$1" br="$2">
-    <Text col="$green10" fontSize="$2" fontWeight="600">Active</Text>
+  <YStack bg="$green3" px="$2" py="$1" rounded="$2">
+    <Text color="$green10" fontSize="$2" fontWeight="600">Active</Text>
   </YStack>
   ```
 - Sentence case (NOT all caps), weight 600, sized 11pt

@@ -5,9 +5,11 @@
 // structured result instead of stringing together shell commands.
 //
 // Usage:
-//   node check-auth.js [<envUrl>]
+//   node check-auth.js [--env <envUrl>] [<envUrl>] [--require-pac]
 //
-// If <envUrl> is omitted, the script tries to read it from `pac org who`.
+// The env URL may be passed as `--env <url>` (the flag build/verify/teardown use) or positionally;
+// if omitted, the script tries to read it from `pac org who`. Pass `--require-pac` (genpage) to make
+// a missing pac login a hard blocker; without it (app-builder), pac is only a warning.
 //
 // Output (stdout JSON, exit 0 even on auth failure — failures are in the fields):
 //   {
@@ -15,6 +17,7 @@
 //     "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
 //                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
 //     "message": "human-readable next step",
+//     "warnings": ["..."],
 //     "azUser": "...",
 //     "pacUser": "...",
 //     "envUrl": "...",
@@ -22,10 +25,35 @@
 //     "whoAmI": { "ok": true, "userId": "...", "organizationId": "..." }
 //   }
 //
+// PAC login is NOT required to pass: the app-builder build/verify/teardown flow authenticates to
+// Dataverse with the `az` token (the SDK's az-token HttpClient), and WhoAmI below is the
+// authoritative test. PAC is only needed for the genpage `pages` phase (`pac model genpage ...`),
+// so a missing/for-different-identity pac login is surfaced as a WARNING, not a hard blocker.
+//
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileSync } = require('child_process');
-const { dataverseRequest } = require('./lib/dataverse-auth');
+const { dataverseRequest, parseArgs, validateFlags } = require('./lib/dataverse-auth');
+
+// Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
+// the first positional arg, so a caller can copy the `--env` form here without silently passing
+// the literal string "--env" as the URL (the prior positional-only parse did exactly that).
+//
+// `--env` is read through the shared parseArgs, which already encodes the rule that a flag followed
+// by another FLAG is boolean `true` rather than a value — so `--env --require-pac` cannot read the
+// next flag as the URL.
+//
+// The positional fallback deliberately does NOT use parseArgs' `positional` array. parseArgs has no
+// flag contract, so it cannot know `--require-pac` is a boolean switch and consumes the token after
+// it as its value: `check-auth.js --require-pac <url>` would lose the URL entirely and fall back to
+// `pac org who`, silently probing a different environment than the caller named. The header
+// documents both orderings, and an agent assembling this command does not control the order.
+function parseEnvUrl(argv) {
+  const { flags } = parseArgs(argv);
+  if (flags.env !== undefined) return typeof flags.env === 'string' && flags.env.trim() ? flags.env : null;
+  const positional = argv.find((a) => typeof a === 'string' && !a.startsWith('--'));
+  return positional || null;
+}
 
 function runQuiet(cmd, args) {
   try {
@@ -50,6 +78,7 @@ function buildResult(partial) {
     ok: false,
     blocker: null,
     message: '',
+    warnings: [],
     azUser: null,
     pacUser: null,
     envUrl: null,
@@ -64,7 +93,23 @@ function normalizeUser(u) {
 }
 
 async function main() {
-  let envUrl = process.argv[2] || null;
+  const argv = process.argv.slice(2);
+  // This tool always exits 0 so callers can parse stdout, so a usage error is reported as a
+  // structured blocker rather than a non-zero exit — a `--requir-pac` typo must not silently
+  // downgrade a hard pac requirement to a warning.
+  const flagError = validateFlags(argv, { known: ['env', 'require-pac'], needValue: ['env'] });
+  if (flagError) {
+    return emit(buildResult({
+      blocker: 'usage',
+      message: `${flagError}. Usage: node check-auth.js --env <url> [--require-pac]`,
+    }));
+  }
+  let envUrl = parseEnvUrl(argv);
+  // Genpage deploys pages via `pac model genpage ...`, so its callers pass --require-pac to keep a
+  // missing pac login a hard blocker. The app-builder build path only needs the az token, so it
+  // omits the flag and a missing pac login is downgraded to a warning.
+  const requirePac = argv.includes('--require-pac');
+  const warnings = [];
 
   // 1) az presence + login
   const azVersion = runQuiet('az', ['--version']);
@@ -86,7 +131,7 @@ async function main() {
     );
   }
 
-  // 2) pac user + env URL
+  // 2) pac user + env URL (best-effort — pac is NOT required for the Dataverse build path)
   const pacOrg = runQuiet('pac', ['org', 'who']);
   let pacUser = null;
   if (pacOrg) {
@@ -98,13 +143,23 @@ async function main() {
     }
   }
   if (!pacUser) {
-    return emit(
-      buildResult({
-        azUser,
-        envUrl,
-        blocker: 'pac_not_logged_in',
-        message: 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.',
-      })
+    if (requirePac) {
+      // Genpage caller (--require-pac): pac is genuinely required to upload pages, so keep the hard block.
+      return emit(
+        buildResult({
+          azUser,
+          envUrl,
+          warnings,
+          blocker: 'pac_not_logged_in',
+          message: 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.',
+        })
+      );
+    }
+    // App-builder path: not a blocker — the build/verify/teardown flow uses the az token, not pac.
+    // Only the genpage `pages` phase shells out to `pac model genpage`. Warn so a genpage run isn't surprised.
+    warnings.push(
+      'PAC CLI is not logged in. This is only required for the genpage `pages` phase (`pac model genpage ...`); ' +
+        'table/column/form/view/app builds authenticate with the az token. Run `pac auth create --environment <url>` if you need genpage.'
     );
   }
   if (!envUrl) {
@@ -112,13 +167,15 @@ async function main() {
       buildResult({
         azUser,
         pacUser,
+        warnings,
         blocker: 'no_env_url',
-        message: 'Could not determine the Dataverse environment URL. Pass it as the first argument or set the active pac profile to an env.',
+        message: 'Could not determine the Dataverse environment URL. Pass it as `--env <url>` (or the first argument), or set the active pac profile to an env.',
       })
     );
   }
 
-  const identitiesMatch = normalizeUser(azUser) === normalizeUser(pacUser);
+  // Identity match only applies when pac is actually logged in.
+  const identitiesMatch = pacUser ? normalizeUser(azUser) === normalizeUser(pacUser) : false;
 
   // 3) WhoAmI — authoritative test
   let whoRes;
@@ -131,6 +188,7 @@ async function main() {
         pacUser,
         envUrl,
         identitiesMatch,
+        warnings,
         blocker: 'whoami_error',
         message: `WhoAmI probe failed: ${e.message}`,
       })
@@ -144,6 +202,7 @@ async function main() {
         pacUser,
         envUrl,
         identitiesMatch,
+        warnings,
         blocker: 'whoami_401',
         message: 'Dataverse rejected the token (401). Run `az login` again to refresh.',
       })
@@ -152,13 +211,16 @@ async function main() {
   if (whoRes.status === 403) {
     const hint = identitiesMatch
       ? `WhoAmI returned 403 even though az and pac identities match (${azUser}). The user may need to be added to the env directly.`
-      : `WhoAmI returned 403. az is signed in as "${azUser}" but pac is using "${pacUser}". Run \`az login --username ${pacUser}\` so both clients use the same identity.`;
+      : pacUser
+        ? `WhoAmI returned 403. az is signed in as "${azUser}" but pac is using "${pacUser}". Run \`az login --username ${pacUser}\` so both clients use the same identity.`
+        : `WhoAmI returned 403. az is signed in as "${azUser}" but that identity lacks access to ${envUrl}. Sign in with an identity that has access, or ask an admin to add it to the environment.`;
     return emit(
       buildResult({
         azUser,
         pacUser,
         envUrl,
         identitiesMatch,
+        warnings,
         whoAmI: { ok: false, status: 403, message: whoRes.data?.error?.message || '' },
         blocker: 'whoami_403',
         message: hint,
@@ -172,6 +234,7 @@ async function main() {
         pacUser,
         envUrl,
         identitiesMatch,
+        warnings,
         whoAmI: { ok: false, status: whoRes.status, message: whoRes.data?.error?.message || '' },
         blocker: 'whoami_error',
         message: `WhoAmI returned unexpected status ${whoRes.status}.`,
@@ -179,12 +242,16 @@ async function main() {
     );
   }
 
+  const readyMessage = !pacUser
+    ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed for the genpage pages phase.`
+    : identitiesMatch
+      ? `Ready (az + pac both signed in as ${azUser}, env ${envUrl}).`
+      : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if entity creation later returns 403, run \`az login --username ${pacUser}\` to align them.`;
   return emit({
     ok: true,
     blocker: null,
-    message: identitiesMatch
-      ? `Ready (az + pac both signed in as ${azUser}, env ${envUrl}).`
-      : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if entity creation later returns 403, run \`az login --username ${pacUser}\` to align them.`,
+    message: readyMessage,
+    warnings,
     azUser,
     pacUser,
     envUrl,
@@ -197,4 +264,9 @@ async function main() {
   });
 }
 
-main();
+// Run only as a CLI; when required from a test, expose the pure helpers instead.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseEnvUrl };

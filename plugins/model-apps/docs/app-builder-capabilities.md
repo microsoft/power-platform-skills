@@ -1,0 +1,253 @@
+# app-builder — capabilities
+
+What the `/app-builder` skill can do today, and how far each capability has been proven. The build
+engine is [`../scripts/lib/sdk-build.js`](../scripts/lib/sdk-build.js); the App Spec contract is
+[`../references/app-spec-schema.md`](../references/app-spec-schema.md); the wiring diagrams are in
+[`architecture.md`](architecture.md).
+
+This file records **shipped** behaviour only. Planned and unbuilt work is tracked in GitHub issues —
+the carried-over backlog is
+[#480](https://github.com/microsoft/power-platform-skills/issues/480). A roadmap committed alongside
+the code goes stale silently and states intent the code does not yet support, so the two are kept
+apart deliberately.
+
+**Evidence legend**
+- ✅ **verified live** — built end-to-end on a real Dataverse environment and torn down clean.
+- 🧪 **tested** — has automated (unit / golden / real-bundle) coverage, not exercised on a live org.
+- ⚠ **not live-verified** — plumbed through and unit-tested, awaiting a live shakeout.
+
+### Authoring & build framework — ✅ verified live
+- Interactive levelled authoring in the **main loop** — jobs-to-be-done first, then data model,
+  artifacts + page-intents, then access (env select, App Spec, lint gate, plan-mode approval).
+- Deterministic, **idempotent** build engine — discovers via the SDK (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing; new / existing / mixed envs all work.
+- **All Dataverse access via the vendored headless SDK**; metadata cached under `<app-folder>/.maker-workspace/` for reuse.
+- Phase selection (`--only`/`--skip`/`--from`/`--to`), `[n/total]` narration, `BuildHalt` gate, dry-run by default, `--sample-data` / `--publish` opt-in.
+- Bounded-concurrency for independent ops; one publish round-trip per entity + the app. `az`-token HttpClient with transient (429 / 5xx) retry.
+- Guardrail lint (`spec-lint.js`) + hard validator (`app-spec.js`). 🧪 full `node:test` suite + the vendored SDK's Jest suite green (`node scripts/run-tests.js --with-sdk <ppux>`).
+
+### Data model (Tier 1) — ✅ verified live
+- All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer (with per-type options), incl. AutoNumber primary columns.
+- Global option sets, status reasons (idempotent, deterministic pinned values), alternate keys (idempotent).
+- Relationships: OneToMany (lookup) **and** ManyToMany; Customer (polymorphic) columns.
+- Sample data: Choice/MultiChoice label→int resolution (inline **and** global choices), `$parent`/`$parents` lookup binds (incl. junction rows with both sides), custom status reasons; resolve-by-name idempotency via the SDK's `seedRecordGraph`.
+- ⚠ Calculated / Rollup formula columns — `source` + `formula` plumbed through, **not live-verified**.
+- **Per-column write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead`) —
+  this is how a column is made read-only. Applied on create **and** reconciled on rebuild, and each
+  flag is sent independently so setting one does not disturb the others. Live-verified by reading the
+  deployed metadata back: `IsValidForUpdate: false` with Create/Read untouched at `true`, and
+  unchanged through a download → rebuild round trip (an omitted setting means *leave alone*, never
+  *reset*). Not available on `Customer` columns — the SDK has no update path for that type at all.
+  (AB#6651276)
+- **Boolean `defaultValue`** — which option a Yes/No column starts on; the SDK previously hardcoded
+  `false`. An explicit `false` is preserved rather than treated as absent. Live-verified.
+  (AB#6648523)
+- **Whole-number `integerFormat`** — `None` · `Duration` · `TimeZone` · `Language` · `Locale`; the
+  SDK previously hardcoded `None`, so a column holding minutes could not render as a duration.
+  Live-verified as `Duration`. (AB#6648522)
+- **Table icons** (`entities[].vectorIcon` = SVG web resource → `IconVectorName`; `entities[].icon` = raster web resource → `IconMediumName`) — sets a custom table's own icon (what the modern designer + nav render). Applied after the web-resources phase via the SDK's `setEntityIcon`; hard-validated against declared web resources so an unresolvable value can't break the designer (glimmer). Live-verified: `IconVectorName` set to a published SVG web resource.
+
+### Business rules — ⚠️ environment-gated
+- `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
+  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on one
+  or more conditions over the record (ANDed). Sixteen operators, taken from the SDK's own table:
+  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
+  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
+  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` · `ContainsData` · `DoesNotContainData`.
+- **The SDK writes a rule through the bound `CreateProcessWithWfomJson` member, or not at all.** The
+  client-side workflow-XAML compiler it used to fall back on was removed upstream, because it covered
+  4 of the 7 action types and a single clause and therefore silently narrowed a rule into something
+  that did not say what the author wrote. An environment that does not declare that member **cannot
+  host business rules** — and that is the common case rather than an edge case. Where the member is
+  declared, a rule can still fail with a server-side MissingMethodException, which is a platform
+  defect on that environment rather than a rule-shape problem. The build then skips them,
+  warns once naming the member, and builds everything else normally; `--verify` reports them as *not
+  applicable on this environment* rather than missing, so the exit code, the deployed baseline and
+  the `--changed-only` snapshot are unaffected.
+- The operator allowlist is load-bearing rather than cosmetic: the SDK resolves an operator it does
+  not recognise to **Equals**, so `GreaterThan` (the natural misspelling of `IsGreaterThan`) would
+  deploy, activate and quietly test equality. The spec pins the list against the bundle's own table
+  in both directions.
+- **Every rule is checked by the business-rule designer's own completeness validator before it is
+  written.** The push cannot tell you a rule is wrong: a condition tree in an unexpected shape is
+  merged onto the node, ignored by the serializer, and written as a rule with no clauses and no
+  actions — HTTP 204, activated, and it never fires. The SDK exposes the same validator the designer
+  gates its Save button on, and nothing on the push path runs it, so the build does. Findings **halt**
+  the build and are reported verbatim; a bundle without the validator, or one that faults, is skipped
+  rather than allowed to block a build it cannot judge. Measured against the bundle: every shape this
+  spec surface can author — all sixteen operators, all four action types, every scope and status,
+  multi-condition and multi-action — reports zero findings, so this cannot reject a rule that was
+  previously buildable.
+- `dataType` is currently **decorative** — measured across every accepted token, on both the
+  condition and the action path, the SDK types every literal as `String`. It is still validated as a
+  closed set so a typo is caught.
+- Every field is validated against the rule's own entity, so a rule naming a column that does not
+  exist is rejected up front rather than deploying and never firing.
+- Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
+- **Activating a rule creates a second `workflows` row, and that is normal.** Dataverse keeps the
+  definition (`type 1`, no parent) and an activated copy (`type 2`, parented to it). Live-measured: a
+  Draft create yields one row, a plain `PATCH` to `statecode 1` yields two — and a PATCH cannot create
+  anything, so the platform makes it. Every business-rule query in build, verify and teardown filters
+  `type eq 1`; omitting it made the build attempt to delete the copy (405), warn about a duplicate
+  that did not exist, and would have made `--verify` fail every active rule.
+- Live-verified end to end through the App Spec on an environment that supports it: rules authored
+  from `businessRules[]` deployed, activated, and the platform's own generated `clientdata` named the
+  authored columns.
+
+### Forms, views & charts — ✅ verified live
+- Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
+- Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
+- **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
+  `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship
+  (`systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
+  `systemformrole` entity, so no association shape can ever work); they live inside `formxml` as a
+  `<DisplayConditions>` element. Note the direction: a form with **no** assignment is offered to
+  **every** role, so this **restricts** a form rather than granting it — and removing a restriction
+  is an explicit `everyone: true`, not deleting the block. Applied in the **security** phase, because
+  the persona's role does not exist until then, and the write lands on the **unpublished** layer, so
+  it takes effect after a publish. Live-verified: the persona's real role id inside
+  `<DisplayConditions Order="2">` on the restricted form, `<Everyone />` on its unrestricted sibling.
+  (AB#6648526)
+- Form JS event handlers (`onload`/`onsave`/`onchange`) wired via web resources.
+- Views with rich filters (`eq-userid`/`this-week`/`in`/`not-in`/… + Choice-label resolution); default Active/Inactive view **column enrichment** via the SDK's `enrichDefaultViews`.
+- Choice-column charts.
+
+### Custom grid rendering (preview) — ✅ SDK live-verified, environment-gated
+- `entities[].columns[].visualization` — render a column as a `RadialDial`, `LineChart`, `HeatMap`
+  or `StarRating` in **every** grid and view that shows it, instead of plain text. `None` clears it.
+  Per-*column* metadata (a `controlconfiguration` row bound to the attribute), so it is declared once
+  on the column rather than on each view.
+- Type-only: the renderers use built-in defaults (dial 0–100, stars 0–5) with no tuning parameters.
+  Column-type compatibility is **not** validated — the platform does not enforce a clean "numeric
+  only" rule (`LineChart` is documented for a *text* column of comma-separated numbers), so guessing
+  a constraint would reject valid specs. Guidance lives in the schema doc.
+- Re-asserted on every build, for pre-existing columns as well as new ones, converging to a single
+  configuration row. Omitting the field leaves a deployed renderer alone; `"None"` is how a spec
+  actively clears one.
+- **Environment-gated preview.** Where the platform has not provisioned it, the backing
+  `controlconfigurations` table is absent and every call 404s; the build **skips** the step (the
+  column and all other artifacts still deploy) and verify reports no divergence. Live-measured: the
+  table was present on **1 of 18** test environments, so a missing renderer is an environment
+  question first, not a spec bug.
+- Live-verified on a provisioned environment: set from scratch, updated in place (the rebuild path),
+  re-asserted without duplicating the config row, all four renderers accepted, and cleared with
+  `None` — 6/6.
+
+### App shell & navigation — ✅ verified live
+- App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
+- Generative pages (**genpage-first**) for overview / dashboard surfaces — uploaded via `pac model genpage upload`; the SDK finalizes the sitemap with `GenPage` subareas.
+- Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component). Tiles render in a **multi-column grid** (2-wide) rather than one stacked full-width column.
+- Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
+- Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name).
+
+### Generative-page management — three-authority, id-based — 🧪 tested
+- **Three-authority page identity.** IDENTITY = durable `<app>_pagemanifest` (key→pageId map), outranked by the spec's own `pages[].pageId` for a downloaded (edit-snapshot) spec. EXISTENCE = env-wide `pac model genpage list` — decides create-vs-reuse for crash-safe convergence (`enumerateEnv`, no `--app-id`). MEMBERSHIP = the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` (`scripts/lib/sitemap-pages.js`) — drives placement, download enumeration, and verify. All page matching is by id, never by display name.
+- **Edit-snapshot `pageId`.** Download keeps each page's deployed `GenPageId` as `pages[].pageId` in the emitted spec. On rebuild, this highest-authority id is confirmed against EXISTENCE and reused — so a downloaded app (including Maker-added pages) rebuilds without creating duplicates.
+- **Validation: every page must be sitemap-placed.** A `pages[]` entry absent from the `appShell` sitemap is rejected; navigation-only (headless) pages are not supported. A "detail" page is a normal sitemap page receiving input via `pageInput`.
+- **Safety HALTs:** `pages-removed` (live page dropped from spec — re-add or `--allow-destructive` detaches the nav SubArea, page left deployed), `pages-shared-across-apps` (`--allow-destructive` does NOT bypass; detach in Maker), `pages-identity-conflict`, `pages-manifest-corrupt`, `pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`.
+- **Verify and download** match by id with exact set-equality (EXISTENCE + MEMBERSHIP); a manifest-uncorrelatable page surfaces `unableToRun`.
+
+### AI-first features — ✅ verified live
+- `ai` block → `ai-features` phase: form-fill, NL search, NL charts, M365 Copilot, and per-table Copilot **row summaries** with tailored `GptDynamicPrompt-2` prompts (auto-selected candidate tables; skips lookup/config/junction + D365-owned incident/lead/opportunity).
+- **Admin-gated**: preflights each setting (`RetrieveSetting`), skips/warns when off, never fails the build. NL grid search is **environment-gated** (`EnableNLGridSearch`), not per-app. Standalone reporter `scripts/ai-preflight.js`.
+- **The readiness gate is not the whole truth, and the report now says so.** A feature's gate and its
+  actual setting are *different rows*, and a gate can read off while the feature is switched on at
+  environment scope — so it runs in every app on that org. Live-measured: gate `EnableNLGridSearch`
+  = `false` while `NLGridSearchSetting` = `2` at environment scope (NL search on), and
+  `NLChartDataVisualizationSetting` = `1` by default (NL charts on). Preflight resolves the
+  effective value per feature — app-scope override → environment → default — reports those as
+  *in effect via the environment/default setting*, and **suppresses the admin action**, so nobody is
+  sent to the admin centre to switch on something already running. A value it cannot read never
+  counts as in effect, so a genuine action is never hidden.
+- **Form fill is a real "off", not a naming mix-up** (measured 2026-08-28). Unlike NL search, the
+  gate and the per-app setting share one name — `FormFillBarUXEnabled` — confirmed against the
+  SDK's own `AI_GATE`/per-app maps, so there is no second setting hiding a different answer. It
+  reads `0` at org *and* app scope, and it is `0` on **all 161** orgs in the test tenant.
+- **`formFill` is the assist TOOLBAR only, and the report now says so.** "AI form fill assistance"
+  is a family; `FormFillBarUXEnabled` governs one member of it. Three siblings are neither covered
+  by that flag nor exposed by the App Spec: `FormFillFileUploadEnabled` (file upload),
+  `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form predictions).
+  Calling the flag "Form fill" overclaimed in both directions — it reported the feature unavailable
+  to someone who may have had smart paste working, and implied enabling it turned the family on. All
+  four members were measured off across 40 orgs, so nothing is silently on here; exposing the
+  siblings would be a feature (new spec keys plus live verification), not a rename.
+- **The setting names are now pinned against the bundle.** Nothing previously did: every test
+  hardcoded the same strings the source does, so an upstream rename would have left the suite green
+  while the build wrote to a setting that no longer exists — the same shape as the
+  `success`→`saved` rename that silently disarmed the 412 guard. `sdk-uptake-contract.test.js`
+  compares `AI_APP_SETTING` to the SDK's map and asserts the gate/per-app names stay distinct.
+
+### Business process flows — ✅ verified live
+- `businessProcessFlows[]` — the staged process bar on a record: ordered `stages[]`, each with
+  ordered `steps[]` bound to columns of the same table. **Every step must bind a `field`**: the
+  platform refuses a step without one (`datafieldname of ControlStep cannot be null or empty`), so
+  there is no field-less "checklist" step — bind a Boolean flag for a manual check-off. `status`
+  defaults to `Active` because an inactive BPF is not merely inert, it is **invisible** — the stage
+  bar does not render at all.
+- Deployed as a `workflows` row (**category 4 / type 1 / businessprocesstype 0**) whose XAML the
+  vendored SDK compiles from the authored stages; an `Active` flow is activated in the same push
+  (`statecode 1` / `statuscode 2`). Every query in build, verify and teardown goes through one
+  `bpfFilter`, which scopes to the DEFINITION row and excludes both the platform's activated `type 2`
+  copy and same-named **task flows** (also category 4) — the two mistakes that cost real time on
+  business rules.
+- Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
+  in both directions, and re-added to the solution on every run so a failed component add is repaired
+  rather than inherited); torn down with the app, deactivate-then-delete, before its table. Deleting
+  an activated flow cascades a **backing-table** drop that used to run past the client's 60 s HTTP
+  timeout; writes now wait up to 5 minutes, and teardown still polls the row rather than reporting a
+  failure for work the server completed if even that is exceeded.
+  A new `business-process-flows` build phase sits next to `business-rules` (16 now).
+- **Each write in a flow's create is conditioned on the token the previous write returned** (vendored
+  SDK): the create echoes its token, the activation is sent only on it, and a rollback deletes only on
+  a token the create produced — so a concurrent edit is refused, never activated or deleted. This
+  exposed a transport hazard, found live: activating a flow on a table created seconds earlier ran
+  past the old 60 s wait, the activation committed anyway, and the transport's re-send was refused as
+  a version conflict, failing the build. Writes now wait up to 5 minutes and a conditional write that
+  gets no answer is never re-sent (`scripts/lib/sdk-http-client.js`); a fresh build of that app then
+  passed live.
+- **The derived unique name is a TABLE name, and it is guarded on both sides.** Dataverse stores the
+  flow as `new_<name lower-cased, non-alphanumerics stripped>` — the derivation ignores the table
+  *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
+  logical name. So the name collides with three things, not one: another flow, a table the spec
+  declares, and anything already in the environment. The first two are rejected at the plan gate; the
+  third is a build-time probe that checks **both** `workflows` (by `uniquename`) and table metadata
+  (by logical name) and **halts** naming whichever owns it, instead of letting the create fail with a
+  platform error about a table the author never mentioned. It runs only on the create path, never on
+  reuse, and is best-effort — a diagnostic must never be the thing that breaks a build.
+- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
+  stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
+  flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as
+  something other than what was authored. The allow-list shape matters: the SDK's normalizers copy a
+  fixed key set and discard the rest, so a stage `branch` or a step's `fieldLogicalName` (instead of
+  `field`) would otherwise pass validation and deploy bound to nothing. `securityRoles` needs role ids
+  and belongs to the `security` phase (a BPF's grants are privileges on the backing table that
+  activation creates) — tracked in
+  [#513](https://github.com/microsoft/power-platform-skills/issues/513).
+- **Live-verified**: build (11 created, verify 8/8), rebuild (flow reused, solution component
+  re-added), and teardown (exit 0, with an independent query confirming both the workflow row and its
+  activation-created backing table are gone). An invalid spec is refused pre-flight with no writes.
+- Two platform facts the validator encodes, both found by adversarial review and measured against the
+  bundle: a flow **name must be unique across the whole spec** (the derived `uniquename` ignores the
+  table and strips case/punctuation, and activation creates a backing table with that name, so two
+  colliding flows cannot both deploy); and a stage must carry **at least one step** (the SDK
+  substitutes a placeholder named "New Step" for an empty stage).
+- Unblocked a defect in the vendored SDK, fixed upstream and re-vendored: the hybrid XML grammar walk
+  descended into TEXT nodes, and `@xmldom/xmldom` (what the SDK's DOM shim installs headlessly)
+  exposes a text node's `childNodes` as `null` where jsdom returns an empty NodeList. Every BPF push
+  therefore threw `TypeError: Cannot read properties of null (reading 'length')` in the vendored
+  bundle — input-independent — while the SDK's own jsdom-only suite stayed green. Pinned by a real-bundle
+  test here and by a `@jest-environment node` regression upstream.
+
+### Edit flow (download → edit → rebuild) — ✅ verified live
+- `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This now works end to end.** It previously did not: the vendored SDK’s `fetchArtifact(‘dashboard’, …)` threw `Cannot read properties of null (reading ‘length’)` while deserializing the `<parameters>` block it had itself serialized, so no tiles were recovered and the subarea was dropped — which failed the whole download unless `--allow-lossy-download` was passed. Root cause upstream: the grammar walk descended into **text** nodes, and the bundled XML parser returns `null` for a text node’s children. Fixed in the SDK and re-vendored; measured across the re-vendor as **0/4 → 4/4** round-trips (list tile, both chart-parameter spellings, and a tile with an empty parameter value), and pinned by `scripts/tests/dashboard-roundtrip.test.js`, which feeds a serialized dashboard straight back in. ([#478](https://github.com/microsoft/power-platform-skills/issues/478)) **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, dashboards, and solution round-trip; **forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec. **Column types round-trip too, including Choice/MultiChoice** — their option sets are read per table, a local set becoming inline `options[]` (localizations preserved) and a shared one a `globalChoice` reference plus a `globalChoices[]` declaration; a column whose option set cannot be read is left untyped *and named*, and the App Spec cannot express option **values**, so a fresh rebuild re-bases them to `100000000 + index`. **`relationships[]` are NOT reconstructed** and their omission is not yet reported ([#567](https://github.com/microsoft/power-platform-skills/issues/567)) — a downloaded spec rebuilt into a fresh environment creates the tables without the lookups between them.
+- Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
+- `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
+
+### Teardown — ✅ verified live
+- `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → business rules → business process flows → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table). A business rule / business process flow is deactivated before it is deleted, because Dataverse refuses to delete an activated process.
+- **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. A **restricted system solution** (`Active`/`Default`/`Basic`) is skipped rather than attempted (Dataverse 400s any delete of one), so a downloaded spec that defaulted its solution to `Default` tears down cleanly. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
+- **An app whose sitemap carries an unpublished edit tears down cleanly.** A sitemap has two tokens: the unpublished-aware read returns a *content* token that runs ahead of the row while an edit is pending, and Dataverse validates `If-Match` against the *row*. The vendored SDK now conditions each delete on the row token from a by-id read. Live-verified on the same pending-edit app: the previous bundle's teardown failed with 412 on the delete `$batch`; this one deleted everything, and an independent query confirmed every row gone.
+
+### Tooling & internals — ✅ verified live
+- ASCII **form wireframe** preview (`preview-form.js`); phase-grouped build log with per-step status glyphs (`✓`/`⊘`/`✗`) + a closing summary.
+- **SDK consolidation** — the SDK owns the Dataverse mechanics (`seedRecordGraph`, `enrichDefaultViews`, AI settings/row-summaries, artifact `resolveArtifact`/`findArtifact`/`deleteAppCascade`); the plugin keeps the judgment (spec validation, choice/status resolution, `$parent`→bind translation, candidate selection).
+

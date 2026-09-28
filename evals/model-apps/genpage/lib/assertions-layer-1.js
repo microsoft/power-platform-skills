@@ -15,10 +15,75 @@
 
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
+
+// The two upload transports, recognised in ONE place.
+//
+// New runs deploy through `scripts/genpage-upload.js`, which hands the prompt to pac BY FILE so a
+// shell cannot reinterpret quotes/newlines (#589). The fixtures checked in here are captured
+// transcripts from before that change and show the raw `pac model genpage upload` form; rewriting a
+// captured transcript to match today's skill would be falsifying the evidence it exists to be.
+//
+// Defined once because the two DID drift: the common assertion was updated and the per-eval Phase
+// expectations were not, so a correct new-transport run failed the evals while a raw
+// `pac … --prompt "…"` run passed — the evals were grading the quoting-unsafe transport as correct.
+const UPLOAD_CMD = /pac\s+model\s+genpage\s+upload|genpage-upload\.js/;
+const uploadLinesOf = (log) => String(log || '').split('\n').filter((l) => UPLOAD_CMD.test(l));
+
+// What the log records about an upload's PROMPT, whichever transport carried it: the inline quoted
+// value, or — for the file transport, where there is no inline value to read — the `Prompt scope:`
+// line the skill requires alongside the command.
+function promptEvidence(log, uploadLine) {
+  const inline = /--prompt\s+"([^"]*)"/.exec(uploadLine || '');
+  if (inline) return inline[1];
+  const scope = /^\s*[-*]?\s*Prompt scope:\s*(.+)$/im.exec(String(log || ''));
+  return scope ? scope[1].trim() : null;
+}
 function skip(reason) { return { status: 'skip', reason }; }
+
+// An EDIT-flow fixture produces `genpage-edit-plan.md` and never `genpage-plan.md`: the create
+// flow's planning phases (solution question, EnterPlanMode approval, plan-schema conformance,
+// entity prefix discipline) do not run at all on that path.
+//
+// Those assertions must SKIP rather than fail for such a fixture. Until eval 19 the suite had no
+// edit fixture — eval 3 is edit-flow but ships none — so the create-flow assumption baked into the
+// COMMON assertions was never exercised, and the first edit fixture added reported six false
+// failures that say nothing about the page under test.
+function isEditFlowFixture(fixture) {
+  return Boolean(fixture && fixture.genpageEditPlan && !fixture.genpagePlan);
+}
 
 function logHas(log, pattern) {
   return Boolean(log) && new RegExp(pattern, 'mi').test(log);
+}
+
+function isUnattendedLog(log) {
+  return Boolean(log) && (
+    /Unattended default:/i.test(log) ||
+    // The mode probe, in prose (`interactive: false`) or as the raw resolve-interaction-mode.js
+    // line (`{"ok":true,"interactive":false,...}`) — hence the optional quotes.
+    // The lookbehind is load-bearing: without it `non-interactive: false`, which describes an
+    // ATTENDED run, matches on the tail of the word and flips the log to the unattended branch.
+    /(?<![\w-])"?interactive"?\s*[:=]\s*"?false"?/i.test(log) ||
+    // The two `reason` strings resolveInteractionMode() emits, and only ever for interactive:false.
+    // Anchored to the `reason` field rather than matched as bare phrases: an ATTENDED log
+    // legitimately *negates* them ("attended (no --non-interactive flag, TTY present)",
+    // "POWER_PLATFORM_SKILLS_NONINTERACTIVE is set -> no"), and an unanchored match would
+    // grade that correct attended run down the unattended branch and fail it for lacking an
+    // `Unattended default:` marker. Shape emitted by scripts/resolve-interaction-mode.js:
+    //   {"ok":true,"interactive":false,"reason":"--non-interactive flag"}
+    /"?reason"?\s*[:=]\s*"?(?:--non-interactive flag|POWER_PLATFORM_SKILLS_NONINTERACTIVE\s+is set)/i.test(log)
+    // Deliberately NO free-prose alternative here (e.g. matching "Interaction mode: unattended").
+    // Prose is unbounded and every attempt to pattern-match it closed one negation position while
+    // opening another: a bare `\bunattended\b` matches inside "not unattended"; anchoring on
+    // `mode: unattended` fixes that but then admits "Mode: unattended = false",
+    // "Interaction mode: unattended? no", and "the Unattended column" — all ATTENDED logs, each
+    // graded unattended and failed for lacking a marker, which is the exact false failure this
+    // function was fixed to stop causing.
+    // Instead the contract is pinned in the doc: genpage SKILL.md's unattended table requires the
+    // mode to be recorded as `Unattended default: interaction mode → unattended (<reason>)`, which
+    // the first alternative already matches. Matching the documented marker is decidable; matching
+    // English is not. Re-adding a prose alternative re-opens the negation problem.
+  );
 }
 
 function planSection(plan, heading) {
@@ -71,6 +136,270 @@ function allMatches(pattern, text) {
   return [...text.matchAll(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g'))];
 }
 
+const REQUIRED_PLAN_SECTIONS = [
+  'User Requirements',
+  'Working Directory',
+  'Plugin Root',
+  'Environment',
+  'Pages',
+  'Entity Creation Required',
+  'Existing Entities',
+  'Connector Bindings',
+  'Design Preferences',
+  'Relevant Samples',
+  'Per-Page Specifications',
+];
+
+const OPTIONAL_PLAN_SECTIONS = new Set(['Solution Packaging']);
+
+const REQUIRED_PER_PAGE_FIELDS = [
+  'File',
+  'Purpose',
+  'Entities',
+  'Needs caching',
+  'Key Features',
+  'Components',
+  'Layout',
+  'Data Binding',
+  'Interactions',
+];
+
+function schemaError(code, message, details = {}) {
+  return { code, message, ...details };
+}
+
+function parseHeadingLine(line) {
+  const match = /^(#{1,3})\s+(.+?)\s*$/.exec(line);
+  if (!match) return null;
+  return { level: match[1].length, title: match[2].trim() };
+}
+
+function parsePlanSections(plan) {
+  const lines = plan.split(/\r?\n/);
+  const sections = [];
+  for (let i = 0; i < lines.length; i++) {
+    const heading = parseHeadingLine(lines[i]);
+    if (heading && heading.level === 2) {
+      const start = i;
+      let end = lines.length;
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextHeading = parseHeadingLine(lines[j]);
+        if (nextHeading && nextHeading.level === 2) {
+          end = j;
+          break;
+        }
+      }
+      sections.push({
+        title: heading.title,
+        startLine: start + 1,
+        content: lines.slice(start + 1, end).join('\n').trim(),
+      });
+    }
+  }
+  return sections;
+}
+
+function findMarkdownTable(sectionText, requiredColumns) {
+  const lines = sectionText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\|.*\|\s*$/.test(lines[i])) continue;
+    const headers = lines[i]
+      .split('|')
+      .slice(1, -1)
+      .map((header) => header.trim().toLowerCase());
+    const hasRequired = requiredColumns.every((column) => headers.includes(column.toLowerCase()));
+    if (hasRequired) return { lineIndex: i, headers, lines: lines.slice(i) };
+  }
+  return null;
+}
+
+function parseMarkdownRows(sectionText, requiredColumns) {
+  const table = findMarkdownTable(sectionText, requiredColumns);
+  if (!table) return [];
+  const rows = [];
+  for (const line of table.lines.slice(2)) {
+    if (!/^\s*\|.*\|\s*$/.test(line)) break;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length === 0 || cells.every((cell) => cell === '')) continue;
+    const row = {};
+    for (let i = 0; i < table.headers.length; i++) {
+      row[table.headers[i]] = cells[i] || '';
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parsePerPageBlocks(sectionText) {
+  const lines = sectionText.split(/\r?\n/);
+  const blocks = new Map();
+  let current = null;
+  for (const line of lines) {
+    const heading = parseHeadingLine(line);
+    if (heading && heading.level === 3) {
+      current = { title: heading.title, lines: [] };
+      blocks.set(heading.title, current);
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  return blocks;
+}
+
+function hasBulletField(lines, field) {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Some fixture plans use the required field as a parent bullet whose details
+  // are nested on following lines. The schema contract requires the field to be
+  // present; it does not require single-line prose after the colon.
+  return lines.some((line) => new RegExp(`^\\s*[-*]\\s+\\*\\*${escaped}:\\*\\*`, 'i').test(line));
+}
+
+function validateEnvironment(sectionText, errors) {
+  for (const field of ['URL', 'App', 'Languages', 'Solution', 'Publisher Prefix']) {
+    const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`^\\s*[-*]?\\s*${escaped}:\\s*\\S`, 'mi').test(sectionText)) {
+      errors.push(schemaError('missing-environment-field', `## Environment missing required field "${field}"`, { section: 'Environment', field }));
+    }
+  }
+}
+
+function validateEntityCreationSection(sectionText, errors) {
+  if (/^No entity creation required — all entities already exist\.\s*$/i.test(sectionText.trim())) return;
+
+  const entityBlocks = [...sectionText.matchAll(/^###\s+(.+?)\s*$/gmi)];
+  if (entityBlocks.length === 0) {
+    errors.push(schemaError('missing-entity-block', '## Entity Creation Required must contain entity subsections or the exact no-entity sentinel', { section: 'Entity Creation Required' }));
+    return;
+  }
+
+  for (let index = 0; index < entityBlocks.length; index++) {
+    const name = entityBlocks[index][1].trim();
+    const start = entityBlocks[index].index + entityBlocks[index][0].length;
+    const end = index + 1 < entityBlocks.length ? entityBlocks[index + 1].index : sectionText.length;
+    const block = sectionText.slice(start, end);
+    for (const field of ['Display Name', 'Display Plural', 'Primary Name Suffix']) {
+      const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!new RegExp(`^\\s*[-*]\\s+${escaped}:\\s*\\S`, 'mi').test(block)) {
+        errors.push(schemaError('missing-entity-field', `entity "${name}" missing required field "${field}"`, { section: 'Entity Creation Required', entity: name, field }));
+      }
+    }
+    for (const [label, columns] of [
+      ['Columns', ['Suffix', 'Type', 'Required', 'Notes']],
+      ['Choice Columns', ['Column Suffix', 'Options']],
+      ['Relationships', ['Type', 'Related Table', 'Lookup Suffix', 'Cascade']],
+    ]) {
+      if (!new RegExp(`^\\s*[-*]\\s+${label}:`, 'mi').test(block) || !findMarkdownTable(block, columns)) {
+        errors.push(schemaError('missing-entity-table', `entity "${name}" missing required "${label}" table`, { section: 'Entity Creation Required', entity: name, table: label }));
+      }
+    }
+  }
+}
+
+function validateGenpagePlanSchema(plan) {
+  const errors = [];
+  if (!plan || typeof plan !== 'string') {
+    return [schemaError('missing-plan', 'genpage-plan.md is empty or missing')];
+  }
+
+  if (!/^#\s+Genpage Plan\s*$/m.test(plan)) {
+    errors.push(schemaError('missing-title', 'plan missing exact "# Genpage Plan" title'));
+  }
+
+  const sections = parsePlanSections(plan);
+  const byTitle = new Map(sections.map((section) => [section.title, section]));
+  for (const section of REQUIRED_PLAN_SECTIONS) {
+    if (!byTitle.has(section)) {
+      errors.push(schemaError('missing-section', `plan missing required section "## ${section}"`, { section }));
+    }
+  }
+
+  // Section order is part of the machine contract. Validate using only known
+  // headings so optional prose headings cannot create false positives.
+  const observed = sections
+    .map((section) => section.title)
+    .filter((title) => REQUIRED_PLAN_SECTIONS.includes(title) || OPTIONAL_PLAN_SECTIONS.has(title));
+  const expected = [
+    ...REQUIRED_PLAN_SECTIONS.slice(0, 8),
+    ...(observed.includes('Solution Packaging') ? ['Solution Packaging'] : []),
+    ...REQUIRED_PLAN_SECTIONS.slice(8),
+  ];
+  const comparable = observed.filter((title) => expected.includes(title));
+  if (comparable.join('\n') !== expected.filter((title) => comparable.includes(title)).join('\n')) {
+    errors.push(schemaError('section-order', 'required plan sections are not in references/plan-schema.md order'));
+  }
+
+  const envSection = byTitle.get('Environment');
+  if (envSection) validateEnvironment(envSection.content, errors);
+
+  const pagesSection = byTitle.get('Pages');
+  const pageRows = pagesSection ? parseMarkdownRows(pagesSection.content, ['Page', 'File', 'Purpose', 'Entities']) : [];
+  if (pagesSection && pageRows.length === 0) {
+    errors.push(schemaError('missing-pages-table', '## Pages must contain a table with Page, File, Purpose, and Entities columns', { section: 'Pages' }));
+  }
+
+  const entitySection = byTitle.get('Entity Creation Required');
+  if (entitySection) validateEntityCreationSection(entitySection.content, errors);
+
+  const connectorSection = byTitle.get('Connector Bindings');
+  if (connectorSection) {
+    const body = connectorSection.content.trim();
+    if (body !== 'No connector bindings.' && !findMarkdownTable(body, ['Logical Name', 'Connector Id', 'Dataset', 'Tables (GUIDs)', 'Table Display Names', 'Operations', 'Fields', 'Parameters', 'Response'])) {
+      errors.push(schemaError('missing-connector-table', '## Connector Bindings must be the exact no-bindings sentinel or the full connector binding table', { section: 'Connector Bindings' }));
+    }
+  }
+
+  // `## Custom API Bindings` is spec'd as always-present: plan-schema.md:212 gives it the same
+  // "Exact literal ... when empty" sentinel rule as `## Connector Bindings` at :211, and :213
+  // reserves "Opt-in" for `## Solution Packaging` alone — which is why OPTIONAL_PLAN_SECTIONS
+  // contains only that one section. (The "opt-in, unlike the always-present ## Connector Bindings"
+  // sentence at :158-160 sits inside the Solution Packaging block and describes IT, not this
+  // section.) In practice though, 0 of the 12 fixture plans emit `## Custom API Bindings` and
+  // REQUIRED_PLAN_SECTIONS omits it, so requiring it here would fail every existing plan. This
+  // check is therefore conditional until the fixtures catch up with the spec — a deliberate
+  // accommodation of a spec-vs-reality divergence, not a statement that the section is optional.
+  // Without it the Custom API half had no enforcement at all: the sentinel was stated but never
+  // checked, so a prompt regression leaking a `----- BEGIN/END ... -----` delimiter into this
+  // section scored green, while the identical regression in the connector half fails loudly.
+  const customApiSection = byTitle.get('Custom API Bindings');
+  if (customApiSection) {
+    const body = customApiSection.content.trim();
+    if (body !== 'No custom API bindings.' && !findMarkdownTable(body, ['Name', 'Kind', 'Bound Entity'])) {
+      errors.push(schemaError('missing-customapi-table', '## Custom API Bindings must be the exact no-bindings sentinel or the Custom API binding table', { section: 'Custom API Bindings' }));
+    }
+  }
+
+  const samplesSection = byTitle.get('Relevant Samples');
+  if (samplesSection && !findMarkdownTable(samplesSection.content, ['Page', 'Sample', 'Reason'])) {
+    errors.push(schemaError('missing-samples-table', '## Relevant Samples must contain a table with Page, Sample, and Reason columns', { section: 'Relevant Samples' }));
+  }
+
+  const perPageSection = byTitle.get('Per-Page Specifications');
+  if (perPageSection) {
+    const blocks = parsePerPageBlocks(perPageSection.content);
+    for (const row of pageRows) {
+      const pageName = row.page;
+      const block = blocks.get(pageName);
+      if (!block) {
+        errors.push(schemaError('missing-page-spec', `## Per-Page Specifications missing page subsection "### ${pageName}"`, { section: 'Per-Page Specifications', page: pageName }));
+        continue;
+      }
+      for (const field of REQUIRED_PER_PAGE_FIELDS) {
+        if (!hasBulletField(block.lines, field)) {
+          errors.push(schemaError('missing-per-page-field', `page "${pageName}" missing required per-page field "${field}"`, { section: 'Per-Page Specifications', page: pageName, field }));
+        }
+      }
+    }
+
+    for (const pageName of blocks.keys()) {
+      if (!pageRows.some((row) => row.page === pageName)) {
+        errors.push(schemaError('extra-page-spec', `per-page subsection "### ${pageName}" has no matching ## Pages row`, { section: 'Per-Page Specifications', page: pageName }));
+      }
+    }
+  }
+
+  return errors;
+}
+
 const WORKFLOW_ASSERTIONS = new Map();
 
 WORKFLOW_ASSERTIONS.set(
@@ -96,7 +425,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified',
+  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -105,8 +434,17 @@ WORKFLOW_ASSERTIONS.set(
     if (/node\s+--version\s*&&\s*pac\s+help/.test(log)) {
       return fail('node --version and pac help are chained with && (forbidden)');
     }
-    if (!/2\.\s*7|>=\s*2\.7|version\s+\d+\.\d+/i.test(log)) {
-      return fail('no PAC CLI version verification recorded');
+    // Parse the recorded PAC CLI version and enforce the contract (> 2.10.0), rather than merely
+    // matching version-shaped text — an older pac (e.g. 2.7.x) must fail. Anchor on the "PAC CLI" /
+    // "PowerPlatform CLI" phrase so the earlier `node --version → v20.x` line can't be mistaken for the
+    // pac version. Accepts the forms pac emits, e.g. "PAC CLI Version 2.11.0", "PAC CLI: 2.11.0",
+    // "Microsoft PowerPlatform CLI Version: 2.11.0+g06bb2eb (.NET 10.0.8)".
+    const m = /(?:PAC|PowerPlatform)\s+CLI(?:\s+Version)?[:\s]+v?(\d+)\.(\d+)(?:\.(\d+))?/i.exec(log);
+    if (!m) return fail('no PAC CLI version recorded (expected e.g. "PAC CLI Version 2.11.0")');
+    const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3] || 0)];
+    const gtMin = major > 2 || (major === 2 && (minor > 10 || (minor === 10 && patch > 0)));
+    if (!gtMin) {
+      return fail(`recorded PAC CLI version ${major}.${minor}.${patch} does not satisfy > 2.10.0`);
     }
     return pass();
   }
@@ -139,7 +477,9 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/AskUserQuestion/.test(log)) return fail('workflow-log does not record any AskUserQuestion call');
+    const unattended = isUnattendedLog(log);
+    if (!unattended && !/AskUserQuestion/.test(log)) return fail('workflow-log does not record any AskUserQuestion call');
+    if (unattended && !/Unattended default:/i.test(log)) return fail('unattended workflow-log does not record its default decision');
     // The planner spec allows the "new vs edit" question to be inferred
     // from $ARGUMENTS when the prompt clearly states a new page. Accept any of:
     //  - explicit question recorded
@@ -163,6 +503,7 @@ WORKFLOW_ASSERTIONS.set(
   'Phase 1 (Planner): genpage-plan.md ALWAYS contains \'Solution:\' and \'Publisher Prefix:\' lines in ## Environment; default fallback is \'Solution: Default\' + \'Publisher Prefix: new\' for code-only flows',
   ({ fixture }) => {
     const plan = fixture.genpagePlan;
+    if (isEditFlowFixture(fixture)) return skip('edit flow — no genpage-plan.md is produced');
     if (!plan) return fail('genpage-plan.md not present in fixture');
     const env = planSection(plan, 'Environment');
     if (!env) return fail('plan has no "## Environment" section');
@@ -179,9 +520,17 @@ WORKFLOW_ASSERTIONS.set(
     const log = fixture.workflowLog;
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
+    if (isEditFlowFixture(fixture)) return skip('edit flow — the solution question belongs to the create flow');
     if (!plan) return fail('no genpage-plan.md');
     const needsMetadata = entitiesNeedCreating(plan) || newAppNeeded(plan);
     const asked = solutionQuestionAsked(log);
+    if (isUnattendedLog(log)) {
+      if (asked) return fail('unattended flow recorded an interactive solution question');
+      if (needsMetadata && !/Unattended default:[^\n]*solution/i.test(log)) {
+        return fail('metadata work required in unattended mode but no solution default/decision was recorded');
+      }
+      return pass();
+    }
     if (needsMetadata && !asked) return fail('metadata work required but solution question not asked');
     if (!needsMetadata && asked) return fail('code-only flow asked solution question (should be skipped)');
     return pass();
@@ -211,6 +560,20 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
+    if (isEditFlowFixture(fixture)) return skip('edit flow — approval is presented from genpage-edit-plan.md');
+    if (isUnattendedLog(log)) {
+      if (/EnterPlanMode called|ExitPlanMode called|AskUserQuestion:/i.test(log)) {
+        return fail('unattended workflow-log contains an attended interaction marker');
+      }
+      // Alternative B (`Unattended default:[^\n]*approved`) strictly subsumed this, making the
+      // plan/approval context dead code: any `Unattended default:` line containing "approved" —
+      // e.g. a solution-selection default — satisfied an assertion that claims to check PLAN
+      // approval. The documented marker is `Unattended default: plan approval → approved (...)`.
+      if (!/Unattended default:[^\n]*(plan|approval)[^\n]*approved/i.test(log)) {
+        return fail('unattended workflow-log does not record plan approval');
+      }
+      return pass();
+    }
     if (!/EnterPlanMode/.test(log)) return fail('workflow-log does not record EnterPlanMode');
     return pass();
   }
@@ -219,27 +582,26 @@ WORKFLOW_ASSERTIONS.set(
 WORKFLOW_ASSERTIONS.set(
   'Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md',
   ({ fixture }) => {
+    if (isEditFlowFixture(fixture)) return skip('edit flow — no genpage-plan.md is produced');
     if (!fixture.genpagePlan) return fail('genpage-plan.md not present in fixture');
-    const required = [
-      '# Genpage Plan',
-      '## User Requirements',
-      '## Working Directory',
-      '## Plugin Root',
-      '## Environment',
-      '## Pages',
-    ];
-    const missing = required.filter((h) => !fixture.genpagePlan.includes(h));
-    if (missing.length > 0) return fail(`plan missing heading(s): ${missing.join(', ')}`);
+    const errors = validateGenpagePlanSchema(fixture.genpagePlan);
+    if (errors.length > 0) {
+      // Keep the runner output readable while still exposing the first concrete
+      // schema violation; the full structured list is available to unit tests via
+      // validateGenpagePlanSchema().
+      return fail(errors[0].message);
+    }
     return pass();
   }
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts',
+  'Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
+    if (isEditFlowFixture(fixture)) return skip('edit flow — entity creation belongs to the create flow');
     if (!plan) return fail('no genpage-plan.md');
     if (!entitiesNeedCreating(plan)) return skip('no entity creation required');
     if (!/check-auth\.js/.test(log)) return fail('check-auth.js not invoked');
@@ -247,7 +609,7 @@ WORKFLOW_ASSERTIONS.set(
     // against a meta-list mention of the entity-builder agent name. Meta-lists
     // like "## Agents Invoked" can name the agent before the actual commands.
     const idxCheck = log.search(/check-auth\.js/);
-    const idxFirstScript = log.search(/\b(create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
+    const idxFirstScript = log.search(/\b(provision-entities\.js|create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
     if (idxFirstScript !== -1 && idxFirstScript < idxCheck) {
       return fail('entity creation script invoked before check-auth.js');
     }
@@ -263,8 +625,10 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('no upload invocation recorded');
-    if (!/--prompt/.test(log)) return fail('upload lacks --prompt flag');
+    if (!UPLOAD_CMD.test(log)) return fail('no upload invocation recorded');
+    // `--prompt` also matches `--prompt-file`, which is the intent: what is asserted is that a
+    // prompt was recorded and scoped, not which flag carried it.
+    if (!/--prompt/.test(log)) return fail('upload lacks a --prompt/--prompt-file flag');
     return pass();
   }
 );
@@ -273,6 +637,7 @@ WORKFLOW_ASSERTIONS.set(
   'Prefix discipline — plan format: Every name in `## Entity Creation Required` (table headings, column Suffix values, choice column suffixes, relationship Lookup Suffix values) is a bare suffix matching `^[a-z][a-z0-9]+$`. No value contains an underscore or a prefix. The prefix lives only in `## Environment` → `Publisher Prefix:`.',
   ({ fixture }) => {
     const plan = fixture.genpagePlan;
+    if (isEditFlowFixture(fixture)) return skip('edit flow — no ## Entity Creation Required section exists');
     if (!plan) return fail('no genpage-plan.md');
     const section = planSection(plan, 'Entity Creation Required');
     if (!section || /No entity creation required/i.test(section)) return skip('no entity creation');
@@ -466,8 +831,8 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('upload command not recorded');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    if (!UPLOAD_CMD.test(log)) return fail('upload command not recorded');
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.some((l) => /--data-sources/.test(l))) {
       return fail('upload includes --data-sources on mock-data page');
     }
@@ -480,8 +845,8 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('upload command not recorded');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    if (!UPLOAD_CMD.test(log)) return fail('upload command not recorded');
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.some((l) => /--data-sources/.test(l))) {
       return fail('upload includes --data-sources on mock-data page');
     }
@@ -593,7 +958,7 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    const uploadLines = log.split('\n').filter((l) => /pac\s+model\s+genpage\s+upload/.test(l));
+    const uploadLines = uploadLinesOf(log);
     if (uploadLines.length === 0) return fail('upload not recorded');
     const editUpload = uploadLines.find((l) => /--page-id/.test(l));
     if (!editUpload) return fail('edit upload missing --page-id');
@@ -624,16 +989,34 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)',
+  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration',
   ({ fixture }) => {
     const log = fixture.entityCreationLog || fixture.workflowLog;
     if (!log) return fail('no entity-creation-log.md or workflow-log.md');
-    const matches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
+    
+    // Check legacy flow: old-script calls must have --solution
+    const legacyMatches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
     const offenders = [];
-    for (const m of matches) {
+    for (const m of legacyMatches) {
       if (!/--solution\b/.test(m[2])) offenders.push(m[1]);
     }
     if (offenders.length > 0) return fail(`${offenders.length} call(s) missing --solution: ${offenders.slice(0,3).join(', ')}`);
+    
+    // Check new flow: provision-entities.js must have Solution: declared in plan or log
+    // Check for provision-entities.js in both workflowLog and entityCreationLog
+    const usesNewFlow = /\bprovision-entities\.js\b/.test(fixture.workflowLog || '') || /\bprovision-entities\.js\b/.test(fixture.entityCreationLog || '');
+    if (usesNewFlow) {
+      // Solution must be declared in ## Environment section (plan or entity-creation-log)
+      const planEnv = planSection(fixture.genpagePlan, 'Environment');
+      const logEnv = planSection(fixture.entityCreationLog, 'Environment');
+      const solutionPattern = /^\s*[-*]?\s*Solution:\s*(\S+)/m;
+      const hasSolution = (planEnv && solutionPattern.test(planEnv)) || (logEnv && solutionPattern.test(logEnv));
+      if (!hasSolution) return fail('provision-entities.js used but no Solution: declaration in ## Environment');
+    }
+    
+    // Skip if no entity provisioning detected
+    if (legacyMatches.length === 0 && !usesNewFlow) return skip('no entity provisioning detected');
+    
     return pass();
   }
 );
@@ -679,10 +1062,231 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// Eval 17: mock-data page — regression guard confirming the planner does NOT run
+// connector discovery for a page with no connector data source, leaving
+// ## Connector Bindings as the exact sentinel. (Connector authoring is GA and
+// always available, so the thing worth pinning is that it stays OFF THE PATH when
+// the maker asked for mock data — otherwise every mock page pays for a `pac
+// connection list` round trip and risks inventing a binding nobody asked for.)
+PHASE_EXPECTATIONS.set(
+  "Phase 1 (Planner): For a mock-data page, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    const plan = fixture.genpagePlan;
+    if (!log) return fail('no workflow-log.md');
+    if (!plan) return fail('no genpage-plan.md');
+
+    // (a) list-connections.js must NOT be invoked — a `node ... list-connections.js`
+    //     command must be absent. A narrative mention like "list-connections.js NOT
+    //     run" in a comment is acceptable and does not count as an invocation.
+    if (/\bnode\b[^\n]*list-connections\.js/.test(log)) {
+      return fail(
+        'list-connections.js was invoked for a mock-data page — connector discovery should be skipped'
+      );
+    }
+
+    // (b) Plan's ## Connector Bindings body must be exactly the no-binding sentinel.
+    const cbSection = planSection(plan, 'Connector Bindings');
+    if (!cbSection) {
+      return fail('genpage-plan.md is missing ## Connector Bindings section');
+    }
+    if (cbSection.trim() !== 'No connector bindings.') {
+      return fail(
+        `## Connector Bindings body is not exactly 'No connector bindings.' (got: ${cbSection.trim().slice(0, 60)})`
+      );
+    }
+
+    return pass();
+  }
+);
+
+// Eval 18: connector-backed page — regression guard confirming that the planner
+// runs list-connections.js for discovery and records at least one real binding.
+PHASE_EXPECTATIONS.set(
+  "Phase 1 (Planner): For a connector-backed page, list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    const plan = fixture.genpagePlan;
+    if (!log) return fail('no workflow-log.md');
+    if (!plan) return fail('no genpage-plan.md');
+
+    // (a) A `node ... list-connections.js` invocation must appear in the log —
+    //     discovery must run for a connector-backed data source.
+    if (!/\bnode\b[^\n]*list-connections\.js/.test(log)) {
+      return fail(
+        'list-connections.js not invoked — expected for a connector-backed page'
+      );
+    }
+
+    // (b) Plan's ## Connector Bindings must contain at least one real binding,
+    //     detected by a table pipe (|) or a shared_ connector id.
+    const cbSection = planSection(plan, 'Connector Bindings');
+    if (!cbSection || cbSection.trim() === '') {
+      return fail('genpage-plan.md is missing ## Connector Bindings section');
+    }
+    if (cbSection.trim() === 'No connector bindings.') {
+      return fail(
+        '## Connector Bindings says "No connector bindings." but the page is connector-backed and a binding was expected'
+      );
+    }
+    if (!/\|/.test(cbSection) && !/shared_/.test(cbSection)) {
+      return fail(
+        '## Connector Bindings does not contain a binding table row (expected | pipe or shared_ connector id)'
+      );
+    }
+
+    return pass();
+  }
+);
+
+// Eval 18: connector deploy — connectors.json is written as a bare array (not
+// the config.json { connectorBindings: [...] } wrapper) and the upload passes
+// --connectors. Locks in the connectors.json shape and the deploy wiring.
+PHASE_EXPECTATIONS.set(
+  "Phase 4.5 / Phase 6: connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    if (!/connectors\.json/.test(log)) return fail('workflow-log does not record connectors.json');
+    if (!/--connectors\b/.test(log)) return fail('upload does not include --connectors');
+    // Guard against the object-wrapper regression: connectors.json must be a bare
+    // array, not `{ "connectorBindings": [...] }` (that is the deployed config.json).
+    if (/connectors\.json[^\n]*\{\s*"connectorBindings"/.test(log)) {
+      return fail('connectors.json shown as the config.json object wrapper, not a bare array');
+    }
+    return pass();
+  }
+);
+
+// --- Eval 19: adding a connector to an EXISTING page (edit flow) -------------
+//
+// Connector work on the create path (eval 18) and on the edit path are different code paths:
+// the edit path dispatches genpage-connector-builder in `edit` mode with the page's EXISTING
+// bindings, and must merge rather than replace. Nothing covered the edit path until this eval.
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 3.5 (connector edit): genpage-connector-builder is dispatched with Mode: edit and the existing bindings, runs list-connections.js, and writes connectors.json as a bare JSON array',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+
+    // (a) The builder must be dispatched in EDIT mode. A create-mode dispatch would discard the
+    //     page's existing bindings instead of merging the new one into them.
+    if (!/genpage-connector-builder/.test(log)) return fail('genpage-connector-builder was not dispatched');
+    if (!/Mode:\s*`?edit`?/i.test(log)) return fail('connector-builder was not dispatched with Mode: edit');
+    if (!/existing bindings/i.test(log)) return fail('the existing bindings were not passed to the builder');
+
+    // (b) Discovery still runs on the edit path.
+    if (!/\bnode\b[^\n]*list-connections\.js/.test(log)) {
+      return fail('list-connections.js not invoked on the edit path');
+    }
+
+    // (c) Same bare-array shape as the create path — `pac` wraps it into config.json itself.
+    //     Asserted POSITIVELY (the recorded content opens with `[{`) rather than by banning the
+    //     string `{ "connectorBindings"`: a log line legitimately names the wrapper in order to
+    //     contrast with it, and a negative match cannot tell the two apart.
+    if (!/connectors\.json/.test(log)) return fail('workflow-log does not record connectors.json');
+    const jsonLine = log.split('\n').find((l) => /connectors\.json/.test(l) && /\[\s*\{/.test(l));
+    if (!jsonLine) return fail('workflow-log does not show connectors.json content as a bare JSON array');
+    if (/:\s*\{\s*"connectorBindings"/.test(jsonLine)) {
+      return fail('connectors.json written as the config.json object wrapper, not a bare array');
+    }
+    return pass();
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 5 (REST connector): the page calls executeConnectorOperation for an operation-based connector — never queryConnectorTable — presence-checks the method, and checks response.ok before reading response.body',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    const tsx = (fixture.files || []).map((f) => f.content).join('\n');
+    if (!log) return fail('no workflow-log.md');
+    if (!tsx) return fail('no .tsx file in fixture');
+
+    // A REST/action connector (MSN Weather) is called with executeConnectorOperation. Using the
+    // table API for it is the mistake this pins: queryConnectorTable takes dataset+table, which an
+    // operation-based connector does not have, so the call fails at runtime.
+    //
+    // Both checks match an actual CALL (`.name(`), not a mention: generated pages legitimately
+    // carry a comment explaining which API they chose and why, and banning the bare identifier
+    // would fail the very code that documents itself correctly.
+    if (!/\.executeConnectorOperation\s*\(/.test(tsx)) {
+      return fail('.tsx does not call executeConnectorOperation for the REST connector');
+    }
+    if (/\.queryConnectorTable\s*\(/.test(tsx)) {
+      return fail('.tsx calls queryConnectorTable for an operation-based connector');
+    }
+    // Presence-check before calling — the runtime may not expose the method yet.
+    if (!/typeof[^\n]*executeConnectorOperation[^\n]*!==\s*'function'/.test(tsx)) {
+      return fail('.tsx does not presence-check executeConnectorOperation before calling it');
+    }
+    // `ok` is checked before `body` is read; an operation that failed still RESOLVES.
+    const okIdx = tsx.search(/response\.ok/);
+    const bodyIdx = tsx.search(/response\.body/);
+    if (okIdx === -1) return fail('.tsx does not check response.ok');
+    if (bodyIdx !== -1 && okIdx > bodyIdx) return fail('.tsx reads response.body before checking response.ok');
+    return pass();
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  "Edit Phase 5 (preservation): content the connector cannot supply is preserved per the edit plan's Preservation Constraints rather than dropped",
+  ({ fixture }) => {
+    const plan = fixture.genpageEditPlan;
+    const tsx = (fixture.files || []).map((f) => f.content).join('\n');
+    if (!plan) return fail('no genpage-edit-plan.md');
+    if (!tsx) return fail('no .tsx file in fixture');
+
+    if (!/##\s*Preservation Constraints/i.test(plan)) {
+      return fail('genpage-edit-plan.md has no ## Preservation Constraints section');
+    }
+    // The concrete case: the CurrentWeather operation returns current conditions only, so the
+    // five-day forecast must survive the edit as inline data. Silently dropping it would remove a
+    // feature the maker never asked to lose — the most common edit-flow regression.
+    if (!/weeklyForecast|forecast/i.test(tsx)) {
+      return fail('.tsx no longer contains the preserved forecast data');
+    }
+    if (!/\{\s*date:\s*'/.test(tsx)) {
+      return fail('.tsx no longer carries the preserved inline forecast rows');
+    }
+    return pass();
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 6 (connector edit): the upload passes --page-id and --connectors, omits --add-to-sitemap, and --prompt carries only the edit delta',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    const upload = uploadLinesOf(log)[0] || '';
+    if (!upload) return fail('no genpage upload command in the workflow log');
+
+    if (!/--page-id\b/.test(upload)) return fail('edit upload must pass --page-id');
+    if (!/--connectors\b/.test(upload)) return fail('edit upload must pass --connectors');
+    // An existing page is already in the sitemap; re-adding it creates a duplicate subarea.
+    if (/--add-to-sitemap\b/.test(upload)) return fail('edit upload must omit --add-to-sitemap');
+
+    // The prompt must be the DELTA. The page's original description ("dashboard showing the current
+    // weather ... temperature, conditions, and humidity") must not be restated, or each edit
+    // re-sends the whole history and the stored prompt drifts from what the page now is.
+    //
+    // Read through `promptEvidence` rather than demanding an inline quoted value: the file
+    // transport has no inline value to read, and requiring one made a correct run fail while a raw
+    // `--prompt "…"` run passed — grading the quoting-unsafe transport as the correct one.
+    const value = promptEvidence(log, upload);
+    if (value === null) return fail('edit upload records no prompt value or `Prompt scope:` line');
+    if (/temperature, conditions, and humidity/i.test(value)) {
+      return fail('the prompt restates the original page description instead of this edit\'s delta');
+    }
+    return pass();
+  }
+);
+
 module.exports = {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,
   planSection,
+  validateGenpagePlanSchema,
   entitiesNeedCreating,
   newAppNeeded,
   logHas,

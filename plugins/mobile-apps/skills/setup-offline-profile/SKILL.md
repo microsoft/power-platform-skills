@@ -6,18 +6,29 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **References:**
 
-- [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — Dataverse entity field map
-- [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
+- [offline-profile-schema.md](${PLUGIN_ROOT}/shared/references/offline-profile-schema.md) — Dataverse entity field map
+- [dataverse-offline-api.md](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
+- [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline this skill writes + the lifecycle delta check that consumes it
 
 # Setup Offline Profile
 
 End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
 
-**Scope of v0**: authoring only. This skill creates the Dataverse entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes the full app-level offline config — profile metadata, per-table scope, and the temporary SDK-workaround fields — to `offline-profile.json`. **This skill does NOT modify `power.config.json`** (that file is owned by `npx power-apps init` and its schema is controlled upstream). It also does NOT scaffold an offline runtime (SQLite store, sync engine, write queue) in the generated app — that's gated on upstream `@microsoft/power-apps-native-host` runtime support.
+**Scope of v0**: configuration only. This skill creates records in the existing
+Dataverse Mobile Offline Profile tables (`mobileofflineprofile`,
+`mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes
+the full app-level offline config — profile metadata, per-table scope, and the
+temporary SDK-workaround fields — to `offline-profile.json`. **This skill does
+NOT modify `power.config.json`** (that file is owned by `npx power-apps init`
+and its schema is controlled upstream). The template already bundles
+`@microsoft/power-apps-native-offline`; `@microsoft/power-apps-native-host`
+consumes the profile and owns local SQLite access, queued synchronization,
+reconnect behavior, and status UX. This skill does not scaffold duplicate
+app-owned offline runtime code.
 
 **Out of scope for v0**:
 - Custom filter mode (`recorddistributioncriteria=3`, savedquery picker) — defer to v0.5
@@ -26,7 +37,7 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run `/enable-tables-offline` if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
@@ -38,7 +49,7 @@ test -f power.config.json && test -f app.config.js
 MANIFEST=$(test -f .datamodel-manifest.json && echo ".datamodel-manifest.json" || \
            (test -f docs/plan-artifacts/.datamodel-manifest.json && echo "docs/plan-artifacts/.datamodel-manifest.json"))
 test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture **Environment URL** for `<envUrl>` and **manifest path** for the architect spawn (Step 3) and the artifacts write (Step 9).
@@ -64,7 +75,7 @@ console.log(JSON.stringify({ platforms, hasNative }));
 STOP conditions:
 - No `power.config.json` → "Run `/create-mobile-app` first."
 - Neither `.datamodel-manifest.json` nor `docs/plan-artifacts/.datamodel-manifest.json` → "Run `/add-dataverse` first — offline profiles require a data model."
-- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)).
+- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)).
 - Web-only + user declines override → STOP. Print: `Offline profile creation skipped — no native target.`
 
 #### Step 1a — Environment consistency check
@@ -78,7 +89,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 | `status` value | Action |
 |---|---|
 | (section absent) OR `status: none` | First-time run. Continue to Step 2. |
-| `status: not-applicable` | User previously opted out via `/create-mobile-app` Step 6.85 ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
+| `status: not-applicable` | User previously opted out during `/create-mobile-app` offline-profile setup ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
 | `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to `/edit-offline-profile` (v0.2) or just exit. |
 | `status: done` BUT `GET /mobileofflineprofiles(<profileId>)` returns 404 | Profile was deleted externally (maker portal or another env). Treat as `none`; clear the section; continue to Step 2. |
 | `status: in-progress` AND profile exists in env | **Resume flow** — see below. |
@@ -118,11 +129,13 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 
 ### Step 2 — Resolve mode (create vs extend vs reconcile)
 
+**Telemetry checkpoint: `resolve_offline_profile_mode`**
+
 **Print before starting:**
 > "→ Checking for existing offline profiles in the environment…"
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles?\$select=mobileofflineprofileid,name,description,publishedon"
 ```
 
@@ -142,6 +155,8 @@ Decision tree — evaluate in order:
 > **Extend mode (rows #2a, #4a) implementation**: re-spawn the architect with `Mode: extend, existingProfileId: <X>`. The architect compares its current proposal to the on-server items + associations and outputs three lists: (i) items to ADD, (ii) items to PATCH (scope/columns/sync diffs), (iii) items to DELETE (in-server but not in current data model). Surface to the user at Gate 2. After approval, the skill issues incremental writes — no profile-shell POST.
 
 ### Step 3 — Spawn architect agent
+
+**Telemetry checkpoint: `design_offline_profile_scope`**
 
 **Print before starting:**
 > "→ Spawning mobile-app:offline-profile-architect agent (read-only) to design the profile…"
@@ -166,6 +181,8 @@ The agent returns `_offline_section.md` in the working directory. Read it. Parse
 - `BLOCKED: <reason>` → STOP, surface to user, do not silently retry.
 
 ### Step 3.5 — Configuration review (interactive AskUserQuestion flow)
+
+**Telemetry checkpoint: `review_offline_profile_configuration`**
 
 **Print before starting:**
 > "→ Presenting the proposed offline profile configuration. You'll tap an option to accept, adjust, or cancel — no need to type."
@@ -315,12 +332,14 @@ configReview: accepted
 
 > **Design rationale.** The original Step 3.5 used free-text replies ("type `accept` or describe edits in English") to keep things conversational. In practice users typed responses the regex parsers didn't recognise — `change scope of contact to teamonly`, `set sync to 10`, etc. — and the skill either silently dropped the edit or asked a clarifying question that drove additional confusion. The `AskUserQuestion` flow above eliminates parsing risk for the enumerable fields (scope, sync interval, top-level decision) while preserving the free-text path for the genuinely free-form fields (name, description, column lists). Net result: zero ambiguous interactions for the common adjustments, fewer typing-induced errors, parity with `/create-mobile-app`'s plan-gate UX.
 
-### Step 4 — Run `/enable-tables-offline` if needed
+### Step 4 — Run the internal `enable-tables-offline` workflow if needed
 
-If Gate 1 identified any table needing change, invoke `/enable-tables-offline` as a sub-skill with the list:
+**Telemetry checkpoint: `enable_dataverse_tables_offline`**
+
+If Gate 1 identified any table needing change, read and execute `${PLUGIN_ROOT}/skills/enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
 
 ```text
-/enable-tables-offline cr123_note,cr123_visit
+$ARGUMENTS: cr123_note,cr123_visit
 ```
 
 Wait for it to return. Expected final line: `DONE` or `DONE_WITH_CONCERNS:`.
@@ -331,13 +350,15 @@ If all tables were already enabled, skip this step.
 
 ### Step 5 — POST profile shell
 
+**Telemetry checkpoint: `create_offline_profile_shell`**
+
 **Print before starting:**
 > "→ Creating MobileOfflineProfile record (Name + Description only)…"
 
 For `create-new` mode:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofiles" \
   --body '{
     "name": "<app name> Offline Profile",
@@ -365,6 +386,8 @@ gate1: approved
 
 ### Step 6 — POST profile items
 
+**Telemetry checkpoint: `add_tables_to_offline_profile`**
+
 **Print before starting:**
 > "→ Creating <N> MobileOfflineProfileItem records (one per table, sequential)…"
 
@@ -373,7 +396,7 @@ gate1: approved
 For each table, in sequence:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitems" \
   --body '{
     "name": "<table display name>",
@@ -399,6 +422,8 @@ Print `✓ <table>` after each 2xx.
 
 ### Step 7 — POST associations + PATCH selectedcolumns
 
+**Telemetry checkpoint: `configure_offline_profile_associations`**
+
 **Print before starting:**
 > "→ Creating association rows + PATCHing selectedcolumns on each profile item…"
 
@@ -407,7 +432,7 @@ Print `✓ <table>` after each 2xx.
 Empirical 2026-05-24 + 2026-05-25 capture from maker portal **unblocked** association creation. Recipe (no `selectedrelationshipsschema` field — server fills it):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitemassociations" \
   --body '{
     "name": "<relationshipSchemaName>",
@@ -428,7 +453,7 @@ For each (PARENT-item, 1:N-relationship-to-child) pair from the architect's prop
 
 > **Skip-when-redundant rule.** If the parent profile item has `recorddistributioncriteria=1` (All records), the architect should have pruned associations on it (per Step 5 pruning rule). Defensively: if any propagate through, SKIP them at POST time. Print: `↷ Skipping <association> on All-records parent <table> — redundant, all rows download anyway`.
 
-> **Pre-publish cycle detection.** Before Step 8 publish, build the relationship graph from the just-created associations and DFS for cycles. If a cycle exists (e.g. `account → task → account`), prompt the user to remove ONE association and re-do this step for the affected pair — otherwise Step 8 will return `0x80071141`. See [shared/references/dataverse-offline-api.md §6b](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md).
+> **Pre-publish cycle detection.** Before Step 8 publish, build the relationship graph from the just-created associations and DFS for cycles. If a cycle exists (e.g. `account → task → account`), prompt the user to remove ONE association and re-do this step for the affected pair — otherwise Step 8 will return `0x80071141`. See [shared/references/dataverse-offline-api.md §6b](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 > **Idempotency.** Re-POSTing an existing (item, relationship) pair returns `409 Conflict`; the `dataverse-request.js` `looksLikeDuplicate` rescue treats this as success. Re-runs after a partial failure are safe.
 
@@ -437,7 +462,7 @@ Skip Step 7a entirely if the architect's proposal includes zero relationships (r
 #### Step 7b — PATCH `selectedcolumns` on each item
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
   --body '{
     "selectedcolumns": "<JSON string — see below>"
@@ -458,6 +483,8 @@ If syncintervalinminutes was edited at Gate 3, include it in the same PATCH.
 
 ### Step 8 — Publish
 
+**Telemetry checkpoint: `publish_offline_profile`**
+
 **Print before starting:**
 > "→ Publishing profile (targeted PublishXml)…"
 
@@ -466,7 +493,7 @@ If syncintervalinminutes was edited at Gate 3, include it in the same PATCH.
 **Targeted PublishXml — the maker portal's pattern** (empirical 2026-05-24):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile>'"$PROFILE_ID"'</mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
@@ -474,7 +501,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
 
 Publishes ONLY this profile, not the entire org's customizations. Empirically much faster + less rate-limit-prone than `PublishAllXml` on shared envs.
 
-**On `400 / 0x80071141` "circular relationship":** the profile's association graph has a cycle (e.g. `account → task → account`). Parse the path from the error message, prompt the user to drop ONE of the offending associations, re-DELETE that association row via DELETE `/mobileofflineprofileitemassociations(<id>)`, then re-attempt publish. See [shared/references/dataverse-offline-api.md §6b](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md).
+**On `400 / 0x80071141` "circular relationship":** the profile's association graph has a cycle (e.g. `account → task → account`). Parse the path from the error message, prompt the user to drop ONE of the offending associations, re-DELETE that association row via DELETE `/mobileofflineprofileitemassociations(<id>)`, then re-attempt publish. See [shared/references/dataverse-offline-api.md §6b](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 **On `400 / 0x80071140` "no relationships are specified" for a Related-only table:** a profile item has `recorddistributioncriteria=0` but no associations point at it. Parse the table name from the error message and prompt the user with two choices:
 1. `/add-table-to-offline-profile --table <name> --add-associations` — re-runs the architect for relationship discovery, POSTs missing associations.
@@ -485,7 +512,7 @@ For fresh `/setup-offline-profile` runs this error should never fire because Ste
 **Fallback — `PublishAllXml`:** if the targeted publish fails with anything other than the circular-relationship error, try the broad publish. This was the v0.1 default and works correctly but rate-limits aggressively on shared envs:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishAllXml" --body '{}'
 ```
 
@@ -497,7 +524,7 @@ Protocol after the POST call returns:
 2. If status `0` AND error contains `Request timed out` OR `429 rate-limited` → DO NOT treat as failure. Run the verification GET below:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
      "mobileofflineprofiles(<profileId>)?\$select=componentstate,publishedon" 2>&1
    ```
 
@@ -509,6 +536,8 @@ Protocol after the POST call returns:
 After confirmed success, re-GET the profile and check `publishedon` for the artifacts step.
 
 ### Step 9 — Persist artifacts
+
+**Telemetry checkpoint: `persist_offline_profile_snapshot`**
 
 **Print before starting:**
 > "→ Writing offline-profile.json + memory-bank.md…"
@@ -526,7 +555,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
   "appConfig": {
     "enabled": true,
     "serverRowLimit": 2000,
-    "/* BEGIN OFFLINE-CONFIG-WORKAROUND */": "remove when SDK gaps are fixed upstream — tracked in pa-wrap-tools (instanceUrl) + PowerApps-Client (useDda + entitiesIncluded). Bracket exists so the future cleanup diff is mechanical.",
+    "/* BEGIN OFFLINE-CONFIG-WORKAROUND */": "remove when SDK gaps are fixed upstream — tracked in microsoft/power-platform-skills/plugins/mobile-apps/template#main (instanceUrl) + PowerApps-Client (useDda + entitiesIncluded). Bracket exists so the future cleanup diff is mechanical.",
     "useDda": false,
     "entitiesIncluded": ["<logicalName-1>", "<logicalName-2>", "..."],
     "instanceUrl": "<envUrl>",
@@ -542,6 +571,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
       "recordsOwnedByMyBusinessUnit": false,
       "syncIntervalInMinutes": 10,
       "selectedColumns": ["cr123_ordernumber", "cr123_total", "..."],
+      "schemaColumns": ["cr123_ordernumber", "cr123_total", "cr123_notes", "..."],
       "relationships": [
         {
           "schemaName": "cr123_order_cr123_orderline",
@@ -561,6 +591,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 - `relationships[]` lives on the **PARENT** table entry (the table on the 1-side of the 1:N relationship). Pure-child tables (e.g. `cr123_orderline`) have empty `relationships: []`.
 - Each `relationships[]` entry has `schemaName` (the relationship's `SchemaName` from EntityDefinitions metadata), `relationshipId` (the relationship's `MetadataId` GUID — **this is the canonical comparison key**, stable across server-side relationshipname formatting), `targetEntity` (child entity logical name), and `associationId` (the created `mobileofflineprofileitemassociationid`).
 - `recordDistributionCriteria=1` (All records) parents always have `relationships: []` — associations would be redundant (see architect Step 5 pruning rule).
+- `schemaColumns[]` is the **schema-reconciliation baseline** — the full set of the table's schema column logical names (from `.datamodel-manifest.json`) that existed when this item was created. It is NOT the same as `selectedColumns` (which is a curated subset the runtime syncs): `schemaColumns` records everything the schema had at reconciliation time, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` compares later manifest columns against this baseline to detect *genuinely new* schema columns (`manifest.columns − schemaColumns`) without false-flagging deliberate exclusions. Populate it from the manifest entry for each table; if the manifest lists no columns for a reused table, write `[]`. See [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md).
 - JSON doesn't support comments — the `/* BEGIN/END OFFLINE-CONFIG-WORKAROUND */` keys above are illustrative bracketing for the SKILL author. **Do NOT write those literal keys to `offline-profile.json`.** When the skill actually patches the file, emit only the real fields (`useDda`, `entitiesIncluded`, `instanceUrl`) inside `appConfig` and keep them contiguous.
 
 Example node script (writes the file in one shot — no read-modify-write against `power.config.json`):
@@ -576,7 +607,7 @@ node -e '
   };
 
   // BEGIN OFFLINE-CONFIG-WORKAROUND (remove when underlying SDK gaps are fixed
-  // upstream — tracked separately in pa-wrap-tools and PowerApps-Client).
+  // upstream — tracked separately in plugins/mobile-apps/template and PowerApps-Client).
   appConfig.useDda = false;
   appConfig.entitiesIncluded = [/* logicalName for each table in the profile */];
   appConfig.instanceUrl = "<envUrl>";
@@ -604,7 +635,7 @@ Field rationale:
 | `appConfig.serverRowLimit` | A (genuine) | Mirrors Image 2's "Data row limit" field (2000 default). For v0 it's a config-only value — runtime enforcement is a Layer B concern. |
 | `appConfig.useDda` | **OFFLINE-CONFIG-WORKAROUND** | Forces the SDK off its broken `shouldUseDda` gate (entity-set vs logical-name mismatch). Remove when that gate is reconciled in `@microsoft/react-native-dataverse-offline` (tracked in PowerApps-Client). |
 | `appConfig.entitiesIncluded` | **OFFLINE-CONFIG-WORKAROUND** | The SDK's offline bootstrap reads this list to know which entity logical names participate in the profile. Currently required because the SDK doesn't derive it from the published profile manifest at runtime. Populate with one logical name per table in the profile (i.e. the `logicalName` field of each `tables[]` entry below). |
-| `appConfig.instanceUrl` | **OFFLINE-CONFIG-WORKAROUND** | Enables offline cold-start by giving the SDK a static org name without needing an `api.powerplatform.com` round-trip while offline. Value is the same `<envUrl>` captured in Step 1 (e.g. `https://orgXXX.crm.dynamics.com`). Was previously written into `power.config.json.databaseReferences[*].databaseDetails.linkedEnvironmentMetadata.instanceUrl`; runtime now reads from `appConfig.instanceUrl` here. Tracked upstream in pa-wrap-tools. |
+| `appConfig.instanceUrl` | **OFFLINE-CONFIG-WORKAROUND** | Enables offline cold-start by giving the SDK a static org name without needing an `api.powerplatform.com` round-trip while offline. Value is the same `<envUrl>` captured in Step 1 (e.g. `https://orgXXX.crm.dynamics.com`). Was previously written into `power.config.json.databaseReferences[*].databaseDetails.linkedEnvironmentMetadata.instanceUrl`; runtime now reads from `appConfig.instanceUrl` here. Tracked upstream in plugins/mobile-apps/template. |
 
 > **Do NOT touch `power.config.json` from this skill.** Earlier drafts wrote the same fields into `power.config.json.offline.*` and `databaseReferences[*].databaseDetails.linkedEnvironmentMetadata.instanceUrl`. That was reverted because `power.config.json` is generated by `npx power-apps init`, whose schema we don't control — adding custom fields there means re-init can wipe them and upstream schema changes can break this skill. If you find a code path here that still mutates `power.config.json`, treat it as a bug.
 
@@ -627,11 +658,13 @@ associationsCount: <M>
 
 ### Step 9.5 — Verify
 
+**Telemetry checkpoint: `verify_published_offline_profile`**
+
 **Print before starting:**
 > "→ Verifying the on-server profile matches offline-profile.json…"
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/verify-offline-profile.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl>
 ```
 
 Read the JSON output:
@@ -670,9 +703,10 @@ Next steps:
   - /preview-offline-scope         → estimate download size before pushing the app (not yet implemented — v0.2)
   - /edit-offline-profile <table>  → re-scope one table (not yet implemented — v0.2)
 
-Note: The Expo runtime does not yet consume this profile automatically. The profile is now
-authored in Dataverse and any compatible Power Apps client (canvas, model-driven) will use it.
-Native runtime support remains deferred until upstream host support is confirmed.
+Runtime: The template bundles @microsoft/power-apps-native-offline.
+@microsoft/power-apps-native-host consumes the profile and owns local SQLite access,
+queued synchronization, reconnect behavior, and status UX. This skill configures
+that runtime; it does not scaffold a second app-owned store, queue, or sync engine.
 ```
 
 ## Status code (final line)

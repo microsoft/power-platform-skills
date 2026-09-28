@@ -1,19 +1,35 @@
 # Entity Creation Log
 
-Env: https://aurorabapenv610b3.crmtest.dynamics.com
-Solution: Crdec34
-Publisher Prefix: cr
-Started: 2026-05-21T00:00:00Z
+## Environment
+- URL: https://contosobapenv0001.crmtest.dynamics.com/
+- Solution: Crdec34
+- Publisher Prefix: cr
 
-| Step | Operation | Status | Resolved Full Name | MetadataId | Notes |
-|------|-----------|--------|---------------------|------------|-------|
-| 1 | Auth check | OK | n/a | n/a | az + pac signed in as Aurora365-User1@auroratstgeo.onmicrosoft.com |
-| 2 | Create table cr_Ticket | EXISTS | cr_ticket | 8a63d937-5355-f111-a821-000d3a380330 | Table already existed in env; verified PrimaryNameAttribute=cr_name, EntitySetName=cr_tickets |
-| 3 | Add column cr_priority (picklist) | OK | cr_priority | 1a2ed57f-5355-f111-a821-000d3a380330 | Options: Low(100000000), Medium(100000001), High(100000002), Critical(100000003) |
-| 4 | Add column cr_status (picklist) | OK | cr_status | bf5f0089-5355-f111-a821-000d3a380330 | Options: Open(100000000), In Progress(100000001), Resolved(100000002), Closed(100000003) |
-| 5 | Add column cr_duedate (datetime) | OK | cr_duedate | c95f0089-5355-f111-a821-000d3a380330 | DateOnly format, UserLocal behavior |
-| 6 | Verify metadata | OK | cr_ticket | 8a63d937-5355-f111-a821-000d3a380330 | EntitySetName=cr_tickets confirmed |
-| 7 | Seed sample tickets | OK | cr_tickets | n/a | 10 records inserted via $batch, 0 errors |
+## Created Tables
+
+### Ticket
+- Schema Name: cr_Ticket
+- Resolved Full Name: cr_ticket
+- Metadata ID: n/a
+
+## Created Columns
+
+| Table | Display Name | Schema Name | Resolved Full Name | Metadata ID |
+|-------|--------------|-------------|--------------------|-------------|
+| cr_ticket | Priority | cr_Priority | cr_priority | n/a |
+| cr_ticket | Status | cr_Status | cr_status | n/a |
+| cr_ticket | Due Date | cr_DueDate | cr_duedate | n/a |
+
+## Created Relationships
+
+(No relationships created)
+
+## Commands
+
+```powershell
+node check-auth.js  # ok: true
+node provision-entities.js --env "$ENV_URL" --input @support-tickets/provision-input.json --apply --sample-data
+```
 
 ## Created Record IDs (cr_ticket)
 

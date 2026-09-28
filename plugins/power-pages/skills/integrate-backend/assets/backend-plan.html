@@ -254,11 +254,34 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 </div>
 
 <script>
-const ITEMS = __ITEMS_DATA__;
-const RATIONALE = __RATIONALE_DATA__;
-const DATA_FLOWS = __DATA_FLOWS_DATA__;
+const ITEMS = __JSON_ITEMS_DATA__;
+const RATIONALE = __JSON_RATIONALE_DATA__;
+const DATA_FLOWS = __JSON_DATA_FLOWS_DATA__;
 
-function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function esc(str) { const d = document.createElement('div'); d.textContent = str == null ? '' : String(str); return d.innerHTML; }
+function safeIcon(value) {
+  const icon = String(value ?? '');
+  if (!/^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon)) return esc(icon);
+
+  let valid = true;
+  const decoded = icon.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, decimal) => {
+    const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      valid = false;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
+  });
+  return valid ? esc(decoded) : esc(icon);
+}
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
 
 const CONCEPTS = [
   {
@@ -361,19 +384,19 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 function approachChip(approach) {
-  const m = APPROACH_META[approach] || { label: approach, cls: 'webapi' };
+  const m = APPROACH_META[approach] || APPROACH_META.webapi;
   return `<span class="approach-chip approach-${m.cls}"><span class="dot"></span>${m.label}</span>`;
 }
 
 function complexityBadge(level) {
-  if (!level) return '';
-  return `<span class="complexity-badge complexity-${level}">${level}</span>`;
+  if (!['low', 'medium', 'high'].includes(level)) return '';
+  return `<span class="complexity-badge complexity-${level}">${esc(level)}</span>`;
 }
 
 function statusBadge(status) {
-  if (!status) return '';
   const labels = { 'new': 'New', 'existing': 'Existing', 'extends': 'Extends Existing' };
-  return `<span class="status-badge status-${status}">${labels[status] || status}</span>`;
+  if (!labels[status]) return '';
+  return `<span class="status-badge status-${status}">${labels[status]}</span>`;
 }
 
 function implementBar(approach) {
@@ -460,10 +483,10 @@ summaryEl.innerHTML = usedApproaches.map(approach => {
 
 document.getElementById('rationaleContainer').innerHTML = RATIONALE.map(r => `
   <div class="principle">
-    <div class="principle-icon">${r.icon}</div>
+    <div class="principle-icon">${safeIcon(r.icon)}</div>
     <div>
-      <div class="principle-title">${r.title}</div>
-      <div class="principle-desc">${r.desc}</div>
+      <div class="principle-title">${esc(r.title)}</div>
+      <div class="principle-desc">${esc(r.desc)}</div>
     </div>
   </div>
 `).join('');
@@ -476,14 +499,14 @@ dfContainer.innerHTML = DATA_FLOWS.map(flow => {
     const connector = idx < flow.steps.length - 1 ? '<span class="flow-connector">&#10140;</span>' : '';
     return `<div class="flow-step" style="border-top:3px solid ${m.color}">
       <div class="flow-step-label">${m.label}</div>
-      <div class="flow-step-name">${step.name}</div>
-      <div class="flow-step-detail">${step.detail || ''}</div>
+      <div class="flow-step-name">${esc(step.name)}</div>
+      <div class="flow-step-detail">${esc(step.detail || '')}</div>
     </div>${connector}`;
   }).join('');
 
   return `<div class="card" style="margin-bottom:16px;">
-    <div style="font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;">${flow.trigger}</div>
-    <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">${flow.description}</div>
+    <div style="font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;">${esc(flow.trigger)}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">${esc(flow.description)}</div>
     <div class="flow-arrow">${stepsHtml}</div>
   </div>`;
 }).join('');
@@ -528,13 +551,12 @@ if (hasExplicitPhases) {
 
 orderContainer.innerHTML = phases.map((phase, phaseIdx) => {
   const itemsHtml = phase.items.map(item => {
-    const m = APPROACH_META[item.approach];
-    const depHtml = item.depends ? `<div class="dep-tag">${item.depends}</div>` : '';
+    const depHtml = item.depends ? `<div class="dep-tag">${esc(item.depends)}</div>` : '';
 
     return `<div class="phase-item">
       <div class="phase-item-left">
-        <div class="phase-item-name">${item.name} ${approachChip(item.approach)}</div>
-        <div class="phase-item-desc">${item.description}</div>
+        <div class="phase-item-name">${esc(item.name)} ${approachChip(item.approach)}</div>
+        <div class="phase-item-desc">${esc(item.description)}</div>
         ${depHtml}
         ${implementBar(item.approach)}
       </div>
@@ -544,20 +566,23 @@ orderContainer.innerHTML = phases.map((phase, phaseIdx) => {
     </div>`;
   }).join('');
 
-  return `<div class="phase-card${phaseIdx === 0 ? ' open' : ''}" onclick="this.classList.toggle('open')">
+  return `<div class="phase-card${phaseIdx === 0 ? ' open' : ''}">
     <div class="phase-header">
       <div class="phase-num" style="background:${phase.color};">${phase.num}</div>
       <div>
-        <div class="phase-title">${phase.title}</div>
-        <div class="phase-subtitle">${phase.subtitle}</div>
+        <div class="phase-title">${esc(phase.title)}</div>
+        <div class="phase-subtitle">${esc(phase.subtitle)}</div>
       </div>
       <span class="phase-chevron">&#9660;</span>
     </div>
-    <div class="phase-items" onclick="event.stopPropagation()">
+    <div class="phase-items">
       ${itemsHtml}
     </div>
   </div>`;
 }).join('');
+orderContainer.querySelectorAll('.phase-header').forEach(header => {
+  header.addEventListener('click', () => header.parentElement.classList.toggle('open'));
+});
 
 // --- Items Tab ---
 const itemParts = [];
@@ -574,25 +599,28 @@ itemsContainer.innerHTML = ITEMS.map(item => {
 
   const detailsHtml = (item.details || []).map(d =>
     `<div class="detail-item">
-      <div class="field-label">${d.label}</div>
-      <div style="font-size:13px;color:var(--text);">${d.value}</div>
+      <div class="field-label">${esc(d.label)}</div>
+      <div style="font-size:13px;color:var(--text);">${esc(d.value)}</div>
     </div>`
   ).join('');
 
-  const depHtml = item.depends ? `<div class="dep-tag">${item.depends}</div>` : '';
+  const depHtml = item.depends ? `<div class="dep-tag">${esc(item.depends)}</div>` : '';
 
-  const docsHtml = (item.docs || []).map(d =>
-    `<a class="concept-link" href="${d.url}" target="_blank">&#128214; ${d.label}</a>`
-  ).join('');
+  const docsHtml = (item.docs || []).map(d => {
+    const url = safeUrl(d.url);
+    return url
+      ? `<a class="concept-link" href="${esc(url)}" target="_blank" rel="noopener">&#128214; ${esc(d.label)}</a>`
+      : `<span class="concept-link">&#128214; ${esc(d.label)}</span>`;
+  }).join('');
 
   return `<div class="card" style="border-left:3px solid ${m.color};">
     <div class="item-header">
       <div>
-        <div class="item-name">${item.name} ${approachChip(item.approach)} ${complexityBadge(item.complexity)} ${statusBadge(item.status)}</div>
-        <div class="item-desc">${item.description}</div>
+        <div class="item-name">${esc(item.name)} ${approachChip(item.approach)} ${complexityBadge(item.complexity)} ${statusBadge(item.status)}</div>
+        <div class="item-desc">${esc(item.description)}</div>
       </div>
     </div>
-    <div class="reason-box reason-${m.cls}"><strong>Why ${m.label}:</strong> ${item.reasoning}</div>
+    <div class="reason-box reason-${m.cls}"><strong>Why ${m.label}:</strong> ${esc(item.reasoning)}</div>
     ${depHtml}
     ${detailsHtml ? `<div class="detail-grid">${detailsHtml}</div>` : ''}
     ${docsHtml ? `<div class="doc-links">${docsHtml}</div>` : ''}

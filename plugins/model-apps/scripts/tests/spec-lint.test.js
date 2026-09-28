@@ -1,0 +1,673 @@
+// plugins/model-apps/scripts/tests/spec-lint.test.js
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { lintAppSpec, NO_VALUE_OPS, KNOWN_FILTER_OPS } = require('../lib/spec-lint.js');
+const { migrateAppSpec } = require('../lib/app-spec.js');
+
+const base = () => ({
+  solution: { uniqueName: 'X', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name', displayName: 'Title' },
+      columns: [{ schemaName: 'new_priority', displayName: 'Priority', type: 'Choice', options: ['Low', 'High'] }] },
+  ],
+  relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } }],
+  forms: [], views: [], charts: [],
+});
+
+test('a clean spec passes with no errors', () => {
+  const r = lintAppSpec(base());
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.errors.length, 0);
+});
+
+test('malformed top-level collections return lint errors instead of throwing', () => {
+  for (const spec of [
+    null,
+    { entities: {} },
+    { relationships: {} },
+    { forms: {} },
+    { entities: [null] },
+  ]) {
+    assert.doesNotThrow(() => lintAppSpec(spec));
+    const result = lintAppSpec(spec);
+    assert.equal(result.ok, false, JSON.stringify(spec));
+  }
+});
+
+// #546. `eq-businessid` / `ne-businessid` are value-less FetchXML condition operators — the
+// business-unit equivalents of `eq-userid` / `ne-userid` — and are the natural way to express
+// "rows owned by my business unit". They were missing from NO_VALUE_OPS, so the lint demanded a
+// `value` the operator must not carry and rejected a correct spec.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/condition-operator
+test('#546 view filters: value-less operators are accepted without a value', () => {
+  for (const op of ['eq-businessid', 'ne-businessid', 'eq-userid', 'ne-userid', 'null', 'this-week']) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op }] }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, true, `${op} must not require a value: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+// The complement: an operator that DOES take a value must still be caught when the value is
+// omitted, or widening the set above would have turned the check into a rubber stamp.
+test('#546 view filters: a value-taking operator with no value is still an error', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'new_priority', op: 'eq' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /needs a value/.test(e)), JSON.stringify(r.errors));
+});
+
+// Regression contract: the #546 test above only exercised a handful of operators, and a test that
+// ITERATES NO_VALUE_OPS to check NO_VALUE_OPS cannot catch a typo inside it — a misspelled entry
+// would simply not be tested, and would reintroduce the same build-blocking false positive.
+//
+// This list is kept in the DOC TABLE'S OWN ALPHABETICAL ORDER, not the source module's editorial
+// grouping, precisely so the transcription is verifiable against
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+// rather than being a reflow of the thing it is meant to check. (A first pass at this test copied
+// the source's grouping, which is not independent of the thing it checks at all.)
+// Note the near-misses deliberately EXCLUDED because they take a value: last-x-days, next-x-days,
+// in-fiscal-period, in-fiscal-year, olderthan-x-*, on, on-or-before, between.
+const DOCUMENTED_NO_VALUE_OPS = [
+  'eq-businessid', 'eq-userid', 'eq-userlanguage', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-useroruserteams', 'eq-userteams',
+  'last-fiscal-period', 'last-fiscal-year', 'last-month', 'last-seven-days', 'last-week',
+  'last-year', 'ne-businessid', 'ne-userid', 'next-fiscal-period', 'next-fiscal-year',
+  'next-month', 'next-seven-days', 'next-week', 'next-year', 'not-null', 'null',
+  'this-fiscal-period', 'this-fiscal-year', 'this-month', 'this-week', 'this-year',
+  'today', 'tomorrow', 'yesterday',
+];
+
+test('#546 every documented value-less operator is accepted without a value', () => {
+  for (const op of DOCUMENTED_NO_VALUE_OPS) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op }] }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, true, `'${op}' must not require a value: ${JSON.stringify(r.errors)}`);
+    assert.ok(!r.warnings.some((w) => /not a documented FetchXML/.test(w)), `'${op}' must be in the known-operator set too: ${JSON.stringify(r.warnings)}`);
+  }
+});
+
+// Both directions. A MISSING/typo'd entry reintroduces #546; an EXTRA entry is worse — adding a
+// value-TAKING operator here silently disables the missing-value check for it and pushes the
+// failure to the platform at build time.
+test('#546 NO_VALUE_OPS matches the documented operator list exactly, in both directions', () => {
+  assert.deepStrictEqual([...NO_VALUE_OPS].sort(), [...DOCUMENTED_NO_VALUE_OPS].sort());
+});
+
+test('the value-less set is a subset of the known-operator set (no entry can be unreachable)', () => {
+  const known = new Set(KNOWN_FILTER_OPS);
+  for (const op of NO_VALUE_OPS) assert.ok(known.has(op), `'${op}' is value-less but not a known operator`);
+});
+
+// The exported sets are shared through the require cache, so handing out the live Set would let one
+// consumer's mutation change lint behaviour process-wide.
+test('the exported operator sets are frozen copies, not the live Sets', () => {
+  assert.ok(Object.isFrozen(NO_VALUE_OPS) && Object.isFrozen(KNOWN_FILTER_OPS));
+  assert.throws(() => { NO_VALUE_OPS.push('eq'); });
+});
+
+// The SEVERITY here was settled by measurement, not assumption. The obvious reading is that a
+// value on a value-less operator is rejected by the platform. Probed live against the Dataverse
+// Web API:
+//   eq-businessid value="00000000-0000-0000-0000-000000000000" -> HTTP 200, 1 row  (same as no value)
+//   this-year     value="1999"                                 -> HTTP 200, 1 row  (same as no value)
+// The platform neither rejects the condition nor honours the value: it IGNORES it. An error would
+// therefore block specs that build and run correctly today, so this is a warning — but a silent
+// accept would leave a filter that does not do what its `value` plainly says it does.
+test('a value on a value-less operator WARNS (the platform ignores it) and does not fail the lint', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op: 'eq-businessid', value: '00000000-0000-0000-0000-000000000000' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, `must not be an error: ${JSON.stringify(r.errors)}`);
+  assert.ok(
+    r.warnings.some((w) => /value-less operator 'eq-businessid'/.test(w) && /sent to Dataverse and ignored there/.test(w)),
+    JSON.stringify(r.warnings)
+  );
+});
+
+// Regression contract. `value` and `values` are dropped at DIFFERENT points, so one message for
+// both sent the author to the wrong place: sdk-build.js forwards `value` into the condition (the
+// platform then ignores it), but reads `values` ONLY in the in/not-in branch — so on a value-less
+// operator it never reaches Dataverse at all.
+test('values[] on a value-less operator warns about the BUILD dropping it, not Dataverse', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'createdon', op: 'this-year', values: ['1999'] }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const w = r.warnings.find((x) => /value-less operator 'this-year'/.test(x));
+  assert.ok(w, JSON.stringify(r.warnings));
+  assert.match(w, /only read by the 'in'\/'not-in' operators/);
+  assert.doesNotMatch(w, /sent to Dataverse/, 'values[] never reaches the platform — saying so would misdirect the author');
+});
+
+// Regression contract. Without a known-operator set, a typo'd operator fell through to the
+// missing-value check and was reported as `needs a value` — advice that is WRONG. Acting on it
+// produces a spec that lints clean and is then rejected by Dataverse at build time. This is the
+// same shape as the #546 false positive with an extra step.
+test('an operator outside the documented set warns with a near match instead of "needs a value"', () => {
+  for (const [op, expected] of [
+    ['eq-businesid', 'eq-businessid'],
+    ['eq-userteam', 'eq-userteams'],
+    ['EQ-USERID', 'eq-userid'],
+  ]) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'ownerid', op }] }];
+    const r = lintAppSpec(s);
+    assert.ok(
+      !r.errors.some((e) => /needs a value/.test(e)),
+      `'${op}' must not be reported as needing a value it cannot take: ${JSON.stringify(r.errors)}`
+    );
+    assert.ok(
+      r.warnings.some((w) => new RegExp(`uses '${op}'`).test(w) && w.includes(`did you mean '${expected}'`)),
+      `'${op}' should suggest '${expected}': ${JSON.stringify(r.warnings)}`
+    );
+  }
+});
+
+test('an unrecognisable operator still warns, without inventing a near match', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'ownerid', op: 'totally-made-up' }] }];
+  const r = lintAppSpec(s);
+  const w = r.warnings.find((x) => /totally-made-up/.test(x));
+  assert.ok(w, JSON.stringify(r.warnings));
+  assert.doesNotMatch(w, /did you mean/);
+});
+
+// The complement: a legitimate value-TAKING operator must still reach the missing-value error, or
+// the new allow-list would have turned that check into a rubber stamp.
+test('a known value-taking operator with no value is still an error, not an unknown-operator warning', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'createdon', op: 'last-x-days' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /needs a value/.test(e)), JSON.stringify(r.errors));
+  assert.ok(!r.warnings.some((w) => /not a documented FetchXML/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a value-less operator WITHOUT a value produces no warning (the advice is not noise)', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op: 'eq-businessid' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /value-less operator/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a view named like the stock default ("Active <Plural>") WARNS about the merge-onto-default collision', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, 'the collision is a warning, not an error: ' + JSON.stringify(r.errors));
+  assert.ok(
+    r.warnings.some((w) => /Active Tickets/.test(w) && /stock default view/.test(w) && /filters\/sort are ignored/.test(w)),
+    JSON.stringify(r.warnings)
+  );
+});
+
+test('a view with a DISTINCT name does NOT warn about a stock-default collision', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Open Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /stock default view/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('#5 warns when an auto-numbered-primary table has sampleData but no single-column alternate key', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'new_offer', displayName: 'Offer', pluralName: 'Offers',
+    primaryAttribute: { schemaName: 'new_number', displayName: 'Offer #', autoNumberFormat: 'OFR-{SEQNUM:5}' }, columns: [] });
+  s.sampleData = { new_offer: [{ new_amount: 100 }, { new_amount: 200 }] };
+  const r = lintAppSpec(s);
+  assert.ok(
+    r.warnings.some((w) => /new_offer/.test(w) && /auto-numbered/.test(w) && /DUPLICATE/.test(w) && /alternateKeys/.test(w)),
+    JSON.stringify(r.warnings)
+  );
+});
+
+test('#5 an auto-numbered-primary table WITH a single-column alternate key does NOT warn', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'new_offer', displayName: 'Offer', pluralName: 'Offers',
+    primaryAttribute: { schemaName: 'new_number', displayName: 'Offer #', autoNumberFormat: 'OFR-{SEQNUM:5}' },
+    columns: [{ schemaName: 'new_ext', displayName: 'Ext Id', type: 'Text' }],
+    alternateKeys: [{ schemaName: 'new_extkey', columns: ['new_ext'] }] });
+  s.sampleData = { new_offer: [{ new_ext: 'A1' }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /auto-numbered/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a relationship to a standard/system table (referenced not in entities[]) WARNS, not errors', () => {
+  const s = base();
+  // systemuser is a standard table the build supports (auto-prefixes the rel name) — must not error.
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', lookup: { schemaName: 'new_AssignedUserId', displayName: 'Assigned' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, 'systemuser referenced is not an error: ' + JSON.stringify(r.errors));
+  assert.ok(r.warnings.some((w) => /systemuser/.test(w) && /standard\/system table/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a relationship whose REFERENCING (child) side is unknown IS an error (the child must be declared)', () => {
+  const s = base();
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_missing', lookup: { schemaName: 'new_CustId', displayName: 'Customer' } });
+  const r = lintAppSpec(s);
+  assert.ok(r.errors.some((e) => /unknown entity 'new_missing'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('warns that a BARE-TOKEN vectorIcon on an entity subarea is dropped; a VALID platform ref round-trips silently', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { entity: 'new_customer', title: 'Customers', vectorIcon: 'Shield' },
+  ] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /vectorIcon 'Shield' is a bare token/.test(w) && /entity subarea/.test(w)), JSON.stringify(r.warnings));
+
+  // A valid platform reference (path) on an entity subarea now ROUND-TRIPS — no warning (it is emitted).
+  const s2 = base();
+  s2.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { entity: 'new_customer', title: 'Customers', vectorIcon: '/WebResources/new_/icons/customer.svg' },
+  ] }] }] };
+  const r2 = lintAppSpec(s2);
+  assert.ok(!r2.warnings.some((w) => /vectorIcon/.test(w)), `a valid platform vectorIcon must not warn: ${JSON.stringify(r2.warnings)}`);
+});
+
+test('warns when a non-entity subarea vectorIcon is a bare Fluent token (VectorIcon needs an SVG path / $webresource)', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { url: 'https://x', title: 'Help', vectorIcon: 'Home' },
+  ] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /vectorIcon 'Home' is a bare token/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('flags the relationship-name vs lookup-name collision (the live bug)', () => {
+  const s = base();
+  s.relationships[0].lookup.schemaName = 'new_customer_new_ticket';
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /collides with its lookup/i.test(m)));
+});
+
+test('errors on an explicit relationship schemaName that lacks the publisher prefix', () => {
+  const s = base();
+  // systemuser-referenced relationship with a hand-written, unprefixed name — Dataverse would 400.
+  s.entities.push({ schemaName: 'systemuser', displayName: 'User', primaryAttribute: { schemaName: 'fullname', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', schemaName: 'systemuser_new_ticket', lookup: { schemaName: 'new_UserId', displayName: 'User' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(r.errors));
+});
+
+test('a system-table relationship with NO schemaName is clean (auto-prefixed default is valid)', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'systemuser', displayName: 'User', primaryAttribute: { schemaName: 'fullname', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', lookup: { schemaName: 'new_UserId', displayName: 'User' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('errors on a missing primaryAttribute', () => {
+  const s = base();
+  delete s.entities[1].primaryAttribute;
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /primaryAttribute/i.test(m)));
+});
+
+test('errors on a Choice column with no options', () => {
+  const s = base();
+  s.entities[1].columns[0].options = [];
+  const r = lintAppSpec(s);
+  assert.ok(r.errors.some((m) => /needs options/i.test(m)));
+});
+
+test('warns when a Choice has too many options', () => {
+  const s = base();
+  s.entities[1].columns[0].options = Array.from({ length: 14 }, (_, i) => 'O' + i);
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((m) => /consider a lookup table/i.test(m)));
+});
+
+test('errors on a sub-grid with no matching OneToMany', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_customer', subgrids: [{ childEntity: 'new_comment' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(r.errors.some((m) => /no matching OneToMany/i.test(m)));
+});
+
+test('warns when a QuickView form is built but not placed on any host form', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket QV', formType: 'QuickView' }];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.ok(r.warnings.some((m) => /QuickView form/i.test(m) && /isn't placed/i.test(m)));
+});
+
+test('a placed QuickView form draws no unplaced warning, and quick-view refs validate', () => {
+  const s = base();
+  s.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main',
+      quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer QV' }] },
+    { entity: 'new_customer', name: 'Customer QV', formType: 'QuickView' },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.ok(!r.warnings.some((m) => /isn't placed/i.test(m)), 'no unplaced warning once referenced');
+});
+
+test('errors when a quick-view references a non-QuickView (or unknown) form', () => {
+  const s = base();
+  s.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main',
+      quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer' }] },
+    { entity: 'new_customer', name: 'Customer', formType: 'Main' },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /must be a QuickView form/i.test(m)));
+});
+
+test('command flyouts: a FlyoutAnchor needs children; children need a library + function', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [
+    { entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [{ label: 'A' }] }, // child missing lib/fn
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /needs a library/i.test(m) || /needs a function/i.test(m)));
+});
+
+test('command flyouts: a well-formed flyout (with library-backed children) passes', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [
+    { entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [
+      { label: 'A', library: 'new_ticket.js', function: 'T.a' },
+    ] },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('sitemap: a DashBoard subarea must reference a declared dashboard', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ dashboard: 'Ops', title: 'Overview' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown dashboard 'Ops'/i.test(m)));
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'iframe', url: 'https://x', name: 'X' }] }];
+  const r2 = lintAppSpec(s);
+  assert.ok(r2.ok, JSON.stringify(r2.errors));
+});
+
+test('sitemap: a page subarea must reference a declared page', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'Overview', title: 'Overview' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown page 'Overview'/i.test(m)), JSON.stringify(r.errors));
+  s.pages = [{ name: 'Overview', codeFile: 'overview.tsx' }];
+  const r2 = lintAppSpec(s);
+  assert.ok(r2.ok, JSON.stringify(r2.errors));
+});
+
+test('sitemap: a subarea with two targets is rejected', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ entity: 'new_customer', url: 'https://x', title: 'Both' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /sets multiple targets/i.test(m)));
+});
+
+test('errors on sub-grids declared on a non-Main form', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_customer', formType: 'QuickCreate', subgrids: [{ childEntity: 'new_ticket' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /Main-form only/i.test(m)));
+});
+
+test('errors on a relationship referencing an unknown entity', () => {
+  const s = base();
+  s.relationships[0].referencing = 'new_nope';
+  const r = lintAppSpec(s);
+  assert.ok(r.errors.some((m) => /unknown entity/i.test(m)));
+});
+
+test('errors on a command with no function and an undeclared library', () => {
+  const s = base();
+  s.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'missing.js' }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /needs a function/i.test(m)));
+  assert.ok(r.errors.some((m) => /undeclared web resource/i.test(m)));
+});
+
+test('accepts a command bound to a declared web resource + function', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'new_ticket.js', function: 'T.escalate' }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('lint: a malformed tab entry is reported, not thrown on', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [null] }];
+  // The linter dereferences each tab (`t.columns`/`t.sections`). Through the public entry point
+  // migrateAppSpec normalises a null entry to `{}` first, so the crash is not reachable there — but
+  // the loop now guards the entry anyway, because lintAppSpec is also called on raw specs.
+  let r;
+  assert.doesNotThrow(() => { r = lintAppSpec(s); }, 'lintAppSpec must not throw on a malformed tab');
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /tab/i.test(m)), `expected a structural tab error; got ${JSON.stringify(r.errors)}`);
+
+  // And a genuinely raw null tab, bypassing migration, is reported rather than thrown on.
+  const raw = { ...base(), forms: [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [null] }] };
+  raw.schemaVersion = undefined;
+  assert.doesNotThrow(() => lintAppSpec(raw));
+});
+
+test('errors on a dashboard tile referencing an unknown view', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Missing' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /references unknown view/i.test(m)));
+});
+
+// #572 — a downloaded app's dashboards carry ID-PASSTHROUGH tiles (the deployed view/chart ids +
+// entity, no names) because the artifacts already exist. `validateAppSpec` and the build both
+// accept that form; this lint did not, so `download-model-app.js` produced a spec that failed its
+// own structural lint with "references unknown chart 'undefined'".
+test('accepts id-passthrough dashboard tiles with no declared views[]/charts[] (#572)', () => {
+  const s = base();
+  s.views = [];
+  s.charts = [];
+  s.dashboards = [{
+    name: 'Field Ops Overview',
+    tiles: [
+      { type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: '11111111-1111-1111-1111-111111111111', visualizationId: '22222222-2222-2222-2222-222222222222' },
+      { type: 'list', name: 'Open', entity: 'new_ticket', viewId: '33333333-3333-3333-3333-333333333333' },
+    ],
+  }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('an id-passthrough chart tile still needs entity and viewId (#572)', () => {
+  const noEntity = base();
+  noEntity.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', viewId: 'v1', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(noEntity).errors.some((m) => /id-based chart tile needs entity/i.test(m)));
+
+  // A visualization with no view has nothing to plot, so the view id is the load-bearing half.
+  const noView = base();
+  noView.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: 'new_ticket', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(noView).errors.some((m) => /also needs viewId/i.test(m)));
+
+  const noListEntity = base();
+  noListEntity.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', name: 'X', viewId: 'v1' }] }];
+  assert.ok(lintAppSpec(noListEntity).errors.some((m) => /id-based list tile needs entity/i.test(m)));
+});
+
+// `visualizationId` identifies a CHART and means nothing on a list tile, but one shared id test was
+// applied to both. A list tile carrying a stray visualizationId therefore took the id path and
+// escaped the viewId requirement, and a chart tile with only a viewId had nothing to plot.
+test('id-passthrough tiles: visualizationId is chart-only, and a chart needs BOTH ids (#572 follow-up)', () => {
+  // A list tile with only a visualizationId must not be treated as id-based.
+  const strayViz = base();
+  strayViz.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', name: 'X', entity: 'new_ticket', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(strayViz).errors.some((m) => /list tile needs a view/i.test(m)),
+    `a list tile without a viewId must be rejected; got ${JSON.stringify(lintAppSpec(strayViz).errors)}`);
+
+  // A chart tile with a viewId but no visualizationId has no visualization to render.
+  const noViz = base();
+  noViz.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: 'new_ticket', viewId: 'v1' }] }];
+  assert.ok(lintAppSpec(noViz).errors.some((m) => /also needs visualizationId/i.test(m)),
+    `a chart tile without a visualizationId must be rejected; got ${JSON.stringify(lintAppSpec(noViz).errors)}`);
+
+  // …and validateAppSpec must agree, or a spec validates clean and then fails its own lint.
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  assert.ok(validateAppSpec(noViz, { profile: 'plan' }).errors.some((m) => /also needs visualizationId/i.test(m)),
+    'the validator and the lint must enforce the same chart-ID contract');
+});
+
+test('a tile with neither a name nor an id reports the absence, not a chart called undefined (#572)', () => {
+  const s = base();
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  // The old check interpolated a missing key straight into the message.
+  assert.ok(!r.errors.some((m) => /'undefined'/.test(m)), `leaked undefined: ${JSON.stringify(r.errors)}`);
+  assert.ok(r.errors.some((m) => /chart tile needs a chart \(by name\) or viewId\+visualizationId/i.test(m)));
+});
+
+test('name-based dashboard tiles are still validated against declared views/charts (#572)', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
+  s.charts = [{ entity: 'new_ticket', name: 'By Priority', groupBy: 'new_priority' }];
+  // Correct names pass...
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'By Priority', view: 'Active' }] }];
+  assert.strictEqual(lintAppSpec(s).ok, true, JSON.stringify(lintAppSpec(s).errors));
+  // ...and a wrong one is still caught, so the id branch did not disable the name branch.
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'Nope', view: 'Active' }] }];
+  assert.ok(lintAppSpec(s).errors.some((m) => /references unknown chart 'Nope'/i.test(m)));
+});
+
+test('warns on prefix drift', () => {
+  const s = base();
+  s.entities[1].schemaName = 'cr123_ticket';
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((m) => /prefix/i.test(m)));
+});
+
+// --- Sample-data Choice value resolvability (the global-choice live gap) -----------------
+
+test('errors on a sampleData Choice value that is neither a declared label nor an int', () => {
+  const s = base();
+  s.sampleData = { new_ticket: [{ new_name: 'T1', new_priority: 'Platnium' }] }; // typo, not Low/High
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /isn't a valid option/i.test(m)));
+});
+
+test('catches an unresolvable label on a GLOBAL-choice column (the gap that slipped past)', () => {
+  const s = base();
+  s.globalChoices = [{ name: 'new_tierset', options: ['Platinum', 'Gold', 'Silver', 'Bronze'] }];
+  s.entities[0].columns.push({ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tierset' });
+  s.sampleData = { new_customer: [{ new_name: 'C1', new_tier: 'Platnium' }] }; // typo for Platinum
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /new_tier='Platnium'/.test(m)));
+});
+
+test('accepts sampleData Choice values that match a declared label (inline or global) or a raw int', () => {
+  const s = base();
+  s.globalChoices = [{ name: 'new_tierset', options: ['Platinum', 'Gold'] }];
+  s.entities[0].columns.push({ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tierset' });
+  s.sampleData = {
+    new_ticket: [{ new_name: 'T1', new_priority: 'High' }, { new_name: 'T2', new_priority: 100000000 }],
+    new_customer: [{ new_name: 'C1', new_tier: 'Gold' }],
+  };
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// --- ai block lint guardrails -----------------------------------------------------------
+
+test('lint warns on a summary configured for a D365-owned table', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { incident: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /Dynamics 365|own summaries/i.test(w)));
+});
+
+test('lint warns on lead and opportunity D365-owned tables', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { lead: { enabled: true }, opportunity: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /lead/i.test(w) && /Dynamics 365/i.test(w)));
+  assert.ok(r.warnings.some((w) => /opportunity/i.test(w) && /Dynamics 365/i.test(w)));
+});
+
+test('lint warns when a summary table has no descriptive columns', () => {
+  const s = base();
+  // new_customer has no columns at all in base() — should warn
+  s.ai = { summaries: { tables: { new_customer: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /no descriptive columns/i.test(w)));
+});
+
+test('lint errors when a configured columns[] entry is not declared on the entity', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { new_ticket: { columns: ['new_nonexistent'] } } } };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown column 'new_nonexistent'/i.test(m)));
+});
+
+test('lint passes a well-formed ai block and raises no ai errors', () => {
+  const s = base();
+  s.ai = { appFeatures: { formFill: true }, summaries: { default: 'auto', tables: { new_ticket: { enabled: true, columns: ['new_priority'] } } } };
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('lint does not warn/error on specs with no ai block (no regression)', () => {
+  const r = lintAppSpec(base());
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.errors.length, 0);
+});
+
+// REGRESSION: a schemaVersion-2 page subarea references the page by its stable KEY (migrateAppSpec
+// rewrites name-based appShell refs to keys). When key !== name (e.g. key 'order-detail', name 'Order
+// Detail') the guardrail lint must NOT falsely error "references unknown page" — that was a bug where
+// lint only checked page NAMES while validateAppSpec correctly checks KEYS for v2 specs.
+test('lint accepts a v2 page subarea referenced by KEY when key !== name (no false "unknown page")', () => {
+  const raw = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'X', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Order #' }, columns: [] }],
+    pages: [{ key: 'order-detail', name: 'Order Detail', source: { kind: 'intent' }, purpose: 'One order', dataSources: ['new_order'] }],
+    appShell: { areas: [{ label: 'Sales', groups: [{ label: 'Work', subAreas: [{ page: 'order-detail', title: 'Order Detail' }] }] }] },
+  };
+  const spec = migrateAppSpec(raw); // sa.page is now the KEY 'order-detail'
+  assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'order-detail');
+  const r = lintAppSpec(spec);
+  assert.ok(!r.errors.some((e) => /unknown page/i.test(e)), `no false unknown-page error; got: ${JSON.stringify(r.errors)}`);
+  // A genuinely unknown page ref (neither key nor name) is still an error.
+  const bad = JSON.parse(JSON.stringify(spec));
+  bad.appShell.areas[0].groups[0].subAreas[0].page = 'nope-not-a-page';
+  assert.ok(lintAppSpec(bad).errors.some((e) => /unknown page/i.test(e)), 'an unknown page ref still errors');
+});
+
+// A multi-column tab holds its sections inside `columns[]`, not directly on `sections`. Reading
+// only `t.sections` reported EVERY multi-column tab as empty -- found by linting a real spec, not
+// by a unit test, which is why this guard exists.
+test('a multi-column tab is not reported as having no sections', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', tabs: [{
+    name: 'tab_g', label: 'G', columns: [
+      { width: '60%', sections: [{ name: 's1', label: 'S1', columns: 1, fields: ['new_name'] }] },
+      { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['new_priority'] }] },
+    ] }] }];
+  const out = lintAppSpec(migrateAppSpec(s));
+  assert.deepStrictEqual(out.errors.filter((e) => /has no sections/.test(e)), []);
+});
+
+test('a tab that genuinely declares no sections in EITHER shape is still an error', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', tabs: [{ label: 'Empty' }] }];
+  assert.ok(lintAppSpec(migrateAppSpec(s)).errors.some((e) => /has no sections/.test(e)));
+  const s2 = base();
+  s2.forms = [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [{ label: 'E', columns: [{ width: '100%', sections: [] }] }] }];
+  assert.ok(lintAppSpec(migrateAppSpec(s2)).errors.some((e) => /has no sections/.test(e)));
+});

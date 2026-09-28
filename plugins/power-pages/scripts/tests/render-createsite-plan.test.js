@@ -236,8 +236,8 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
     !html.includes('</script><script>window.__summaryPwned=1;</script>'),
     'rendered HTML leaks a literal </script> from SUMMARY'
   );
-  assert.match(html, /"text":"Summary with \\u003c\/script>\\u003cscript>window\.__summaryPwned=1;\\u003c\/script>/);
-  assert.match(html, /\\u003c\/script>/);
+  assert.match(html, /"text":"Summary with \\u003c\/script\\u003e\\u003cscript\\u003ewindow\.__summaryPwned=1;\\u003c\/script\\u003e/);
+  assert.match(html, /\\u003c\/script\\u003e/);
 });
 
 test('render-createsite-plan refuses to overwrite existing file', () => {

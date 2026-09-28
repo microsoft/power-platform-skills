@@ -5,9 +5,9 @@ Run this on every screen before marking it done.
 ## Must-have
 
 - [ ] `SafeAreaView` wraps the screen content
-- [ ] Every icon-only `Pressable`/`Button` has `accessibilityLabel="..."`
-- [ ] Every interactive element has `accessibilityRole` (`button`, `link`, `header`, `tab`, `switch`, etc.)
-- [ ] Toggles use `accessibilityState={{ selected: true/false }}` or `{ checked }`
+- [ ] Every icon-only Tamagui `Pressable`/`Button` has `aria-label="..."`
+- [ ] Every interactive Tamagui element has `role` (`button`, `link`, `heading`, `tab`, `switch`, etc.)
+- [ ] Tamagui toggle buttons use `aria-pressed`; checkboxes use `aria-checked`; tabs/options use `aria-selected`
 - [ ] Touch targets ≥ 44×44 pt (iOS) / 48dp (Android) — use `hitSlop` if visual is smaller
 - [ ] Text contrast ≥ 4.5:1 (body) / 3:1 (large text) against background
 - [ ] Inactive tabs, metadata, helper text, picker icons, and modal body copy use readable tokens (`$color10` or stronger), not faint decorative tokens (`$color8` or weaker)
@@ -27,8 +27,8 @@ Tamagui's `Button` and `Input` get a11y roles for free. BUT — if you build a c
 ```tsx
 <XStack
   pressStyle={{ opacity: 0.7 }}
-  accessibilityRole="button"
-  accessibilityLabel="Open recipe details"
+  role="button"
+  aria-label="Open recipe details"
   onPress={handlePress}
   hitSlop={8}
 >
@@ -40,8 +40,8 @@ For icon-only buttons:
   size="$3"
   circular
   icon={Heart}
-  accessibilityLabel="Favorite"
-  accessibilityState={{ selected: isFavorite }}
+  aria-label="Favorite"
+  aria-pressed={isFavorite}
   onPress={toggle}
 />
 ```
@@ -57,7 +57,7 @@ For icon-only buttons:
 ## Forms specifically
 
 - Each input has a visible `<Label>` — placeholder doesn't count
-- Use the correct mobile input hints (`keyboardType`, `inputMode`, `autoComplete`, `textContentType`, `returnKeyType`) for the field type
+- Tamagui `Input` / `TextArea` use `inputMode`, `type`, `autoComplete`, and `enterKeyHint`; raw React Native inputs retain native input props
 - Errors are announced when they appear
 - Required fields marked (text, not just asterisk)
 - Submit button label changes to reflect state ("Save" → "Saving…")
@@ -65,15 +65,15 @@ For icon-only buttons:
 
 ## Lists specifically
 
-- `accessibilityRole="list"` on the container
-- `accessibilityRole="listitem"` on each item (or rely on FlatList defaults)
+- `role="list"` on a Tamagui container
+- `role="listitem"` on each Tamagui item (or rely on FlatList defaults)
 - Row actions have their own labels distinct from the row itself
 
 ## Navigation specifically
 
 - Screen titles are real headings — Expo Router's `options.title` handles this
 - Back buttons auto-label ("Back to Recipes") — don't override unless necessary
-- Tab bar labels visible, not icon-only (or provide `accessibilityLabel`)
+- Tab bar labels visible, not icon-only (or provide `aria-label` on Tamagui controls)
 
 ## What users with disabilities actually complain about (fix these first)
 

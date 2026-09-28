@@ -33,6 +33,10 @@
             "source": "./plugins/mobile-apps"
         },
         {
+            "name": "power-apps-mobile-extension",
+            "source": "./plugins/power-apps-mobile-extension"
+        },
+        {
             "name": "power-automate",
             "source": "./plugins/power-automate"
         }

@@ -89,13 +89,13 @@ export default function RecipeFormScreen() {
                       id="title"
                       size="$4"
                       autoComplete="off"
-                      returnKeyType="next"
+                      enterKeyHint="next"
                       value={field.value}
-                      onChangeText={field.onChange}
+                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
-                      <Text col="$red10" fontSize="$2">{fieldState.error.message}</Text>
+                      <Text color="$red10" fontSize="$2">{fieldState.error.message}</Text>
                     )}
                   </YStack>
                 )}
@@ -111,13 +111,13 @@ export default function RecipeFormScreen() {
                       id="description"
                       size="$4"
                       numberOfLines={4}
-                      returnKeyType="default"
+                      enterKeyHint="enter"
                       value={field.value ?? ''}
-                      onChangeText={field.onChange}
+                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
-                      <Text col="$red10" fontSize="$2">{fieldState.error.message}</Text>
+                      <Text color="$red10" fontSize="$2">{fieldState.error.message}</Text>
                     )}
                   </YStack>
                 )}
@@ -132,15 +132,17 @@ export default function RecipeFormScreen() {
                     <Input
                       id="servings"
                       size="$4"
-                      keyboardType="number-pad"
                       inputMode="numeric"
-                      returnKeyType="done"
+                      enterKeyHint="done"
                       value={String(field.value ?? '')}
-                      onChangeText={(t) => field.onChange(Number(t) || 0)}
+                      onChange={(event) => {
+                        const value = event.target?.value ?? event.nativeEvent?.text ?? ''
+                        field.onChange(Number(value) || 0)
+                      }}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
-                      <Text col="$red10" fontSize="$2">{fieldState.error.message}</Text>
+                      <Text color="$red10" fontSize="$2">{fieldState.error.message}</Text>
                     )}
                   </YStack>
                 )}
@@ -150,10 +152,10 @@ export default function RecipeFormScreen() {
                 control={control}
                 name="isPublic"
                 render={({ field }) => (
-                  <XStack ai="center" jc="space-between" gap="$3" py="$2">
-                    <YStack f={1} gap="$1">
+                  <XStack items="center" justify="space-between" gap="$3" py="$2">
+                    <YStack flex={1} gap="$1">
                       <Label htmlFor="isPublic">Public recipe</Label>
-                      <Text fontSize="$2" col="$color10">Share with others in your org.</Text>
+                      <Text fontSize="$2" color="$color10">Share with others in your org.</Text>
                     </YStack>
                     <Switch
                       id="isPublic"
@@ -163,7 +165,7 @@ export default function RecipeFormScreen() {
                         field.onChange(next)
                       }}
                     >
-                      <Switch.Thumb animation="quick" />
+                      <Switch.Thumb transition="quick" />
                     </Switch>
                   </XStack>
                 )}
@@ -177,18 +179,20 @@ export default function RecipeFormScreen() {
                 />
                 <Form.Trigger asChild>
                   <Button
-                    f={1}
-                    theme="active"
+                    flex={1}
+                    bg="$blue10"
                     disabled={!formState.isValid || formState.isSubmitting}
                   >
-                    {formState.isSubmitting ? 'Saving…' : 'Save'}
+                    <Button.Text color="$color1">
+                      {formState.isSubmitting ? 'Saving…' : 'Save'}
+                    </Button.Text>
                   </Button>
                 </Form.Trigger>
               </XStack>
 
               {showSuccess && (
-                <YStack ai="center" p="$3" bg="$green3" br="$3">
-                  <Text col="$green10" fontWeight="600">Recipe saved!</Text>
+                <YStack items="center" p="$3" bg="$green3" rounded="$3">
+                  <Text color="$green10" fontWeight="600">Recipe saved!</Text>
                 </YStack>
               )}
             </YStack>
@@ -212,13 +216,13 @@ function CancelButton({
   const router = useRouter()
 
   if (!isDirty) {
-    return <Button f={1} onPress={() => router.back()}>Cancel</Button>
+    return <Button flex={1} onPress={() => router.back()}>Cancel</Button>
   }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Trigger asChild>
-        <Button f={1} onPress={() => onOpenChange(true)}>Cancel</Button>
+        <Button flex={1} onPress={() => onOpenChange(true)}>Cancel</Button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
         <AlertDialog.Overlay />
@@ -228,7 +232,7 @@ function CancelButton({
             <AlertDialog.Description>
               You have unsaved changes that will be lost.
             </AlertDialog.Description>
-            <XStack gap="$3" jc="flex-end">
+            <XStack gap="$3" justify="flex-end">
               <AlertDialog.Cancel asChild><Button>Keep editing</Button></AlertDialog.Cancel>
               <AlertDialog.Action asChild>
                 <Button theme="red" onPress={() => router.back()}>Discard</Button>

@@ -22,6 +22,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const { loadFixtures } = require('./lib/fixture-loader.js');
+const { parseEvalArgs } = require('../lib/eval-args.js');
 const { TapReporter } = require('./lib/reporter.js');
 const {
   ASSERTIONS,
@@ -29,21 +30,10 @@ const {
 } = require('./lib/assertions-layer-2.js');
 
 function parseArgs(argv) {
-  const args = { fixtures: null, eval: null, tier: null };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--fixtures') args.fixtures = argv[++i];
-    else if (a === '--eval') args.eval = parseInt(argv[++i], 10);
-    else if (a === '--tier') args.tier = argv[++i];
-    else if (a === '--help' || a === '-h') {
-      printHelp();
-      process.exit(0);
-    } else {
-      console.error(`Unknown argument: ${a}`);
-      process.exit(2);
-    }
-  }
-  return args;
+  // Shared with the app-builder runner: all three shipped an identical parser whose
+  // `argv[++i]` yielded `undefined` for a trailing flag, so a value-less `--tier`/`--fixtures`
+  // silently became "no filter" and the run reported PASS for a scope never asked for.
+  return parseEvalArgs(argv, { printHelp });
 }
 
 function printHelp() {

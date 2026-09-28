@@ -5,7 +5,7 @@ description: >-
   via the Power Platform REST API. Use when the user wants to activate, provision,
   turn on, or enable a Power Pages website or portal.
 user-invocable: true
-allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
 ---
 
@@ -20,8 +20,10 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 ## Core Principles
 
 - **Cloud-aware URL resolution** — Never hardcode API base URLs or site URL domains. Always derive them from the Cloud value returned by `pac auth who`.
-- **Token handling** — Scripts acquire and refresh Azure CLI tokens internally. The agent only needs to verify the user is logged in to Azure CLI.
+- **Token handling** — The agent only needs to verify the user is logged in to Azure CLI.
 - **Confirm before mutating** — Always present the full activation parameters to the user and get explicit approval before POSTing to the websites API.
+- **Preserve the caller's environment** — When another skill passes `environmentUrl`, verify PAC and Azure CLI still target that environment and tenant before activation.
+- **Caller status updates** — When `/create-site` supplies a `statusPath`, update that file before and after activation prompts so the open template status page shows when user input is required.
 
 **Initial request:** $ARGUMENTS
 
@@ -37,7 +39,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 
 ## Phase 1: Verify Prerequisites
 
-**Goal:** Ensure PAC CLI is installed and authenticated, and verify the user is logged in to Azure CLI (scripts handle token acquisition internally).
+**Goal:** Ensure PAC CLI is installed and authenticated, and verify the user is logged in to Azure CLI.
 
 ### Actions
 
@@ -78,7 +80,7 @@ pac auth who
 
 #### 1.3 Verify Azure CLI Login
 
-Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
+Verify the user is logged in to Azure CLI:
 
 ```bash
 az account show
@@ -88,7 +90,28 @@ az account show
 
 #### 1.4 Check If Already Activated
 
-Before gathering parameters, check whether the site is already activated by running the shared activation status script:
+First inspect `$ARGUMENTS` for explicit imported-site identity from another skill:
+
+```text
+siteName: <name>
+websiteRecordId: <guid>
+environmentUrl: <url>
+statusPath: <path>
+```
+
+When both values are present, set `SITE_IDENTITY_SOURCE = "arguments"` immediately and **skip the local-project activation status check below**. That check resolves identity from `powerpages.config.json` / `.powerpages-site`, which may be absent or unrelated when `/create-site` activates an imported template site. Continue to Phase 2 with the explicit identity.
+
+When `environmentUrl` is present, store it as `EXPECTED_ENVIRONMENT_URL` and verify the current CLI context before Phase 2:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<EXPECTED_ENVIRONMENT_URL>"
+```
+
+Continue only when the JSON result has `ok: true`. This check compares the active PAC environment URL with the caller's URL and verifies that PAC, the Azure account, and the Dataverse access token use the same tenant. If it fails, stop and ask the user to switch PAC or Azure CLI authentication. Do not activate the imported Website Record ID in a different environment.
+
+When `source` is `create-site template path` and `statusPath` is present, store it as `ACTIVATION_STATUS_PATH`. This is the existing template status file created by `/create-site`; do not create a separate status page.
+
+When `SITE_IDENTITY_SOURCE !== "arguments"`, check whether the local project site is already activated by running the shared activation status script:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
@@ -101,12 +124,14 @@ Evaluate the JSON result:
 - **If `activated` is `false`**: Proceed to Phase 2.
 - **If `error` is present**: Proceed to Phase 2 (do not block the activation flow).
 
+When `SITE_IDENTITY_SOURCE = "arguments"`, skip this entire local-project status check and continue to Phase 2 with the supplied site identity.
+
 ### Output
 
 - PAC CLI installed and authenticated
 - Environment ID, Organization ID, and Cloud value extracted
 - Azure CLI login confirmed
-- Activation status checked (already activated → stop early, not activated → continue)
+- Activation status checked for a local project, or skipped for an argument-based imported site
 
 ---
 
@@ -117,6 +142,22 @@ Evaluate the JSON result:
 ### Actions
 
 #### 2.1 Read Site Name
+
+If the skill was invoked by another skill with explicit imported-site identity in `$ARGUMENTS`, use it before local project discovery:
+
+```text
+siteName: <name>
+websiteRecordId: <guid>
+```
+
+When both values are present:
+
+- Set `siteName` from the explicit value.
+- Set `websiteRecordId` from the explicit value.
+- Set `SITE_IDENTITY_SOURCE = "arguments"`.
+- Skip the `powerpages.config.json` lookup below and skip Phase 2.3 (`pac pages list`) because the caller already resolved the imported website record.
+
+If either explicit value is missing, continue with the existing local-project discovery flow.
 
 Look for `powerpages.config.json` in the current directory or one level of subdirectories using `Glob`:
 
@@ -155,9 +196,36 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 |----------|--------|---------|
 | Your site subdomain will be: **`<suggestion>`** (full URL: `https://<suggestion>.<siteUrlDomain>`). Would you like to use this subdomain or enter your own? | Subdomain | Use `<suggestion>` (Recommended), Enter a custom subdomain |
 
+When `ACTIVATION_STATUS_PATH` is set, use `Write` to atomically overwrite it immediately before `AskUserQuestion`:
+
+```json
+{
+  "state": "running",
+  "phase": "activation",
+  "message": "Waiting for subdomain selection",
+  "awaitingInput": true,
+  "inputPrompt": "Choose the site subdomain in the agent terminal."
+}
+```
+
+Immediately after the user responds, overwrite the file again so the toast disappears:
+
+```json
+{
+  "state": "running",
+  "phase": "activation",
+  "message": "Preparing site activation",
+  "awaitingInput": false
+}
+```
+
+If the user cancels the prompt, clear `awaitingInput` before stopping. Apply the same status updates whenever a subdomain conflict loops back to this step.
+
 **If custom**: The user provides their own subdomain via "Other" free text input. Validate it is lowercase, alphanumeric with hyphens only, and 3-50 characters.
 
 #### 2.3 Get Website Record ID
+
+Skip this step when `SITE_IDENTITY_SOURCE = "arguments"` and `websiteRecordId` is already set.
 
 Run `pac pages list` to get the website record ID:
 
@@ -216,9 +284,7 @@ node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "
 
 Omit `--websiteRecordId` if it is null/empty.
 
-The script acquires an Azure CLI token, POSTs to the websites API, extracts the `Operation-Location` header, and polls every 10 seconds for up to 5 minutes (refreshing the token periodically). It outputs a JSON result to stdout.
-
-> **Note:** This script may run for up to 5 minutes while polling. Use a Bash timeout of at least 360 seconds (6 minutes).
+Treat the script's JSON result as the authoritative activation result. Run it in the foreground with a Bash timeout of at least 360 seconds, and do not continue to Phase 5 until it exits. Do not launch a separate readiness poll.
 
 #### 4.2 Handle Results
 
@@ -235,6 +301,8 @@ Evaluate the JSON output:
 | **`Failed`** | other | Present the error to the user and help troubleshoot. |
 | **`Running`** | — | Provisioning still in progress after 5 minutes. Inform the user it may take up to 15 minutes and suggest checking the Power Platform admin center. |
 | `error` field | — | Prerequisite failure (missing args, no token). Present the error and help troubleshoot. |
+
+Do not start a second background poll against `siteUrl` after the activation script returns `Succeeded`. HTTP and DNS propagation can lag behind provisioning; report that caveat in Phase 5 instead of leaving a command that can trigger another assistant turn. If an extra reachability poll was started accidentally, stop it before presenting the activation summary.
 
 ### Output
 

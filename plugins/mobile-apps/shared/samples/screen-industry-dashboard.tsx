@@ -9,7 +9,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ScrollView } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Button, H3, H4, H5, Paragraph, Separator, Text, XStack, YStack } from 'tamagui'
+import { Button, H3, H4, H5, Paragraph, Separator, Text, XStack, YStack, useTheme } from 'tamagui'
 
 import { DashboardService } from '../../src/generated/services/DashboardService'
 
@@ -20,12 +20,13 @@ interface DashboardData {
 }
 
 const shadows = {
-  sm: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
-  md: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
+  sm: { boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)' },
+  md: { boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)' },
 } as const
 
 export default function DashboardScreen() {
   const router = useRouter()
+  const theme = useTheme()
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['dashboard'],
     queryFn: DashboardService.getSummary,
@@ -36,10 +37,10 @@ export default function DashboardScreen() {
   if (isError) {
     return (
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-        <YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-          <Ionicons name="alert-circle" size={40} color="$statusOverdue" />
+        <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+          <Ionicons name="alert-circle" size={40} color={theme.statusOverdue.val} />
           <H4>Dashboard unavailable</H4>
-          <Paragraph ta="center" col="$color10">{(error as Error).message}</Paragraph>
+          <Paragraph text="center" color="$color10">{(error as Error).message}</Paragraph>
           <Button onPress={refetch}>Retry</Button>
         </YStack>
       </SafeAreaView>
@@ -49,7 +50,7 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        <YStack f={1} bg="$backgroundStrong" p="$4" gap="$4">
+        <YStack flex={1} bg="$background" p="$4" gap="$4">
           <H3 fontWeight="700">Dashboard</H3>
 
           {/* Stat cards — 2-column grid */}
@@ -61,26 +62,26 @@ export default function DashboardScreen() {
 
           {/* Quick actions row */}
           <YStack gap="$2">
-            <H5 fontWeight="600" col="$color10">Quick Actions</H5>
+            <H5 fontWeight="600" color="$color10">Quick Actions</H5>
             <XStack gap="$3" flexWrap="wrap">
               <QuickActionButton
                 label="New Task"
-                icon={<Ionicons name="checkbox-outline" size={20} />}
+                icon={<Ionicons name="checkbox-outline" size={20} color={theme.color10.val} />}
                 onPress={() => router.push('/task/new')}
               />
               <QuickActionButton
                 label="Team"
-                icon={<Ionicons name="people-outline" size={20} />}
+                icon={<Ionicons name="people-outline" size={20} color={theme.color10.val} />}
                 onPress={() => router.push('/team')}
               />
               <QuickActionButton
                 label="Reports"
-                icon={<Ionicons name="trending-up" size={20} />}
+                icon={<Ionicons name="trending-up" size={20} color={theme.color10.val} />}
                 onPress={() => router.push('/reports')}
               />
               <QuickActionButton
                 label="Messages"
-                icon={<Ionicons name="chatbubble-outline" size={20} />}
+                icon={<Ionicons name="chatbubble-outline" size={20} color={theme.color10.val} />}
                 onPress={() => router.push('/messages')}
               />
             </XStack>
@@ -90,12 +91,12 @@ export default function DashboardScreen() {
 
           {/* Recent tasks — dense list */}
           <YStack gap="$2">
-            <XStack ai="center" jc="space-between">
-              <H5 fontWeight="600" col="$color10">Recent Tasks</H5>
+            <XStack items="center" justify="space-between">
+              <H5 fontWeight="600" color="$color10">Recent Tasks</H5>
               <Button
                 size="$2"
                 chromeless
-                iconAfter={<Ionicons name="arrow-up" size={16} />}
+                iconAfter={<Ionicons name="arrow-up" size={16} color={theme.color10.val} />}
                 onPress={() => router.push('/tasks')}
               >
                 View all
@@ -103,9 +104,9 @@ export default function DashboardScreen() {
             </XStack>
 
             {data?.recentTasks.length === 0 && (
-              <YStack ai="center" p="$4" gap="$2">
-                <Ionicons name="grid-outline" size={32} color="$color10" />
-                <Paragraph col="$color10">No recent tasks</Paragraph>
+              <YStack items="center" p="$4" gap="$2">
+                <Ionicons name="grid-outline" size={32} color={theme.color10.val} />
+                <Paragraph color="$color10">No recent tasks</Paragraph>
               </YStack>
             )}
 
@@ -137,18 +138,18 @@ function StatCard({
   return (
     <YStack
       bg="$color2"
-      br="$4"
+      rounded="$4"
       p="$3"
       gap="$1"
       width="47%"
       {...shadows.sm}
     >
-      <Text fontSize="$2" col="$color10" fontWeight="500">{label}</Text>
+      <Text fontSize="$2" color="$color10" fontWeight="500">{label}</Text>
       <Text fontSize="$8" fontWeight="700">{value}</Text>
       {trend && (
         <Text
           fontSize="$1"
-          col={trendUp ? '$green10' : '$red10'}
+          color={trendUp ? '$green10' : '$red10'}
           fontWeight="600"
         >
           {trendUp ? '↑' : '↓'} {trend}
@@ -169,15 +170,15 @@ function QuickActionButton({
 }) {
   return (
     <YStack
-      ai="center"
+      items="center"
       gap="$1"
       p="$3"
-      br="$3"
+      rounded="$3"
       bg="$color2"
       pressStyle={{ scale: 0.98 }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={label}
+      role="button"
+      aria-label={label}
       width="22%"
       {...shadows.sm}
     >
@@ -203,23 +204,23 @@ function TaskRow({
 
   return (
     <XStack
-      ai="center"
-      jc="space-between"
+      items="center"
+      justify="space-between"
       py="$2"
       px="$3"
       bg="$color2"
-      br="$3"
+      rounded="$3"
       pressStyle={{ scale: 0.98 }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${task.title} — ${c.label}`}
+      role="button"
+      aria-label={`${task.title} — ${c.label}`}
     >
-      <YStack f={1} gap="$1" mr="$2">
+      <YStack flex={1} gap="$1" mr="$2">
         <Text fontSize="$4" fontWeight="600" numberOfLines={1}>{task.title}</Text>
-        <Text fontSize="$2" col="$color10">{task.assignee}</Text>
+        <Text fontSize="$2" color="$color10">{task.assignee}</Text>
       </YStack>
-      <XStack bg={c.bg} px="$2" py="$1" br="$10">
-        <Text fontSize="$1" fontWeight="600" col={c.text}>{c.label}</Text>
+      <XStack bg={c.bg} px="$2" py="$1" rounded="$10">
+        <Text fontSize="$1" fontWeight="600" color={c.text}>{c.label}</Text>
       </XStack>
     </XStack>
   )
@@ -228,35 +229,35 @@ function TaskRow({
 function DashboardSkeleton() {
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-      <YStack f={1} bg="$backgroundStrong" p="$4" gap="$4">
-        <YStack h={28} w="40%" bg="$color4" br="$2" />
+      <YStack flex={1} bg="$background" p="$4" gap="$4">
+        <YStack height={28} width="40%" bg="$color4" rounded="$2" />
         {/* Stat card skeletons */}
         <XStack flexWrap="wrap" gap="$3">
           {Array.from({ length: 4 }).map((_, i) => (
-            <YStack key={i} bg="$color2" br="$4" p="$3" gap="$2" width="47%" {...shadows.sm}>
-              <YStack h={10} w="50%" bg="$color4" br="$2" />
-              <YStack h={24} w="60%" bg="$color4" br="$2" />
+            <YStack key={i} bg="$color2" rounded="$4" p="$3" gap="$2" width="47%" {...shadows.sm}>
+              <YStack height={10} width="50%" bg="$color4" rounded="$2" />
+              <YStack height={24} width="60%" bg="$color4" rounded="$2" />
             </YStack>
           ))}
         </XStack>
         {/* Quick action skeletons */}
         <XStack gap="$3">
           {Array.from({ length: 4 }).map((_, i) => (
-            <YStack key={i} ai="center" p="$3" br="$3" bg="$color2" width="22%">
-              <YStack h={20} w={20} bg="$color4" br={10} />
-              <YStack h={10} w="80%" bg="$color4" br="$2" mt="$1" />
+            <YStack key={i} items="center" p="$3" rounded="$3" bg="$color2" width="22%">
+              <YStack height={20} width={20} bg="$color4" rounded={10} />
+              <YStack height={10} width="80%" bg="$color4" rounded="$2" mt="$1" />
             </YStack>
           ))}
         </XStack>
         <Separator />
         {/* Task row skeletons */}
         {Array.from({ length: 5 }).map((_, i) => (
-          <XStack key={i} ai="center" py="$2" px="$3" bg="$color2" br="$3">
-            <YStack f={1} gap="$1" mr="$2">
-              <YStack h={14} w="70%" bg="$color4" br="$2" />
-              <YStack h={10} w="40%" bg="$color4" br="$2" />
+          <XStack key={i} items="center" py="$2" px="$3" bg="$color2" rounded="$3">
+            <YStack flex={1} gap="$1" mr="$2">
+              <YStack height={14} width="70%" bg="$color4" rounded="$2" />
+              <YStack height={10} width="40%" bg="$color4" rounded="$2" />
             </YStack>
-            <YStack h={20} w={60} bg="$color4" br="$10" />
+            <YStack height={20} width={60} bg="$color4" rounded="$10" />
           </XStack>
         ))}
       </YStack>

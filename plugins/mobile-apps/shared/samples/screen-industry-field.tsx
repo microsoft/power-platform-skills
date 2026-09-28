@@ -8,7 +8,7 @@ import { FlatList } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Button, H3, H4, Paragraph, Spinner, Text, XStack, YStack } from 'tamagui'
+import { Button, H3, H4, Paragraph, Spinner, Text, XStack, YStack, useTheme } from 'tamagui'
 
 import { useCursorListData } from '@/hooks'
 import { InspectionService } from '../../src/generated/services/InspectionService'
@@ -23,17 +23,12 @@ interface Inspection {
 }
 
 const shadows = {
-  md: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
+  md: { boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)' },
 } as const
 
 export default function InspectionsListScreen() {
   const router = useRouter()
+  const theme = useTheme()
   const {
     items,
     loading,
@@ -56,40 +51,39 @@ export default function InspectionsListScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-      <YStack f={1} bg="$backgroundStrong">
+      <YStack flex={1} bg="$background">
         {/* Header — large, high-contrast for outdoor use */}
-        <XStack ai="center" jc="space-between" px="$4" py="$4">
+        <XStack items="center" justify="space-between" px="$4" py="$4">
           <H3 fontWeight="700">Inspections</H3>
           <Button
             size="$4"
             bg="$blue10"
-            color="$color1"
-            icon={<Ionicons name="add" size={20} />}
-            accessibilityLabel="New inspection"
+            icon={<Ionicons name="add" size={20} color="white" />}
+            aria-label="New inspection"
             onPress={() => router.push('/inspection/new')}
           >
-            New
+            <Button.Text color="$color1">New</Button.Text>
           </Button>
         </XStack>
 
         {loading && <LoadingState />}
         {error && (
-          <YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-            <Ionicons name="alert-circle" size={40} color="$statusOverdue" />
+          <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+            <Ionicons name="alert-circle" size={40} color={theme.statusOverdue.val} />
             <H4>Failed to load inspections</H4>
-            <Paragraph ta="center" col="$color10">{error}</Paragraph>
+            <Paragraph text="center" color="$color10">{error}</Paragraph>
             <Button onPress={refetch}>Try again</Button>
           </YStack>
         )}
         {!loading && !error && items.length === 0 && (
-          <YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-            <Ionicons name="clipboard-outline" size={48} color="$color10" />
+          <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+            <Ionicons name="clipboard-outline" size={48} color={theme.color10.val} />
             <H4>No inspections</H4>
-            <Paragraph ta="center" col="$color10">
+            <Paragraph text="center" color="$color10">
               Create your first inspection to get started.
             </Paragraph>
-            <Button bg="$blue10" color="$color1" onPress={() => router.push('/inspection/new')}>
-              Create inspection
+            <Button bg="$blue10" onPress={() => router.push('/inspection/new')}>
+              <Button.Text color="$color1">Create inspection</Button.Text>
             </Button>
           </YStack>
         )}
@@ -126,37 +120,39 @@ function InspectionRow({
   onPress: () => void
   onCamera: () => void
 }) {
+  const theme = useTheme()
+
   return (
     <YStack
       bg="$color2"
-      br="$4"
+      rounded="$4"
       p="$4"
       gap="$3"
       mb="$3"
       {...shadows.md}
       pressStyle={{ scale: 0.98 }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${item.title} — ${item.status}`}
+      role="button"
+      aria-label={`${item.title} — ${item.status}`}
     >
-      <XStack ai="center" jc="space-between">
-        <Text fontSize="$6" fontWeight="700" numberOfLines={1} f={1}>
+      <XStack items="center" justify="space-between">
+        <Text fontSize="$6" fontWeight="700" numberOfLines={1} flex={1}>
           {item.title}
         </Text>
         <InspectionStatusBadge status={item.status} />
       </XStack>
 
-      <Text col="$color10" fontSize="$4" numberOfLines={1}>
+      <Text color="$color10" fontSize="$4" numberOfLines={1}>
         {item.location}
       </Text>
 
-      <XStack ai="center" jc="space-between">
-        <XStack ai="center" gap="$2">
-          <Ionicons name="time-outline" size={14} color="$color10" />
-          <Text col="$color10" fontSize="$3">
+      <XStack items="center" justify="space-between">
+        <XStack items="center" gap="$2">
+          <Ionicons name="time-outline" size={14} color={theme.color10.val} />
+          <Text color="$color10" fontSize="$3">
             Due {item.dueDate}
           </Text>
-          <Text col="$color10" fontSize="$3">
+          <Text color="$color10" fontSize="$3">
             · {item.itemCount} items
           </Text>
         </XStack>
@@ -166,7 +162,7 @@ function InspectionRow({
           size="$3"
           circular
           icon={<Ionicons name="camera" size={18} />}
-          accessibilityLabel="Take inspection photo"
+          aria-label="Take inspection photo"
           onPress={(e) => {
             e.stopPropagation?.()
             onCamera()
@@ -179,6 +175,7 @@ function InspectionRow({
 }
 
 function InspectionStatusBadge({ status }: { status: Inspection['status'] }) {
+  const theme = useTheme()
   const config = {
     pending:     { label: 'Pending',     bg: '$yellow3', text: '$yellow10', icon: 'time-outline' as const },
     in_progress: { label: 'In Progress', bg: '$blue3',   text: '$blue10',   icon: 'time-outline' as const },
@@ -187,9 +184,9 @@ function InspectionStatusBadge({ status }: { status: Inspection['status'] }) {
   }
   const c = config[status]
   return (
-    <XStack bg={c.bg} px="$2" py="$1" br="$10" ai="center" gap="$1">
-      <Ionicons name={c.icon} size={12} color="$color10" />
-      <Text fontSize="$1" fontWeight="600" col={c.text}>{c.label}</Text>
+    <XStack bg={c.bg} px="$2" py="$1" rounded="$10" items="center" gap="$1">
+      <Ionicons name={c.icon} size={12} color={theme.color10.val} />
+      <Text fontSize="$1" fontWeight="600" color={c.text}>{c.label}</Text>
     </XStack>
   )
 }
@@ -198,15 +195,15 @@ function LoadingState() {
   return (
     <YStack gap="$3" p="$4">
       {Array.from({ length: 4 }).map((_, i) => (
-        <YStack key={i} bg="$color2" br="$4" p="$4" gap="$3" {...shadows.md}>
-          <XStack ai="center" jc="space-between">
-            <YStack h={18} w="55%" bg="$color4" br="$2" />
-            <YStack h={20} w={80} bg="$color4" br="$10" />
+        <YStack key={i} bg="$color2" rounded="$4" p="$4" gap="$3" {...shadows.md}>
+          <XStack items="center" justify="space-between">
+            <YStack height={18} width="55%" bg="$color4" rounded="$2" />
+            <YStack height={20} width={80} bg="$color4" rounded="$10" />
           </XStack>
-          <YStack h={14} w="70%" bg="$color4" br="$2" />
-          <XStack ai="center" jc="space-between">
-            <YStack h={12} w="40%" bg="$color4" br="$2" />
-            <YStack h={32} w={32} bg="$color4" br={16} />
+          <YStack height={14} width="70%" bg="$color4" rounded="$2" />
+          <XStack items="center" justify="space-between">
+            <YStack height={12} width="40%" bg="$color4" rounded="$2" />
+            <YStack height={32} width={32} bg="$color4" rounded={16} />
           </XStack>
         </YStack>
       ))}

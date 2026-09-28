@@ -4,12 +4,11 @@
 // Reusable across export-solution and import-solution skills.
 //
 // Usage:
-//   node poll-async-operation.js --asyncJobId "<guid>" --envUrl "https://contoso.crm.dynamics.com" --token "<bearer-token>"
+//   node poll-async-operation.js --asyncJobId "<guid>" --envUrl "https://contoso.crm.dynamics.com"
 //
 // Optional:
 //   --intervalMs <ms>      Poll interval in milliseconds (default: 5000)
 //   --maxAttempts <n>      Maximum poll attempts (default: 60 = ~5 minutes at 5s)
-//   --tokenResource <url>  Resource URL for token refresh (default: envUrl)
 //
 // Output (JSON to stdout):
 //   { "status": "Succeeded", "asyncJobId": "...", "attempts": 12 }
@@ -18,7 +17,12 @@
 //   { "status": "Timeout", "asyncJobId": "...", "message": "Still running after N attempts" }
 //   { "error": "..." }   — when arguments are missing or network errors prevent polling
 
-const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const fs = require('fs');
+const {
+  getAuthToken,
+  makeRequest,
+  validateDataverseEnvironmentUrl,
+} = require('./lib/validation-helpers');
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj));
@@ -31,7 +35,7 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const args = {};
-  const keys = ['--asyncJobId', '--envUrl', '--token', '--intervalMs', '--maxAttempts', '--tokenResource'];
+  const keys = ['--asyncJobId', '--envUrl', '--intervalMs', '--maxAttempts', '--statusFile'];
   for (const key of keys) {
     const idx = argv.indexOf(key);
     if (idx !== -1 && idx + 1 < argv.length) {
@@ -43,17 +47,26 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 
-if (!args.asyncJobId) output({ error: 'Missing required argument: --asyncJobId' });
-if (!args.envUrl) output({ error: 'Missing required argument: --envUrl' });
+function normalizeEnvUrl(value) {
+  return String(value || '').replace(/\/+$/, '').replace(/\/api\/data\/v[0-9.]+$/i, '');
+}
 
-const envUrl = args.envUrl.replace(/\/+$/, '');
-const intervalMs = parseInt(args.intervalMs || '5000', 10);
-const maxAttempts = parseInt(args.maxAttempts || '60', 10);
-const tokenResource = args.tokenResource || envUrl;
+function normalizeAsyncJobId(value) {
+  const match = String(value || '').match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+  return match ? match[0].toLowerCase() : '';
+}
 
-// Token may be passed in directly (to avoid redundant az CLI calls) or refreshed each cycle
-let token = args.token || null;
-const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs)); // refresh every ~60s
+function parsePositiveInteger(value, fallback, flagName) {
+  const raw = value === undefined || value === null || value === '' ? String(fallback) : String(value);
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    return { error: `Invalid ${flagName}: expected a positive integer` };
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    return { error: `Invalid ${flagName}: expected a positive integer` };
+  }
+  return { value: parsed };
+}
 
 // Dataverse asyncoperations statecode/statuscode reference:
 //   statecode 0: Open (0=Ready, 20=InProgress, 30=Pausing, 40=Canceling)
@@ -66,27 +79,64 @@ const SUCCESS_STATUSCODES = new Set([30]);
 const FAILURE_STATUSCODES = new Set([31]);
 const CANCELED_STATUSCODES = new Set([32]);
 
-const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
+function writeStatus(statusFile, status) {
+  if (!statusFile) return;
+  try {
+    fs.writeFileSync(statusFile, JSON.stringify({ updatedAt: new Date().toISOString(), ...status }, null, 2), 'utf8');
+  } catch {
+    // The status page is best-effort; polling must never fail because the user
+    // closed a temp folder or the status file could not be updated.
+  }
+}
 
-(async () => {
-  // Acquire initial token if not provided
+async function pollAsyncOperation(rawArgs, deps = {}) {
+  if (!rawArgs.asyncJobId) return { error: 'Missing required argument: --asyncJobId' };
+  if (!rawArgs.envUrl) return { error: 'Missing required argument: --envUrl' };
+
+  let envUrl;
+  try {
+    envUrl = validateDataverseEnvironmentUrl(normalizeEnvUrl(rawArgs.envUrl));
+  } catch (err) {
+    return { error: err.message };
+  }
+  const asyncJobId = normalizeAsyncJobId(rawArgs.asyncJobId);
+  if (!asyncJobId) return { error: `Invalid async operation id: ${rawArgs.asyncJobId}` };
+  const intervalResult = parsePositiveInteger(rawArgs.intervalMs, 5000, '--intervalMs');
+  if (intervalResult.error) return intervalResult;
+  const attemptsResult = parsePositiveInteger(rawArgs.maxAttempts, 60, '--maxAttempts');
+  if (attemptsResult.error) return attemptsResult;
+  const intervalMs = intervalResult.value;
+  const maxAttempts = attemptsResult.value;
+  const tokenResource = envUrl;
+  const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
+  const getToken = deps.getAuthToken || getAuthToken;
+  const request = deps.makeRequest || makeRequest;
+  const wait = deps.sleep || sleep;
+
+  let token = null;
+  const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs)); // refresh every ~60s
+
+  token = getToken(tokenResource);
   if (!token) {
-    token = getAuthToken(tokenResource);
-    if (!token) {
-      output({ error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` });
-    }
+    const error = `Azure CLI token not available for ${tokenResource}. Run "az login" first.`;
+    writeStatus(rawArgs.statusFile, {
+      state: 'failed',
+      message: 'Template import status check failed. Check the agent terminal.',
+    });
+    return { error };
   }
 
+  let lastHttpStatus = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Refresh token periodically
     if (attempt > 1 && attempt % tokenRefreshEvery === 0) {
-      const refreshed = getAuthToken(tokenResource);
+      const refreshed = getToken(tokenResource);
       if (refreshed) token = refreshed;
     }
 
     let pollBody;
     try {
-      const result = await makeRequest({
+      const result = await request({
         url: pollUrl,
         method: 'GET',
         headers: {
@@ -99,25 +149,33 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
 
       if (result.error) {
         // Network error — wait and retry (don't fail on transient issues)
-        await sleep(intervalMs);
+        writeStatus(rawArgs.statusFile, { state: 'running', message: 'Waiting for Dataverse import status', attempt });
+        await wait(intervalMs);
         continue;
       }
 
       if (result.statusCode === 401) {
         // Auth expired mid-poll — refresh and retry immediately
-        const refreshed = getAuthToken(tokenResource);
+        const refreshed = getToken(tokenResource);
         if (refreshed) token = refreshed;
         continue;
       }
 
       if (result.statusCode !== 200 || !result.body) {
-        await sleep(intervalMs);
+        lastHttpStatus = result.statusCode;
+        writeStatus(rawArgs.statusFile, {
+          state: 'running',
+          message: 'Waiting for Dataverse import status',
+          detail: `Dataverse async operation lookup returned HTTP ${result.statusCode}`,
+          attempt,
+        });
+        await wait(intervalMs);
         continue;
       }
 
       pollBody = JSON.parse(result.body);
     } catch {
-      await sleep(intervalMs);
+      await wait(intervalMs);
       continue;
     }
 
@@ -128,34 +186,46 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
 
     if (!TERMINAL_STATECODES.has(statecode)) {
       // Still running — wait and poll again
-      await sleep(intervalMs);
+      writeStatus(rawArgs.statusFile, { state: 'running', message: friendlyMessage || message || 'Import is still running', attempt });
+      await wait(intervalMs);
       continue;
     }
 
     // Terminal state reached
     if (SUCCESS_STATUSCODES.has(statuscode)) {
-      output({ status: 'Succeeded', asyncJobId: args.asyncJobId, attempts: attempt });
+      writeStatus(rawArgs.statusFile, { state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', attempt });
+      return { status: 'Succeeded', asyncJobId, attempts: attempt };
     }
 
     if (CANCELED_STATUSCODES.has(statuscode)) {
-      output({ status: 'Canceled', asyncJobId: args.asyncJobId, message, attempts: attempt });
+      writeStatus(rawArgs.statusFile, { state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', attempt });
+      return { status: 'Canceled', asyncJobId, message, attempts: attempt };
     }
 
     // Failed (statuscode 31 or unknown terminal)
-    output({
+    writeStatus(rawArgs.statusFile, { state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', attempt });
+    return {
       status: 'Failed',
-      asyncJobId: args.asyncJobId,
+      asyncJobId,
       message,
       friendlyMessage,
       statuscode,
       attempts: attempt,
-    });
+    };
   }
 
   // Timed out
-  output({
+  writeStatus(rawArgs.statusFile, { state: 'timeout', message: 'Template import is still running. Check the agent terminal.', attempt: maxAttempts });
+  return {
     status: 'Timeout',
-    asyncJobId: args.asyncJobId,
+    asyncJobId,
+    lastHttpStatus,
     message: `Async operation still running after ${maxAttempts} attempts (~${Math.round(maxAttempts * intervalMs / 60000)} minutes). Check operation status manually.`,
-  });
-})();
+  };
+}
+
+if (require.main === module) {
+  pollAsyncOperation(args).then(output);
+}
+
+module.exports = { normalizeAsyncJobId, normalizeEnvUrl, parseArgs, parsePositiveInteger, pollAsyncOperation };

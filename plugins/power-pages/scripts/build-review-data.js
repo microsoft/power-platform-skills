@@ -13,6 +13,7 @@ const REQUIRED_FLAGS = [
 ];
 
 const SECTION_MAP = {
+  'scan-code.json': { id: 'code-scan', label: 'Code & Packages', icon: '▦' },
   'scan-site.json': { id: 'site-scan', label: 'Live Site Scan', icon: '◐' },
   'manage-headers.json': { id: 'headers', label: 'Browser Headers', icon: '◑' },
   'manage-firewall.json': {

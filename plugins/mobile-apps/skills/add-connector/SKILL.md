@@ -1,12 +1,12 @@
 ---
 name: add-connector
-description: Use when the user wants to add a Power Platform connector to a mobile app and there is no dedicated /add-* skill for that connector (Dataverse and SharePoint have their own skills).
+description: Use when adding a Power Platform connector to an Expo/React Native Power Apps mobile app and no dedicated mobile connector skill exists.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** | **Connector reference: [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)** — read both first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** | **Connector reference: [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)** — read both first.
 
 # Add Connector (Generic)
 
@@ -17,7 +17,7 @@ Fallback skill for any connector not covered by a dedicated `/add-*` skill. For 
 
 (More dedicated skills will land in v1: `/add-teams`, `/add-excel`, `/add-onedrive`, `/add-azuredevops`, `/add-office365`.)
 
-The native host runtime (`power-apps-native-host`) handles connector routing, connection resolution, and OAuth consent through `PowerAppsHostProvider` in `app/_layout.tsx` — no separate executor wiring is needed.
+The native host runtime (`@microsoft/power-apps-native-host`) handles connector routing, connection resolution, and OAuth consent through `PowerAppsProvider` in `app/_layout.tsx` — no separate executor wiring is needed.
 
 ## Workflow
 
@@ -27,7 +27,9 @@ The native host runtime (`power-apps-native-host`) handles connector routing, co
 
 ### Step 1 — Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+**Telemetry checkpoint: `validate_connector_project`**
+
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 Also confirm we're inside a Power Apps mobile app:
 
@@ -38,6 +40,8 @@ test -f power.config.json && test -f app.config.js
 If either is missing, instruct the user to run `/create-mobile-app` first and stop.
 
 ### Step 2 — Identify Connector
+
+**Telemetry checkpoint: `resolve_connector_request`**
 
 **If `$ARGUMENTS` is provided or the caller already specified the connector**, use it directly and skip the question below.
 
@@ -76,7 +80,9 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 ### Step 3 — Add Connector
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+**Telemetry checkpoint: `generate_connector_data_source`**
+
+**First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
@@ -163,6 +169,8 @@ Help the user write code using the generated service methods.
 
 ### Step 5 — Build
 
+**Telemetry checkpoint: `validate_connector_integration`**
+
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify the new connector wires in cleanly (~10–20 seconds)."
 
@@ -195,9 +203,9 @@ Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting succ
 
 ## Runtime connector handling
 
-The native host runtime handles all connector routing automatically via `PowerAppsHostProvider` in `app/_layout.tsx`. When a screen calls a generated service method:
+The native host runtime handles all connector routing automatically via `PowerAppsProvider` in `app/_layout.tsx`. When a screen calls a generated service method:
 
-1. `PowerAppsHostProvider` resolves the connection from `connectionReferences` in `power.config.json`
+1. `PowerAppsProvider` resolves the connection from `connectionReferences` in `power.config.json`
 2. If the connection requires OAuth consent, `ConnectionSetupScreen` is shown automatically
 3. `NativePowerAppsBridge` dispatches the call with the correct auth token
 

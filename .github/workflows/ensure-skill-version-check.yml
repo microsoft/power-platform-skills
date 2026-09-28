@@ -18,24 +18,24 @@ jobs:
             - name: generate app token
               if: ${{ github.event.pull_request.head.repo.fork == false }}
               id: app-token
-              uses: actions/create-github-app-token@v1
+              uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
               with:
                   app-id: 3189942
                   private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
 
             - name: checkout (non-fork)
               if: ${{ github.event.pull_request.head.repo.fork == false }}
-              uses: actions/checkout@v4
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
               with:
                   ref: ${{ github.head_ref }}
                   token: ${{ steps.app-token.outputs.token }}
 
             - name: checkout (fork)
               if: ${{ github.event.pull_request.head.repo.fork == true }}
-              uses: actions/checkout@v4
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
             - name: setup-node
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
               with:
                   node-version: 20
 

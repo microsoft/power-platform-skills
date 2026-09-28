@@ -401,7 +401,7 @@ test('captures Location header in result for diagnostics', async (t) => {
       match: (u, args) => args.method === 'POST',
       respond: () => ({
         statusCode: 202,
-        headers: { location: 'https://api.bap.microsoft.com/lifecycleOperations/abc', 'retry-after': '1' },
+        headers: { location: '/lifecycleOperations/abc', 'retry-after': '1' },
         body: JSON.stringify({ name: 'e1', properties: { provisioningState: 'Creating' } }),
       }),
     },
@@ -413,6 +413,38 @@ test('captures Location header in result for diagnostics', async (t) => {
 
   const result = await provisionCustomHost({ bapToken: 'fake', displayName: 'X', region: 'unitedstates', sleepImpl: noSleep });
   assert.equal(result.locationHeader, 'https://api.bap.microsoft.com/lifecycleOperations/abc');
+});
+
+test('rejects a cross-cloud Location header before Custom Host polling', async (t) => {
+  let pollCalled = false;
+  withMockedHttp(t, [
+    {
+      match: (u, args) => args.method === 'POST',
+      respond: () => ({
+        statusCode: 202,
+        headers: { location: 'https://dod.api.bap.microsoft.us/lifecycleOperations/custom-cross-cloud' },
+        body: JSON.stringify({ name: 'e1', properties: { provisioningState: 'Creating' } }),
+      }),
+    },
+    {
+      match: () => true,
+      respond: () => {
+        pollCalled = true;
+        return { statusCode: 200, body: '{}' };
+      },
+    },
+  ]);
+
+  await assert.rejects(
+    () => provisionCustomHost({
+      bapToken: 'fake',
+      displayName: 'X',
+      region: 'unitedstates',
+      sleepImpl: noSleep,
+    }),
+    /Location header.*different host/,
+  );
+  assert.equal(pollCalled, false);
 });
 
 test('falls back to env GET when lifecycle op response lacks linkedEnvironmentMetadata', async (t) => {

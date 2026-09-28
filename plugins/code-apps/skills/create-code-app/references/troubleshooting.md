@@ -14,7 +14,7 @@
 | ----------------------- | ------------------------------------------------------------------ |
 | Build fails             | Check Node.js 22+ version, run `npm install`                       |
 | Build fails with TS6133 | Unused imports cause errors in strict mode. Remove unused imports. |
-| Auth error              | Run `npx power-apps logout`, then retry — the CLI will re-prompt browser login. |
+| Auth error              | Run `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will re-prompt browser login. |
 | No data                 | Verify user has read access to table, check browser console        |
 | Local testing           | Use same browser profile as Power Platform auth                    |
 
@@ -24,7 +24,7 @@
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | "environment config does not match" | Update `environmentId` in `power.config.json` to match the target environment, then retry.                      |
 | DNS/network error                   | Try different environment or contact admin.                                                                      |
-| Auth error / token expired          | Run `npx power-apps logout`, then retry `npx power-apps push` — CLI will prompt re-authentication via browser.  |
+| Auth error / token expired          | Run `pa auth logout`, then retry `pa app push` — CLI will prompt re-authentication via browser. On `power-apps`-only projects use `power-apps logout` then `power-apps push`.  |
 
 ## Resources
 

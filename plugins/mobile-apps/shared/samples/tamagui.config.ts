@@ -1,9 +1,11 @@
-import { defaultConfig } from '@tamagui/config/v4'
-import { createTamagui } from 'tamagui'
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig'
 
-// Start from the v4 default. Customize by extending — see
-// shared/references/tamagui-custom-tokens.md for how.
-export const tamaguiConfig = createTamagui(defaultConfig)
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+// Add or replace Tamagui configuration values here.
+const customConfig = {}
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
 
 export default tamaguiConfig
 

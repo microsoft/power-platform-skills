@@ -6,8 +6,10 @@ description: >
   with the model-apps plugin to the GitHub repository.
 user-invocable: true
 argument-hint: "[optional: brief description of the bug]"
-allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, read, execute, search, todo
 model: sonnet
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 **Workflow: [report-issue-workflow.md](${PLUGIN_ROOT}/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that bundled file.

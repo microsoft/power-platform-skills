@@ -18,7 +18,7 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ### MUST (required before acting)
 
-- **Confirm before any deployment**: Before running `npx power-apps push`, ask: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit user confirmation.
+- **Confirm before any deployment**: Before running `pa app push` (deploy), ask: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit user confirmation.
   Exception: the baseline deploy in `create-code-app` Step 7 is pre-approved as part of the scaffold flow. The final deploy in Step 10 still requires confirmation.
 - **Confirm before any global install**: Before running `npm install -g ...` or `winget install ...`, ask: _"This will install [tool] globally on your machine. OK to proceed?"_ Wait for explicit user confirmation. This applies even when the install is a documented prerequisite.
 - **Confirm before writing outside project root**: Before writing, editing, or deleting any file that is not inside the current project directory, ask the user for confirmation.
@@ -26,7 +26,7 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ### MUST NOT
 
-- MUST NOT run `npx power-apps push` if `npm run build` has not succeeded in the current session.
+- MUST NOT run `pa app push` (deploy) if `npm run build` has not succeeded in the current session.
 - MUST NOT edit any file under `src/generated/` unless the step explicitly calls for it (e.g., the `add-azuredevops` HttpRequest fix).
 - MUST NOT install packages globally (`npm install -g`, `winget install`) without user confirmation.
 - MUST NOT make changes outside the project root without user confirmation.
@@ -74,7 +74,7 @@ Standards for versioning, theme, build workflow, and TypeScript strict mode.
 **Key Points:**
 - Always display version in UI, increment on each deploy
 - Default to dark theme (user can override)
-- Always `npm run build` before `npx power-apps push` -- never skip the build
+- Always `npm run build` before `pa app push` (deploy) -- never skip the build
 - Remove unused imports before building (TS6133 strict mode)
 
 ---
@@ -108,7 +108,7 @@ All non-Dataverse connectors require a connection ID. Read this before any `/add
 
 **Key Points:**
 - Run `/list-connections` to find the connection ID before adding a connector
-- Always pass `-c <connection-id>` to `npx power-apps add-data-source`
+- Always pass `-c <connection-id>` to `pa app add data-source`
 
 ---
 
@@ -125,21 +125,34 @@ When selecting an environment, use this priority order: `power.config.json` → 
 
 ---
 
+## CLI Binary Resolution (`pa` preferred)
+
+**📋 [cli-binary.md](./cli-binary.md)**
+
+The CLI ships two binaries — grouped `pa` (preferred) and flat `power-apps` (fallback). Resolve which one the project has **before running any command**, and author commands in the canonical grouped `pa` form.
+
+**Key Points:**
+- Probe `node_modules/.bin/pa` from the project root: if present use `pa` (grouped), else fall back to `power-apps` (flat). Cache the result in the memory bank.
+- **Always** invoke via `npx --no-install <pa|power-apps>` — `--no-install` prevents npx from fetching an unrelated remote package.
+- Author commands in the grouped form using the renamed `pa` flags (`pa app add data-source --connector <api> --table <table>`); if the project only has `power-apps`, translate **both the verb path and the renamed flags** to their flat equivalents (`--connector`→`--api-id`/`-a`, `--table`→`--resource-name`/`-t`) using the mapping tables in `cli-binary.md` before running. Most flags (`-c`, `-d`, `-e`) are unchanged.
+
+---
+
 ## CLI Commands
 
-The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed locally as part of `npm install` when a project is scaffolded with the template. All CLI commands run via `npx power-apps` from within the project directory — no global install or `pwsh` wrapper needed.
+The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed locally as part of `npm install` when a project is scaffolded with the template. **Never invoke a bare `pa`/`power-apps`** — always run the locally-installed CLI through the resolved `$PA` prefix (`npx --no-install …`) from within the project directory. **Resolve the binary first (see [cli-binary.md](./cli-binary.md)); the commands below are canonical grouped `pa` templates — substitute `$PA` for the leading `pa`, and when `PA_KIND=power-apps` translate the verb path and renamed flags via the mapping tables before running.**
 
-**Core commands:**
+**Core commands (canonical `pa` form — translate to flat `power-apps` via [cli-binary.md](./cli-binary.md) when only `power-apps` is installed):**
 
 ```bash
-npx power-apps init -n '<app-name>' -e <env-id>        # Initialize project, create power.config.json
-npx power-apps push                                     # Deploy app to Power Platform (run npm run build first)
-npx power-apps run                                      # Start local dev server
-npx power-apps add-data-source -a <api> [-c <conn-id>] [-d <dataset>] [-t <table>]
-npx power-apps list-connections                         # List connections in current environment
-npx power-apps list-datasets -a <api> -c <conn-id>     # List datasets for a connector
-npx power-apps list-tables -a <api> -c <conn-id> -d <dataset>  # List tables in a dataset
-npx power-apps logout                                   # Log out
+pa app init -n '<app-name>' -e <env-id>        # Initialize project, create power.config.json
+pa app push                                     # Deploy app to Power Platform (run npm run build first)
+pa app run                                      # Start local dev server
+pa app add data-source --connector <api> [-c <conn-id>] [-d <dataset>] [--table <table>]
+pa connection list                              # List connections in current environment
+pa connector list-datasets --connector <api> -c <conn-id>     # List datasets for a connector
+pa connector list-tables --connector <api> -c <conn-id> -d <dataset>  # List tables in a dataset
+pa auth logout                                  # Log out
 ```
 
 **Authentication:** The CLI uses MSAL (browser-based login). On the first command that requires auth, a browser window opens for Microsoft sign-in. The token is cached for subsequent commands. No separate auth setup step is needed.
@@ -150,7 +163,7 @@ npx power-apps logout                                   # Log out
 
 ## Command Failure Handling
 
-Apply these rules whenever an `npx power-apps` or `npm` command exits non-zero. Do NOT retry silently or proceed past a failure.
+Apply these rules whenever a Power Apps CLI (`pa`/`power-apps`) or `npm` command exits non-zero. Do NOT retry silently or proceed past a failure.
 
 ### `npm run build` failures
 
@@ -167,16 +180,16 @@ Apply these rules whenever an `npx power-apps` or `npm` command exits non-zero. 
 **Example — build error requiring user input:**
 > "Build failed with an error I cannot automatically fix: `[exact error text]`. Please review the error above and let me know how you'd like to proceed."
 
-### `npx power-apps add-data-source` failures
+### `pa app add data-source` failures
 
 | Condition | Action |
 | --- | --- |
 | Non-zero exit / error output | Report the exact error. STOP. Do not continue to the build step. |
 | "connectionId not found" or empty `-c` | Ask the user to run `/list-connections` to get a valid connection ID and retry. |
-| Auth error / token expired | Run `npx power-apps logout`, then retry — the CLI will prompt re-authentication. |
+| Auth error / token expired | Run `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will prompt re-authentication. |
 
 **Example:**
-> "The `npx power-apps add-data-source` command failed: `Error: connectionId 'abc123' not found in environment.` Please run `/list-connections` to confirm the connection exists and get the correct ID."
+> "The `pa app add data-source` command failed: `Error: connectionId 'abc123' not found in environment.` Please run `/list-connections` to confirm the connection exists and get the correct ID."
 
 ---
 

@@ -54,8 +54,8 @@ tone: conversational
 - **Accent usage:** primary action, hero element on landing screen, single highlight per screen. NOT pills, NOT icons, NOT borders.
 - **Status colors:** **monochrome plus accent.** Pills use grayscale background with the accent color or a single muted hue:
   ```tsx
-  <YStack bg="$color2" px="$3" py="$1" br="$10">
-    <Text col="$color11" fontSize="$2" fontWeight="500">In progress</Text>
+  <YStack bg="$color2" px="$3" py="$1" rounded="$10">
+    <Text color="$color11" fontSize="$2" fontWeight="500">In progress</Text>
   </YStack>
   ```
   Critical-only badges may use a muted red, but everything else stays grayscale.
@@ -87,14 +87,14 @@ tone: conversational
 ### Empty state
 - **Type-led, no icon required:**
   ```tsx
-  <YStack alignItems="flex-start" gap="$3" px="$5" py="$10">
+  <YStack items="flex-start" gap="$3" px="$5" py="$10">
     <Text fontSize="$8" fontWeight="500" letterSpacing={-0.5}>
       Nothing here yet.
     </Text>
     <Text fontSize="$5" color="$color10" lineHeight="$6">
       Your first inspection will show up once you save it.
     </Text>
-    <Button bg="$blue10" color="$color1" mt="$3">Start one</Button>
+    <Button theme="blue" mt="$3">Start one</Button>
   </YStack>
   ```
 - Big quiet headline + supporting sentence + accent button
@@ -113,7 +113,7 @@ tone: conversational
 - 3 such pairs is enough — avoid filling the whole screen with skeletons
 
 ### Primary action
-- **Shape:** pill (`borderRadius="$10"` or fully rounded — `borderRadius: 999`)
+- **Shape:** pill (`rounded="$10"` or fully rounded — `borderRadius: 999`)
 - **Position:** in-flow on detail/form screens (after content, full-width with horizontal padding); bottom-center floating on landing screens
 - **Color:** accent fill on neutral text, OR cream-fill-on-dark for dark variant
 - **Label:** conversational verb + object — `"Save inspection"`, `"Create project"`, `"Send to review"`. Often slightly longer than SaaS — extra word for warmth.

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: enforce 5 screen-quality rules deterministically.
+ * Explicit validator: enforce screen-quality rules deterministically.
  *
  * Replaces these per-screen self-check rules from agents/screen-builder.md:
  *   - #20 Palette warmth (no raw grays in screens)
- *   - #29 No inline shadowOffset / shadowColor
+ *   - #29 No React Native shadow props on Tamagui components
  *   - #34 Color tokens are explicit ($color12 not $color)
  *   - #35 No raw hex outside brand/tokens.ts
  *   - #24 (partial) ListEmptyComponent — flag the "if data.length===0 above FlatList" anti-pattern
@@ -19,8 +19,8 @@
  *
  * Scope:
  *   - Watches: app/(any-path)/*.tsx, src/components/(any-path)/*.tsx
- *   - Skips:   brand/tokens.ts, tamagui.config.ts, tests, node_modules,
- *              src/generated (auto-generated), shared/samples (plugin source)
+ *   - Skips:   route layouts, brand/tokens.ts, tamagui.config.ts, tests,
+ *              node_modules, src/generated (auto-generated), shared/samples
  *
  * Exit codes:
  *   0 = pass (clean, not watched, or unparseable input)
@@ -36,19 +36,6 @@ function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
 }
 
-function hasDeferredStyleHooksMarker(filePath) {
-  if (typeof filePath !== 'string' || !filePath) return false;
-
-  let dir = path.dirname(path.resolve(filePath));
-  for (let depth = 0; depth < 12; depth += 1) {
-    if (fs.existsSync(path.join(dir, '.tmp', 'defer-style-hooks'))) return true;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return false;
-}
-
 function isWatchedFile(filePath) {
   if (typeof filePath !== 'string') return false;
   if (!/\.tsx$/i.test(filePath)) return false;
@@ -57,6 +44,7 @@ function isWatchedFile(filePath) {
 
   // Exclusions — these legitimately contain hex / inline shadows / etc.
   const exclude = [
+    /\/_layout\.tsx$/,
     /\/brand\//,
     /\/tamagui\.config\.ts/,
     /\/node_modules\//,
@@ -102,17 +90,17 @@ function extractContent(toolName, toolInput) {
 }
 
 // ─── Rule 1: Forbidden vague Tamagui token shorthands ────────────────────────
-// `col="$color"`, `bg="$bg"`, `color="$primary"` etc. — these don't resolve to
-// any token in default Tamagui v3 config. Builders must use $color12, $color2,
+// `color="$color"`, `bg="$bg"`, `color="$primary"` etc. — these don't resolve to
+// any token in the default Tamagui 2 config. Builders must use $color12, $color2,
 // or brand-aliased tokens.
 
 const VAGUE_TOKEN_NAMES = new Set([
   '$color',     // missing scale digit — should be $color1..$color12
   '$bg',        // not a Tamagui token — use $background
-  '$primary',   // not a Tamagui token — use brand alias
+  '$primary',   // not a Tamagui token — use $accentBase
   '$text',      // not a Tamagui token — use $color12
-  '$accent',    // not a Tamagui token — use brand alias
-  '$secondary', // not a Tamagui token — use brand alias
+  '$accent',    // not a Tamagui token — use $accentBase
+  '$secondary', // not a Tamagui token — use a verified project alias
   '$muted',     // not a Tamagui token — use $color10
   '$border',    // not a Tamagui token — use $borderColor
 ]);
@@ -131,11 +119,47 @@ function findVagueTokens(content) {
       violations.push({
         rule: 'vague-token',
         match: `${prop}="${token}"`,
-        fix: `Use a numbered or brand-aliased token: ${prop}="$color12" / ${prop}="$brandText" / ${prop}="$accentBase". Bare ${token} does not resolve in default Tamagui v3 config — text becomes invisible.`,
+        fix: `Use a numbered or brand-aliased token: ${prop}="$color12" / ${prop}="$brandText" / ${prop}="$accentBase". Bare ${token} does not resolve in the default Tamagui 2 config — text becomes invisible.`,
       });
     }
   }
   return violations;
+}
+
+function findJsxOpeningTags(content, componentNames) {
+  const names = [...componentNames]
+    .sort((left, right) => right.length - left.length)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (names.length === 0) return [];
+
+  const tags = [];
+  const startRe = new RegExp(`<(${names.join('|')})(?:\\.[A-Za-z][A-Za-z0-9_]*)?(?=\\s|/?>)`, 'g');
+  let startMatch;
+  while ((startMatch = startRe.exec(content)) !== null) {
+    let braceDepth = 0;
+    let quote = null;
+    let escaped = false;
+
+    for (let index = startRe.lastIndex; index < content.length; index += 1) {
+      const char = content[index];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === quote) quote = null;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === '`') quote = char;
+      else if (char === '{') braceDepth += 1;
+      else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+      else if (char === '>' && braceDepth === 0) {
+        tags.push({ name: startMatch[1], tag: content.slice(startMatch.index, index + 1) });
+        startRe.lastIndex = index + 1;
+        break;
+      }
+    }
+  }
+  return tags;
 }
 
 // ─── Rule 1b: Unsupported semantic button themes ────────────────────────────
@@ -152,7 +176,7 @@ function findUnsupportedButtonThemes(content) {
     violations.push({
       rule: 'unsupported-button-theme',
       match: m[0].slice(0, 180),
-      fix: 'Do not use theme="active" or theme="primary" unless that exact theme is defined in tamagui.config.ts. Use explicit verified tokens instead, e.g. <Button bg="$blue10" color="$color1" ...>.',
+      fix: 'Do not use theme="active" or theme="primary" unless that exact theme is defined in tamagui.config.ts. Use a confirmed Config v5 theme such as theme="blue", or compose explicit frame and label styles with <Button bg="$blue10"><Button.Text color="$color1">...</Button.Text></Button>.',
     });
   }
   return violations;
@@ -162,7 +186,7 @@ function findUnsupportedButtonThemes(content) {
 // Match #fff, #ffffff, #FFFFFF, #fff8 etc. anywhere in the file's TSX/style content.
 // Whitelist: hex inside `// brand-exception:` comments, inside string literals
 // that are NOT style values (e.g. status copy mentioning "#1"), and inside
-// `console.*` / `accessibilityLabel` strings.
+// `console.*` / `aria-label` strings.
 
 function findRawHex(content) {
   const violations = [];
@@ -190,7 +214,7 @@ function findRawHex(content) {
     });
   }
 
-  const styleObjRe = /\b(color|backgroundColor|borderColor|borderTopColor|borderBottomColor|borderLeftColor|borderRightColor|tintColor|shadowColor)\s*:\s*['"](#[0-9a-fA-F]{3,8})['"][^\n]*/g;
+  const styleObjRe = /\b(color|backgroundColor|borderColor|borderTopColor|borderBottomColor|borderLeftColor|borderRightColor|tintColor)\s*:\s*['"](#[0-9a-fA-F]{3,8})['"][^\n]*/g;
   while ((m = styleObjRe.exec(content)) !== null) {
     const line = m[0];
     if (/brand-exception/.test(line)) continue;
@@ -204,19 +228,22 @@ function findRawHex(content) {
   return violations;
 }
 
-// ─── Rule 3: No inline shadowOffset / shadowColor / shadowRadius ─────────────
-// Builders must use Tamagui `elevation="$1"` or the `shadows` token export.
+// ─── Rule 3: No React Native shadow object on Tamagui components ────────────
+// Tamagui 2 uses CSS-standard `boxShadow`. Raw React Native animated styles may
+// still use platform shadow fields, but generated Tamagui screen code must not.
 
 function findInlineShadows(content) {
   const violations = [];
-  const re = /\b(shadowOffset|shadowColor|shadowRadius|shadowOpacity)\s*:/g;
+  // Restrict this rule to opening tags for components generated as Tamagui
+  // primitives. Raw Animated.View / React Native style objects legitimately use
+  // the native shadow fields and must not be rewritten to CSS boxShadow.
+  const re = /<(YStack|XStack|ZStack|Card|Button|Pressable)\b[^>]*(shadowOffset|shadowColor|shadowRadius|shadowOpacity)\s*(?:=|:)[^>]*>/g;
   let m;
   while ((m = re.exec(content)) !== null) {
-    // Whitelist: inside brand/tokens.ts shadow definitions (file is already excluded above)
     violations.push({
       rule: 'inline-shadow',
-      match: `${m[1]}: ...`,
-      fix: `Use Tamagui \`elevation="$1"\` (subtle) or \`elevation="$2"\` (raised), or spread \`{...shadows.sm}\` from \`@/tokens\`. Inline shadow props skip the dark-mode fallback (where elevation should come from a lighter surface, not a black blur).`,
+      match: `${m[2]}: ...`,
+      fix: 'Use Tamagui 2 `boxShadow`, for example `boxShadow="0 2px 8px $shadow3"`, or spread a verified v2 shadow token whose object contains `boxShadow`. Do not spread legacy React Native shadow objects into Tamagui components.',
     });
   }
   return violations;
@@ -263,7 +290,7 @@ function findSafeAreaProblems(content) {
     violations.push({
       rule: 'missing-safe-area-chrome',
       match: 'screen content without SafeAreaView/useSafeAreaInsets',
-      fix: 'Wrap screen content in SafeAreaView from react-native-safe-area-context or apply paddingTop={insets.top} from useSafeAreaInsets(). Top headers must never render under the iOS/Android status area.',
+      fix: 'Wrap screen content in SafeAreaView from react-native-safe-area-context or apply pt={insets.top} from useSafeAreaInsets(). Top headers must never render under the iOS/Android status area.',
     });
   }
 
@@ -275,7 +302,7 @@ function findSafeAreaProblems(content) {
     violations.push({
       rule: 'absolute-bottom-without-inset',
       match: tag.slice(0, 180),
-      fix: 'Offset absolute FABs, snackbars, and sticky CTAs with bottom={insets.bottom + 16} (or tabBarHeight + inset) so controls clear the home indicator and tab bar.',
+      fix: 'Offset absolute FABs, snackbars, and sticky CTAs with b={insets.bottom + 16} (or tabBarHeight + inset) so controls clear the home indicator and tab bar.',
     });
   }
 
@@ -351,7 +378,7 @@ function findA11yControlProblems(content) {
     });
   }
 
-  const buttonRe = /<Button\b[\s\S]{0,500}?(?:\/>|>[\s\S]{0,120}<\/Button>)/g;
+  const buttonRe = /<Button(?=\s|\/?>)[\s\S]{0,500}?(?:\/>|>[\s\S]{0,120}<\/Button>)/g;
   let m;
   while ((m = buttonRe.exec(content)) !== null) {
     let tag = m[0];
@@ -362,11 +389,11 @@ function findA11yControlProblems(content) {
       }
     }
     const iconOnly = /\bicon=/.test(tag) && !hasTextChildren(tag);
-    if (iconOnly && !/\baccessibilityLabel=/.test(tag)) {
+    if (iconOnly && !/\baria-label=/.test(tag)) {
       violations.push({
         rule: 'icon-only-control-missing-label',
         match: tag.slice(0, 180),
-        fix: 'Every icon-only Button/Pressable needs accessibilityLabel and accessibilityRole="button" when the role is not provided by the component.',
+        fix: 'Every icon-only Tamagui Button/Pressable needs `aria-label`; custom controls also need the appropriate `role` when the component does not provide one.',
       });
     }
     if (/\bsize=["']\$[12]["']/.test(tag) && !/\bhitSlop=/.test(tag)) {
@@ -378,14 +405,14 @@ function findA11yControlProblems(content) {
     }
   }
 
-  const tappableStackRe = /<(XStack|YStack|ZStack|Stack)\b(?=[\s\S]{0,400}\bonPress=)[\s\S]{0,500}?(?:\/>|>[\s\S]{0,120}<\/\1>)/g;
-  while ((m = tappableStackRe.exec(content)) !== null) {
-    const tag = m[0];
-    if (!/\baccessibilityRole=/.test(tag)) {
+  const stackTags = findJsxOpeningTags(content, new Set(['XStack', 'YStack', 'ZStack', 'Stack']));
+  for (const { tag } of stackTags) {
+    if (!/\bonPress\s*=/.test(tag)) continue;
+    if (!/\brole=/.test(tag)) {
       violations.push({
         rule: 'custom-pressable-missing-role',
         match: tag.slice(0, 180),
-        fix: 'Custom tappable stacks must include accessibilityRole="button" (or the correct role) and a clear accessibilityLabel when the visual label is not enough.',
+        fix: 'Custom tappable Tamagui stacks must include role="button" (or the correct role) and a clear aria-label when the visual label is not enough.',
       });
     }
   }
@@ -394,7 +421,7 @@ function findA11yControlProblems(content) {
   while ((m = tappableContainerRe.exec(content)) !== null) {
     const block = m[0];
     const body = m[2] || '';
-    const nestedInteractive = /<(Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|Link)\b|<(XStack|YStack|ZStack|Stack|View)\b(?=[^>]*\bonPress=)/.test(body);
+    const nestedInteractive = /<(Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|Link)(?=\s|\/?>)|<(XStack|YStack|ZStack|Stack|View)(?=\s|\/?>)(?=[^>]*\bonPress=)/.test(body);
     if (nestedInteractive) {
       violations.push({
         rule: 'nested-touch-targets',
@@ -424,7 +451,7 @@ function findStatusVisualProblems(content) {
   let m;
   while ((m = largeRedHeaderRe.exec(content)) !== null) {
     const tag = m[0];
-    if (/height=\{?(?:1[8-9]\d|[2-9]\d\d)|minHeight=\{?(?:1[8-9]\d|[2-9]\d\d)|flex=\{?1|f=\{?1/.test(tag)) {
+    if (/height=\{?(?:1[8-9]\d|[2-9]\d\d)|minH=\{?(?:1[8-9]\d|[2-9]\d\d)|flex=\{?1/.test(tag)) {
       violations.push({
         rule: 'dominant-red-detail-header',
         match: tag.slice(0, 180),
@@ -475,7 +502,7 @@ function buildBlockMessage(filePath, violations) {
   }
 
   const ruleHeaders = {
-    'vague-token': 'Vague Tamagui tokens that don\'t resolve in v3 config (causes invisible text)',
+    'vague-token': 'Vague Tamagui tokens that do not resolve in Config v5 (causes invisible text)',
     'unsupported-button-theme': 'Unsupported semantic button theme (primary CTA can look disabled)',
     'raw-hex': 'Raw hex colors in screen TSX (breaks dark-mode + brand tokens)',
     'inline-shadow': 'Inline shadow props (skip dark-mode elevation fallback)',
@@ -606,8 +633,6 @@ process.stdin.on('end', () => {
 
   const filePath = toolInput.file_path || toolInput.filePath;
   if (!isWatchedFile(filePath)) process.exit(0);
-
-  if (process.env.CODE_APPS_NATIVE_SKIP_SCREEN_QUALITY_HOOK === '1' || hasDeferredStyleHooksMarker(filePath)) process.exit(0);
 
   const content = extractContent(toolName, toolInput);
   if (!content) process.exit(0);

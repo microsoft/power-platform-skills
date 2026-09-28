@@ -51,6 +51,19 @@
       root.innerHTML = '<div style="color:var(--colorPaletteRedForeground1,#bc2f32);">' + escapeHtml(msg) + '</div>';
     }
 
+    function contentText(content) {
+      if (typeof content === 'string') { return content; }
+      if (!Array.isArray(content)) { return ''; }
+      return content
+        .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+        .map((block) => block.text)
+        .join('\n');
+    }
+
+    function renderMessage(message) {
+      root.innerHTML = '<div>' + escapeHtml(message) + '</div>';
+    }
+
     function formatTime(isoStr) {
       if (!isoStr) { return ''; }
       try {
@@ -68,7 +81,8 @@
       return 'status-default';
     }
 
-    function renderData(data) {
+    function renderData(toolResult) {
+      const data = toolResult.structuredContent;
       const dep = data.departure || {};
       const arr = data.arrival || {};
 
@@ -109,7 +123,23 @@
 
     renderLoading();
     const app = new App({ name: "flight-status", version: "1.0.0" });
-    app.ontoolresult = (result) => { const data = result.structuredContent; if (data) { renderData(data); } else { renderError('No flight data received.'); } };
+    app.ontoolresult = (result) => {
+      const toolResult = {
+        content: result.content ?? [],
+        structuredContent: result.structuredContent ?? {},
+        _meta: result._meta ?? {}
+      };
+      if (Object.keys(toolResult.structuredContent).length > 0) {
+        renderData(toolResult);
+      } else {
+        const message = contentText(toolResult.content);
+        if (message) {
+          renderMessage(message);
+        } else {
+          renderError('No flight data received.');
+        }
+      }
+    };
     app.onhostcontextchanged = (ctx) => { if (ctx.theme) { applyTheme(ctx.theme); } };
     app.onteardown = () => ({});
     await app.connect();

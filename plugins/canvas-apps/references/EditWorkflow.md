@@ -1,0 +1,136 @@
+# Edit Workflow
+
+Use this workflow only when `[working directory]` already has meaningful content.
+
+## 1. Assess Complexity
+
+Read all `[working directory]/*.pa.yaml` files.
+
+Treat the edit as **simple** only when all are true:
+
+- At most two property mutations in total, across at most two existing controls, and at
+  most one new leaf control
+- At most one screen changes
+- No new screen, data source, or connector
+- No control is removed or reparented, and no container, layout mode, or existing control
+  hierarchy changes
+
+Adding one leaf control to the `Children` of an existing screen or container is not a
+structural layout change by itself. Keep that edit simple when the insertion can preserve
+the current hierarchy and layout strategy. Adding a container, moving existing controls,
+or reorganizing the hierarchy is a complex edit.
+
+Anything else is **complex**.
+
+## 2. Simple Edit
+
+1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit
+   touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
+   sizing, scrolling, or color.
+2. Use `describe_control` before adding a property not already present on that control,
+   or before adding a control. Choose an app-wide unique control name.
+3. Apply targeted edits directly to the `[working directory]` folder. Insert a new leaf
+   control without rebuilding the surrounding hierarchy.
+4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
+5. Stop after the final summary; do not invoke planner or builder agents.
+
+## 3. Complex Edit Planning
+
+Read:
+
+- `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
+- `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
+- `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
+- `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
+
+Determine:
+
+- An original-request capability inventory for every changed requirement, captured before
+   reducing it to screens or implementation tasks
+- Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
+- Every changed action's precondition, source-of-truth transition, and visible postcondition
+- Screens to modify and exact changes
+- Screens to create
+- Existing palette, layout strategy, variables, and data bindings to preserve
+- New controls, data sources, connectors, or shared state
+- Required changes to `[working directory]/App.pa.yaml`
+
+For changed time ordering, preserve typed Date/Time semantics or introduce a validated
+canonical 24-hour sort key; do not retain direct sorting of mixed display strings.
+
+Present:
+
+```markdown
+## Canvas Edit Plan
+
+### Screens to Modify
+| Action | Screen | File | Summary |
+|--------|--------|------|---------|
+| Modify | [Name] | [Name].pa.yaml | [changes] |
+
+### Screens to Add
+| Action | Screen | File | Purpose |
+|--------|--------|------|---------|
+| Create | [Name] | [Name].pa.yaml | [purpose] |
+
+### App Changes
+[Exact App.pa.yaml changes, or "None"]
+
+### Functional Changes
+| Capability | Existing behavior | Required transition | Visible success |
+|------------|-------------------|---------------------|-----------------|
+| [Changed behavior] | [Current reachable path or gap] | [Source, stable ID, and exact postcondition] | [Bound receipt plus downstream observer] |
+
+### Approach
+[How the edit preserves and extends the current app]
+```
+
+Wait for user approval. Revise and re-present if requested.
+
+## 4. Invoke the Planner
+
+Before delegation, write `[working directory]/canvas-app-requirements.md` from the approved edit plan and
+original request using the `Original Requirements Contract` template in
+`${PLUGIN_ROOT}/references/PlanTemplates.md`. Include every requested edit clause and every existing
+behavior made regression-sensitive by the edit. This artifact is orchestrator-owned and
+the planner must not edit it.
+
+
+Before delegation, use the top-level skill's MCP connection for discovery introduced by
+the edit. List resources only when the edit introduces resources not already present.
+Call `describe_control` for every type receiving a property, enum, or variant not already
+carried in its target YAML, and call `describe_api` and `get_data_source_schema` only for
+APIs and data sources involved in the edit. Also call `describe_control` for every Canvas
+or Code Component used by the plan, and make those component calls last so the packet
+contains the freshest Studio snapshot. Preserve the exact results as the discovery
+packet. Do not delegate these calls: task agents do not reliably inherit the configured
+MCP connection.
+
+
+Invoke the `canvas-app-planner` agent with `Task` and:
+
+```text
+Mode: EDIT
+Working directory: `[working directory]`
+Plan index: `[working directory]/canvas-app-plan.md`
+Shared plan: `[working directory]/canvas-app-shared.md`
+Plugin root: `${PLUGIN_ROOT}`
+Edit requirements: [user requirements]
+Approved plan: [full approved plan]
+Original requirements contract: `[working directory]/canvas-app-requirements.md`
+Current app state: [palette, variables, layout, screens, controls]
+Synced files: [absolute working-directory paths]
+Discovery packet: [complete results gathered above]
+```
+
+The planner writes the plan index, shared plan, and one screen brief per dispatch row. It
+does not edit any `.pa.yaml` file in EDIT mode.
+
+If it returns `Status: Discovery Packet Blocked`, gather the named missing result in this
+top-level context and re-invoke it with the completed packet. If writing is blocked, apply
+its complete inline artifact payloads verbatim as required by the skill before entering
+Planned Build Handoff.
+
+Wait for the planner to finish, then return to **Planned Build Handoff** in the
+`canvas-app` skill.

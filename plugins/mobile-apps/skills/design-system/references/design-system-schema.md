@@ -238,20 +238,52 @@ Missing sections → skill surfaces error, asks user to re-run.
 
 ## How Tamagui Integration Uses tokens.ts
 
-`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b imports it into `tamagui.config.ts` using [`tamagui-integration.md`](./tamagui-integration.md):
+`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b
+imports it into `tamagui.config.ts` using
+[`tamagui-integration.md`](./tamagui-integration.md) and the native host's
+`withPowerAppsSemanticAliases` helper:
 
 ```ts
+import { createTokens } from '@tamagui/core';
+import { defaultConfig } from '@tamagui/config/v5';
+import {
+  createPowerAppsTamaguiConfig,
+  withPowerAppsSemanticAliases,
+} from '@microsoft/power-apps-native-host/config/tamaguiConfig';
 import { tokens as brandTokens } from './brand/tokens';
 
-const customTokens = createTokens({
+const tokens = createTokens({
   ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    surface0: brandTokens.color.bg,
-    surface1: brandTokens.color.surface,
-    accentBase: brandTokens.color.primary,
-    accentSoft: brandTokens.color.accent,
-    // ... mapped from brand tokens
-  },
+  space: { ...defaultConfig.tokens.space, ...brandTokens.space },
+  size: { ...defaultConfig.tokens.size, ...brandTokens.size },
+  radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
 });
+
+export const appLightTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.light,
+  brandTokens.color,
+);
+
+export const appDarkTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.dark,
+  {
+    primary: brandTokens.color.primary,
+    accent: brandTokens.color.accent,
+    statusSuccess: brandTokens.color.statusSuccess,
+    statusWarning: brandTokens.color.statusWarning,
+    statusDanger: brandTokens.color.statusDanger,
+    statusInfo: brandTokens.color.statusInfo,
+  },
+);
+
+const customConfig = {
+  tokens,
+  themes: {
+    ...defaultConfig.themes,
+    light: appLightTheme,
+    dark: appDarkTheme,
+  },
+};
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
 ```

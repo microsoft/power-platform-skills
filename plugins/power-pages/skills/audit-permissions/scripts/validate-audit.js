@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates that the permissions audit report was generated.
-// Runs as a Stop hook to verify the skill produced output.
+// Runs as a PostToolUse(Skill) hook to verify the skill produced output.
 
 const fs = require('fs');
 const path = require('path');

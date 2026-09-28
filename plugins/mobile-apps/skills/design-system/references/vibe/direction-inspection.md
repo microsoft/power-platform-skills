@@ -63,9 +63,9 @@ tone: direct
 - **Card with status stripe:**
   ```tsx
   <Card flexDirection="row" overflow="hidden">
-    <YStack w={4} bg={statusColor(item.status)} />
+    <YStack width={4} bg={statusColor(item.status)} />
     <YStack flex={1} p="$4" gap="$2">
-      <XStack jc="space-between" ai="center">
+      <XStack justify="space-between" items="center">
         <Text fontWeight="700" fontSize="$5">{item.title}</Text>
         <StatusPill status={item.status} />
       </XStack>
@@ -81,7 +81,7 @@ tone: direct
 - Big Ionicon (size 56) at top
 - One-line explanation in 17pt
 - Big primary action button below (full-width or near-full)
-- Example: `<Ionicons name="clipboard-outline" size={56} color="$color10" />` + "No jobs assigned today" + `<Button bg="$blue10" color="$color1" size="$5">Refresh</Button>`
+- Example: `<Ionicons name="clipboard-outline" size={56} color={theme.color10.val} />` + "No jobs assigned today" + `<Button theme="blue" size="$5">Refresh</Button>`
 
 ### Error state
 - Inline above retry button (never `Alert.alert()`)
@@ -104,7 +104,7 @@ tone: direct
 ### Status pills
 - Saturated background, white text:
   ```tsx
-  <YStack bg="#FF6A00" px="$2" py="$1" br="$2">
+  <YStack bg="#FF6A00" px="$2" py="$1" rounded="$2">
     <Text color="white" fontSize="$2" fontWeight="700">URGENT</Text>
   </YStack>
   ```

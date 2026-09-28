@@ -6,6 +6,13 @@ description: >-
   and reference docs for code-generation rules. Writes one .tsx file per invocation.
   Called by the genpage skill in parallel — not invoked directly by users.
 color: green
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# search and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate` are NOT aliases anywhere — `todo` is
+# the portable name. No `execute`/`Bash`: this agent only authors page source.
+# See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -13,6 +20,10 @@ tools:
   - Grep
   - TaskCreate
   - TaskUpdate
+  - read
+  - edit
+  - search
+  - todo
 ---
 
 # Genpage Page Builder
@@ -26,13 +37,46 @@ You will be invoked with a prompt that includes:
 - **Page name** — e.g., "Candidate Tracker"
 - **Target file** — e.g., "candidate-tracker.tsx"
 - **Plan document path** — absolute path to `genpage-plan.md`
-- **Data mode** — either `dataverse` or `mock`
+- **Data mode** — the **Dataverse axis**: `dataverse` (page reads Dataverse tables
+  via RuntimeTypes) or `mock` (no Dataverse tables). This is **orthogonal to
+  connectors**: a page may *also* carry connector bindings (the plan's
+  `## Connector Bindings`), which layer connector-backed data on top of either mode.
+  The effective shapes are `dataverse`, `mock`, `dataverse + connectors`, or
+  `mock + connectors` — a **connector-only page is `mock` data mode with connector
+  bindings**.
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
+- **Connectors** — `none` or `<n> binding(s)`, derived by the orchestrator from the plan's
+  `## Connector Bindings` table immediately before code generation. **`none` overrides the plan
+  body**: treat the page as having no connector bindings no matter what the section text says. A
+  missing line means `none` (fail closed) — emitting a call to a binding that was never created
+  produces a page that fails at runtime, whereas omitting one produces a page that merely lacks
+  the feature.
+- **Telemetry** — `enabled` or `disabled`, the orchestrator's Phase 4.7 `custom-telemetry` probe
+  result. A missing line means `disabled` (fail closed), which is why the `/app-builder` dispatch
+  can state it as a constant. `enabled` is **permission, not instruction**: it only makes
+  instrumentation possible — you still emit `props.appInsights` calls solely when the maker's own
+  request asks to measure, track, monitor or diagnose something.
 - **Working directory** — where to write the `.tsx` file
 - **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
-The **Data mode** flag is authoritative — use it to decide whether to perform Step 2
-(read RuntimeTypes.ts) or skip it. Do not infer data mode from the plan document.
+The **Data mode** flag is authoritative for the Dataverse axis — use it to decide
+whether to perform Step 2 (read RuntimeTypes.ts) or skip it. Do not infer data mode
+from the plan document.
+
+**Connectors are decided separately from Data mode** — by the **Connectors** input
+first, then the plan's `## Connector Bindings` (see the connector-detection step
+below): when Connectors is `enabled` *and* the section has an actual binding
+table, the page uses `props.dataApi` connector methods (`queryConnectorTable` /
+`executeConnectorOperation`) **even in `mock` data mode** — the "mock data forbids
+`dataApi`" rule applies only to *non-connector* panels, which still use realistic
+inline data. Never fabricate connector rows/fields; use only the discovered
+`Fields`/`Parameters`/`Response` from the plan.
+
+**Custom APIs are likewise decided separately from Data mode** by the plan's `## Custom API
+Bindings` (see the Custom-API step below): when it has an actual binding table, the page may
+call `props.dataApi.executeAction` / `executeFunction` **even in `mock` data mode** (e.g. a
+Global Function that computes a value). Never fabricate a Custom API name, parameter, or
+parameter kind; use only the plan's `## Custom API Bindings` values.
 
 ## Step 1 — Read the Plan Document
 
@@ -91,6 +135,16 @@ This pattern saves ~26K tokens per page-builder run vs. loading the full list,
 while keeping the same correctness guarantee: nothing ships unless every icon
 import has been Grep-validated against the verified list.
 
+## Step 2.6 — Runtime-only Griffel validation
+
+`pac model genpage transpile` type-checks the page but does not execute
+`makeStyles`; unsupported Griffel shorthands can therefore compile and then log
+runtime errors in the browser. Before returning, Grep the generated `.tsx` with
+the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted, and spaced property
+syntax are all caught. Replace every match with the four explicit longhands:
+`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
+`borderLeftWidth`. Do not return a file that still matches the regex.
+
 ## Step 3 — Read References and Samples
 
 Read the code generation rules reference:
@@ -99,27 +153,73 @@ Read the code generation rules reference:
 ${PLUGIN_ROOT}/references/rules.md
 ```
 
+Only when your dispatch says **`Connectors: <n> binding(s)`** *and* the plan's
+`## Connector Bindings` section contains an actual binding table (a
+`| Logical Name | …` header with at least one data row) do you treat the page as
+connector-backed and also read:
+
+```
+${PLUGIN_ROOT}/references/connectors.md
+```
+
+If your dispatch says `Connectors: none` (or omits the line), or the
+`## Connector Bindings` section is the literal `No connector bindings.`, is empty,
+is missing entirely, or contains no binding row, the page has **no connectors** —
+do not read connectors.md and do not emit any connector code. The dispatch wins
+over the plan: a page whose data source is Dataverse or mock has no bindings to
+call, so emitting connector code would produce a page that cannot bind at runtime.
+
+Only when the plan's `## Custom API Bindings` section contains an actual binding table
+(a `| Name | Kind | …` header with at least one data row) do you treat the page as
+Custom-API-backed and also read:
+
+```
+${PLUGIN_ROOT}/references/custom-api.md
+```
+
+If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
+empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
+do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
+`listBoundActions` code.
+
+Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
+asks to measure, track, monitor, or diagnose something do you instrument the page and
+also read:
+
+```
+${PLUGIN_ROOT}/references/page-telemetry.md
+```
+
+If your dispatch says `Telemetry: disabled` (or omits the line), or the request never
+asked for measurement, the page emits **no telemetry at all** — do not read
+page-telemetry.md, do not add an `appInsights` prop, and do not emit any `trackEvent` /
+`trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` /
+`stopTrack` call. `Telemetry: enabled` is permission, not instruction: the default
+output for an instrumentation-enabled run is still a page with zero telemetry.
+
 Read the relevant sample file identified in the plan:
 
 ```
 ${PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
-If **Data mode** is `dataverse` AND the page fits the "list / detail / pages
-the user navigates back to" profile (per the plan's Per-Page Specification),
-also read the data caching reference:
+If the page's Per-Page Specification says **`Needs caching: true`** because the
+page **fetches data on mount** through a real host read — Dataverse `dataApi`
+calls OR connector calls such as `queryConnectorTable` /
+`executeConnectorOperation` — also read the data fetching reference:
 
 ```
 ${PLUGIN_ROOT}/references/data-caching.md
 ```
 
-Skip the caching reference for forms, single-visit dashboards, mock-data pages,
-or any page where the user is not expected to navigate away and return.
+Skip it only for pages that render inline mock arrays and forms with no initial
+fetch.
 
 Use the sample as a structural reference — follow its patterns for component
-organization, DataAPI usage, and styling approach. For pages that need caching,
-the data-caching reference is authoritative for the inline IIFE + cache
-guard + batched state pattern.
+organization, DataAPI usage, and styling approach. For any page that fetches on
+mount, the data-fetching reference is authoritative for the in-flight de-dupe +
+`window` cache + readiness-dep pattern that survives the host double-mount.
+**Never put `dataApi` in a dependency array** (see rules.md Rule 15).
 
 ## Step 4 — Create a Task
 
@@ -217,6 +317,7 @@ export default GeneratedComponent;
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — all async `dataApi` calls wrapped in try-catch
+- **No telemetry by default** — never emit `props.appInsights` calls unless your dispatch says `Telemetry: enabled` **and** the maker asked to measure or track something. Absence of a request means zero telemetry, not "instrument the obvious things". See references/page-telemetry.md.
 - **Lookup fields** — read display names via `@OData.Community.Display.V1.FormattedValue`; *set* a lookup on create/update with `_<field>_value: "/logicalSingular(guid)"`, never `@odata.bind` (the DataAPI silently drops it → orphaned row). See rules.md DataAPI Rule 13.
 - **All hooks above early returns** — every `useMemo`/`useState`/`useEffect`/`useCallback` must precede any loading/empty `return`, or detail pages crash with React error #310 on first open. See rules.md Critical Rule 19.
 - **Entity logical names** — singular lowercase (e.g., `"account"`)
@@ -226,22 +327,46 @@ export default GeneratedComponent;
 - **No FluentProvider** — already provided at root
 - **No createTheme/mergeThemes/useTheme** — these don't exist in Fluent UI V9
 - **D3.js for charts** — use `group()` not `nest()`
-- **Cross-page navigation** — when navigating to a sibling generative page that is
-  being built in this same run (i.e., another page in the plan's Pages table), you
-  do NOT have its real GUID yet. Use the placeholder `"PAGEREF_<filename-without-tsx>"`
-  exactly as the `pageId` value. Example:
+- **Cross-page navigation** — when navigating to a sibling generative page, emit a
+  `"PAGEREF_<token>"` placeholder exactly as the `pageId` value of a `pageType:"generative"`
+  `navigateTo` call — one per declared navigation edge. **Read the token from the plan's
+  `## Environment` `Mode:` line — do not guess, and do not derive it from the `File` column
+  unless Mode says to:**
+  - **`Mode: app-builder`** — use the target page's **`Key`** (the `Key` column in `## Pages`,
+    also repeated as `- **Key:**` in each Per-Page Specification). This is the App Spec's stable
+    `pages[].key` and the same value as `navigatesTo[].targetKey`; the build resolves
+    `PAGEREF_<key>` → GUID and enforces exact parity with `navigatesTo`.
+  - **`Mode:` absent (standalone `/genpage`)** — there are no App Spec keys and the plan has no
+    `Key` column, so use the **target page's file name without `.tsx`**, exactly as it appears in
+    the `File` column. The orchestrator's Phase 6.5 builds a `filename-without-tsx → page-id` map
+    to substitute it.
+
+  **Never use the file stem in `app-builder` mode.** A page pulled from a deployed app keeps its
+  real storage path (e.g. `pages/9f2c…/page.tsx`), whose stem is `page` — nothing to do with its
+  identity. Using it emits `PAGEREF_page`, which fails nav parity and halts the build.
+
+  Pass any custom identifier in `data:` (never `recordId`); it arrives on the target
+  as `pageInput?.data?.<field>`. Example:
   ```typescript
   Xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-detail",   // resolved to real GUID after first upload
-    entityName: "cr_pet",
-    recordId: selectedId,
+    pageId: "PAGEREF_pet-detail",   // app-builder: the target's Key column; standalone: its file stem
+    data: { petId: selectedId },    // custom ids in data (read as pageInput?.data?.petId on the target)
   });
   ```
-  Do NOT invent a fake GUID. Do NOT skip the navigation. The orchestrator's Phase 6.5
-  resolves these placeholders by exact-string substitution after Phase 6 returns the
-  real GUIDs. **Always wrap the placeholder in double quotes** — Phase 6.5 looks for
-  `"PAGEREF_<name>"` as a quoted token to avoid partial-string collisions.
+  Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT use a page's
+  **display name** — only the key / file stem above. **Always wrap the placeholder in double
+  quotes and place it as the `pageId` value** — the resolver only rewrites a `"PAGEREF_<token>"`
+  at a real `navigateTo` call site; a single-quoted, back-ticked, or concatenated form, or any
+  decoy string elsewhere, is rejected by the pre-deploy scan. Under `/app-builder` every
+  `PAGEREF_<key>` must have a matching `navigatesTo` entry in the spec (the build enforces exact
+  parity); under `/genpage` every token must match a `File` in the plan's `## Pages` table.
+- **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav
+  call must be explicitly placed as a `page` subarea in the app's `appShell`; navigation-
+  only (headless) pages are not supported — validation rejects them. A "detail" page that
+  receives a caller-supplied id or context is a normal sitemap page using `pageInput`.
+  See [`references/rules.md`](../references/rules.md) → *Multi-page builds* and
+  [`references/app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`.
 
 ### Localization
 
@@ -285,6 +410,87 @@ const mockRecords = [
   { id: "2", name: "Fabrikam Inc", revenue: 2300000, status: "Active" },
   // ... 5-10 realistic records
 ];
+```
+
+### Connector-backed data
+
+When the plan has `## Connector Bindings`, use only the logical name, connector
+id, dataset, table GUID, display name, operation, Fields, Parameters, and
+Response values from that section. Never guess a `connectorLogicalName`,
+connector field name, parameter name, or response field name that is not in the
+plan. Read
+`${PLUGIN_ROOT}/references/connectors.md` and emit connector calls with the
+verified runtime patterns below. Connector methods are optional at runtime, so
+every call must be presence-checked and wrapped in `try`/`catch` with a graceful
+empty or error state.
+
+Connector rows are not covered by RuntimeTypes. Before using
+`queryConnectorTable`, declare an inline row interface from the plan's discovered
+`Fields` list and mark every property optional. Use the field spelling and types
+exactly as recorded in the plan; if a type is unclear, use `unknown`. SharePoint
+choice fields use the `{ Value?: string }` shape. Example:
+
+```typescript
+type PetRow = { ID?: number; PetName?: string; OwnerName?: string; PetType?: { Value?: string }; Created?: string };
+```
+
+Tabular connectors use `queryConnectorTable`. Tables must be the plan's list
+GUIDs, and datasets must be the plan's dataset value (SharePoint site URL):
+
+```typescript
+const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: PetRow[] }>; };
+if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
+const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
+```
+
+REST/action connector operation names, parameter names, and response field names
+must come from the plan's discovered `Operations`, `Parameters`, and `Response`
+schema. Before calling `executeConnectorOperation`, declare the response
+interface from the plan and mark every response field optional. Build the
+parameter object from discovered parameters plus maker-provided values; never
+invent parameter or response field names. Check `response.ok` before casting or
+using the body:
+
+```typescript
+type WeatherResponse = { temperature?: number; conditions?: string; humidity?: number };
+const parameters: { Location: string; units?: string } = { Location: 'Seattle', units: 'C' };
+```
+
+```typescript
+const connectorApi = dataApi as unknown as { executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>; };
+if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
+const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', parameters);
+if (!response.ok) { return; }
+const weather = response.body as WeatherResponse;
+```
+
+### Custom API invocation (Dataverse Actions & Functions)
+
+When the plan has `## Custom API Bindings`, the page may invoke Dataverse Custom APIs on the
+signed-in user's own token. Use only the `Name`, `Kind`, `Bound Entity`, and `Parameters`
+values from that section — never guess a Custom API name, parameter name, or parameter kind.
+Read `${PLUGIN_ROOT}/references/custom-api.md` and emit calls with the verified patterns
+there. The methods are optional at runtime, so every call must be presence-checked; guard
+each **Action** against double-submit, read results from `res.outputs` (never `res.value`),
+surface only the sanitized `res.error?.message`, and **never auto-retry** an `indeterminate`
+result (only `error.code === 'network'` is safely retryable, via a manual "Try again").
+
+Match the call to the row's `Kind`: an **Action** row uses `executeAction`; a **Function** row
+uses `executeFunction`. Calling the wrong one is rejected with `wrong_operation_kind`. For an
+entity-bound row (a `Bound Entity` table, not `(Global)`), pass
+`boundTo: { entityName: pageInput.entityName, id: pageInput.recordId }` whose `entityName`
+equals that table; for a `(Global)` row, omit `boundTo` entirely.
+
+```typescript
+const actionApi = dataApi as unknown as { executeAction?: (request: { name: string; parameters?: Record<string, unknown>; boundTo?: { entityName: string; id: string } }) => Promise<{ ok: boolean; indeterminate?: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } }>; };
+if (typeof actionApi.executeAction !== 'function' || isSubmitting) { return; } // presence-check + double-submit guard
+setIsSubmitting(true);
+try {
+  const res = await actionApi.executeAction({ name: 'new_ApproveOrder', parameters: { Comment: comment, Amount: amount }, boundTo: { entityName: pageInput.entityName, id: pageInput.recordId } });
+  if (res.indeterminate) { setError("We couldn't confirm this completed — refresh before retrying."); return; }
+  if (!res.ok) { setError(res.error?.message ?? 'The action failed.'); return; }
+  const { NewStatus } = res.outputs as { NewStatus: string };
+} finally { setIsSubmitting(false); }
 ```
 
 ## Step 6 — Write the .tsx File

@@ -6,7 +6,7 @@ fully green.** Replaces the original memory-game capture under eval id 15.
 ## Source
 
 Captured from a real `/genpage` session against
-`https://aurorabapenv610b3.crmtest.dynamics.com`. Driven by
+`https://contosobapenv0001.crmtest.dynamics.com`. Driven by
 `claude-sonnet-4-6` under the v2.1 plugin + v2.2 manifest generator + v2.2
 planner-spec tightening. Working dir was `D:/temp/support-tickets/`.
 

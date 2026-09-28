@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: enforce cursor-list contracts for heavy Dataverse screens.
+ * Explicit validator: enforce cursor-list contracts for heavy Dataverse screens.
  *
  * The source of truth is native-app-plan.md. If a written app screen maps to a
  * per-screen spec whose Pagination field is `cursor`, it must not use the

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates Power Pages code site generation output.
-// Runs as a Stop hook to verify the site was properly created.
+// Runs as a PostToolUse(Skill) hook to verify the site was properly created.
 
 const fs = require('fs');
 const path = require('path');

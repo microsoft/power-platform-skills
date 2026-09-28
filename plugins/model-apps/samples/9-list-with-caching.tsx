@@ -22,11 +22,12 @@ import {
 } from '@fluentui/react-components';
 import { SearchRegular } from '@fluentui/react-icons';
 
-// Sample: list page with data caching (Rule 15).
+// Sample: list page with data fetching (Rule 15).
 // Demonstrates:
 //   - Rule 14: SINGLE batched setData({records, loading, error}) — no separate setState
-//   - Rule 15: window cache + inline async IIFE + cache guard
-//   - No useCallback for dataApi (it gets a new ref each render — would re-fire)
+//   - Rule 15: window cache + in-flight-promise de-dupe + readiness-only deps
+//     (survives the host double-mount on open — one fetch, no spinner re-flash)
+//   - dataApi is NEVER in the dep array (new ref each render — would re-fire)
 //   - Cross-page navigation via Xrm.Navigation.navigateTo to a sibling generative page
 //   - PAGEREF_ placeholder for the detail page (multi-page-build pattern)
 //   - DataGrid with createTableColumn + columnSizingOptions
@@ -41,13 +42,16 @@ type ContactRow = TableRow<{
 
 type ReadableContact = ReadableTableRow<ContactRow>;
 
-// ---------- Module-level cache ----------
-// Initialise from window so the data survives module re-evaluation on
-// back-navigation. Cache key = entity logical name. The window object persists
-// for the browser session; module-level `let` does not.
-const CACHE_KEY = '__ppContactListCache';
-const winAny = window as unknown as Record<string, ReadableContact[] | undefined>;
-let cache: ReadableContact[] | null = winAny[CACHE_KEY] ?? null;
+// ---------- Module-level cache + in-flight de-dupe ----------
+// The VALUES live on `window` (the single source of truth) so they survive module
+// re-evaluation on back-navigation AND the host's double-mount on open (a second
+// mount ~300ms later re-runs the effect). CACHE_KEY holds resolved rows;
+// INFLIGHT_KEY holds the pending promise so a racing second mount shares one
+// round-trip. Read `window` in the effect — never a module-local snapshot, which
+// a re-eval can leave stale. See references/data-caching.md.
+const CACHE_KEY = '__ppContactList_contactCache';
+const INFLIGHT_KEY = '__ppContactList_contactInflight';
+const winAny = window as unknown as Record<string, unknown>;
 
 // ---------- Styles ----------
 
@@ -87,36 +91,61 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     const styles = useStyles();
 
     const [data, setData] = useState<{ records: ReadableContact[]; loading: boolean; error: string | null }>(
-        () => ({
-            records: cache ?? [],
-            loading: cache === null,
-            error: null,
-        }),
+        () => {
+            const cached = winAny[CACHE_KEY] as ReadableContact[] | undefined;
+            return { records: cached ?? [], loading: cached === undefined, error: null };
+        },
     );
     const [search, setSearch] = useState('');
 
-    useEffect(() => {
-        // Cache guard — already loaded, skip fetch entirely.
-        if (cache !== null) return;
+    const dataReady = !!dataApi;
 
-        // Inline async IIFE — no useCallback. dataApi gets a new object ref each
-        // render, so a useCallback would recreate and re-fire this effect.
-        (async () => {
-            try {
-                const result = await dataApi.queryTable('contact', {
+    useEffect(() => {
+        if (!dataReady) return;      // wait until the host hands us the DataAPI
+
+        // Read the authoritative window cache — the other mount may have resolved
+        // it between this render and this effect. Sync state on a hit so we never
+        // stick on the spinner (reference compare avoids a redundant render).
+        const cached = winAny[CACHE_KEY] as ReadableContact[] | undefined;
+        if (cached !== undefined) {
+            if (data.records !== cached) setData({ records: cached, loading: false, error: null });
+            return;
+        }
+        let cancelled = false;
+
+        // De-dupe the host double-mount: reuse an in-flight fetch if one exists,
+        // else start one and publish its promise on window so a racing second
+        // mount awaits it instead of firing a duplicate query.
+        let inflight = winAny[INFLIGHT_KEY] as Promise<ReadableContact[]> | undefined;
+        if (!inflight) {
+            inflight = dataApi
+                .queryTable('contact', {
                     select: ['contactid', 'fullname', 'emailaddress1', 'telephone1', 'jobtitle'],
                     orderBy: 'fullname asc',
                     pageSize: 100,
-                });
-                cache = result.rows as ReadableContact[];
-                winAny[CACHE_KEY] = cache;
-                setData({ records: cache, loading: false, error: null });
-            } catch (err) {
+                })
+                .then((result) => {
+                    winAny[CACHE_KEY] = result.rows;
+                    return result.rows as ReadableContact[];
+                })
+                // Clear only if still ours — a concurrent refresh may have replaced it.
+                .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+            winAny[INFLIGHT_KEY] = inflight;
+        }
+
+        inflight
+            .then((rows) => { if (!cancelled) setData({ records: rows, loading: false, error: null }); })
+            .catch((err) => {
+                if (cancelled) return;
                 const message = err instanceof Error ? err.message : 'Failed to load contacts.';
                 setData({ records: [], loading: false, error: message });
-            }
-        })();
-    }, [dataApi]);
+            });
+
+        return () => { cancelled = true; };
+        // Depend on readiness only — never `dataApi` (new ref each render would
+        // re-fire this effect on every render). See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const filtered = data.records.filter((c) => {
         if (!search) return true;

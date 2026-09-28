@@ -10,7 +10,7 @@ D:/temp/sales-dashboard
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com/
+- URL: https://contosobapenv0001.crmtest.dynamics.com/
 - App: DSTest-A-WithDataSources (35913103-4e59-f111-a821-000d3a37616d)
 - Languages: English (1033) only
 - Solution: Default
@@ -26,6 +26,10 @@ No entity creation required — all entities already exist.
 
 ## Existing Entities
 None
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Design Preferences
 - Styling: Modern dark theme. Base on Fluent UI v9 `webDarkTheme` with a deep neutral background (near-black `#0E1116`/`#14171C`), elevated card surfaces (`#1B1F25`), subtle 1px borders using `colorNeutralStroke2`, and a vibrant accent palette — primary accent teal/cyan (`#2EE6D6`), secondary accent magenta (`#FF4FA3`), and supporting amber (`#FFB547`) for warnings. High-contrast typography using `colorNeutralForeground1` for headings and `colorNeutralForeground3` for secondary labels. Card corners radius `tokens.borderRadiusLarge`, soft shadow `tokens.shadow16` for elevation.

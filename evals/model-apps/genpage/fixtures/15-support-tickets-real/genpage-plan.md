@@ -10,7 +10,7 @@ D:/temp/support-tickets
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com
+- URL: https://contosobapenv0001.crmtest.dynamics.com
 - App: Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc)
 - Languages: English (1033) only
 - Solution: Crdec34
@@ -39,10 +39,16 @@ D:/Projects/power-platform-skills/plugins/model-apps
   | priority | Low (100000000), Medium (100000001), High (100000002), Critical (100000003) |
   | status | Open (100000000), In Progress (100000001), Resolved (100000002), Closed (100000003) |
 - Relationships:
-  (none)
+  | Type | Related Table | Lookup Suffix | Cascade |
+  |------|---------------|---------------|---------|
+  | none | none | none | none |
 
 ## Existing Entities
 None
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Design Preferences
 - Styling: Color-coded priority badges (Critical = red, High = orange, Medium = yellow, Low = green); status shown as pill/tag labels; due dates with overdue urgency cue (red text when past due)

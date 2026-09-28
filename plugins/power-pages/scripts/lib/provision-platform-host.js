@@ -146,7 +146,7 @@ async function provisionPlatformHost(opts = {}) {
   const sleep = sleepImpl || defaultSleep;
   const now = nowImpl || (() => Date.now());
 
-  const cleanBase = bapBase.replace(/\/+$/, '');
+  const cleanBase = helpers.validateBapUrl(bapBase, { allowPath: false }).replace(/\/+$/, '');
   const cid = correlationId || crypto.randomUUID();
   const startedAt = now();
 
@@ -204,7 +204,14 @@ async function provisionPlatformHost(opts = {}) {
   let displayName = envBody?.properties?.displayName || null;
   let resolvedSku = envBody?.properties?.environmentSku || ENVIRONMENT_SKU;
   let provisioningState = extractProvisioningState(envBody) || 'Creating';
-  const locationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const rawLocationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const locationHeader = rawLocationHeader
+    ? helpers.validateBapPollingUrl(
+      rawLocationHeader,
+      postUrl,
+      'BAP getOrCreate Location header',
+    )
+    : null;
   let retryAfterSec = readRetryAfterSec(postRes.headers) || DEFAULT_RETRY_AFTER_SEC;
 
   // Idempotent existing-PE path: 200 + Succeeded means the tenant already had

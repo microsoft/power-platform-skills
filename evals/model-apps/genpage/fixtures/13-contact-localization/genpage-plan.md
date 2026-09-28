@@ -14,9 +14,10 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 ## Environment
 
-- Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- Environment URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- Active Profile: contoso-user001@contosotest1.onmicrosoft.com
+- URL: https://contosobapenv0002.crm10.dynamics.com/
 - App: Sales Hub (55555555-4444-5555-6666-777777777777)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -33,6 +34,10 @@ No entity creation required — all entities already exist.
 ## Existing Entities
 
 contact
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Localization
 
@@ -53,13 +58,23 @@ contact
 
 ## Relevant Samples
 
-- plugins/model-apps/samples/9-list-with-caching.tsx (Dataverse list pattern)
-- references/localization.md (multi-language + RTL pattern)
-
+| Page | Sample | Reason |
+|------|--------|--------|
+| Contacts (Localized) | 9-list-with-caching.tsx | Dataverse list pattern |
 ## Per-Page Specifications
 
 ### Contacts (Localized)
 
+
+- **File:** page.tsx
+- **Purpose:** Contact list with multi-language UI (en/ar/fr)
+- **Entities:** contact
+- **Needs caching:** true
+- **Key Features:** Localized contact list with translated headers for English, Arabic, and French and RTL support.
+- **Components:** DataGrid, Text, Spinner, MessageBar, and PeopleRegular icon.
+- **Layout:** Responsive list layout using logical CSS properties so RTL and LTR share one stylesheet.
+- **Data Binding:** queryTable("contact") on mount selecting name, email, and phone; use window de-dupe and cache.
+- **Interactions:** Sortable/resizable localized columns with UI strings from translate().
 - File: page.tsx
 - Entity: contact
 - Language detection: `Xrm.Utility.getGlobalContext().userSettings.languageId`

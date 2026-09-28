@@ -160,7 +160,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <p class="section-desc">Implementation plan for <code>__SITE_NAME__</code></p>
 
       <div class="summary-box" id="summaryBox"></div>
-      <script id="summaryData" type="application/json">__SUMMARY_DATA__</script>
+      <script id="summaryData" type="application/json">__JSON_SUMMARY_DATA__</script>
 
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-num" id="statPages">0</div><div class="stat-label">Pages</div></div>
@@ -222,15 +222,15 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   </div>
 </div>
 
-<script id="typographyData" type="application/json">__TYPOGRAPHY_DATA__</script>
-<script id="paletteData" type="application/json">__PALETTE_DATA__</script>
-<script id="motionData" type="application/json">__MOTION_DATA__</script>
-<script id="backgroundsData" type="application/json">__BACKGROUNDS_DATA__</script>
-<script id="pagesData" type="application/json">__PAGES_DATA__</script>
-<script id="componentsData" type="application/json">__COMPONENTS_DATA__</script>
-<script id="routesData" type="application/json">__ROUTES_DATA__</script>
-<script id="reviewData" type="application/json">__REVIEW_DATA__</script>
-<script id="deploymentData" type="application/json">__DEPLOYMENT_DATA__</script>
+<script id="typographyData" type="application/json">__JSON_TYPOGRAPHY_DATA__</script>
+<script id="paletteData" type="application/json">__JSON_PALETTE_DATA__</script>
+<script id="motionData" type="application/json">__JSON_MOTION_DATA__</script>
+<script id="backgroundsData" type="application/json">__JSON_BACKGROUNDS_DATA__</script>
+<script id="pagesData" type="application/json">__JSON_PAGES_DATA__</script>
+<script id="componentsData" type="application/json">__JSON_COMPONENTS_DATA__</script>
+<script id="routesData" type="application/json">__JSON_ROUTES_DATA__</script>
+<script id="reviewData" type="application/json">__JSON_REVIEW_DATA__</script>
+<script id="deploymentData" type="application/json">__JSON_DEPLOYMENT_DATA__</script>
 
 <script>
 function readJsonData(id){
@@ -249,6 +249,14 @@ const REVIEW = readJsonData('reviewData');
 const DEPLOYMENT = readJsonData('deploymentData');
 
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function safeFontName(value) {
+  const name = String(value ?? '');
+  return /^[A-Za-z0-9 _.-]{1,100}$/.test(name) ? name : '';
+}
+function safeColor(value) {
+  const color = String(value ?? '');
+  return /^#[0-9a-f]{3,8}$/i.test(color) ? color : 'transparent';
+}
 
 // --- Load chosen Google Fonts for the typography preview ---
 (function loadFonts(){
@@ -298,7 +306,8 @@ const typeSlots = [
 typeContainer.innerHTML = typeSlots.map(s => {
   const t = TYPOGRAPHY && TYPOGRAPHY[s.slot];
   if(!t) return '';
-  const fam = t.name ? "'"+t.name.replace(/'/g, "\\'")+"', var(--sans)" : 'var(--sans)';
+  const fontName = safeFontName(t.name);
+  const fam = fontName ? "'"+fontName+"', var(--sans)" : 'var(--sans)';
   return '<div class="type-card">'
     + '<div class="type-role">'+s.role+'</div>'
     + '<div class="type-sample" style="font-family:'+fam+';">'+esc(t.sample || 'Aa Bb Cc')+'</div>'
@@ -310,7 +319,7 @@ typeContainer.innerHTML = typeSlots.map(s => {
 // --- Design: palette ---
 document.getElementById('paletteContainer').innerHTML = PALETTE.map(c =>
   '<div class="swatch-card">'
-  + '<div class="swatch" style="background:'+esc(c.hex)+';"></div>'
+  + '<div class="swatch" style="background:'+safeColor(c.hex)+';"></div>'
   + '<div class="swatch-body">'
   + '<div class="swatch-var">'+esc(c.var || '')+'</div>'
   + '<div class="swatch-hex">'+esc(c.hex)+'</div>'

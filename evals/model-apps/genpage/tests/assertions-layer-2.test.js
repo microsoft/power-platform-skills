@@ -410,3 +410,152 @@ test('Phase 5 - raw HTML form elements: pass on Fluent <Input>', () => {
   const result = check({ files: [f('a.tsx', `<Input value="" />`)], eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
+
+// ---------- connector on-mount caching (effect-scoped) ----------
+// These lock the two failure modes the previous whole-file-regex version had: an unrelated
+// __*Cache / __*Inflight elsewhere in the file made a genuinely uncached connector fetch PASS, and a
+// legitimate in-flight-only page (references/data-caching.md: "de-dupe always, cache when it helps")
+// FAILED. Scoping the check to the useEffect that contains the connector call fixes both.
+const CACHE_RULE = 'For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions';
+const cacheCheck = (content) => ASSERTIONS.get(CACHE_RULE)({ files: [f('p.tsx', content)], eval: evalStub() });
+
+test('connector caching: uncached on-mount fetch fails even when an unrelated cache exists', () => {
+  const r = cacheCheck(`
+const w = window as any;
+w.__UnrelatedCache = [];
+w.__UnrelatedInflight = null;
+export default function P() {
+  const dataReady = true;
+  useEffect(() => { const x = dataReady; }, [dataReady]);
+  useEffect(() => { (async () => { const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r); })(); }, []);
+  return null;
+}`);
+  assert.equal(r.status, 'fail');
+  assert.match(r.reason, /in-flight de-dupe/);
+});
+
+test('connector caching: in-flight de-dupe without a resolved cache passes', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = useDataReady();
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+    w[INFLIGHT_KEY].then(setRows);
+  }, [dataReady]);
+  return null;
+}`);
+  assert.equal(r.status, 'pass');
+});
+
+test('connector caching: readiness flag need not be the first dependency', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = useDataReady();
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+    w[INFLIGHT_KEY].then(setRows);
+  }, [reloadKey, dataReady]);
+  return null;
+}`);
+  assert.equal(r.status, 'pass');
+});
+
+test('connector caching: a connector call in a click handler is out of scope', () => {
+  const r = cacheCheck(`
+export default function P() {
+  const onClick = async () => { await props.dataApi.executeConnectorOperation("op", {}); };
+  return <button onClick={onClick}/>;
+}`);
+  assert.equal(r.status, 'skip');
+});
+
+test('connector caching: an on-mount effect with no dependency array fails', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+  });
+  return null;
+}`);
+  assert.equal(r.status, 'fail');
+});
+
+// Round-2 hardening: the effect scoper is literal-aware and follows local helpers.
+test('connector caching: a string cannot forge or hide the effect', () => {
+  const inEffect = (body, deps = '[dataReady]') => `
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P(){ const dataReady = true;
+  useEffect(() => { ${body} }, ${deps}); return null; }`;
+
+  // A `')))'` string used to close the useEffect call early, hiding the fetch entirely.
+  assert.equal(cacheCheck(inEffect(
+    `const s = ')))'; const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});`
+  )).status, 'pass');
+
+  // The in-flight name appearing only INSIDE a string must not satisfy the de-dupe check.
+  assert.equal(cacheCheck(inEffect(
+    `const label = "window.__DocsInflight"; props.dataApi.queryConnectorTable("t", {}).then(setRows);`
+  )).status, 'fail');
+
+  // A legitimate `'((('` string must not cause a false failure.
+  assert.equal(cacheCheck(inEffect(
+    `const art = '((('; const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});`
+  )).status, 'pass');
+});
+
+test('connector caching: follows a local helper the effect calls', () => {
+  const helper = (inner) => `
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = true;
+  const loadDocs = async () => { ${inner} };
+  useEffect(() => { loadDocs(); }, [dataReady]);
+  return null;
+}`;
+  // Uncached read hidden in a helper is still a finding.
+  assert.equal(cacheCheck(helper(
+    `const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r);`
+  )).status, 'fail');
+  // De-duped read in a helper passes.
+  assert.equal(cacheCheck(helper(
+    `const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {}); setRows(await w[INFLIGHT_KEY]);`
+  )).status, 'pass');
+  // A helper the effect never calls is out of scope.
+  assert.equal(cacheCheck(`
+export default function P() {
+  const unusedLoader = async () => { await props.dataApi.queryConnectorTable("t", {}); };
+  useEffect(() => { setX(1); }, []);
+  return null;
+}`).status, 'skip');
+});
+
+test('connector caching: TypeScript-annotated helper declarations are followed', () => {
+  // `const loadDocs: () => Promise<void> = async …` — the annotation sits between the name and the
+  // `=`, so a matcher that stopped at `=` never found the body and the read was invisible.
+  const typed = (inner) => `
+const INFLIGHT_KEY = "__ppInflight";
+export default function P() {
+  const dataReady = true;
+  const loadDocs: () => Promise<void> = async () => { ${inner} };
+  useEffect(() => { loadDocs(); }, [dataReady]);
+  return null;
+}`;
+  assert.equal(cacheCheck(typed('const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r);')).status, 'fail');
+  assert.equal(cacheCheck(typed('const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {}); setRows(await w[INFLIGHT_KEY]);')).status, 'pass');
+});
+
+test('connector caching: a method call does not attach an unrelated same-named helper', () => {
+  // `service.loadDocs()` must not pull in a top-level `loadDocs` — that produced a false finding.
+  assert.equal(cacheCheck(`
+const loadDocs = async () => { await props.dataApi.queryConnectorTable("t", {}); };
+export default function P() {
+  useEffect(() => { service.loadDocs(); }, []);
+  return null;
+}`).status, 'skip');
+});

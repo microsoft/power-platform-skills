@@ -12,7 +12,7 @@ export default function Index() {
 
   if (isLoading) {
     return (
-      <View flex={1} alignItems="center" justifyContent="center">
+      <View flex={1} items="center" justify="center">
         <ActivityIndicator size="large" />
       </View>
     );

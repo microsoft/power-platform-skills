@@ -1,12 +1,14 @@
 # Power Apps Standalone App Template
 
-This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
+This template is an Expo, React Native, and TypeScript starter for building an
+iOS, Android, or hosted web app that connects to Power Platform data through
+`@microsoft/power-apps-native-host`.
 
 ## Requirements
 
-- Node.js 22 LTS.
+- Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 
 ## Setup
 
@@ -28,14 +30,9 @@ connector wiring.
 
 	For GitHub Copilot in VS Code:
 
-	1. Open the Command Palette.
-	2. Run **Chat: Install Plugin From Source**.
-	3. Paste the mobile-app plugin manifest URL:
-
-		```text
-		https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
-		```
-
+	1. Open the Extensions view.
+	2. Enter `@agentplugin` in the search box.
+	3. Find the Power Platform mobile-app plugin and select **Install**.
 	4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
 	Alternatively, install it from a terminal with GitHub Copilot CLI:
@@ -65,46 +62,142 @@ connector wiring.
 	When prompted to sign in, use credentials for the tenant where the Dataverse
 	environment belongs.
 
-4. Create a Microsoft Entra app registration and grant admin consent. (simplified experience coming soon)
+4. Create the Microsoft Entra app registration from Power Apps Wrap.
 
-	Create a native/public client app registration for the mobile app, then add
-	the following redirect URIs:
+	Open the app-registration page for the Power Platform environment selected
+	during `/create-mobile-app`:
 
 	```text
-	https://login.microsoftonline.com/common/oauth2/nativeclient
-	msauth.com.microsoft.PreviewApp://auth
+	https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
 	```
 
-	Add these API permissions as **Delegated** permissions, then grant admin
-	consent for the tenant:
+	Create the registration on that page, copy its **Application (client) ID**,
+	and paste it when `/create-mobile-app` asks. The Wrap experience configures
+	the native app registration for this flow. You do not need to add redirect
+	URIs or API permissions manually, and tenant-wide admin consent is not
+	required.
 
-	- Azure API Connections
-		- `Runtime.All`
-	- Dynamics CRM
-		- `user_impersonation`
-	- Microsoft Graph
-		- `User.Read`
-	- Power Platform API
-		- `Connectivity.Connections.Read`
-		- `Connectivity.Connections.Write`
-		- `Connectivity.Connectors.Read`
-		- `PowerApps.Apps.Read`
-	- PowerApps Service
-		- `User`
+	If the app was created without a client ID, run
+	`/set-app-registration-native` later from the app folder. It opens the same
+	environment-specific page and writes the pasted client ID to
+	`auth.config.json`.
+
+	### Required API permissions
+
+	The Microsoft Entra app registration requires these delegated permissions
+	from the **Power Platform API**:
+
+	- `PowerApps.Apps.Play`
+	- `PowerApps.Apps.Read`
+	- `Connectivity.Connectors.Read`
+	- `Connectivity.Connections.Read`
+	- `Connectivity.Connections.Write`
+	- `Connectivity.Connections.UserConsent`
+
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+	runs schema generation and type-checking before Expo starts.
+	The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+	allowing `/debug-app` to work across VS Code, Copilot CLI, and Claude Code
+	without a terminal ID.
+
+	To start Metro manually instead, run the command below from the app directory.
+	Manual starts and `/debug-app` use the same `.powernative` log source.
 
 	```bash
 	npm run dev
 	```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-	- Play store: (coming soon)
-	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+	- Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
+
+## Upgrade the Native Host
+
+From the app directory, preview the next template upgrade:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest upgrade-template --dry-run
+```
+
+Apply it:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest upgrade-template
+```
+
+Each run upgrades one template version, installs compatible dependencies, and
+runs Expo validation. If another version is available, run the command again.
+The current version is stored in `app.json` under
+`expo.extra.powerappsNative`; do not edit this object.
+
+Apps created before this version file existed must specify their source template
+version:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest \
+	upgrade-template --from-version 1
+```
+
+The upgrader never changes `app/`, `src/`, `android/`, or `ios/`. If a root
+configuration change conflicts with your customization, it writes a `.rej` file
+for manual resolution. Failed validation restores files managed by the upgrade.
+
+Supported package managers are npm, pnpm, and Bun. See
+[CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration files.
+
+### Manual migration to a new template
+
+To migrate without `upgrade-template`, create a new app from the latest template
+instead of modifying the old app in place. Commit or back up the old app first.
+
+1. Create the new app and install its dependencies.
+2. Copy the contents of `app/` and `src/` from the old app into the same
+	directories in the new app:
+
+	```bash
+	cp -R ../old-app/app/. app/
+	cp -R ../old-app/src/. src/
+	```
+
+3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
+	`power.config.json`, and `offline-profile.json` as needed. Review each file
+	before replacing the version supplied by the new template.
+4. Keep the new template's `package.json`, lock file, root configuration files,
+	`android/`, and `ios/`. Reapply old customizations selectively rather than
+	copying these files wholesale.
+5. Run `npm install`, `npm run type-check`, and the bundle command for each
+	target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
+6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
+	update the migrated `app/` and `src/` code for the new template APIs while
+	preserving the new template configuration. Review the changes and rerun the
+	failing command until the build succeeds.
+
+## Web
+
+Start the browser app:
+
+```bash
+npm run web
+```
+
+The command opens **Local Play** in your default browser and embeds the local
+Expo app in the hosted Power Apps player. Use the same browser profile as your
+Power Platform tenant.
+
+Web builds are supported in Code Apps. They are also supported in Power Pages
+when the app uses Dataverse only.
+
+To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
+and `buildPath` to `dist-web` in `power.config.json`, then run
+`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+
+To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
+skills to upload the generated `dist-web` directory.
 
 ## License and notices
 

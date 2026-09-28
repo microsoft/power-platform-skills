@@ -1,6 +1,6 @@
 # Power Automate CLI Reference
 
-> Note: Shell commands below require the [FlowAgent engine repo](https://github.com/matow_microsoft/flow-agent) cloned and built. Plugin users should use MCP tools instead.
+> **Note:** These shell commands require a local engine build. If you installed this as a plugin, use the MCP tools instead — they cover the same operations.
 
 All commands use `node dist/cli.js <command> [options]` from the project root.
 

@@ -8,15 +8,15 @@
 v20.18.2
 
 `pac help`
-PAC CLI Version 2.7.4+g06bb2eb (.NET 10.0.8) — version >= 2.7.0 confirmed.
+PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8) — version > 2.10.0 confirmed.
 
 `pac auth list`
 Index Active Kind      Name User                                          Cloud  Type            Environment       Environment Url
-[1]          UNIVERSAL      akmaloo@microsoft.com                         Public OperatingSystem
-[2]          UNIVERSAL      aurorauser14@capintegration01.onmicrosoft.com Test   User            TMSBAPEnv5ee52    https://tmsbapenv5ee52.crmtest.dynamics.com/
-[3]   *      UNIVERSAL      Aurora365-User1@auroratstgeo.onmicrosoft.com  Test   User            AuroraBAPEnv610b3 https://aurorabapenv610b3.crmtest.dynamics.com/
+[1]          UNIVERSAL      developer@contoso.com                         Public OperatingSystem
+[2]          UNIVERSAL      fabrikamusr1@fabrikamtenant01.onmicrosoft.com Test   User            FabrikamEnv001    https://fabrikamenv001.crmtest.dynamics.com/
+[3]   *      UNIVERSAL      Contoso-User001@contosotest1.onmicrosoft.com  Test   User            ContosoBAPEnv0001 https://contosobapenv0001.crmtest.dynamics.com/
 
-AskUserQuestion: "Multiple auth profiles found. Which environment would you like to use?" → [3] Aurora365-User1@auroratstgeo.onmicrosoft.com — AuroraBAPEnv610b3 (currently active)
+AskUserQuestion: "Multiple auth profiles found. Which environment would you like to use?" → [3] Contoso-User001@contosotest1.onmicrosoft.com — ContosoBAPEnv0001 (currently active)
 
 `pac model list-languages`
 Found 1 enabled language(s): English (United States) LCID 1033 — no localization needed.
@@ -40,7 +40,7 @@ EnterPlanMode called
 User response: approved
 
 ### Decisions
-- Working environment: AuroraBAPEnv610b3 (https://aurorabapenv610b3.crmtest.dynamics.com/)
+- Working environment: ContosoBAPEnv0001 (https://contosobapenv0001.crmtest.dynamics.com/)
 - Languages: English (1033) only
 - Entity status: task — exists (Standard table), no creation required
 - App: Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc)
@@ -58,7 +58,7 @@ User response: approved
 - Result: wrote `package.json` and `genpage.d.ts` (no extra features — no charts/datepicker/timepicker needed)
 
 ## Phase 2 — Entities
-Skipped — `task` Standard entity confirmed to exist in AuroraBAPEnv610b3.
+Skipped — `task` Standard entity confirmed to exist in ContosoBAPEnv0001.
 
 ## Phase 3 — App selection
 Existing app: Genpage Publish Test (`3fc905b9-7854-f111-a821-70a8a59ce7bc`). `pac model create` not invoked.

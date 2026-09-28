@@ -1,15 +1,14 @@
-import { createTamagui } from '@tamagui/core';
-import { config } from '@tamagui/config/v3';
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig';
 
-/**
- * Tamagui configuration.
- * @tamagui/config/v3 provides a fully-configured design system including
- * tokens, themes (light/dark), fonts, animations, and shorthands.
- */
-export const tamaguiConfig = createTamagui(config);
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
+// Add or replace Tamagui configuration values here.
+const customConfig = {};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
 export default tamaguiConfig;
 
 export type Conf = typeof tamaguiConfig;
-declare module '@tamagui/core' {
+declare module 'tamagui' {
   interface TamaguiCustomConfig extends Conf {}
 }

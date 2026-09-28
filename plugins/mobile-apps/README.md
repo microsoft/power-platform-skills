@@ -4,13 +4,15 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 ## Requirements
 
-- Node.js 22 LTS.
+- Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 
 ## Setup
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
+
+Have questions or feedback? Join the [Native Apps Office Hours](OFFICE_HOURS.md).
 
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
@@ -26,16 +28,9 @@ connector wiring.
 
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
-    For GitHub Copilot in VS Code:
-
-    1. Open the Command Palette.
-    2. Run **Chat: Install Plugin From Source**.
-    3. Paste the mobile-app plugin manifest URL:
-
-        ```text
-        https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
-        ```
-
+    1. Open the Extensions pane.
+    2. Enter `@agentPlugins mobile-app` in the search box.
+    3. Select the **mobile-app** plugin and install it.
     4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
     Alternatively, install it from a terminal with GitHub Copilot CLI:
@@ -65,152 +60,93 @@ connector wiring.
     When prompted to sign in, use credentials for the tenant where the Dataverse
     environment belongs.
 
-4. Create a Microsoft Entra app registration and grant admin consent.
+4. Create the Microsoft Entra app registration from Power Apps Wrap.
 
-    Create a native/public client app registration for the mobile app, then add
-    the following redirect URIs:
+    Open the app-registration page for the Power Platform environment selected
+    during `/create-mobile-app`:
 
     ```text
-    https://login.microsoftonline.com/common/oauth2/nativeclient
-    msauth.com.microsoft.PreviewApp://auth
+    https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
     ```
 
-    Add these API permissions as **Delegated** permissions, then grant admin
-    consent for the tenant:
+    Create the registration on that page, copy its **Application (client) ID**,
+    and paste it when `/create-mobile-app` asks. The Wrap experience configures
+    the native app registration for this flow. You do not need to add redirect
+    URIs or API permissions manually, and tenant-wide admin consent is not
+    required.
 
-    - Azure API Connections
-        - `Runtime.All`
-    - Dynamics CRM
-        - `user_impersonation`
-    - Microsoft Graph
-        - `User.Read`
-    - Power Platform API
-        - `Connectivity.Connections.Read`
-        - `Connectivity.Connections.Write`
-        - `Connectivity.Connectors.Read`
-        - `PowerApps.Apps.Read`
-    - PowerApps Service
-        - `User`
+    If the app was created without a client ID, run
+    `/set-app-registration-native` later from the app folder. It opens the same
+    environment-specific page and writes the pasted client ID to
+    `auth.config.json`.
+
+    ### Required API permissions
+
+    The Microsoft Entra app registration requires these delegated permissions
+    from the **Power Platform API**:
+
+    - `PowerApps.Apps.Play`
+    - `PowerApps.Apps.Read`
+    - `Connectivity.Connectors.Read`
+    - `Connectivity.Connections.Read`
+    - `Connectivity.Connections.Write`
+    - `Connectivity.Connections.UserConsent`
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+    `/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+    runs schema generation and type-checking before Expo starts.
+    The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+    so `/debug-app` works after switching between VS Code, Copilot CLI, and
+    Claude Code without asking for a terminal ID.
+
+    To start Metro manually instead, run the command below from the app directory.
+    Manual starts and `/debug-app` use the same `.powernative` log source.
 
     ```bash
     npm run dev
     ```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+    The Metro config removes sensitive lines before writing logs. The complete
+    `.powernative/` folder is ignored by the template's `.gitignore`.
+
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    - Play store: (coming soon)
-    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## License and notices
 
 This template is provided under the license in `LICENSE`.
 
-## Plugin reference
-
 The mobile-app plugin is stored in `plugins/mobile-apps` in the `power-platform-skills` marketplace. It works with GitHub Copilot in VS Code and Claude Code.
 
-<a id="glossary"></a>
-### Glossary
+## Manual migration to a new template
 
-| Term | Meaning |
-|---|---|
-| **Skill** | `/command` you invoke (e.g. `/create-mobile-app`, `/add-dataverse`) |
-| **Agent** | Sub-process a skill spawns (e.g. `data-model-architect`, `screen-builder`) |
-| **Gate** | Approval prompt before a mutation — user must confirm before the skill proceeds |
-| **Memory bank** | `memory-bank.md` per project — source of truth for resume across sessions |
-| **Brief** | Confirmed feature description (4–8 bullets) the planner consumes |
+To migrate without `upgrade-template`, create a new app from the latest template
+instead of modifying the old app in place. Commit or back up the old app first.
 
-### Repo layout
+1. Create the new app and install its dependencies.
+2. Copy the contents of `app/` and `src/` from the old app into the same
+    directories in the new app:
 
-```
-skills/       — /commands users invoke
-agents/       — sub-processes (planner, architects, screen-builder)
-hooks/        — pre/post-tool validators
-shared/       — cross-cutting refs (memory-bank, version-check, MCP, …)
-AGENTS.md     — agent contract
-```
+    ```bash
+    cp -R ../old-app/app/. app/
+    cp -R ../old-app/src/. src/
+    ```
 
-## Prerequisites — what you must set up before `/create-mobile-app`
-
-The skill checks these in Step 1 (Prerequisites) and stops with a clear error if any are missing. Get them ready up front to avoid mid-flow blocks.
-
-### 1. Tooling versions
-
-| Tool | Min version | How to install / check |
-|---|---|---|
-| Node.js | **22 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
-| `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts. Install via Homebrew: `brew install azure-cli` |
-| `git` | any recent | required for upstream template clone |
-
-Detailed matrix (and Xcode/Android Studio notes if you want local native builds): [`shared/version-check.md`](shared/version-check.md).
-
-### 2. Power Platform environment
-
-You'll need an environment to deploy into. `/create-mobile-app` runs `npx power-apps init`, then reads the generated `power.config.json`, resolves the Dataverse URL and tenant through `resolve-environment.js`, and continues. The resolver calls the BAP admin environments endpoint (`api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/<environment-id>`). If the signed-in Azure CLI account cannot read that environment through BAP, provide the Dataverse environment URL directly.
-
-When resolution succeeds from an initialized app root, the resolver writes the non-secret environment details to both `.resolved-environment.json` and `auth.config.json.environment`. Later skills should read those cached values before re-running the environment API. Current-user values such as `UserId` and `BusinessUnitId` are resolved only by skills that explicitly need Dataverse identity context.
-
-Requirements:
-- Start from a fresh installed `expo-app-standalone` template folder; `/create-mobile-app` owns `npx power-apps init`
-- Environment URL handy (e.g. `https://orgXXX.crm.dynamics.com/`) as a fallback if the resolver cannot infer the URL from the selected environment ID
-- Environment ID handy for the `npx power-apps init` selection
-- Permissions to create tables (system customizer or higher) if you'll let the planner create new Dataverse tables
-
-If environment resolution cannot get a Dataverse token during the skill, run `az login --tenant <env-tenant>` and retry.
-
-### 3. (Optional) Companion plugins
-
-- **`expo/skills`** — see the next section. Strongly recommended for native UI patterns.
-
-### Quick sanity check
-
-Before you run `/create-mobile-app`, paste this one-liner from the fresh template folder. It touches the required local tooling and verifies the template dependencies are installed:
-
-```bash
-node -v && \
-npx --yes degit --help >/dev/null && \
-npm install --package-lock-only --ignore-scripts && \
-echo "✅ all prereqs OK"
-```
-
-If any line fails, fix that one before starting the skill. The most common failures are an older Node.js version or running the command outside the fresh template folder.
-
----
-
-## Recommended companion plugin: `expo/skills`
-
-This plugin owns Power Platform integration (auth, Dataverse, connectors, planning, scaffolding). For Expo Router patterns, native UI conventions, and library preferences, install the official Expo team's plugin alongside this one:
-
-```bash
-/plugin marketplace add expo/skills
-/plugin install expo
-```
-
-We **defer to** these Expo skills for:
-- `building-native-ui` — Expo Router, Stack, NativeTabs, Link previews, sheets, modals, search bars, Apple HIG conventions, library preferences (e.g., `expo-audio` not `expo-av`)
-- `expo-dev-client` — custom dev clients
-- `expo-module` — authoring local native modules
-- `upgrading-expo` — SDK upgrades
-- `use-dom`, `expo-tailwind-setup`, etc.
-
-We **do not use** their `expo-deployment` / `expo-cicd-workflows` / `expo-api-routes` skills — deployment in this plugin is `npm run build` + `npx power-apps push`. Power Platform integration uses Dataverse + connectors, not Expo API Routes.
-
-The two plugins layer cleanly: this plugin owns _what_ to build (data model, screens, connectors) and _Power Platform mechanics_; Expo skills own _how_ to build native UI.
-
-After deploy, use `/open-wrap-url --app-id <app-id> --env-id <env-id>` to jump straight to the Wrap page for native extension / package generation.
-
-## What you get
-
-- **Expo standalone template** prepared with `degit` from [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template). The plugin bundles the latest template snapshot under `template/`, while `/create-mobile-app` expects the user to run from a fresh installed template working directory and applies the app identity / connector preparation edits there.
-- **Same `npx power-apps add-data-source` workflow** across this plugin's skills — generated services in `src/generated/services/` work consistently
-- **Auth configuration** through the Microsoft Entra app registration created during setup
-- **Two platforms** in one codebase: iOS, Android
-- **Deploy = `npm run build` + `npx power-apps push`** — local native compile (platform-specific native run commands) is the user's choice and is **out of scope**; users run those directly when they want them.
+3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
+    `power.config.json`, and `offline-profile.json` as needed. Review each file
+    before replacing the version supplied by the new template.
+4. Keep the new template's `package.json`, root configuration files,
+    `android/`, and `ios/`. Reapply old customizations selectively rather than
+    copying these files wholesale.
+5. Run `npm install`, `npm run type-check`, and the bundle command for each
+    target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
+6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
+    update the migrated `app/` and `src/` code for the new template APIs while
+    preserving the new template configuration. Review the changes and rerun the
+    failing command until the build succeeds.
 
 ## Hello world — your first run
 
@@ -220,7 +156,7 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with `npm run dev` ready to go. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
 
 ## Quick examples
 
@@ -236,10 +172,10 @@ What happens:
 1. **Wizard** (~30s) — confirms device class / aesthetic
 2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
 3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
+4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
@@ -286,6 +222,7 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
 > /list-connections              # diagnostic when a service call returns 401
+> /check-updates                 # ordered dependency updates
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
@@ -315,10 +252,6 @@ Example edit flows:
 | `/edit-app "Add barcode scanning and use the scanned value to search records"` | Scanner location, scanned value meaning, table/service/field to search, no/multiple-match behavior | `/add-native barcode-scanner`, data-model update if target field is missing, scanner/search screen rebuild, static gates, optional `/debug-app` handoff if you report a symptom |
 | `/edit-app "Update the design to better match company branding"` | Brand source and scope: palette, typography, components/density, or full reskin | `/design-system --refresh` or `--reskin`, affected screen rebuild when layout grammar changes, style sweep, preview |
 
-### Prefer browser-free / token-budget mode?
-
-At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost picker — option (c) *"Skip — no design work"* skips the style picker and brand rendering entirely, inferring the design from your description. The plan and preview HTML are still generated; you open them yourself if curious. The flag is persisted to the project's `memory-bank.md` so future `/preview-screens` and `/edit-app` invocations honor it.
-
 ## Commands
 
 | Command | Status | Description |
@@ -331,14 +264,18 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
+| `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
+| `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
+| `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
 | `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
-| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Auto-proposed by `/create-mobile-app` Step 6.85 for offline-relevant apps; also runs standalone on existing apps. |
+| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. The bundled offline package is consumed by the native host for local storage, queued synchronization, reconnect handling, and status UX, so the skill configures the host runtime instead of generating duplicate app-owned offline infrastructure. Offered explicitly by `/create-mobile-app` after Dataverse materialization; connectivity wording in the initial prompt does not auto-enable it. Also runs standalone on existing apps. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |
 | `/assign-offline-profile` | 🟡 v0.1 | Bind users / teams to a Mobile Offline Profile via `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` rows. Without this, the profile exists but no one's app uses it. Accepts `--user <upn>`, `--team <name>`, `--me`, `--all-app-users`, `--unassign-*` flags. |
 | `/edit-offline-profile` | 🟡 v0.1 | Change ONE aspect of an existing profile (table scope, sync frequency, column list, name/description) without re-running the full wizard. Mirrors the `/edit-app` gated edit pattern. Accepts `--rename`, `--table X --scope`, `--table X --sync`, `--table X --columns add:/remove:/reset` flags. |
@@ -349,38 +286,29 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — coordinates the data-model + screen-planner architects, plans native capabilities + connectors inline, runs 4 approval gates |
+| `native-app-planner` | Orchestrator — approves data platform + native capabilities + connectors, conditionally coordinates the data-model architect, coordinates screen planning, and runs up to 4 approval gates |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
 
-## Mobile Plugin Snapshot
+## Telemetry and privacy
 
-| Area | `mobile-app` (this plugin) |
-|---|---|
-| Stack | Expo + React Native + TypeScript |
-| Targets | iOS, Android |
-| Native APIs | Camera, location, biometrics, push, sensors (Expo SDK) |
-| Data access | Power Platform connectors |
-| Generated services | `src/generated/services/` |
-| Deploy | `npm run build` + `npx power-apps push` |
+The Mobile Apps plugin sends start-only usage telemetry to Microsoft. A start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, invocation source, and a random per-project app instance ID. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
 
-## Shared resources
+Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. The plugin does not emit `skill_completed`, success/failure, error, or duration data because the available hook boundary does not prove that the workflow itself completed.
 
-| File | Purpose |
-| --- | --- |
-| [`shared/shared-instructions.md`](shared/shared-instructions.md) | **Read first by every skill.** Cross-cutting safety rules, memory-bank protocol, preferred-environment policy, connector-first rule, OS-aware CLI invocation, command-failure handling, prompt-injection guard, sub-skill invocation, execution style. |
-| [`shared/version-check.md`](shared/version-check.md) | Single source of truth for minimum tool versions. Always-required: Node 22+, npm 10+. Conditional: `az` 2.60+ for ADO npm token setup and `/add-dataverse` token acquisition. Xcode/JDK/Android Studio are documented but **not gated by any skill** — user-managed if they want local native builds. |
-| [`shared/preferred-environment.md`](shared/preferred-environment.md) | Environment selection priority: `power.config.json` → memory-bank → explicit environment URL/ID. Never silent switches. |
-| [`shared/connector-reference.md`](shared/connector-reference.md) | Connection ID workflow, common API names, dataset/table discovery, Grep-not-Read pattern for large generated files. |
-| [`shared/memory-bank.md`](shared/memory-bank.md) | Per-project notebook template — copied into the working directory by `/create-mobile-app` Step 6. Tracks data-model decisions, connectors bound, screens built, build history. Read at start of every skill, updated after each successful step, enables resume on failure. |
-| [`hooks/`](hooks/) | PostToolUse validator hook — runs per-skill validators after a Skill tool call (currently scaffolded; v0 ships with no validators yet). |
-| [`shared/references/offline-profile-schema.md`](shared/references/offline-profile-schema.md) | Canonical Dataverse entity field map for the three Mobile Offline Profile entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) + the per-table `EntityMetadata` prereqs. Source of truth for POST body shapes. |
-| [`shared/references/dataverse-offline-api.md`](shared/references/dataverse-offline-api.md) | Web API recipes — every PUT/POST/PATCH/DELETE that `/setup-offline-profile` and `/enable-tables-offline` issue, with §-numbered sections each skill step references. |
+Control the per-user transmission preference with:
+
+```text
+/mobile-app:telemetry status
+/mobile-app:telemetry off
+/mobile-app:telemetry on
+```
+
+`off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
 
 ## Known blockers
-
 
 ## See also
 

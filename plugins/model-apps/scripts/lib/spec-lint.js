@@ -1,0 +1,580 @@
+// plugins/model-apps/scripts/lib/spec-lint.js
+// Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
+// gate; warnings teach. Bakes in the modeling lessons hit live — notably the
+// relationship schema-name vs lookup-name collision Dataverse rejects.
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
+const { normalizeSpecShape } = require('./spec-shape.js');
+const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
+const { nearestName } = require('./nearest-name.js');
+
+const CHOICE_OPTION_WARN = 12;
+const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
+// FetchXML operators that take no <value> (so a filter may omit value/values).
+//
+// The list is the documented value-less ConditionOperator set, NOT a curated subset: an operator
+// missing here makes the lint demand a value the operator must not carry and reject a correct spec
+// (#546 — `eq-businessid` / `ne-businessid`, the business-unit equivalents of `eq-userid` /
+// `ne-userid`, which are the natural way to express "rows owned by my business unit"). The reverse
+// error matters too, so do not add a value-TAKING operator here: that would silently stop the lint
+// catching a missing value and push the failure to the platform at build time.
+//
+// Every name below is copied verbatim from the documented operator table, and the test pins them
+// against an INDEPENDENT literal list — iterating this set to test itself cannot catch a typo in it,
+// and a typo reintroduces exactly the #546 false positive.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const NO_VALUE_OPS = new Set(['null', 'not-null',
+  // current-user / current-business-unit context
+  'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-businessid', 'ne-businessid', 'eq-userlanguage',
+  // relative date
+  'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month', 'next-month',
+  'this-year', 'last-year', 'next-year', 'last-seven-days', 'next-seven-days',
+  // relative fiscal period
+  'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
+  'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period']);
+
+// Every operator the condition table documents, value-less ones included. Transcribed in the doc
+// table's own alphabetical order so it can be diffed against the source by eye.
+//
+// WHY this exists: without it, a typo'd operator fell through to the missing-value check and was
+// reported as `needs a value` — advice that is not merely unhelpful but WRONG. The author adds a
+// value, the lint goes green, and Dataverse rejects the operator at build time. That is the same
+// shape as the #546 false positive, with an extra step. Mirrors how business-rule operators are
+// already validated (see BUSINESS_RULE_OPERATORS in app-spec.js, which also offers a near match).
+//
+// An unknown operator is a WARNING, not an error, and that is the direct lesson of #546: an
+// INCOMPLETE list here would reject a correct spec, which is worse than letting a rare unknown
+// operator through to a build-time failure that at least names it. `--strict` still fails on it.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const KNOWN_FILTER_OPS = new Set([
+  'above', 'begins-with', 'between', 'contain-values', 'ends-with', 'eq', 'eq-businessid',
+  'eq-or-above', 'eq-or-under', 'eq-userid', 'eq-userlanguage', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-useroruserteams', 'eq-userteams', 'ge', 'gt', 'in',
+  'in-fiscal-period', 'in-fiscal-period-and-year', 'in-fiscal-year',
+  'in-or-after-fiscal-period-and-year', 'in-or-before-fiscal-period-and-year', 'last-fiscal-period',
+  'last-fiscal-year', 'last-month', 'last-seven-days', 'last-week', 'last-x-days',
+  'last-x-fiscal-periods', 'last-x-fiscal-years', 'last-x-hours', 'last-x-months', 'last-x-weeks',
+  'last-x-years', 'last-year', 'le', 'like', 'lt', 'ne', 'ne-businessid', 'ne-userid', 'neq',
+  'next-fiscal-period', 'next-fiscal-year', 'next-month', 'next-seven-days', 'next-week',
+  'next-x-days', 'next-x-fiscal-periods', 'next-x-fiscal-years', 'next-x-hours', 'next-x-months',
+  'next-x-weeks', 'next-x-years', 'next-year', 'not-begin-with', 'not-between',
+  'not-contain-values', 'not-end-with', 'not-in', 'not-like', 'not-null', 'not-under', 'null',
+  'olderthan-x-days', 'olderthan-x-hours', 'olderthan-x-minutes', 'olderthan-x-months',
+  'olderthan-x-weeks', 'olderthan-x-years', 'on', 'on-or-after', 'on-or-before',
+  'this-fiscal-period', 'this-fiscal-year', 'this-month', 'this-week', 'this-year', 'today',
+  'tomorrow', 'under', 'yesterday',
+]);
+
+// Cheap near-match for the "did you mean" hint, in the same spirit as the business-rule operator
+// check. Catches the two mistakes that actually happen: wrong case (`EQ-USERID`) and a single
+// dropped/extra/substituted character (`eq-useroruserteam`, `eq-businesid`).
+//
+// Shares the matcher with the CLI unknown-flag check (dataverse-auth.js): both answer the same
+// question against a closed vocabulary, and a second copy would be free to drift into disagreeing
+// about what counts as a near miss.
+function nearestFilterOp(op) {
+  return nearestName(op, KNOWN_FILTER_OPS);
+}
+
+function lintAppSpec(spec) {
+  const errors = [];
+  const warnings = [];
+  const E = (m) => errors.push(m);
+  const W = (m) => warnings.push(m);
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    return { ok: false, errors: ['spec is not an object'], warnings };
+  }
+  const lc = (s) => String(s || '').toLowerCase();
+  // Lint runs on WORK-IN-PROGRESS specs (it is the gate the author hits before plan mode), so a
+  // half-typed collection must produce findings, not a crash that kills the authoring flow.
+  // Shared with validateAppSpec so the two gates can never disagree about what a malformed spec is.
+  const arrOf = (v) => (Array.isArray(v) ? v : []);
+  const shape = normalizeSpecShape(spec);
+  for (const m of shape.errors) E(m);
+  spec = shape.spec;
+
+  const prefix = spec.solution && spec.solution.publisherPrefix;
+  const entityNames = new Set();
+  const globalChoiceNames = new Set((spec.globalChoices || []).map((g) => lc(g.name)));
+  const webResourceNames = new Set((spec.webResources || []).map((w) => lc(w.name)));
+  const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
+  const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
+  // columns per entity (logical) — used to validate onchange attributes.
+  const columnsByEntity = {};
+  for (const e of spec.entities || []) {
+    const set = new Set((e.columns || []).map((c) => lc(c.schemaName)));
+    if (e.primaryAttribute && e.primaryAttribute.schemaName) set.add(lc(e.primaryAttribute.schemaName));
+    columnsByEntity[lc(e.schemaName)] = set;
+  }
+  for (const wr of spec.webResources || []) {
+    if (!wr.name) E('A webResource is missing a name');
+    if (!WEB_RESOURCE_KINDS.has(lc(wr.type || 'js'))) E(`webResource '${wr.name}' has unknown type '${wr.type}'`);
+    if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) E(`webResource '${wr.name}' needs content, contentBase64, or contentPath`);
+    if (lc(wr.type || 'js') === 'js' && wr.name && !lc(wr.name).endsWith('.js')) W(`web resource '${wr.name}' is a script but its name doesn't end in .js — Dataverse convention expects the extension`);
+    if (prefix && wr.name && !lc(wr.name).startsWith(lc(prefix) + '_')) W(`web resource '${wr.name}' does not use the solution prefix '${prefix}_'`);
+  }
+  for (const g of spec.globalChoices || []) {
+    if (!g.name) E('A globalChoice is missing a name');
+    if (!(Array.isArray(g.options) && g.options.length)) E(`globalChoice '${g.name}' needs options[]`);
+  }
+
+  for (const e of spec.entities || []) {
+    const key = lc(e.schemaName);
+    if (entityNames.has(key)) E(`Duplicate entity schemaName: ${e.schemaName}`);
+    entityNames.add(key);
+
+    if (prefix && e.schemaName && !lc(e.schemaName).startsWith(lc(prefix) + '_')) {
+      W(`Entity ${e.schemaName} does not use the solution prefix '${prefix}_'`);
+    }
+    if (!e.primaryAttribute || !e.primaryAttribute.schemaName || !e.primaryAttribute.displayName) {
+      E(`Entity ${e.schemaName} is missing a primaryAttribute (schemaName + displayName)`);
+    }
+    if (e.primaryAttribute && e.primaryAttribute.autoNumberFormat && !SEQNUM_RE.test(e.primaryAttribute.autoNumberFormat)) {
+      W(`Entity ${e.schemaName} primary AutoNumber format '${e.primaryAttribute.autoNumberFormat}' has no {SEQNUM} token — every record would get the same value`);
+    }
+
+    const cols = new Set();
+    for (const c of e.columns || []) {
+      const ck = lc(c.schemaName);
+      if (cols.has(ck)) E(`Entity ${e.schemaName} has a duplicate column ${c.schemaName}`);
+      cols.add(ck);
+      if (c.type === 'Choice' || c.type === 'MultiChoice') {
+        if (c.globalChoice && !globalChoiceNames.has(lc(c.globalChoice))) E(`Column ${e.schemaName}.${c.schemaName} references unknown globalChoice '${c.globalChoice}'`);
+        else if (!c.globalChoice && !(c.options && c.options.length)) E(`${c.type} column ${e.schemaName}.${c.schemaName} needs options[] or a globalChoice`);
+        else if (c.options && c.options.length > CHOICE_OPTION_WARN) W(`Column ${e.schemaName}.${c.schemaName} has ${c.options.length} options — consider a lookup table`);
+      }
+      if ((c.source === 'Calculated' || c.source === 'Rollup') && !c.formula) W(`${c.source} column ${e.schemaName}.${c.schemaName} has no formula — it will be created empty`);
+      if (c.type === 'AutoNumber' && c.autoNumberFormat && !SEQNUM_RE.test(c.autoNumberFormat)) W(`AutoNumber column ${e.schemaName}.${c.schemaName} format '${c.autoNumberFormat}' has no {SEQNUM} token`);
+    }
+    const keyable = new Set([...cols, lc(e.primaryAttribute && e.primaryAttribute.schemaName)]);
+    for (const k of e.alternateKeys || []) {
+      if (!k.schemaName) E(`Entity ${e.schemaName} has an alternate key without a schemaName`);
+      for (const kc of k.columns || []) if (!keyable.has(lc(kc))) E(`Alternate key ${e.schemaName}.${k.schemaName} references unknown column '${kc}'`);
+      if (!(k.columns && k.columns.length)) E(`Alternate key ${e.schemaName}.${k.schemaName} needs columns[]`);
+    }
+    for (const sr of e.statusReasons || []) {
+      if (!sr.label) E(`Entity ${e.schemaName} has a statusReason without a label`);
+      if (sr.state && sr.state !== 'Active' && sr.state !== 'Inactive') E(`statusReason '${sr.label}' state must be 'Active' or 'Inactive'`);
+    }
+  }
+
+  for (const r of spec.relationships || []) {
+    if (r.type === 'ManyToMany') {
+      if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
+      if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
+      if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
+        E(`N:N relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+      }
+      continue;
+    }
+    if (r.type !== 'OneToMany') continue;
+    // The `referenced` (parent) side may be a standard/system table (systemuser, account, …) that
+    // isn't declared in entities[] — a supported pattern (the build auto-prefixes the relationship
+    // name). So WARN, don't error, when it's absent (matches validateAppSpec + the build). The
+    // `referencing` (child) side gets the lookup column, so it MUST be a declared entity.
+    if (!entityNames.has(lc(r.referenced))) W(`Relationship references entity '${r.referenced}' that isn't declared in entities[] — OK if it's a standard/system table (e.g. systemuser, account); otherwise a likely typo`);
+    if (!entityNames.has(lc(r.referencing))) E(`Relationship references unknown entity '${r.referencing}'`);
+    if (!r.lookup || !r.lookup.schemaName) {
+      E(`OneToMany ${r.referenced}->${r.referencing} is missing lookup.schemaName`);
+      continue;
+    }
+    if (lc(relationshipSchemaName(r, prefix)) === lc(r.lookup.schemaName)) {
+      E(`Relationship schema name '${relationshipSchemaName(r, prefix)}' collides with its lookup attribute name '${r.lookup.schemaName}' — Dataverse rejects this; use a distinct relationship name`);
+    }
+    // Dataverse requires a relationship schema name to start with the publisher prefix. The default
+    // name is auto-prefixed (incl. relationships to standard tables like systemuser/account), but an
+    // EXPLICIT rel.schemaName is honored verbatim — so catch an explicit name that would 400 at build.
+    if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
+      E(`Relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+    }
+  }
+
+  // QuickView forms referenced by a host form's quickViews[] (so we only warn about unplaced ones).
+  const placedQuickViewForms = new Set();
+  for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form) placedQuickViewForms.add(qv.form);
+  for (const f of spec.forms || []) {
+    const formType = f.formType || 'Main';
+    if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) E(`Form ${f.entity} has invalid formType '${f.formType}' (use Main/QuickCreate/QuickView)`);
+    if (formType !== 'Main' && (f.subgrids || []).length) E(`Form ${f.entity} is a ${formType} form but declares sub-grids — sub-grids are Main-form only`);
+    if (formType === 'QuickView' && !placedQuickViewForms.has(f.name)) W(`Form ${f.entity} is a QuickView form but isn't placed on any host form — add a quickViews[] entry (lookup + form) on the parent form to surface it`);
+    // An EXPLICIT layout must supply real structure. An empty `tabs: []` compiles to a form with no
+    // authored tab (only the adapter's seed tab survives), and a tab with no sections has nowhere to
+    // place fields/sub-grids/quick-views — the build would silently drop them (firstSectionRowsPointer
+    // returns ''). Catch both at the plan gate instead.
+    const isExplicit = Array.isArray(f.tabs) || f.layout === 'explicit';
+    if (isExplicit) {
+      if (!Array.isArray(f.tabs) || f.tabs.length === 0) E(`Form ${f.entity} uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
+      else for (const t of f.tabs) {
+        // A malformed entry (`tabs: [null]`, a string, an array) would throw from this linter rather
+        // than be reported as a lint error — the validator rejects it, but the standalone lint has to
+        // survive the same input.
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+          E(`Form ${f.entity} has a tab entry that is not an object — each tab must be { label, sections|columns }`);
+          continue;
+        }
+        // A tab holds sections either directly (the single-full-width-column shorthand) or inside
+        // `columns[]` (the multi-column form). Checking only `t.sections` reported every
+        // multi-column tab as empty, which is the exact silent-disagreement this lint exists to
+        // prevent — the compiler and validator both accept the `columns[]` shape.
+        const sections = Array.isArray(t.columns)
+          ? t.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []))
+          : t.sections;
+        if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+      }
+    }
+    for (const sg of f.subgrids || []) {
+      const has1N = (spec.relationships || []).some(
+        (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
+      );
+      const hasNN = (spec.relationships || []).some(
+        (r) => r.type === 'ManyToMany' && ((lc(r.entity1) === lc(f.entity) && lc(r.entity2) === lc(sg.childEntity)) || (lc(r.entity1) === lc(sg.childEntity) && lc(r.entity2) === lc(f.entity)))
+      );
+      if (!has1N && !hasNN) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany or ManyToMany relationship`);
+    }
+    for (const ev of f.events || []) {
+      if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }
+      if (!ev.library) E(`Form ${f.entity} ${ev.event} handler is missing a library (web-resource name)`);
+      else if (!webResourceNames.has(lc(ev.library))) E(`Form ${f.entity} ${ev.event} handler references undeclared web resource '${ev.library}' — add it to webResources[]`);
+      if (!ev.function) E(`Form ${f.entity} ${ev.event} handler is missing a function name`);
+      if (lc(ev.event) === 'onchange') {
+        if (!ev.attribute) E(`Form ${f.entity} onchange handler requires an attribute (column logical name)`);
+        else if ((columnsByEntity[lc(f.entity)] || new Set()).size && !columnsByEntity[lc(f.entity)].has(lc(ev.attribute))) W(`Form ${f.entity} onchange handler binds '${ev.attribute}', which isn't a column on ${f.entity}`);
+      }
+    }
+    // Quick-view placement: each entry embeds a QuickView form (by name) via a lookup column.
+    for (const qv of f.quickViews || []) {
+      if (!qv || !qv.lookup) { E(`Form ${f.entity} has a quickView missing lookup (the lookup column logical name)`); continue; }
+      if (!qv.targetEntity || !entityNames.has(lc(qv.targetEntity))) E(`Form ${f.entity} quickView references unknown targetEntity '${qv.targetEntity}'`);
+      // Resolve by (name, targetEntity) preferring the QuickView so a same-named Main on the target entity
+      // doesn't shadow it (order-dependent otherwise).
+      const qvCandidates = qv.form ? (spec.forms || []).filter((x) => x.name === qv.form && lc(x.entity) === lc(qv.targetEntity)) : [];
+      const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
+      if (!qf) E(`Form ${f.entity} quickView references form '${qv.form}' (a QuickView on '${qv.targetEntity}') not found in forms[]`);
+      else if ((qf.formType || 'Main') !== 'QuickView') E(`Form ${f.entity} quickView form '${qv.form}' must be a QuickView form`);
+    }
+  }
+
+  // Commands (modern command-bar buttons) — a functional leaf button needs a JS library + function;
+  // a flyout/split container (type FlyoutAnchor/SplitButton) instead holds child buttons.
+  const COMMAND_LOCATIONS = new Set(['maintab', 'hometab', 'contextualtab']);
+  const COMMAND_TYPES = new Set(['button', 'flyoutanchor', 'splitbutton']);
+  const lintCmdAction = (label, ent, library, fn) => {
+    if (!library) E(`Command '${label}' on ${ent} needs a library (web-resource name)`);
+    else if (!webResourceNames.has(lc(library))) E(`Command '${label}' references undeclared web resource '${library}' — add it to webResources[]`);
+    if (!fn) E(`Command '${label}' on ${ent} needs a function name`);
+  };
+  for (const c of spec.commands || []) {
+    if (!c.entity || !entityNames.has(lc(c.entity))) { E(`Command references unknown entity '${c.entity}'`); continue; }
+    if (!c.label) E(`A command on ${c.entity} is missing a label`);
+    if (c.location && !COMMAND_LOCATIONS.has(lc(c.location))) E(`Command '${c.label}' has invalid location '${c.location}' (MainTab/HomeTab/ContextualTab)`);
+    const type = c.type || 'Button';
+    if (!COMMAND_TYPES.has(lc(type))) E(`Command '${c.label}' has invalid type '${c.type}' (Button/FlyoutAnchor/SplitButton)`);
+    if (lc(type) === 'flyoutanchor' || lc(type) === 'splitbutton') {
+      if (!(Array.isArray(c.children) && c.children.length)) E(`Command '${c.label}' on ${c.entity} is a ${type} but has no children[] (menu buttons)`);
+      for (const ch of c.children || []) {
+        if (!ch || !ch.label) { E(`Command '${c.label}' on ${c.entity} has a child button without a label`); continue; }
+        lintCmdAction(`${c.label} ▸ ${ch.label}`, c.entity, ch.library, ch.function);
+      }
+    } else {
+      lintCmdAction(c.label, c.entity, c.library, c.function);
+    }
+  }
+
+  // Dashboards — chart/list tiles must reference a declared chart/view; webresource a web resource.
+  //
+  // ID PASSTHROUGH: a tile from a downloaded/round-tripped app carries the deployed view/chart ids
+  // (+ target entity) instead of names, binding to artifacts that ALREADY exist rather than to
+  // anything the spec declares. `validateAppSpec` (app-spec.js, "ID-passthrough tiles") and the
+  // build (sdk-build.js `dashboardTileOpts`, "ID passthrough (round-tripped dashboards)") have both
+  // always accepted that form, and `download-model-app.js readDashboards` deliberately emits it —
+  // this lint was the only stage that did not know about it, so a freshly downloaded spec failed
+  // its OWN structural lint. Because such a tile has no `chart`/`view` key at all, the old check
+  // also interpolated `undefined` into the message and reported a chart literally named
+  // 'undefined'. See #572.
+  const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
+  const viewNames = new Set((spec.views || []).map((v) => lc(v.name)));
+  const chartNames = new Set((spec.charts || []).map((c) => lc(c.name)));
+  for (const d of spec.dashboards || []) {
+    if (!d.name) { E('A dashboard is missing a name'); continue; }
+    if (!(d.tiles && d.tiles.length)) W(`Dashboard '${d.name}' has no tiles`);
+    for (const t of d.tiles || []) {
+      if (!DASH_TILE_TYPES.has(t.type)) { E(`Dashboard '${d.name}' has a tile with invalid type '${t.type}' (chart/list/iframe/webresource)`); continue; }
+      // `visualizationId` identifies a CHART; it means nothing on a list tile. One shared id test let
+      // a list tile carrying a stray visualizationId take the id path and skip the viewId requirement
+      // altogether, so the tile deployed with no view to list.
+      const byId = t.type === 'chart' ? (t.viewId || t.visualizationId) : t.viewId;
+      if (t.type === 'chart') {
+        if (byId) {
+          // A chart tile renders a visualization over a view, so BOTH halves are load-bearing: a
+          // visualizationId alone has no data to plot, and a viewId alone has nothing to plot with.
+          if (!t.viewId) E(`Dashboard '${d.name}' chart tile with visualizationId also needs viewId`);
+          if (!t.visualizationId) E(`Dashboard '${d.name}' id-based chart tile with viewId also needs visualizationId`);
+          if (!t.entity) E(`Dashboard '${d.name}' id-based chart tile needs entity`);
+        } else {
+          if (!t.chart) E(`Dashboard '${d.name}' chart tile needs a chart (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!chartNames.has(lc(t.chart))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
+          if (!t.view) E(`Dashboard '${d.name}' chart tile needs a view (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' chart tile references unknown view '${t.view}'`);
+        }
+      } else if (t.type === 'list') {
+        if (byId) {
+          if (!t.entity) E(`Dashboard '${d.name}' id-based list tile needs entity`);
+        } else if (!t.view) E(`Dashboard '${d.name}' list tile needs a view (by name) or a viewId (id passthrough)`);
+        else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' list tile references unknown view '${t.view}'`);
+      }
+      if (t.type === 'iframe' && !t.url) E(`Dashboard '${d.name}' iframe tile needs a url`);
+      if (t.type === 'webresource' && (!t.webResource || !webResourceNames.has(lc(t.webResource)))) E(`Dashboard '${d.name}' webresource tile references undeclared web resource '${t.webResource}'`);
+    }
+  }
+
+  // Sitemap subareas — each names exactly one target (entity/dashboard/url/page). A DashBoard subarea
+  // surfaces a built dashboard in the app nav (and auto-pins it as an app component); a page subarea
+  // surfaces a generative page (declared in pages[]) as a GenPage subarea.
+  const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  // A page subarea may reference a page by its stable KEY (schemaVersion 2 — migrateAppSpec rewrites
+  // name-based appShell page refs to keys) OR by name (legacy). Accept EITHER so a valid v2 key ref where
+  // key !== name (e.g. key 'order-detail', name 'Order Detail') is not falsely flagged. validateAppSpec is
+  // the strict enforcer (it selects keys-for-v2 / names-for-legacy per schemaVersion, app-spec.js:586); the
+  // guardrail lint just must not error on a correct ref.
+  const pageRefs = new Set([
+    ...arrOf(spec.pages).map((p) => p && p.key).filter(Boolean),
+    ...arrOf(spec.pages).map((p) => p && p.name).filter(Boolean),
+  ]);
+  // Genpage data sources that aren't declared entities are likely standard tables (fine) or a typo.
+  const entityLowerSet = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
+  for (const p of spec.pages || []) {
+    for (const ds of p.dataSources || []) {
+      if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
+    }
+  }
+  // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
+  // a $webresource:<name>.svg reference — NOT a bare Fluent token, which breaks the modern
+  // app-designer property pane. For ENTITY subareas the nav icon comes from the TABLE icon
+  // (entities[].vectorIcon → IconVectorName), so a subarea vectorIcon is DROPPED at build time; warn
+  // the author to set the table icon instead.
+  // The sitemap `VectorIcon` attribute must be a platform icon reference — an SVG/image path
+  // (e.g. /WebResources/<pub>/icons/x.svg) or a `$webresource:<name>.svg` reference — NOT a bare
+  // Fluent token, which breaks the modern app-designer property pane. An entity-subarea vectorIcon that
+  // IS a valid platform ref now round-trips (the build emits it); only a BARE token on an entity subarea
+  // is dropped. (isPlatformIconRef also accepts an extension-less WebResources path like an OOB
+  // /_imgs/.../CDSEntity, which is a valid live reference.)
+  for (const a of (spec.appShell && spec.appShell.areas) || []) {
+    if (a.vectorIcon && !isPlatformIconRef(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
+    for (const g of a.groups || []) {
+      for (const sa of g.subAreas || []) {
+        const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
+        if (targets.length === 0) E(`Sitemap subarea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
+        else if (targets.length > 1) E(`Sitemap subarea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
+        if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
+        if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
+        if (sa.page && !pageRefs.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
+        if (sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
+          if (sa.entity) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — on an entity subarea a bare Fluent token breaks the app designer and is DROPPED. Use an SVG path (/WebResources/<pub>/icons/x.svg) or $webresource:<name>.svg, or set entities[].vectorIcon (the table icon).`);
+          else W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
+        }
+      }
+    }
+  }
+
+  for (const ch of spec.charts || []) {
+    const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(ch.entity));
+    if (!ent) { E(`Chart '${ch.name}' references unknown entity '${ch.entity}'`); continue; }
+    const col = (ent.columns || []).find((c) => lc(c.schemaName) === lc(ch.groupBy));
+    if (!col) W(`Chart '${ch.name}' groups by '${ch.groupBy}', which isn't a column on ${ch.entity}`);
+    else if (col.type !== 'Choice') W(`Chart '${ch.name}' groups by a non-Choice column '${ch.groupBy}' — Choice columns chart best`);
+  }
+
+  // View filters: each condition needs a value unless the operator is a no-value kind; in/not-in
+  // need a values[]. Choice labels in values resolve to ints at build time.
+  for (const v of spec.views || []) {
+    // View-name collision: an authored view named exactly like the Dataverse stock default view
+    // ("Active/Inactive <DisplayCollectionName>") is matched by name+entity and RECONCILED onto that
+    // stock default rather than created anew — so only its COLUMNS merge in (unioned with the stock
+    // set, incl. the stock "Created On"); its authored filters and sort are NOT applied. Warn so the
+    // author picks a distinct name (or knowingly customizes the stock default).
+    const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
+    if (ve && v.name) {
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
+      if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
+        W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
+      }
+    }
+    for (const f of v.filters || []) {
+      if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
+      const op = f.op || 'eq';
+      if (!KNOWN_FILTER_OPS.has(op)) {
+        // Reported INSTEAD of the missing-value check below, never alongside it: `needs a value` is
+        // wrong advice for an operator that does not exist, and acting on it produces a spec that
+        // lints clean and then fails at the platform.
+        const near = nearestFilterOp(op);
+        W(`View '${v.name}' filter on '${f.attr}' uses '${op}', which is not a documented FetchXML condition operator${near ? ` — did you mean '${near}'?` : ''}. Dataverse will reject it when the view is built.`);
+      } else if (op === 'in' || op === 'not-in') {
+        if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
+      } else if (NO_VALUE_OPS.has(op)) {
+        // A value on a value-less operator is a WARNING, not an error, and the distinction was
+        // settled by measurement rather than assumption. Probed live against Dataverse Web API:
+        //   eq-businessid value="00000000-0000-0000-0000-000000000000"  -> HTTP 200, 1 row
+        //   eq-businessid (no value)                                    -> HTTP 200, 1 row
+        //   this-year     value="1999"                                  -> HTTP 200, 1 row
+        //   this-year     (no value)                                    -> HTTP 200, 1 row
+        // The platform neither rejects the condition nor honours the value — it IGNORES it. So
+        // erroring would block specs that build and run correctly today, while staying silent
+        // leaves a filter that does not do what its `value` says. The author almost always meant
+        // a value-TAKING operator (`eq` against a specific business unit) — hence the advice.
+        //
+        // Note this deliberately differs from the business-rule operator check in app-spec.js,
+        // which ERRORS on the same shape. That is a different engine: a business rule is compiled
+        // client-side, where the stray value is not harmless.
+        //
+        // The operator set spans several unrelated semantics (`null`/`not-null` test presence,
+        // `eq-userlanguage` matches the user's language, the relative-date ones match a period), so
+        // the message deliberately says only that the value has no effect — asserting a particular
+        // match semantics would be wrong for most of the set.
+        //
+        // `value` and `values` are called out separately because they are dropped at different
+        // points, and a message that named the wrong one would send the author to the wrong place:
+        // `value` is forwarded into the condition and discarded by Dataverse (sdk-build.js emits it
+        // for any non-in/not-in operator), whereas `values` is only ever read by the in/not-in
+        // branch, so it never reaches the platform at all.
+        if (f.value !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so it has no effect on what the filter matches. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        }
+        if (f.values !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries values[] — values[] is only read by the 'in'/'not-in' operators, so it is dropped when the view is built. Drop it, or use 'in' if you meant to match a list.`);
+        }
+      } else if (f.value === undefined) {
+        E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
+      }
+    }
+  }
+
+  // Sample data: a custom statusReason must be declared on the entity; every $parent/$parents
+  // bind must have a OneToMany from the named parent to this entity (so the lookup exists);
+  // every Choice/MultiChoice value must be a declared option label or an option int (a raw
+  // label only auto-resolves for inline-option columns — global choices used to slip through
+  // and get rejected by Dataverse, so catch unresolvable labels here regardless of binding).
+  for (const [ent, recs] of Object.entries(spec.sampleData || {})) {
+    const e = (spec.entities || []).find((x) => lc(x.schemaName) === lc(ent));
+    if (!e) continue; // unknown-entity is already an error in validateAppSpec
+    // #5 (edit-loop safety): a table whose PRIMARY is auto-numbered has no author-supplied key value in
+    // its sample rows (the number is server-assigned), so unless it declares a SINGLE-COLUMN alternate
+    // key, sample seeding has no idempotency key — every re-run (or a retried insert) DUPLICATES the
+    // rows, and you can't refresh data with --sample-data on an edit. Warn so the author adds a natural
+    // key. Mirrors entity-provision.js chooseMatchOn (single-column alt key, else the primary name).
+    if (Array.isArray(recs) && recs.length && e.primaryAttribute && e.primaryAttribute.autoNumberFormat) {
+      const hasSingleColKey = (e.alternateKeys || []).some((k) => Array.isArray(k.columns) && k.columns.length === 1);
+      if (!hasSingleColKey) {
+        W(`sampleData['${ent}']: ${ent}'s primary column is auto-numbered, so its ${recs.length} sample row(s) have no idempotency key — a re-run (or a retried insert) will DUPLICATE them, and you can't refresh data with --sample-data on an edit. Add a single-column alternateKeys[] entry (a natural key) to make seeding idempotent.`);
+      }
+    }
+    const declaredReasons = new Set((e.statusReasons || []).map((s) => lc(s.label)));
+    for (const rec of Array.isArray(recs) ? recs : []) {
+      if (rec && rec.statusReason && !declaredReasons.has(lc(rec.statusReason))) E(`sampleData['${ent}'] sets statusReason '${rec.statusReason}', which isn't a declared status reason on ${ent}`);
+      const parents = [].concat(rec && rec.$parent ? [rec.$parent] : [], (rec && rec.$parents) || []);
+      for (const p of parents) {
+        if (p && p.entity && !relationshipFor(spec, p.entity, ent)) E(`sampleData['${ent}']: no OneToMany from parent '${p.entity}' to '${ent}' (needed to bind the lookup)`);
+      }
+      // Shared with validateAppSpec (#4) so the guardrail and the hard gate flag the same tokens.
+      for (const { field, token } of invalidChoiceSampleTokens(spec, e, rec)) {
+        E(`sampleData['${ent}'] sets ${field}='${token}', which isn't a valid option for that Choice column — use a declared option label or its integer value`);
+      }
+    }
+  }
+
+  // ai block — row-summary guardrails.
+  const D365_OWNED_SUMMARY_TABLES = new Set(['incident', 'lead', 'opportunity']);
+  const DESCRIPTIVE_TYPES = new Set(['Text', 'Memo', 'Choice', 'MultiChoice', 'DateTime', 'Money', 'Integer', 'Decimal', 'Double', 'Boolean']);
+  if (spec.ai && spec.ai.summaries && spec.ai.summaries.tables && typeof spec.ai.summaries.tables === 'object') {
+    for (const [k, v] of Object.entries(spec.ai.summaries.tables)) {
+      if (D365_OWNED_SUMMARY_TABLES.has(lc(k))) {
+        W(`Summary table '${k}' is a Dynamics 365 app table (Case/Lead/Opportunity) — it provides its own summaries; the row-summary feature isn't available for it`);
+      }
+      const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(k));
+      if (ent) {
+        const descriptiveCols = (ent.columns || []).filter((c) => DESCRIPTIVE_TYPES.has(c.type));
+        if (descriptiveCols.length === 0) {
+          W(`Summary table '${k}' has no descriptive columns — a row summary may not be useful`);
+        }
+        if (v && Array.isArray(v.columns)) {
+          const entCols = new Set([
+            ...(ent.columns || []).map((c) => lc(c.schemaName)),
+            ...(ent.primaryAttribute && ent.primaryAttribute.schemaName ? [lc(ent.primaryAttribute.schemaName)] : []),
+          ]);
+          for (const c of v.columns) {
+            if (typeof c === 'string' && !entCols.has(lc(c))) {
+              E(`ai.summaries.tables['${k}'].columns: unknown column '${c}'`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  dupWarn((spec.views || []).map((v) => v.name), 'view', W);
+  dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
+  dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
+
+  // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
+  // is still buildable, and the author may have good reason. They exist because all three were steps
+  // the authoring flow only asked for in prose, and prose steps get silently skipped — testers
+  // reported exactly that (no jobs enumerated, no pages proposed). Surfacing them at the lint gate
+  // makes the omission visible while it is still cheap to fix.
+  //
+  // Every traversal is shape-guarded. Lint runs on WORK-IN-PROGRESS specs (it is the gate the author
+  // hits before plan mode), so a half-typed `personas: {}` or a null entry must produce a finding —
+  // validateAppSpec already reports the shape error — and never a crash that kills the flow.
+  const personas = Array.isArray(spec.personas) ? spec.personas.filter((p) => p && typeof p === 'object') : [];
+  const jobs = personas.flatMap((p) => (Array.isArray(p.jobs) ? p.jobs : [])
+    .filter((j) => j && typeof j === 'object')
+    .map((j) => ({ persona: p.persona, job: j })));
+  if (!personas.length) {
+    W('no personas[] — no jobs-to-be-done are recorded and no security role is authored, so the app opens only for system administrators. Capture who uses this app and what each of them needs to get done.');
+  } else if (!jobs.length) {
+    W('personas[] declares no jobs — a persona with no jobs-to-be-done neither documents the app nor sizes its security role.');
+  }
+  for (const { persona, job } of jobs) {
+    if (!(Array.isArray(job.surfaces) && job.surfaces.length)) {
+      W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);
+    }
+  }
+  // A surface that names nothing this spec builds is the NEXT failure after "no surfaces at all":
+  // the job claims coverage that does not exist. Only a warning, because a surface may legitimately
+  // name an out-of-the-box artifact this spec never authors (the same reason app-spec.js validates
+  // surfaces as shape-only) — see lib/surface-resolver.js.
+  for (const u of resolveSurfaces(spec).unresolved) W(unresolvedSurfaceMessage(u));
+  if (!(Array.isArray(spec.pages) && spec.pages.length)) {
+    W('no pages[] — per the genpage-first policy, non-record surfaces (overview/landing, dashboard, analytics, guided or wizard flows) should be generative pages. If this app is genuinely record-CRUD only, ignore this.');
+  }
+  // An icon the user cannot picture is an icon they cannot approve. At plan time the SVG may not be
+  // drawn yet, and a web-resource name ("new_project_icon") describes nothing — so a custom table
+  // carrying an icon without `iconDescription` is a review gap, not a build problem.
+  for (const e of arrOf(spec.entities)) {
+    if (!e || typeof e !== 'object' || e.existing) continue;
+    if ((e.vectorIcon || e.icon) && !(typeof e.iconDescription === 'string' && e.iconDescription.trim())) {
+      W(`entity ${e.schemaName || '?'}: has an icon but no iconDescription — describe what the glyph DEPICTS (e.g. "a briefcase") so the user can approve it before the SVG is drawn.`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+function dupWarn(names, kind, W) {
+  const seen = new Set();
+  for (const n of names) {
+    const k = String(n || '').toLowerCase();
+    if (k && seen.has(k)) W(`Duplicate ${kind} name: ${n}`);
+    seen.add(k);
+  }
+}
+
+// The operator sets are exported FROZEN — as arrays, not the live Sets. The module-level Set is
+// shared by every in-process consumer through the require cache, so handing out the instance would
+// let one caller's `.add()`/`.delete()` silently change lint behaviour for everything else.
+// Exported so the regression test can compare them against an independent, doc-derived literal list
+// in BOTH directions — a missing/typo'd entry reintroduces the #546 false positive, and an extra
+// (value-taking) entry silently disables the missing-value check.
+module.exports = {
+  lintAppSpec,
+  NO_VALUE_OPS: Object.freeze([...NO_VALUE_OPS]),
+  KNOWN_FILTER_OPS: Object.freeze([...KNOWN_FILTER_OPS]),
+};

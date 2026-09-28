@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "description": "Canvas Apps lifecycle hooks (Copilot format)",
+  "hooks": {
+    "userPromptTransformed": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet run --file \"${PLUGIN_ROOT}/hooks/inject-sync-reminder.cs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "name": "account-summary",
+  "description": "Search accounts by name and return revenue and status summaries.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "nameContains": {
+        "type": "string",
+        "description": "Optional text that the account name must contain."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Maximum number of matching accounts to return.",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 25
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "accounts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "revenue": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "revenue",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "totalCount": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "hasMoreRows": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "accounts",
+      "totalCount",
+      "hasMoreRows"
+    ],
+    "additionalProperties": false
+  }
+}

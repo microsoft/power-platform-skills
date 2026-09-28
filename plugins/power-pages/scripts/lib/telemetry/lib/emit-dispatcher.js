@@ -30,7 +30,7 @@ function localConfigDir() {
   return CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
 }
 
-// Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
+// Usage telemetry is default-on. The user opt-out is per-plugin and lives in
 // config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
 // It suppresses TRANSMISSION only; the local mirror is written before this gate.
 function isUserOptedOut(pluginName) {

@@ -14,7 +14,7 @@ Best for: content-heavy apps, journaling, reading, note-taking. Serif headings c
 
 ```tsx
 // tamagui.config.ts
-import { createFont } from 'tamagui'
+import { createFont } from '@tamagui/core'
 
 const headingFont = createFont({
   family: 'Lora',
@@ -122,13 +122,18 @@ Complete copy-paste block for `expo-font` + Tamagui wiring:
 
 ```tsx
 // app/_layout.tsx
+import { PowerAppsProvider } from '@microsoft/power-apps-native-host'
 import { useFonts } from 'expo-font'
 import * as SplashScreen from 'expo-splash-screen'
 import { useEffect } from 'react'
+import { useColorScheme } from 'react-native'
+
+import tamaguiConfig from '../tamagui.config'
 
 SplashScreen.preventAutoHideAsync()
 
 export default function RootLayout() {
+  const colorScheme = useColorScheme()
   const [fontsLoaded] = useFonts({
     // Replace with your chosen pairing
     Lora: require('../assets/fonts/Lora-Regular.ttf'),
@@ -143,31 +148,39 @@ export default function RootLayout() {
   if (!fontsLoaded) return null
 
   return (
-    <TamaguiProvider config={tamaguiConfig} defaultTheme={colorScheme}>
+    <PowerAppsProvider
+      // Keep the existing msalConfig, powerConfig, and schemaMap props.
+      tamaguiConfig={tamaguiConfig}
+      defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
+    >
       {/* ... */}
-    </TamaguiProvider>
+    </PowerAppsProvider>
   )
 }
 ```
 
 ```tsx
 // tamagui.config.ts
-import { createTamagui, createFont } from 'tamagui'
-import { defaultConfig } from '@tamagui/config/v4'
+// Keep the existing imports, factory call, exports, and module augmentation.
+// Replace only customConfig inside the customization markers.
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig'
+import { defaultConfig } from '@tamagui/config/v5'
+import { createFont } from '@tamagui/core'
 
 const headingFont = createFont({ /* from pairing above */ })
 const bodyFont = createFont({ /* from pairing above */ })
 
-const config = createTamagui({
-  ...defaultConfig,
+const customConfig = {
   fonts: {
     ...defaultConfig.fonts,
     heading: headingFont,
     body: bodyFont,
+    mono: defaultConfig.fonts.body,
   },
-})
+}
 
-export default config
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
+export default tamaguiConfig
 ```
 
 Usage in components:

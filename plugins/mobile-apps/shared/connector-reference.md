@@ -101,7 +101,7 @@ npx power-apps add-flow --flow-id <flow-guid> --non-interactive
 npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
-Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading Metro terminal output.
+Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
 
 ## Inspecting large generated files
 
@@ -124,10 +124,10 @@ This avoids context window bloat and is much faster than reading entire generate
 
 ## Connector routing (runtime)
 
-`PowerAppsHostProvider` in `app/_layout.tsx` handles all connector routing at runtime — both Dataverse and non-Dataverse connectors use the same unified pipeline. No separate executor or provider wiring is needed.
+`PowerAppsProvider` in `app/_layout.tsx` handles all connector routing at runtime — both Dataverse and non-Dataverse connectors use the same unified pipeline. No separate executor or provider wiring is needed.
 
 When a screen calls a generated service method:
-1. `PowerAppsHostProvider` resolves the connection from `connectionReferences` in `power.config.json`
+1. `PowerAppsProvider` resolves the connection from `connectionReferences` in `power.config.json`
 2. If the connection requires setup (missing or expired), `ConnectionSetupScreen` is shown automatically
 3. `NativePowerAppsBridge` dispatches the call with the correct auth token
 

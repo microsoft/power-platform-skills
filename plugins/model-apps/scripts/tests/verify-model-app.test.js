@@ -1,0 +1,740 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert');
+const os = require('node:os');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { readerFor, appIdFor } = require('../verify-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
+
+const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+
+// SDK stub that provides enough surface for readerFor (appId resolution, sitemap, webresource).
+// `sitemap` when provided causes stubSdk to route appmodulecomponent + sitemap queries appropriately
+// so fetchSitemap returns { ok:true, xml, ids }.
+function stubSdk({ webresource = [], sitemap = null } = {}) {
+  return {
+    queryRecords: async (set) => {
+      if (set === 'appmodule') return [{ appmoduleid: 'app-uuid-1', appmoduleidunique: 'uid-1' }];
+      if (set === 'appmodulecomponent') return sitemap ? [{ objectid: 'sm-1', componenttype: 62 }] : [];
+      if (set === 'sitemap') return sitemap ? [{ sitemapxml: sitemap }] : [];
+      if (set === 'webresource') return webresource;
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+  };
+}
+
+// SDK where appmodule returns empty → fetchSitemap gets { ok:false, reason:'app-not-found' }.
+function noAppSdk() {
+  return { queryRecords: async () => [], findTables: async () => [], findColumns: async () => [] };
+}
+
+test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throws on failure', async () => {
+  let calls = 0;
+  const genpageCli = { enumerateEnv: async () => { calls++; return { ok: true, ids: [GP_OVERVIEW, GP_DETAIL] }; } };
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: os.tmpdir() });
+
+  const ids = await reader.existenceIds();
+  assert.deepStrictEqual(ids, [GP_OVERVIEW, GP_DETAIL]);
+  await reader.existenceIds(); // second call — must NOT re-invoke enumerateEnv (memoized)
+  assert.strictEqual(calls, 1, 'enumerateEnv called exactly once (memoized per verify run)');
+
+  // Failure path: enumerateEnv !ok → existenceIds must throw (fail-closed — unknown env means cannot verify).
+  const failing = readerFor(stubSdk(), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: false, error: 'auth expired' }) },
+    workspaceDir: os.tmpdir(),
+  });
+  await assert.rejects(failing.existenceIds(), /auth expired/i);
+});
+
+test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when sitemap unreadable', async () => {
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${GP_OVERVIEW}"/><SubArea GenPageId="${GP_DETAIL}"/></Group></Area></SiteMap>`;
+  const reader = readerFor(stubSdk({ sitemap: xml }), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    workspaceDir: os.tmpdir(),
+  });
+  const ids = await reader.sitemapPageIds();
+  assert.ok(ids.includes(GP_OVERVIEW.toLowerCase()), 'GP_OVERVIEW in sitemapPageIds');
+  assert.ok(ids.includes(GP_DETAIL.toLowerCase()), 'GP_DETAIL in sitemapPageIds');
+
+  // Failure: fetchSitemap returns !ok (app-not-found) → sitemapPageIds must throw (fail-closed).
+  const failing = readerFor(noAppSdk(), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    workspaceDir: os.tmpdir(),
+  });
+  await assert.rejects(failing.sitemapPageIds(), /could not read the app sitemap/i);
+});
+
+test('readerFor.manifest() returns null when webresource absent; parsed manifest when valid; null when corrupt', async () => {
+  // Absent: no webresource row → manifest() returns null (verifySpec will set unableToRun on a page-bearing spec).
+  const readAbsent = readerFor(stubSdk(), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    workspaceDir: os.tmpdir(),
+  });
+  assert.strictEqual(await readAbsent.manifest(), null, 'manifest null when webresource absent');
+
+  // Valid: webresource.content = base64 of valid manifest JSON → manifest() returns parsed object.
+  const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_OVERVIEW }] };
+  const b64 = Buffer.from(JSON.stringify(manifest)).toString('base64');
+  const readPresent = readerFor(stubSdk({ webresource: [{ content: b64 }] }), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    workspaceDir: os.tmpdir(),
+  });
+  const m = await readPresent.manifest();
+  assert.ok(m && m.pages[0].pageId === GP_OVERVIEW, 'manifest parsed when webresource is valid');
+
+  // Corrupt: base64 of non-JSON → parseManifestBase64 returns null → manifest() returns null.
+  const corruptB64 = Buffer.from('this is not valid json!').toString('base64');
+  const readCorrupt = readerFor(stubSdk({ webresource: [{ content: corruptB64 }] }), 'contoso_app', {
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    workspaceDir: os.tmpdir(),
+  });
+  assert.strictEqual(await readCorrupt.manifest(), null, 'manifest null when webresource is corrupt JSON');
+});
+
+test('readerFor.pageCode(id) downloads by id (pageIds:[id]), caches per id, throws on download failure', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'vf-'));
+  let downloads = 0;
+  const genpageCli = {
+    enumerateEnv: async () => ({ ok: true, ids: [] }),
+    // Simulate pac writing <outDir>/<pageId>/page.tsx (the per-id output layout).
+    download: async ({ outputDir, pageIds }) => {
+      downloads += 1;
+      const id = pageIds[0];
+      fs.mkdirSync(path.join(outputDir, id), { recursive: true });
+      fs.writeFileSync(path.join(outputDir, id, 'page.tsx'), `// code for ${id}`, 'utf8');
+      return true;
+    },
+  };
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: ws });
+
+  const code = await reader.pageCode(GP_OVERVIEW);
+  assert.ok(code.includes(GP_OVERVIEW), 'returned the page code for the requested id');
+
+  await reader.pageCode(GP_OVERVIEW); // second call — same id — must NOT re-download
+  assert.strictEqual(downloads, 1, 'download runs once per id (cached)');
+
+  await reader.pageCode(GP_DETAIL); // different id → exactly one more download (per-id, not all-pages)
+  assert.strictEqual(downloads, 2, 'each distinct id downloaded separately');
+
+  // Download failure → throws so the build gate gets an error (fail-closed).
+  const failing = readerFor(stubSdk(), 'contoso_app', {
+    genpageCli: {
+      enumerateEnv: async () => ({ ok: true, ids: [] }),
+      download: async () => { throw new Error('pac download failed'); },
+    },
+    workspaceDir: fs.mkdtempSync(path.join(os.tmpdir(), 'vf-')),
+  });
+  await assert.rejects(failing.pageCode(GP_OVERVIEW), /pac download failed/i);
+});
+
+test('readerFor WITHOUT a genpageCli has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed (Imp7/C6)', () => {
+  const reader = readerFor(stubSdk(), 'contoso_app', {});
+  // No genpageCli → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
+  assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no genpageCli');
+  assert.strictEqual(typeof reader.existenceIds, 'undefined', 'no existenceIds when no genpageCli');
+  assert.strictEqual(typeof reader.manifest, 'undefined', 'no manifest when no genpageCli');
+  assert.strictEqual(typeof reader.pageCode, 'undefined', 'no pageCode when no genpageCli');
+});
+
+test('readerFor base readers normalize exact identities for tables, relationships, commands, and settings', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async (logical) => {
+      calls.push({ method: 'findTables', logical });
+      return [{ logicalName: 'NEW_ACCOUNT' }, { logicalName: 'new_contact' }];
+    },
+    findColumns: async (logical) => {
+      calls.push({ method: 'findColumns', logical });
+      return [{ logicalName: `${logical}_name` }];
+    },
+    queryRecords: async () => [],
+    fetchEntityMetadata: async (logical) => {
+      calls.push({ method: 'fetchEntityMetadata', logical });
+      return {
+        Relationships: [
+          { SchemaName: 'new_Parent_Child' },
+          { schemaName: 'new_lower' },
+          { name: 'new_named' },
+          {},
+        ],
+      };
+    },
+    resolveArtifact: async (kind, identity) => {
+      calls.push({ method: 'resolveArtifact', kind, identity });
+      return [{ id: 'cmd-1' }];
+    },
+    retrieveSetting: async (name, opts) => {
+      calls.push({ method: 'retrieveSetting', name, opts });
+      return { value: '2' };
+    },
+  };
+  const reader = readerFor(sdk, 'contoso_app', {});
+
+  assert.deepStrictEqual(await reader.findTable('NEW_ACCOUNT'), { logicalName: 'NEW_ACCOUNT' });
+  assert.deepStrictEqual(await reader.findColumns('new_account'), [{ logicalName: 'new_account_name' }]);
+  assert.deepStrictEqual(await reader.entityRelationships('NEW_CHILD'), ['new_parent_child', 'new_lower', 'new_named']);
+  assert.strictEqual(await reader.commandBar('NEW_ACCOUNT'), true);
+  assert.deepStrictEqual(await reader.retrieveSetting('NLGridSearchSetting'), { value: '2' });
+  assert.ok(calls.some((c) => c.method === 'findTables' && c.logical === 'new_account'));
+  assert.ok(calls.some((c) => c.method === 'fetchEntityMetadata' && c.logical === 'new_child'));
+  assert.ok(calls.some((c) => c.method === 'resolveArtifact' && c.identity.entity === 'new_account'));
+  assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
+});
+
+test('readerFor + verifySpec reads deployed fetchxml and systemform.isdefault through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'savedquery') {
+        return [{
+          savedqueryid: 'view-1',
+          layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+          fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter></entity></fetch>',
+        }];
+      }
+      if (set === 'systemform') return [{ formid: 'form-1', isdefault: false }];
+      return [];
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = {
+    solution: { publisherPrefix: 'new' },
+    app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], charts: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Tickets', columns: ['new_subject'], activeOnly: false, filters: [{ attr: 'modifiedon', op: 'this-week' }] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', isDefault: true }],
+  };
+
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+
+  assert.ok(r.missing.some((m) => m.kind === 'view-filters' && /modifiedon this-week/.test(m.detail)), 'the real reader must surface fetchxml to the filter oracle');
+  assert.ok(r.missing.some((m) => m.kind === 'form-default' && /isdefault is false/.test(m.detail)), 'the real reader must surface systemform.isdefault to the default-form oracle');
+  const viewQuery = calls.find((c) => c.set === 'savedquery');
+  assert.ok(viewQuery.opts.select.includes('fetchxml'), 'view reads must request savedquery.fetchxml');
+  const formDefaultQuery = calls.find((c) => c.set === 'systemform' && /formid eq form-1/.test(c.opts.filter));
+  assert.ok(formDefaultQuery, 'default-form proof must read the deployed form row by id');
+  assert.ok(formDefaultQuery.opts.select.includes('isdefault'), 'default-form proof must request systemform.isdefault');
+});
+
+test('appIdFor returns the deployed app id or undefined when the app is already gone', async () => {
+  const filters = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      filters.push(opts.filter);
+      return /missing/.test(opts.filter) ? [] : [{ appmoduleid: 'app-uuid-1' }];
+    },
+  };
+
+  assert.strictEqual(await appIdFor(sdk, 'contoso_app'), 'app-uuid-1');
+  assert.strictEqual(await appIdFor(sdk, 'missing_app'), undefined);
+  assert.ok(filters.every((f) => /uniquename eq '/.test(f)), 'app lookup stays name-scoped');
+});
+
+test('readerFor.appRoleIds reads the deployed appmoduleroles_association rows', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'appmodule') return [{ appmoduleid: 'app-id-1' }];
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        return {
+          status: 200,
+          headers: {},
+          body: { value: [{ roleid: 'role-agent' }, { roleid: 'ROLE-MANAGER' }] },
+        };
+      },
+    },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.roleIds, ['role-agent', 'role-manager']);
+  assert.ok(calls.some((c) => c.url && /appmodules\(app-id-1\)\/appmoduleroles_association/.test(c.url)), 'must read the actual app-role association navigation property');
+});
+
+test('readerFor.appRoleIds fails closed when the association rows cannot be read', async () => {
+  const sdk = {
+    queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-id-1' }] : []),
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: { get: async () => ({ status: 403, headers: {}, body: { error: { message: 'forbidden' } } }) },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, false);
+  assert.match(res.reason, /403/);
+});
+
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
+  const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
+  const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
+  const events = [];
+  const stderr = [];
+  const mod = { exports: {} };
+  const fakeFs = {
+    mkdirSync: (dir, opts) => events.push({ type: 'mkdirSync', dir, opts }),
+  };
+  const customRequire = (id) => {
+    if (id === 'node:fs') return fakeFs;
+    if (id === 'node:path') return path;
+    if (id === './lib/dataverse-auth.js') {
+      return {
+        parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
+        readJsonArg: (arg) => {
+          events.push({ type: 'readJsonArg', arg });
+          return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
+        },
+        emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
+      };
+    }
+    if (id === './lib/sdk-http-client.js') {
+      return { createAzHttpClient: (env) => ({ env }) };
+    }
+    if (id === './lib/verify-spec.js') {
+      return {
+        verifySpec: async (spec, read) => {
+          events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
+          return verifyResult;
+        },
+      };
+    }
+    if (id === './lib/sdk-build.js') {
+      return { appUniqueName: () => 'new_supportdesk' };
+    }
+    if (id === './lib/app-spec.js') {
+      return {
+        validateAppSpec: () => validateResult,
+        migrateAppSpec: (spec) => {
+          events.push({ type: 'migrateAppSpec', spec });
+          return { ...spec, migrated: true };
+        },
+      };
+    }
+    if (id === './lib/odata.js') {
+      return { odataLit: (value) => String(value).replace(/'/g, "''") };
+    }
+    if (id === './lib/genpage-cli.js') {
+      return { makeGenpageCli: (env) => { events.push({ type: 'makeGenpageCli', env }); return { env }; } };
+    }
+    if (id === './lib/sitemap-pages.js') {
+      return {
+        fetchSitemap: async () => ({ ok: true, xml: '<SiteMap />' }),
+        sitemapGenPageIds: () => [],
+      };
+    }
+    if (id === './lib/page-manifest.js') {
+      return {
+        manifestResourceName: (appUnique) => `${appUnique}_pagemanifest`,
+        parseManifestBase64: () => null,
+      };
+    }
+    if (id === './vendor/cds-maker-sdk.cjs') {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
+        createMakerSdk: (cfg) => {
+          events.push({ type: 'createMakerSdk', cfg });
+          if (sdkThrows) throw sdkThrows;
+          return {
+            initWorkspace: () => events.push({ type: 'initWorkspace' }),
+            findTables: async () => [],
+            findColumns: async () => [],
+            queryRecords: async () => [],
+            fetchEntityMetadata: async () => ({ Relationships: [] }),
+            resolveArtifact: async () => [],
+            retrieveSetting: async () => null,
+          };
+        },
+      };
+    }
+    // Fallback for any require the intercepts above do not cover. Relative ids must resolve against
+    // the SCRIPT's directory, not this test file's — the sandbox runs verify-model-app.js source, so
+    // `./lib/x.js` means `scripts/lib/x.js`. Resolving it here (rather than adding an intercept per
+    // module) means a new `./lib/...` import in the script does not silently break every CLI test
+    // with "Cannot find module".
+    if (id.startsWith('./') || id.startsWith('../')) {
+      return require(path.resolve(path.dirname(scriptPath), id));
+    }
+    return require(id);
+  };
+  customRequire.main = invokeAsMain ? mod : {};
+  const sandboxProcess = {
+    argv: ['node', scriptPath],
+    stderr: { write: (message) => stderr.push(message) },
+    exit: (code) => {
+      const err = new Error(`process.exit(${code})`);
+      err.exitCode = code;
+      throw err;
+    },
+  };
+  vm.runInNewContext(source, {
+    require: customRequire,
+    module: mod,
+    exports: mod.exports,
+    process: sandboxProcess,
+    Buffer,
+    setImmediate,
+  }, { filename: scriptPath });
+  return { main: mod.exports.__mainForTest, events, stderr, settle: () => new Promise((resolve) => setImmediate(resolve)) };
+}
+
+test('verify CLI rejects a bare --workspace before provisioning an SDK', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json', workspace: true } },
+  });
+
+  await assert.rejects(harness.main(), (err) => err.exitCode === 1);
+  assert.match(harness.stderr.join(''), /Usage: node verify-model-app\.js/);
+  assert.ok(!harness.events.some((e) => e.type === 'createMakerSdk'), 'usage errors never initialize the SDK');
+});
+
+test('verify CLI emits structured validation failures without touching Dataverse', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\bad.json' } },
+    validateResult: { ok: false, errors: ['entities must be a non-empty array'] },
+  });
+
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(emitted.payload.errors, ['entities must be a non-empty array']);
+  assert.ok(!harness.events.some((e) => e.type === 'createMakerSdk'), 'invalid specs halt before SDK construction');
+});
+
+test('verify CLI prints per-check status and aliases missing checks into emitResult errors', async () => {
+  const missing = { kind: 'view', name: 'new_ticket.Open Tickets', present: false };
+  const harness = loadVerifyCli({
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        workspace: 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\verify',
+      },
+    },
+    verifyResult: {
+      ok: false,
+      checks: [{ kind: 'entity', name: 'new_ticket', present: true }, missing],
+      missing: [missing],
+    },
+  });
+
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+
+  assert.match(stderr, /✓ entity: new_ticket/);
+  assert.match(stderr, /✗ view: new_ticket\.Open Tickets/);
+  assert.match(stderr, /✗ verify FAIL — 1 missing \(1\/2 present\)/);
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(emitted.payload.errors, ['view:new_ticket.Open Tickets']);
+  assert.ok(harness.events.some((e) => e.type === 'mkdirSync' && /\\.test-workspace\\verify$/.test(e.dir)));
+  assert.ok(harness.events.some((e) => e.type === 'initWorkspace'));
+});
+
+test('verify CLI accepts a positional spec, uses the default workspace, and prints PASS', async () => {
+  // Build the path with `path.join` rather than a hard-coded `D:\...` literal: the CLI derives the
+  // default workspace via path.join, so on a POSIX runner it produces `samples/.maker-workspace`
+  // and a backslash-anchored assertion could never match (this test failed on every non-Windows CI
+  // runner for that reason, not because the CLI was wrong).
+  const specPath = path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json');
+  const harness = loadVerifyCli({
+    parseResult: { positional: [specPath], flags: { env: 'https://org.example' } },
+    verifyResult: {
+      ok: true,
+      checks: [{ kind: 'entity', name: 'new_ticket', present: true }],
+      missing: [],
+    },
+  });
+
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+
+  assert.match(stderr, /✓ verify PASS \(1\/1 present\)/);
+  assert.strictEqual(emitted.ok, true);
+  assert.deepStrictEqual(emitted.payload.missing, []);
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+});
+
+test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
+  const harness = loadVerifyCli({
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+      },
+    },
+    sdkThrows: new Error('SDK unavailable'),
+    invokeAsMain: true,
+  });
+
+  await harness.settle();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.match(emitted.payload.message, /SDK unavailable/);
+});
+
+// ── entityPrivileges reader ──────────────────────────────────────────────────────────────────────
+// These tests exist because the original role-privileges tests injected a FAKE `entityPrivileges`
+// into verifySpec, which meant the real reader was never executed by any test. That is how it shipped
+// building a RELATIVE url against a transport that requires absolute ones — a failure verify-spec
+// catches per entity, so every entity would silently have reported "privileges unreadable". A reader
+// is only as tested as its narrowest untested seam, which is why the last test here drives the REAL
+// vendored bundle rather than a hand-written SDK stub.
+//
+// The reader now goes through the SDK's `getEntityPrivileges` instead of a raw Web API call, so the
+// url-shape tests that used to live here are gone with the url they tested. What replaces them is the
+// SHAPE ADAPTATION and the fail-closed behaviour, which is what verify-spec actually depends on.
+
+test('entityPrivileges maps the SDK camelCase rows onto the PascalCase shape the comparison reads', async () => {
+  // lib/role-privileges.js speaks Dataverse's wire vocabulary (`PrivilegeType`), which is also what
+  // the role WRITE payload uses. The SDK returns its own camelCase view. If this mapping were
+  // dropped, `ACCESS_TYPE[...] === x.PrivilegeType` would compare against undefined for every row and
+  // report every declared privilege as missing — a total, silent false failure.
+  const seen = [];
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async (logical) => {
+    seen.push(logical);
+    return [{ name: 'prvReadAccount', privilegeId: 'p1', privilegeType: 'Read', access: 'read', scopes: ['user', 'organization'] }];
+  };
+  const read = readerFor(sdk, 'app', {});
+
+  const privs = await read.entityPrivileges('Account');
+
+  assert.deepStrictEqual(seen, ['account'], 'the logical name is lower-cased, as Dataverse stores it');
+  assert.deepStrictEqual(privs, [{ Name: 'prvReadAccount', PrivilegeId: 'p1', PrivilegeType: 'Read' }]);
+});
+
+test('entityPrivileges PROPAGATES a throw rather than returning an empty grant', async () => {
+  // The SDK throws for a table that exposes no privileges (unknown or non-securable). Swallowing that
+  // into `[]` would read as "this table exposes nothing", which passes the subset comparison
+  // vacuously — the exact false PASS the check exists to prevent. verify-spec wraps each call in a
+  // try/catch and leaves the entity ABSENT from its map, which `compareRolePrivileges` reports as a
+  // finding. So the fail-closed behaviour depends on this throw reaching it.
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async () => { throw new Error('no privileges for co_missing'); };
+  const read = readerFor(sdk, 'app', {});
+  await assert.rejects(read.entityPrivileges('co_missing'), /no privileges for co_missing/);
+});
+
+test('entityPrivileges is ALWAYS wired now that the SDK carries the read', async () => {
+  // It used to be conditional on a raw httpClient + org url, and ABSENT when either was missing, so
+  // verify-spec skipped the role-privileges check entirely. With the read on the SDK there is no such
+  // condition left: the reader exists whenever the SDK does. Asserted so a future refactor cannot
+  // quietly reintroduce a silent skip — an absent reader disables a security check without saying so.
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'function');
+});
+
+test('entityPrivileges REAL BUNDLE: the SDK method exists and returns the shape the mapping expects', async () => {
+  // The seam that matters. A hand-written SDK stub proves only that the mapping is self-consistent;
+  // it would stay green if `getEntityPrivileges` were renamed or dropped by a re-vendor, or if it
+  // returned a different shape. Drive the actual bundle over a fake Dataverse instead.
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entpriv-real-'));
+  const urls = [];
+  const httpClient = {
+    get: async (url) => {
+      urls.push(url);
+      return {
+        status: 200,
+        headers: {},
+        body: {
+          LogicalName: 'co_ticket',
+          Privileges: [
+            { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read', CanBeBasic: true, CanBeGlobal: true },
+            { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create', CanBeBasic: false, CanBeGlobal: true },
+          ],
+        },
+      };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+
+  const privs = await readerFor(sdk, 'app', {}).entityPrivileges('CO_Ticket');
+
+  assert.deepStrictEqual(privs, [
+    { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read' },
+    { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create' },
+  ], 'the bundle must still return { name, privilegeId, privilegeType } rows');
+  assert.ok(urls.some((u) => /EntityDefinitions\(LogicalName='co_ticket'\)/.test(u)),
+    `the SDK must query the entity by logical name; saw ${JSON.stringify(urls)}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('rolePrivileges paginates and never caps with top', async () => {
+  // Found by a LIVE run: with the previous 	op: 5000 a System Administrator role returned
+  // EXACTLY 5000 rows -- silently truncated. Paginated it returns 7119, so 2119 privileges were
+  // being dropped. A truncated page is the worst shape for this check: a declared privilege that
+  // fell off the end reads as NOT HELD, so verify reports a correctly configured role as missing.
+  // Dataverse honors  as a hard cap and omits @odata.nextLink, and the SDK rejects
+  // paginate+top, so asserting the ABSENCE of top matters as much as the presence of paginate.
+  const calls = [];
+  const sdk = stubSdk();
+  sdk.queryRecords = async (set, options) => { calls.push({ set, options }); return []; };
+  const read = readerFor(sdk, 'app', {});
+
+  await read.rolePrivileges('00000000-0000-0000-0000-000000000001');
+
+  const q = calls.find((c) => c.set === 'roleprivileges');
+  assert.ok(q, 'expected a roleprivileges query');
+  assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
+  assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
+});
+
+// ---------------------------------------------------------------------------
+// appEntityComponents(): the app's TABLE (type-1) components.
+//
+// These drive the REAL reader through readerFor(), not a hand-fed fake handed to verify-spec — the
+// consumer tests in verify-spec.test.js prove the CHECK, these prove the Dataverse plumbing it
+// depends on (the componenttype filter, pagination, resolution direction and failure modes).
+// ---------------------------------------------------------------------------
+
+const META = { new_order: 'aaaa0000-0000-0000-0000-000000000001', new_line: 'aaaa0000-0000-0000-0000-000000000002', entity: 'eeee0000-0000-0000-0000-00000000000e' };
+
+// `componentIds` are the type-1 rows the app carries. `calls` records every query/metadata read.
+function componentsSdk({ componentIds = [], calls = [], resolve = META, noApp = false } = {}) {
+  return {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (noApp) return [];
+      if (set === 'appmodule') return [{ appmoduleid: 'app-uuid-1', appmoduleidunique: 'uid-1' }];
+      if (set === 'appmodulecomponent') return componentIds.map((id) => ({ objectid: id, componenttype: 1 }));
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+        const logical = m && m[1];
+        if (typeof resolve === 'function') return resolve(logical);
+        const id = resolve[logical];
+        return id ? { status: 200, headers: {}, body: { MetadataId: id } } : { status: 404, headers: {}, body: null };
+      },
+    },
+  };
+}
+const readerWith = (sdk) => readerFor(sdk, 'contoso_app', { workspaceDir: os.tmpdir() });
+
+test('appEntityComponents(): filters componenttype 1 and PAGINATES rather than capping with top', async () => {
+  // `top` is a HARD cap in Dataverse and suppresses @odata.nextLink, so a capped page truncates
+  // silently — and for a MEMBERSHIP check a row that fell off the end reads as NOT PRESENT, i.e.
+  // verify would report a correctly built app as broken. The same trap was already found live on
+  // roleprivileges in this file. It would also hide the `entity` placeholder rows this check exists
+  // to find, since those are exactly what accumulates in a corrupted app.
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: [META.new_order], calls });
+  await readerWith(sdk).appEntityComponents(['new_order']);
+  const q = calls.find((c) => c.set === 'appmodulecomponent');
+  assert.ok(q, 'the component query must run');
+  assert.match(q.opts.filter, /componenttype eq 1/);
+  assert.strictEqual(q.opts.paginate, true, 'must paginate to completion');
+  assert.strictEqual(q.opts.top, undefined, 'must NOT cap with top — a truncated page reads as "missing"');
+});
+
+test('appEntityComponents(): reports present vs absent for the WANTED tables', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  assert.strictEqual(r.placeholder, false);
+});
+
+test('appEntityComponents(): detects an `entity` placeholder component', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order, META.entity] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.placeholder, true, 'a component pointing at the `entity` metadata table must be reported');
+  assert.deepStrictEqual(r.present, ['new_order'], 'and the real table is still present');
+});
+
+test('appEntityComponents(): cost is bounded by the WANTED set, not by the component count', async () => {
+  // Resolving every COMPONENT instead would scale with the app and reintroduce the need for a cap.
+  const many = Array.from({ length: 300 }, (_, i) => `bbbb0000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: many.concat(META.new_order), calls });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  const metadataReads = calls.filter((c) => c.url).length;
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  // one per wanted table + one for the `entity` placeholder probe
+  assert.strictEqual(metadataReads, 2, `expected 2 metadata reads for 301 components, got ${metadataReads}`);
+});
+
+test('appEntityComponents(): a wanted table that does not exist is ABSENT, not a read failure', async () => {
+  // A 404 means the table is not in the environment at all, which the separate entity-existence
+  // check already reports. Failing the whole answer would mask it behind an unrelated error.
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_ghost']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+});
+
+test('appEntityComponents(): a non-404 resolution error fails closed and names the TABLE, not a GUID', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order], resolve: (logical) => (logical === 'new_line' ? { status: 403, headers: {}, body: null } : { status: 200, headers: {}, body: { MetadataId: META[logical] } }) });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /new_line/, 'the reason must name the table so an operator can act on it');
+  assert.match(r.reason, /403/);
+});
+
+test('appEntityComponents(): an unresolvable app fails closed', async () => {
+  const r = await readerWith(componentsSdk({ noApp: true })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /contoso_app/);
+});
+
+test('appEntityComponents(): an app with NO table components answers ok with nothing present', async () => {
+  // This is the reported defect itself (a sitemap naming tables the app does not contain), not a
+  // read failure — and it cannot mask a permissions problem, because the sitemap is read from the
+  // same appmodulecomponent table and would fail visibly first.
+  const r = await readerWith(componentsSdk({ componentIds: [] })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, []);
+});
+
+test('appEntityComponents(): memoized per wanted-set — one live read per verify run', async () => {
+  const calls = [];
+  const reader = readerWith(componentsSdk({ componentIds: [META.new_order], calls }));
+  await reader.appEntityComponents(['new_order']);
+  await reader.appEntityComponents(['new_order']);
+  assert.strictEqual(calls.filter((c) => c.set === 'appmodulecomponent').length, 1, 'the component query must not repeat');
+});
+test('appEntityComponents(): matches an objectid whose CASING differs from the resolved MetadataId', async () => {
+  // Dataverse does not guarantee that a component `objectid` and the table's `MetadataId` come back
+  // in the same casing, and a GUID is case-insensitive. Comparing raw strings would report a
+  // correctly pinned table as MISSING — a false red build on a healthy app.
+  const sdk = componentsSdk({ componentIds: [META.new_order.toUpperCase()] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
+});

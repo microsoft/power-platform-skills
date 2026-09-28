@@ -194,6 +194,7 @@ Shape:
       "recordsOwnedByMyBusinessUnit": false,
       "syncIntervalInMinutes": 10,
       "selectedColumns": ["cr123_title", "cr123_body", "..."],
+      "schemaColumns": ["cr123_title", "cr123_body", "cr123_internalnotes", "..."],
       "relationships": [
         {
           "associationId": "<guid>",
@@ -205,6 +206,8 @@ Shape:
   ]
 }
 ```
+
+`selectedColumns` is the curated set the runtime syncs; `schemaColumns` is the **schema-reconciliation baseline** — every schema column logical name the table had (from `.datamodel-manifest.json`) when this item was last reconciled, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` diffs later manifest columns against `schemaColumns` (not `selectedColumns`) so it only surfaces *genuinely new* columns. See [offline-profile-reconciliation.md](./offline-profile-reconciliation.md).
 
 App-level offline config (previously written into `power.config.json` as an `offline` block) now lives inside the same `offline-profile.json` file under an `appConfig` key:
 

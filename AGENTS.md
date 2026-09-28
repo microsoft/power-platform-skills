@@ -6,6 +6,52 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 A **plugin marketplace** for Power Platform development by Microsoft. The Open Plugins marketplace manifest (`marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
 
+## This Repo Is PUBLIC — keep internal detail out of it
+
+Everything here — code, docs, commit messages, PR descriptions, and branch names — is world-readable.
+Write for a reader outside Microsoft who cannot see any internal system.
+
+**Do not commit:**
+
+- **Internal hosts, repos or paths** — `*.ghe.com` links, internal repo names, or a path into an
+  internal repo's doc tree. Naming one discloses its existence and its structure.
+- **References to internal documents**, including indexes into them — "spec rank 14",
+  "Group N P1", "(resolves C2, I1)", "see the R1 review". A reader who cannot open the document
+  gets nothing from the pointer, and it advertises the document.
+- **Real environment, tenant or org identifiers** — Dataverse environment names/URLs, tenant GUIDs,
+  subscription ids. These name real infrastructure. In examples use an obvious placeholder
+  (`https://contoso.crm.dynamics.com`, `<envUrl>`); to record that something was live-verified, keep
+  the **claim** and drop the environment ("live-verified", not "live-verified on <envname>").
+- **Internal review process** — who or which model reviewed something, how many rounds, internal
+  finding ids. "Adversarially reviewed" is a useful signal; the rest is internal.
+- **Exploratory design docs for UNBUILT work** — roadmaps, prioritisation, and candid notes on
+  limitations. A design doc for something that **shipped** is fine and often valuable (see
+  `plugins/model-apps/docs/`); a proposal for something that has not is internal.
+- **Pointers to files that are not in the repo** — a citation nobody can resolve is noise at best.
+
+**Fine to commit:** ADO / `AB#` work-item ids (opaque, and `AB#` is the standard Azure Boards ↔
+GitHub link syntax), and the location of a first-party source repo a maintainer needs in order to
+rebuild a vendored bundle. Both carry real "why" context and disclose no content.
+
+**When you must record internal context**, put it in the PR conversation or an internal doc — not in
+a committed file. When editing an existing doc, keep this rule in mind for the lines around your
+change, not just the ones you add.
+
+**CI enforcement (partial).** `node scripts/validate-no-real-environments.js` (wired into the
+`validate-repository-metadata` workflow) fails the build when a real Dataverse host, tenant, or
+previously-removed identifier appears under `plugins/model-apps/**` or `evals/model-apps/**`. It
+matches on *shape* — `org<8 hex>` is what Dataverse auto-generates, so it is rejected even though it
+starts with the otherwise-allowed word `org` — rather than only re-catching known strings. Run it
+locally after touching eval fixtures or any file that quotes an environment URL.
+
+The scan is **scoped to model-apps only**, and this is a real gap rather than an oversight: other
+plugins still carry pre-existing references of this class (for example real `org<8 hex>` orgs cited
+in power-pages provenance comments), so widening the scan today would fail unrelated PRs. Scrub a
+plugin first, then add it to `SCAN_PATHS`. The guard also cannot see the *local part* of a UPN, so
+`firstname.lastname@contoso.onmicrosoft.com` passes — use a role word (`maker@`, `tester@`).
+Captured `pac auth list` transcripts are the most common source of all three; when scrubbing one,
+prefer an **equal-length** placeholder so the fixed-width table stays aligned.
+
 ## Repository Structure
 
 ```
@@ -41,6 +87,25 @@ claude --plugin-dir /path/to/plugins/<plugin-name>
 
 No root-level build, lint, or test commands exist. Build/test tooling lives inside each plugin.
 
+## CI
+
+**Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
+Both are repo-wide and enforce metadata/marketplace rules, not behavior.
+
+**Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`). This is deliberate — a PR should not
+spend CI on a plugin it never touched — but it has a corollary: *a green PR does not mean the repo is
+green*, only that the paths you touched are.
+
+**A test suite with no workflow silently never runs.** When you add tests to a plugin, add or extend
+that plugin's own path-filtered workflow in the same PR; do not widen another plugin's filter to
+cover yours.
+
+A plugin that has adopted telemetry must also set its opt-out env var on any job that could execute a
+telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
+`POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"`. It suppresses transmission only, so it
+cannot change what a test asserts.
+
 ## Plugin Conventions
 
 Each plugin follows this structure:
@@ -53,7 +118,7 @@ Each plugin follows this structure:
 - `scripts/` — Shared utility scripts referenced by skills and agents
 - `references/` — Shared reference documents used by multiple skills
 
-Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
+Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include a validation script in a `scripts/` subdirectory (the first `validate*.js`, discovered automatically). It is run by the plugin's **`PostToolUse` hook on the `Skill` tool** — `hooks/run-skill-posttool-validation.js` looks the script up and executes it after the Skill tool returns, propagating its exit code. Note this fires when the skill is **invoked**, not when its work finishes, so a validator must no-op (approve) when the artifacts it checks are not present yet.
 
 ## Cross-Plugin Shared Skills
 
@@ -72,6 +137,8 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 1DS telemetry code for all plugins lives at `shared/telemetry/`. Each adopting plugin keeps a physical copy of the library in its own tree at `plugins/<plugin>/scripts/lib/telemetry/lib`, alongside that plugin's real `ikey.json`. Do not use Git symlinks for this copy; plugin hosts may not dereference them reliably.
 
 Edit `shared/telemetry/` first, then refresh every adopting plugin's copied `scripts/lib/telemetry/lib` directory in the same change so the canonical source and bundled plugin content stay in sync.
+
+`eventInfo` is a dynamic escape hatch whose nested keys are not enforced by `FIELD_TYPES`. Follow the approved schema in `shared/telemetry/README.md`; do not add nested fields or arbitrary payloads without privacy review and coordinated disclosure, schema, and test updates.
 
 **Never reuse another plugin's instrumentation key or event stream.** When adopting telemetry in a new plugin, copy only the routing-agnostic library (`shared/telemetry/lib` → `plugins/<plugin>/scripts/lib/telemetry/lib`) — do **not** copy an existing adopter's real `ikey.json` (or its `resolver.js`). Each plugin's `ikey.json` carries that plugin's own instrumentation key(s), collector routing, and `event_stream_name`; start from the placeholder `shared/telemetry/ikey.json` (every region key is `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` and it ships `disabled: true`) and provision a fresh, plugin-specific key before shipping. Copying a key already committed to another plugin (e.g. lifting `power-pages`'s `ikey.json` wholesale) mis-attributes the new plugin's events to the other plugin's Kusto stream and pollutes it — the copy step must bring over library code only, never another plugin's provisioned `ikey.json`/`resolver.js`.
 

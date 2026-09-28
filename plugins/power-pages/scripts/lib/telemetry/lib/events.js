@@ -34,7 +34,9 @@ const FIELD_TYPES = {
   pacCliVersion: "string",
   aiAgentName: "string",
   aiAgentVersion: "string",
-  // Common — caller-supplied dynamic JSON
+  // Common — caller-supplied dynamic JSON. This validates only the container,
+  // not nested keys. Callers must follow shared/telemetry/README.md's approved
+  // eventInfo schema; arbitrary nested payloads can bypass the top-level allowlist.
   eventInfo: "object",
   // Skill
   skillName: "string",

@@ -1,0 +1,40 @@
+{
+  "solution": { "uniqueName": "ContosoProjects", "displayName": "Contoso Projects", "publisherPrefix": "new" },
+  "app": { "name": "Project Tracker", "description": "Track projects" },
+  "entities": [
+    {
+      "schemaName": "new_project",
+      "displayName": "Project",
+      "pluralName": "Projects",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "new_budget", "displayName": "Budget", "type": "Money" },
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "options": ["New", "Active", "Closed"] }
+      ]
+    }
+  ],
+  "relationships": [],
+  "forms": [
+    {
+      "entity": "new_project",
+      "type": "main",
+      "name": "Project",
+      "tabs": [
+        { "label": "General", "sections": [{ "label": "Details", "columns": 1, "fields": ["new_name", "new_budget", "new_status"] }] }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "entity": "new_project",
+      "type": "main",
+      "name": "Active Projects",
+      "columns": ["new_name", "new_budget", "new_status"],
+      "sort": [{ "attr": "new_name", "dir": "asc" }],
+      "activeOnly": true
+    }
+  ],
+  "appShell": {
+    "areas": [{ "label": "Work", "groups": [{ "label": "Projects", "subAreas": [{ "entity": "new_project" }] }] }]
+  }
+}

@@ -6,16 +6,18 @@ description: >
   "add authorization", "protect routes", "configure identity provider",
   "configure Entra ID", "configure Entra External ID",
   "configure OpenID Connect", "add OIDC", "set up SAML",
-  "set up WS-Federation", "set up local login", "add username password",
+  "set up WS-Federation", "set up local login",
   "add Facebook login", "add Google sign in", "add Microsoft Account",
-  "set up invitation login", or otherwise wants to set up
+  or otherwise wants to set up
   authentication (login/logout) and role-based authorization for their
-  Power Pages code site using any supported identity provider
-  (Microsoft Entra ID, Entra External ID, OpenID Connect, SAML2,
-  WS-Federation, local authentication, Microsoft Account, Facebook,
-  or Google).
+  Power Pages code site using any supported identity provider.
+  Also sets up the IdP app registration for OIDC providers (Okta, Auth0,
+  Entra External ID, and other OIDC) -- reads the provider's docs first, then
+  either guides the user through the provider's console or, when the provider
+  supports it, configures it for the user -- and wires
+  the client ID, authority, and claims mapping into Power Pages.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -23,7 +25,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including invitation-based registration and Terms & Conditions acceptance. Power Pages built-in 2FA is intentionally not scaffolded because the SendCode/VerifyCode pages are server-rendered and cannot be integrated into a SPA experience — use IdP-level MFA instead. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (Okta, Auth0, etc.), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including invitation-based registration and Terms & Conditions acceptance. Power Pages built-in 2FA is intentionally not scaffolded because the SendCode/VerifyCode pages are server-rendered and cannot be integrated into a SPA experience — use IdP-level MFA instead. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -42,7 +44,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 ## Workflow
 
 1. **Phase 1: Check Prerequisites** — Verify site exists, detect framework, check web roles
-2. **Phase 2: Plan** — Gather auth requirements and present plan for approval
+2. **Phase 2: Plan** — Gather auth requirements (optionally set up the IDP app registration knowledge-first — Guided by default, or configure-for-you via the provider's own CLI where supported: Okta / Auth0 / Entra External ID) and present plan for approval
 3. **Phase 3: Create Auth Service** — Auth service with login/logout and type declarations
 4. **Phase 4: Create Authorization Utils** — Role-checking functions and wrapper components
 5. **Phase 5: Create Auth UI** — Login/logout button integrated into navigation
@@ -155,7 +157,7 @@ For each detected provider, read its full set of `.sitesetting.yml` files to ext
 | `https://login.windows.net/{guid}/` (no `/v2.0/`) — site's parent tenant | **Microsoft Entra ID (workforce)** — `type: 'entra-id'` | Auto-populated by Power Pages on site creation. The `{Name}` slug is usually `AzureAD`. **Set `providerIdentifier` to undefined in AUTH_PROVIDERS** — runtime resolver derives it from `Portal.tenant`. |
 | `https://{subdomain}.ciamlogin.com/{tenantId}` (no trailing `/v2.0/`) | **Entra External ID** — `type: 'oidc'` | Customer tenant. Must include explicit `providerIdentifier` matching the Authority. |
 | `https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/{policy}` | **Azure AD B2C** (legacy) — `type: 'oidc'` | Older B2C product. Must include explicit `providerIdentifier`. |
-| Any other OIDC authority (Okta, Auth0, Ping, etc.) | **OIDC (Generic)** — `type: 'oidc'` | Must include explicit `providerIdentifier`. |
+| Any other OIDC authority (Okta, Auth0, etc.) | **OIDC** — `type: 'oidc'` | Must include explicit `providerIdentifier`. |
 
 **The Entra ID (workforce) case is special** — when Phase 1.5 discovery detects `Authentication/OpenIdConnect/AzureAD/*` settings on the site (which Power Pages auto-creates for the parent tenant), add a single entry to `EXISTING_PROVIDERS`:
 
@@ -300,7 +302,7 @@ If the user has NOT specified which provider(s) they want, use `AskUserQuestion`
 
 | Question | Options |
 |----------|---------|
-| Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
+| Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect — Okta, Auth0, or any OIDC-compliant provider, SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, Login.gov, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
 **Then, for EACH selected provider, ask the mandatory follow-up questions below.** Do not skip any provider — every selected provider needs its configuration collected before proceeding.
 
@@ -328,16 +330,29 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 |----------|---------|
 | What is the Client ID from the Google Cloud Console? (e.g., `123456789-abc.apps.googleusercontent.com`) | *(free text)* |
 
-> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/oauth2-google
 
-**For "OpenID Connect (Generic)"**:
+**For "OpenID Connect"** (Okta, Auth0, etc.):
+
+**First, identify the specific OIDC provider** — setup steps and the docs to read differ per vendor:
 
 | Question | Options |
 |----------|---------|
-| What is the Authority URL for your OpenID Connect provider? (e.g., `https://dev-12345.okta.com/oauth2/default` or `https://login.microsoftonline.com/{tenant}/v2.0`) | *(free text)* |
-| What is the Client ID (Application ID) from your provider's app registration? (e.g., `0oa1bcde2fGHIJklmn3o4`) | *(free text)* |
-| What is the Metadata Address URL? (Only needed if your provider's metadata is NOT at `{authority}/.well-known/openid-configuration`). Leave blank to auto-derive. | *(free text, optional)* |
-| What display name should the login button show? (e.g., `Sign in with Okta`) | *(free text)* |
+| Which OpenID Connect provider are you using? | Okta, Auth0, Other (any OIDC-compliant provider) |
+
+Use the answer as `{provider}` in the questions below and for Phase 2.1.2 Step A (reading the provider's docs). For **Other**, capture the provider's name from the user.
+
+**Orient the user first — don't jump straight to inputs.** Now that they've picked {provider}, set expectations: you'll set up an app registration at {provider} for this site. The **first thing** you'll do is **read {provider}'s own documentation** — how it's set up depends on the provider. Then, depending on what {provider} supports, you'll either walk the user through the steps in the {provider} console, or — when {provider} supports it — configure it for the user. Either way you derive the metadata, Redirect URI, and claims automatically, and the app uses the no-secret `code id_token` flow — no client secret to manage.
+
+Ask for the {provider} tenant — the sign-in domain (Okta: `your-tenant.okta.com`, Auth0: `your-tenant.us.auth0.com`):
+
+| Question | Options |
+|----------|---------|
+| What's your {provider} tenant? | *(free text)* |
+| What display name should the login button show? (default: `Sign in`) | *(free text, defaulted)* |
+| Do you already have an app registration for this site at {provider}? | No — set one up in Phase 2.1.2 (Recommended), Yes — I already have one |
+
+If the user answered **"Yes — I already have one"**, ask for the existing **Client ID** and **Metadata Address** now (Phase 8.1 needs them) and skip the Phase 2.1.2 app-registration setup. Otherwise the Client ID is **not** asked upfront — it comes from **Phase 2.1.2**, where you set up the app (guided, or configured for the user when the provider supports it) and derive the metadata from the provider's discovery document.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -562,9 +577,10 @@ If "No", re-prompt for the specific value the user wants to change.
 | Question | Options |
 |----------|---------|
 | What is the metadata endpoint URL for your SAML2 identity provider? (e.g., `https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml`) | *(free text)* |
-| What display name should the login button show? (e.g., `Sign in with ADFS`) | *(free text)* |
+| What display name should the login button show? (e.g., `Sign in with ADFS`, `Sign in with Login.gov`) | *(free text)* |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/saml2-settings
+> Login.gov (US government SAML IdP) — get its metadata endpoint from the SAML developer guide: https://developers.login.gov/saml/getting-started/
 
 **For "WS-Federation"**:
 
@@ -611,11 +627,13 @@ Ask whether to auto-link external sign-ins to existing contacts by email.
 
 | Question | Header | Options |
 |----------|--------|---------|
-| If a user signs in with an external provider and their email matches an existing Dataverse contact, what should happen? | Contact linking | Link to the existing contact (Recommended) — auto-link by email match so makers don't end up with duplicate contacts when admins pre-create records (single-tenant providers only — see warning below), Create a new contact — always create a fresh contact, never auto-link (safer choice when the IdP doesn't verify emails) |
+| If a user signs in with an external provider and their email matches an existing Dataverse contact, what should happen? | Contact linking | Link to the existing contact (Recommended) — auto-link by email match so users don't end up with duplicate contacts when admins pre-create records (single-tenant providers only — see warning below), Create a new contact — always create a fresh contact, never auto-link (safer choice when the IdP doesn't verify emails) |
 
 Store as `CONTACT_LINKING_CHOICE`. This drives `AllowContactMappingWithEmail` (`true` for "link", `false` for "create new").
 
-> **Why "Link to the existing contact" is the default**: the common flow is that admins pre-create contact records in Dataverse (often via invitation or import) and then expect those exact contacts to be picked up when the user signs in for the first time via the configured IdP. Without linking, the server creates a brand-new contact and the pre-created record sits orphaned — confusing for makers and easy to misdiagnose. Linking by verified email is the well-known pattern for joining IdP identity to an existing CRM record.
+> **Why "Link to the existing contact" is the default**: the common flow is that admins pre-create contact records in Dataverse (often via invitation or import) and then expect those exact contacts to be picked up when the user signs in for the first time via the configured IdP. Without linking, the server creates a brand-new contact and the pre-created record sits orphaned — confusing for users and easy to misdiagnose. Linking by verified email is the well-known pattern for joining IdP identity to an existing CRM record.
+>
+> **⚠ Auto-link is for migration / pre-provisioned contacts**: turn linking on when contacts already exist in Dataverse (data migration, admin import, invitations) and must be matched by email. On a greenfield site with no pre-existing contacts, normal first-sign-in contact creation works the same — linking simply has nothing to match.
 >
 > **⚠ Multi-tenant safety**: For **multi-tenant Entra External ID** (Authority uses `/organizations/` or `/common/`, or `IssuerFilter` is a wildcard), the Power Pages server **forcibly disables** `AllowContactMappingWithEmail` regardless of the site setting (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`). Reason: email claims can't be trusted across tenants. If the user selects "Link to the existing contact" but the Authority is multi-tenant, warn them that linking won't work and recommend single-tenant Authority.
 >
@@ -665,7 +683,7 @@ Only ask one optional question — the button display name. Provide a sensible d
 
 Store as `ENTRA_ID_DISPLAY_NAME` (default `"Sign in with Microsoft"`). Phase 3.2 adds an entry to `AUTH_PROVIDERS` with `type: 'entra-id'`, this display name, and **no `providerIdentifier`** (runtime-resolved).
 
-> **Why no tenant ID?** The tenant ID is essentially for SPA-button wiring (the value the SPA POSTs to `/Account/Login/ExternalLogin`). Power Pages exposes the site's parent tenant ID at runtime via `window.Microsoft.Dynamic365.Portal.tenant`, so the SPA can construct the providerIdentifier (`https://login.windows.net/{tenantId}/`) without asking the maker. The server-side OIDC settings are already in place from site creation. Compare this to **Entra External ID**, where the tenant is a SEPARATE customer tenant unrelated to the site's parent — there we DO need the maker to provide the tenant ID + subdomain because they can't be derived from `Portal.tenant`.
+> **Why no tenant ID?** The tenant ID is essentially for SPA-button wiring (the value the SPA POSTs to `/Account/Login/ExternalLogin`). Power Pages exposes the site's parent tenant ID at runtime via `window.Microsoft.Dynamic365.Portal.tenant`, so the SPA can construct the providerIdentifier (`https://login.windows.net/{tenantId}/`) without asking the user. The server-side OIDC settings are already in place from site creation. Compare this to **Entra External ID**, where the tenant is a SEPARATE customer tenant unrelated to the site's parent — there we DO need the user to provide the tenant ID + subdomain because they can't be derived from `Portal.tenant`.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -853,7 +871,7 @@ Step 2 — for Entra External ID specifically, instruct the user to register the
 >
 > **Why this is needed**: Entra External ID rejects any `post_logout_redirect_uri` value that isn't pre-registered (same security model as Redirect URIs for sign-in). Without this registration, the IdP silently drops the parameter and the user is stranded after sign-out — even if Power Pages sends it correctly.
 >
-> For **generic OIDC providers** (Okta, Auth0, Ping, etc.), check the provider's docs for the equivalent registration. Most providers call this "Logout URL", "Post Logout Redirect URI", or "Allowed Sign-out Redirect URLs" under the app's settings.
+> For **other OIDC providers** (Okta, Auth0, etc.), check the provider's docs for the equivalent registration. Most providers call this "Logout URL", "Post Logout Redirect URI", or "Allowed Sign-out Redirect URLs" under the app's settings.
 
 Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={POST_LOGOUT_REDIRECT_URI}` when this option is chosen.
 
@@ -865,10 +883,9 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 | `Scope` | Space-separated OAuth scopes (e.g., `openid profile email`) | `openid` |
 | `ResponseType` | OAuth response type (`code`, `id_token`, `code id_token`) | `code id_token` |
 | `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
-| `RedirectUri` | Override the callback URL | `{site-url}/signin-{provider}` |
+| `RedirectUri` | Override the callback URL | `{site-url}/signin-{ProviderName-lowercased}` |
 | `PostLogoutRedirectUri` | URL to redirect to after federated logout completes at the IdP. **Required when `RPInitiatedLogout=true`** — server has a fallback that derives from `RedirectUri` authority, but a separate flag (`PostLogoutRedirectUriEnabled`) requires the explicit site setting to be present before the fallback is used. Without an explicit value, the IdP logout URL omits the parameter and users get stranded. | Unset (server default — but use the Logout mode question above to write it correctly) |
 | `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, the server forces `ExternalLogoutEnabled` to `false` regardless of that setting. **Prefer the "Logout mode" question above** instead of setting this directly — that flow pairs it with `PostLogoutRedirectUri` (required) and the Entra app-registration step. | `false` |
-| `Caption` | Display name shown on the login button | Provider name |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied **once** at first sign-in, before the contact is created. Example for Entra External ID: `firstname=given_name,lastname=family_name,emailaddress1=email`. The server silently skips malformed pairs — verify in Application Insights if claims aren't populating. | None |
 | `LoginClaimsMapping` | Same format as `RegistrationClaimsMapping`. Applied **every login** (overwrites contact fields). Use sparingly — it overwrites manual edits the user makes to their profile. | None |
 | `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out (legacy OWIN sign-out, prefer `RPInitiatedLogout` for OIDC). Forced to `false` when `RPInitiatedLogout=true`. | `false` (server default) |
@@ -897,7 +914,7 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{provider}`) | Derived from site URL |
+| `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{ProviderName-lowercased}`) | Derived from site URL |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. SAML assertion types are URIs (e.g., `firstname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname,lastname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname`). Applied once at first sign-in. | None |
 | `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
 | `ExternalLogoutEnabled` | Enable SAML Single Logout (SLO) | `true` |
@@ -936,7 +953,6 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `Caption` | Display name on the login button | Provider name |
 | `Scope` | OAuth scopes to request (space-separated) | Provider defaults |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. Social provider claim types vary — Facebook uses `name`/`email`, Google uses `given_name`/`family_name`/`email`. Example: `firstname=given_name,emailaddress1=email`. Applied once at first sign-in. | None |
 | `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
@@ -986,6 +1002,77 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 | `Authentication/Registration/SignOutEverywhereEnabled` | On logout, invalidate all sessions across all devices by updating the user's security stamp | `false` |
 
 For each setting the user wants to configure, create the site setting using `create-site-setting.js` during Phase 8.1 alongside the required settings.
+
+#### 2.1.2 Set Up the IDP App Registration (check the provider's docs first)
+
+Applies to **OIDC providers** (Okta, Auth0, Entra External ID, and other OIDC). For SAML2, WS-Federation, social, or local auth, use the Phase 2.1 walkthroughs.
+
+Power Pages needs an OIDC **app registration** at the IDP, wired to this site. **How you set it up depends entirely on the identity provider**, so read the provider's own current documentation first.
+
+> Read first: `${PLUGIN_ROOT}/skills/setup-auth/references/idp-provisioning-reference.md` — the Power Pages ↔ IDP contract (Redirect URI, the no-secret `code id_token` flow) and the **per-IDP official documentation links**.
+
+**Step A — check the provider's docs (always the first step).** As soon as you know which IDP the user wants, read that provider's official documentation (via the reference links; use the Learn MCP `microsoft_docs_search`/`microsoft_docs_fetch` for Microsoft IDPs) to determine two things: **(1)** the exact steps to register and configure an OIDC app, and **(2)** the CLI it offers for configuring the app (Okta, Auth0, and Entra External ID each provide one). **Do not proceed to any other step before this**, and never invent console paths or endpoints.
+
+**Step B — choose how to set it up.** Two ways — offer both:
+
+- **Guided** (default, recommended) — you read the provider's docs and walk the user through the steps to perform in the provider's own console. Always available.
+- **Configure it for the user** — when the provider offers a CLI for app configuration. **Okta, Auth0, and Entra External ID all do, so always offer it for them.** A CLI that isn't installed yet is not a reason to withhold the offer — installing it and signing in is part of this path.
+
+For a provider that offers no such CLI, go Guided.
+
+<!-- not-a-gate: configuration sub-prompt — selects Guided vs configure-for-you; the load-bearing consent is the 2.1.2.provision-idp gate and the 2.2 plan gate. -->
+
+**When the provider offers such a CLI** (always for Okta, Auth0, Entra External ID), ask (otherwise skip this question and proceed Guided):
+
+| Question | Header | Options |
+|----------|--------|---------|
+| How would you like to set up the {provider} app registration? | Setup | Guided (Recommended) — I walk you through the steps in the {provider} console, Configure it for me — I set it up in your {provider} using its CLI |
+
+**Step C — the app configuration Power Pages needs (inform, then approve).** Power Pages' default is the no-secret **`code id_token`** flow, so the app is a **Web application with no client secret**. Present the target configuration and let the user approve or adjust:
+
+- **App type:** Web application — **no client secret**
+- **Sign-in flow:** `code id_token` (the app must issue **ID tokens** at the IDP)
+- **Redirect URI:** `<REDIRECT_URI>` (exact — casing + `signin-` prefix)
+- **Scopes:** `openid profile email`
+
+In **Guided**, this is the checklist the user applies in the console. When you **configure it for the user**, it is the spec you apply.
+
+**Step D — execute sequentially and verify each step. Never one-shot.** Do one step, verify it, then continue:
+
+1. Register the app → capture/verify the **Client ID**.
+2. Set the Redirect URI → verify it matches `<REDIRECT_URI>` exactly.
+3. Enable **ID token** issuance (`code id_token`) → verify.
+
+- **Guided:** instruct the user to perform each step in the console, then confirm the result before moving on.
+- **Configure it for the user:** run the provider's CLI/API for each step, then read the object back to verify before the next.
+
+> **Okta:** enable **Implicit (Hybrid)** with **Allow ID Token**, **assign the app to users** (else `access_denied` "Policy evaluation failed"), and prefer the Org authorization server (`https://{domain}`). See the reference's Okta section.
+
+<!-- gate: setup-auth:2.1.2.provision-idp | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · setup-auth:2.1.2.provision-idp):** Explicit go/no-go before you configure a real app registration in the user's identity provider on the user's behalf.
+>
+> **Trigger:** The user chose **Configure it for me** and the provider supports it; about to make real changes at the IDP on the user's behalf.
+> **Why we ask:** This creates/configures a real object in the user's IDP tenant, so it should never happen without an explicit yes. Guided setup does not reach this gate — the user makes the changes.
+> **Cancel leaves:** Nothing — no app is configured; the user can switch to Guided setup instead.
+
+| Question | Options |
+|----------|---------|
+| Go ahead and configure the {provider} app registration in your {provider} now? | Yes — configure it for me, No — switch to Guided setup |
+
+**If "No"**: switch to the Guided flow.
+
+**Step E — open registration.** External sign-ins obey the site's registration gating. Confirm the recommended default — **Open** for customer-facing providers (Auth0 / Okta / Entra External ID), **Controlled** for workforce Entra ID:
+
+<!-- not-a-gate: configuration sub-prompt — records the OpenRegistrationEnabled value; the load-bearing plan sign-off is the 2.2 gate. -->
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Should anyone who signs in through {provider} get an account created automatically, or only pre-provisioned users? | Registration | Open — self-service (Recommended for customer sites) — auto-create a contact for any authenticated user, Controlled — pre-provisioned only — only admit users whose email matches an existing contact |
+
+Store as `OPEN_REGISTRATION_CHOICE`. Phase 8.1 writes `Authentication/Registration/OpenRegistrationEnabled` (`true` for Open, `false` for Controlled). Pair this with the contact-linking (`AllowContactMappingWithEmail`) choice already collected in Phase 2.1.
+
+**Step F — record the results for Phase 8.1.** However the app was set up, capture the values Phase 8.1 writes as site settings (identical for both flows): `ClientId`, `Authority` (and `AuthenticationType` = Authority), `MetadataAddress` (the provider's discovery endpoint — read from the IDP), `RedirectUri`. **No `ClientSecret`** — the no-secret flow needs none, so skip Phase 8.1.1 (Key Vault), same as Entra External ID. See the reference's "Resulting site settings" table.
 
 #### 2.2 Present Plan for Approval
 
@@ -1090,7 +1177,7 @@ Both are caught by `response.url.includes('TermsAndConditions')`. When detected,
 
 - **Microsoft Entra ID**: Form POST to `/Account/Login/ExternalLogin` with provider `https://login.windows.net/{tenantId}/`
 - **Entra External ID**: Form POST to `/Account/Login/ExternalLogin` with provider set to the External ID `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`). Uses OpenID Connect underneath with the External ID tenant authority URL.
-- **OpenID Connect (Generic)**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
+- **OpenID Connect**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
 - **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
 - **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
 - **Local Authentication**: Form POST to `/SignIn` with `PasswordValue` (not `Password`), anti-forgery token from `/_layout/tokenhtml`, and optionally `RememberMe`. When `LocalLoginByEmail` is `true`, send the `Email` field; otherwise send the `Username` field. Note: the login endpoint uses `/SignIn` and `PasswordValue` — these differ from the registration endpoint which uses `/Account/Login/Register` and `Password`. Does NOT use the ExternalLogin endpoint.
@@ -1535,7 +1622,7 @@ name: Code-Site-Shell-Header
 
 > **About the two new entries (`/register` and `/account/login/register`):** these handle a specific external-auth flow that's hard to discover otherwise. When an external user (Entra External ID, OIDC, SAML2, social) clicks the "Sign in" button WITHOUT first clicking an invitation email link, and they don't have an existing contact in Dataverse, the server forces them through a server-rendered invitation flow:
 >
-> 1. `POST /Account/Login/ExternalLogin` → IdP → `/signin-{provider}` → `/Account/Login/ExternalLoginCallback`
+> 1. `POST /Account/Login/ExternalLogin` → IdP → `/signin-{ProviderName-lowercased}` → `/Account/Login/ExternalLoginCallback`
 > 2. `ExternalLoginCallback` finds no contact + no invitation → redirects to `/Register?ReturnUrl=/` (the RedeemInvitation form, server-rendered)
 > 3. User enters invitation code → server validates → redirects to `/Account/Login/Register?invitationCode=...` (the local Register Web Forms page, which has external provider buttons rendered on it)
 > 4. User clicks an external provider button on the Register page → `/Account/Login/ExternalLogin?InvitationCode=...` → external auth round 2 with invitation in URL → contact created + invitation redeemed
@@ -2160,6 +2247,16 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 Where `{Type}` is `OpenIdConnect`, `SAML2`, `WsFederation`, or `OpenAuth`. This is a **per-provider toggle** that's distinct from the global `Authentication/Registration/ExternalLoginEnabled` — set both to `true` for registration to work. Use case for setting one provider's `RegistrationEnabled=false`: temporarily block new users from a given IdP while still letting existing users sign in.
 
+**Per-provider `Caption` — required for every provider.** Write `Authentication/{Type}/{ProviderName}/Caption` (the login button label) for each configured provider (`{Type}` = `OpenIdConnect`/`SAML2`/`WsFederation`/`OpenAuth`; Local Authentication has no login button and needs no `Caption`), using the display name from Phase 2.1:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/{Type}/{ProviderName}/Caption" \
+  --value "<display-name from Phase 2.1>" \
+  --description "Login button label for this provider"
+```
+
 **Logout settings — conditional on Phase 2.1.1 logout mode choice**
 
 For external providers, write logout settings only when the user picked **"Federated logout"** in Phase 2.1.1. If they picked "Local logout only" (the default), write neither setting — the server defaults (`RPInitiatedLogout=false`, `ExternalLogoutEnabled=false`) handle this correctly.
@@ -2185,7 +2282,7 @@ For SAML2 / WS-Federation / social providers, the equivalent settings names diff
 
 > **Server behavior reminder**: Without these settings (i.e., "Local logout only" mode), `/Account/Login/LogOff` clears the Power Pages session and redirects to the `returnUrl` query parameter (or site root if missing/invalid). The IdP session stays warm — next sign-in is silent SSO. **No app-registration changes needed in this mode.**
 >
-> With these settings ("Federated logout"), `/Account/Login/LogOff` 302s to the IdP's `end_session_endpoint` with `id_token_hint` and `post_logout_redirect_uri`. The IdP signs the user out and redirects to the registered post-logout URI. **The maker MUST also register that URI in the IdP app registration** (see Phase 2.1.1) — confirmed via HAR analysis that without app-registration of the front-channel logout URL, the IdP silently drops the parameter and users get stranded.
+> With these settings ("Federated logout"), `/Account/Login/LogOff` 302s to the IdP's `end_session_endpoint` with `id_token_hint` and `post_logout_redirect_uri`. The IdP signs the user out and redirects to the registered post-logout URI. **The user MUST also register that URI in the IdP app registration** (see Phase 2.1.1) — confirmed via HAR analysis that without app-registration of the front-channel logout URL, the IdP silently drops the parameter and users get stranded.
 
 **Provider-specific settings** — create site settings for **EACH** provider selected in Phase 2.1. If the user selected multiple providers (e.g., Entra External ID + Local Authentication), create settings for ALL of them:
 
@@ -2216,7 +2313,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **No question is asked for this.** Unlike other external providers where the Profile mapping question (Track B) is part of Phase 2.1, the Entra ID mapping is written silently because (a) workforce Entra IS deterministic on which claim is the right substitute for email (always `upn`), and (b) without this mapping the contact is created broken, so opting out doesn't make sense.
 
-**OpenID Connect (Generic)** — create settings for the provider (ClientId was collected in Phase 2.1):
+**OpenID Connect** — create settings for the provider (ClientId from Phase 2.1.2 setup, or pasted manually):
 
 ```powershell
 # Authority (required — or use MetadataAddress as alternative)
@@ -2307,7 +2404,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
   --description "Provider identifier for ExternalLogin — must match Authority exactly"
 
-# RedirectUri — the full URI the maker registered in their Entra app.
+# RedirectUri — the full URI the user registered in their Entra app.
 # Confirmed/customized by user in Step 2 of walkthrough (stored as REDIRECT_URI).
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
@@ -2318,7 +2415,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 # CallbackPath — derived from RedirectUri (just the path portion, extracted via
 # new URL(REDIRECT_URI).pathname). Required to prevent CallbackPath collision when
 # multiple OIDC providers exist (OWIN defaults all OIDC to /signin-oidc otherwise).
-# The maker doesn't see this separately — the skill writes it automatically.
+# The user doesn't see this separately — the skill writes it automatically.
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
@@ -2420,6 +2517,8 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 | Both | `true` | `true` | `true` |
 | Registration disabled | `false` | (skip — moot) | (skip — moot) |
 
+> **External-provider sites (no local auth):** when the user did NOT choose Local Authentication, `REGISTRATION_MODE` is not collected. Instead honor `OPEN_REGISTRATION_CHOICE` from Phase 2.1.2 (the Phase 2.1.2 open-registration question): write `Authentication/Registration/OpenRegistrationEnabled` = `true` for **Open — self-service**, `false` for **Controlled — pre-provisioned only**. Do not write `Enabled`/`InvitationEnabled` in this case (they govern the local registration pages, which an external-only site doesn't scaffold). If neither `REGISTRATION_MODE` nor `OPEN_REGISTRATION_CHOICE` was collected, skip these settings and let the server defaults apply.
+
 > **Do NOT create the `Authentication/Registration/RequireInvitationCode` setting.** It does not exist on the server (the server never reads it). The invitation-only behavior is enforced entirely by `OpenRegistrationEnabled = false` + `InvitationEnabled = true`. Earlier versions of this skill wrote this setting — if you find it in the project's site settings (`.powerpages-site/site-settings/Authentication-Registration-RequireInvitationCode.sitesetting.yml`), **delete the file** as part of the setup.
 
 Example (write each setting that applies — skip Enabled/OpenReg/Invitation when mode is `Registration disabled` except `Enabled=false`):
@@ -2482,7 +2581,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 **Web API for contact entity — conditional on `INCLUDE_PROFILE_PAGE = true`**
 
-When the maker opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
+When the user opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
 
 > **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. The executor MUST NOT trim it. All 9 entries must be present so the profile form can read AND write every editable field:
 >
@@ -2512,7 +2611,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Field name format**: all entries in the `fields` value MUST be lowercase Dataverse LogicalNames. The Web API does case-sensitive literal matching — `FirstName` or `Firstname` will produce a 403 Forbidden response from the server even though the column exists. The list above is correct.
 >
-> **Customizing the field list LATER**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with exactly the 9 entries above — do not add or remove entries during scaffolding.
+> **Customizing the field list LATER**: if the user has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with exactly the 9 entries above — do not add or remove entries during scaffolding.
 
 #### 8.1.x Create Table Permission for Contact (When INCLUDE_PROFILE_PAGE = true)
 
@@ -2601,7 +2700,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Only run this phase if a provider requires a secret.** Skip entirely when none of the configured providers need one.
 
 Providers that **may** require a secret:
-- **OpenID Connect (Generic)** — usually yes (confidential client)
+- **OpenID Connect** — **NO by default.** Power Pages' default `code id_token` flow is a no-secret public client (see Phase 2.1.2 and idp-provisioning-reference.md). Only a confidential-client override requires a secret — skip this section unless the user explicitly opts into one.
 - **Entra External ID** — **NO by default.** The Phase 2.1 walkthrough configures Entra External ID as a public client using PKCE (no client secret). **Always skip this section for Entra External ID.** If a user later needs a confidential-client setup with a secret, they add `ClientSecret` manually via the Power Pages admin center — covered in Phase 8.5 post-deploy notes.
 - **Microsoft Account / Facebook / Google** — yes (social OAuth requires app secret)
 - **SAML2 / WS-Federation** — no (certificate-based, not secrets)
@@ -2792,7 +2891,7 @@ Present a summary of everything created:
 
 After the summary, generate an HTML setup report at `<PROJECT_ROOT>/docs/auth-setup-report.html` that captures every decision and artifact from this run. The report is opened in the user's browser as a durable, shareable record they can review later.
 
-**Why**: This skill makes many composing decisions (provider choice, registration mode, profile mapping, contact linking, profile page, terms, federated logout, etc.). A side-by-side HTML report makes it easy for the maker to audit the full configuration in one place — much more scannable than the chat summary above. It also gives reviewers and teammates a single artifact to look at without re-running the skill.
+**Why**: This skill makes many composing decisions (provider choice, registration mode, profile mapping, contact linking, profile page, terms, federated logout, etc.). A side-by-side HTML report makes it easy for the user to audit the full configuration in one place — much more scannable than the chat summary above. It also gives reviewers and teammates a single artifact to look at without re-running the skill.
 
 **1. Build the data payload.** Construct a JSON object with the following keys and write it to a temp file:
 
@@ -2899,14 +2998,14 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
 - **Test on deployed site**: Auth only works on the deployed Power Pages site, not on `localhost`
 - **Identity provider configuration**: Provider-specific setup is required:
   - **Entra ID**: Configure the identity provider in the Power Pages admin center
-  - **OpenID Connect**: Register a client application with the OIDC provider and update the `ClientId` site setting. Set the redirect URI in the provider to `{site-url}/signin-{provider}`
+  - **OpenID Connect**: Register a client application with the OIDC provider and update the `ClientId` site setting. Set the redirect URI in the provider to `{site-url}/signin-{ProviderName-lowercased}`
   - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
   - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
-  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
+  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{ProviderName-lowercased}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
 - **Auth failure handling (keep users in SPA)**: When OIDC/SAML2/WS-Fed auth fails, the server redirects to `/Account/Login/ExternalAuthenticationFailed` — a server-rendered page that breaks the SPA. To keep users in the SPA on failure, edit the Dataverse content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied` in the Power Pages admin center to inject a `<script>` that redirects to `/login?message={error-code}`. The SPA's `getAuthError()` will then display the error inline. See authentication-reference.md for the exact script.
 - **User profile display**: After login, the auth service's `getUserDisplayName()` falls back through `firstName + lastName` → `firstName` → `lastName` → `email` → `userName` → `'User'`. **Email beats userName** because for external providers (Entra External ID, OIDC) the `userName` field is the OIDC subject identifier — a long opaque string like `vs25QwNe1ZAHqlWK1Naw9dVEBe-TbF5tZEpb0XjAEZQ` that's ugly and meaningless in a navigation bar. Power Pages populates `firstName`/`lastName`/`email` from standard OIDC claims (`given_name`, `family_name`, `email`). Entra External ID user flows often don't include `given_name`/`family_name` in the returned claims by default — if you want names populated, ensure the user flow has both attributes selected under "User attributes to collect" AND "Application claims" / "User attributes to return as claims" (see Phase 2.1 Entra External ID Step 3). The `email` claim is almost always emitted, so emails reliably populate even when names don't. `getUserInitials()` follows the same priority chain using the first character of each fallback source.
 - **Two-Factor Authentication**: This skill does NOT scaffold Power Pages built-in 2FA — the `SendCode`/`VerifyCode` flow is server-rendered and cannot be integrated into the SPA experience. For MFA needs, configure it at the identity provider layer (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.) — IdP-level MFA is transparent to Power Pages and stays inside the IdP's branded experience.

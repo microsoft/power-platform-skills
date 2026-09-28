@@ -16,9 +16,10 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 ## Environment
 
-- Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- Environment URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- Active Profile: contoso-user001@contosotest1.onmicrosoft.com
+- URL: https://contosobapenv0002.crm10.dynamics.com/
 - App: Service Hub (22222222-1111-2222-3333-444444444444)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -36,6 +37,10 @@ No entity creation required — all entities already exist.
 
 incident, contact
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 
 - 3 steps: customer info → case details → review
@@ -45,12 +50,23 @@ incident, contact
 
 ## Relevant Samples
 
-- plugins/model-apps/samples/2-wizard-multi-step.tsx (wizard pattern reference)
-
+| Page | Sample | Reason |
+|------|--------|--------|
+| New Case Wizard | 2-wizard-multi-step.tsx | wizard pattern reference |
 ## Per-Page Specifications
 
 ### New Case Wizard
 
+
+- **File:** page.tsx
+- **Purpose:** 3-step wizard for creating contact + incident
+- **Entities:** incident, contact
+- **Needs caching:** false
+- **Key Features:** Three-step create form for customer info, case details, and review before submit.
+- **Components:** Input, Dropdown, Button, Field, MessageBar, Text, and wizard progress indicators from Fluent UI V9.
+- **Layout:** Single-card stepper layout with review summary; responsive vertical stacking on narrow screens.
+- **Data Binding:** No initial fetch; on submit create contact then incident with the contact bind.
+- **Interactions:** Next/Back step navigation, validation before advancing, and submit via dataApi.createRow.
 - File: page.tsx
 - Entities: contact (create), incident (create with @odata.bind to contact)
 - Components: Fluent UI V9 Input, Dropdown, Button, Field, MessageBar

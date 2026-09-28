@@ -2,124 +2,765 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.2.0
+Entries are deliberately short: what changed and why it matters to you. The reasoning,
+evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-Local-dev ergonomics, sample coverage, and an automated eval suite with
-real and synthetic fixtures. Builds on v2.1; no breaking changes.
+## [Unreleased] — 2.9.0
+
+A dry run that says what an apply would really do, sample data that can express a hierarchy, and
+downloads that round-trip Choice columns.
 
 ### Added
-- **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
-  and `genpage.d.ts` so `npm install` + editor IntelliSense work after
-  generation. Versions in `references/supported-dependencies.md`.
-- **Eval suite runners.** `run-layer-1.js` (workflow assertions) and
-  `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
-  types, tiers, capture flow.
-- **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
-  captures; all green under the tightened v2.2 spec).
-- `scripts/capture-fixture.js` — copies `/genpage` working dirs into
-  fixtures and runs both layers.
-- `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
-- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
-  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
-  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
-  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
-  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
-  dialogs — so a modal can't escape the preview and cover the designer /
-  coding-agent panel.
 
-### Changed
-- Spec tightening so workflow-logs are command-verbatim and `pageInput`
-  destructure is required even on mock pages (planner, page-builder,
-  SKILL.md Phase 6 + Phase 8).
-- 8 runner regex relaxations to accept functionally-equivalent agent
-  patterns (typed `(window as any).Xrm` aliases, `pac solution list`,
-  local enum mapping, etc.) — no rule loosening.
+- **`personas[].excludes[]` records what the app deliberately leaves out** ([#583]), rendered as
+  **Deliberately out of scope** beside the traceability table. Documentary only.
+- **Richer form layouts**: multi-column tabs (`tabs[].columns[]` with a `width`), cell
+  `colspan`/`rowspan`, and author-controlled `expanded`/`visible`/`showLabel`. Layout keys are
+  allow-listed, so a typo fails instead of silently vanishing.
+- **The dry run resolves create-vs-reuse against the live environment** ([#559]) — each item is
+  `+ create`, `= reuse` or `? unknown`, never guessed. `--no-live-plan` restores the offline listing.
+- **Sample data can express a hierarchy on one table** ([#544]). `$parent` may target the row's own
+  entity; rows seed in dependency waves and a cycle fails the lint. `$parent.lookup` picks the
+  relationship when two connect the same pair — now required there instead of guessed.
+- **`minimumPluginVersion`** lets a spec declare the oldest plugin that can build it, so a newer spec
+  is refused rather than mis-compiled.
+- **The vendored SDK moves to injected storage.** `createNodeWorkspaceStorage(...)` replaces
+  `workspacePath` — no change for authors, breaking for anything calling these scripts as a library.
 
 ### Fixed
-- **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
-  DataTable, not an array).** 7 files were iterating `result` directly
-  (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
-  producing `X.map is not a function` at runtime. Fixed in
-  `samples/11-kanban-with-dnd.tsx` and 6 fixture `.tsx` files.
-  New Layer 2 assertion catches this pattern going forward: any Dataverse
-  file calling `dataApi.queryTable` must access `.rows` somewhere.
 
-### Tests
-- 215 passing across `scripts/tests/` + `evals/.../tests/`.
+- **A page NAME can no longer forge the page listing.** The "Found N pages" summary was matched
+  anywhere in pac's output, so a page called `Found 1 generated page` made a listing with no real
+  summary read as authoritative — and a truncated-but-authoritative listing is what drives a
+  duplicate page create. The whole line must be the summary, so a name that merely *starts* with it
+  is rejected too.
+- **A malformed page id is refused instead of stored.** The old pattern accepted 36 characters from
+  an alphabet containing `-`, so a row of dashes passed and an over-long id was silently *truncated*
+  into a plausible one. Any identifier character following the id now disqualifies it, not just a
+  hex digit. An unparsable id goes through the existing uncertain-create recovery.
+- **A sample-data row that is not an object is rejected up front.** `null` crashed, a string became
+  `{"0":"a","1":"b"}` and a number became `{}` — all after tables, forms and views had deployed.
+  Both provisioning entry points share one gate; `provision-entities` previously checked only that
+  the value was an array.
+- **A failed PAC command reports what PAC actually said.** The real error was replaced by the last
+  line of the help dump that follows it, and a deterministic failure (a bad argument, a missing file)
+  was retried three times before reporting anything — on an ordinary page update it still was, since
+  the stop condition only covered creates.
+- **A path ending in `\` no longer swallows the flags after it** on Windows, where a trailing
+  backslash escaped its own closing quote.
+- **A crashed browser-automation server reports failure**, instead of exiting 0 because the process
+  was killed by a signal rather than by its own choice.
+- **`generate-page-manifest --force` never writes outside the working directory or through a link.**
+  A `package.json` that is a symlink (even a dangling one) or a hard link is refused, and so is a
+  working directory that is itself a link or junction; a linked ancestor is still followed. A file is
+  replaced atomically and keeps its file mode, and a read-only one is refused rather than replaced.
+- **`--clear-workspace` refuses a UNC/network path**, which could otherwise block on an unreachable
+  share with no way to interrupt it. A mapped drive is unaffected.
+- **A transient discovery failure no longer certifies a `--changed-only` baseline as fresh**, which
+  could let a later page edit skip a full build it actually needed.
+- **An explicit form layout reshapes a form instead of flattening it** ([#575]). Every field was
+  appended to the first section, containers were never created or resized, and declaring `tabs`
+  silently switched pruning on. Containers now match by `name`, then `label`, then position, and a
+  misplaced field is moved rather than duplicated.
+- **A section emptied by a layout move is reclaimed** instead of surviving as a blank twin.
+- **A field added or moved on an existing form packs to the section's grid**, so the same spec no
+  longer produces a different form depending on whether the form already existed.
+- **Cell spans converge on an existing form, and are clamped against the grid that is really
+  deployed.** A declared span reaches the deployed cell; an undeclared one is still never sent, so a
+  cell widened by hand survives. Clamping used the grid the spec compiled to rather than the live
+  one, so an auto layout could narrow a maker's four-column cell to one; and narrowing a section
+  left an over-wide cell behind, unchanged on the next apply too. `rowspan` is rejected unless it is
+  inline on the last field in its section ([#581]), and a form-level `fieldOptions` span is now
+  validated too instead of a bad value being dropped.
+- **Re-flowing a section no longer breaks a maker's row-spanning layout.** Once a field follows a
+  `rowspan`, re-flowing by reading order moved it into the reserved slot. Such a section now keeps
+  its grid when the rows cannot follow a narrowing, a span change that would overflow its row is
+  skipped, and a `rowspan` is never raised on a deployed cell that other cells follow. Trailing spans
+  (the stock-form shape) re-flow normally. Every refusal is reported and recorded in the build
+  result's `skipped.layout`.
+- **A form field can be narrowed again.** An explicit `colspan`/`rowspan` of `1` was
+  indistinguishable from omitting it, so changing `2` back to `1` never reached the form.
+- **Widening a field on a deployed form re-packs its row.** The span was patched in place but the
+  row was not re-packed, leaving three columns of content in a two-column section. Displaced fields
+  move down rather than to the bottom of the section; a span that still fits writes nothing.
+- **`--verify` judges widths and spans by the build's own rule.** It used to derive them separately:
+  a too-narrow section could excuse its own span (`columns: 4, colspan: 4` arriving as 1 and 1
+  verified PASS), while a section that omits `columns`, a QuickCreate section, or a span set through
+  `fieldOptions` was misjudged. Verify now uses the compiler's width and field-option rules, and it
+  counts the slot a row-spanning cell reserves beneath it, so a full row under a `rowspan` fails.
+- **`--verify` no longer fails a reshape the build performed correctly.** The build reuses deployed
+  containers and deliberately does not rename them (form scripts and business rules reference
+  section names), but verify looked them up by the authored name — so a section it had just reused
+  read as "absent". Both sides now share one matcher.
+- **The form wireframe shows authored `hidden` and `readOnly` state** ([#591]), so the approval gate
+  no longer draws every field as visible and editable.
+- **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). A
+  prompt containing quotes, newlines, `%VAR%` or non-ASCII could fail to deploy — and editing the
+  approved prompt until it parses builds the page from text nobody approved. `--add-to-sitemap` is
+  now refused alongside `--page-id`.
+- **A multi-line page prompt is no longer flattened on upload** ([#565]). Prompt files are now
+  delivered byte-for-byte, including a trailing newline; only a leading byte-order mark is stripped,
+  because that is an encoding marker rather than content.
+- **`/genpage` refuses to "update" a page that does not exist.** `pac` treats an unknown `--page-id`
+  as a create and returns the new id, so a stale one silently produced a second, unplaced page and
+  reported it as an update.
+- **An explicitly empty prompt or agent message is refused, not replaced** with generated text.
+  Omitting the value still gets the default, on both `/genpage` and `/app-builder`.
+- **A `/genpage` update no longer silently unbinds the page.** `pac` rewrites the binding list from
+  the flags it is given, so omitting `--data-sources` persisted `[]` while the source went on
+  querying the table. An update now preserves the page's existing bindings; `--clear-data-sources`
+  unbinds deliberately.
+- **`/genpage` Phase 1 is reachable again** ([#541]) — its interactive flow no longer runs inside a
+  headless subagent.
+- **A downloaded page keeps its table bindings.** `pac` writes `config.json` with a BOM, which
+  `JSON.parse` rejects, and the failure was read as "no data sources". A config that is present but
+  unreadable now stops the download unless you pass `--allow-lossy-download`.
+- **Choice and MultiChoice columns round-trip on download** ([#564]). They were emitted untyped, so
+  a fresh rebuild created Text, and a MultiChoice column was dropped entirely. Option *values* still
+  do not round-trip: labels and order do, and a fresh rebuild re-bases them to `100000000 + index`.
+- **`relationships[]` is reconstructed on download** ([#567]). The block was absent and nothing said
+  so, so a rebuild produced tables with no lookups and reported success.
+- **A download no longer invents columns** — a polymorphic lookup's shadow attributes ([#574]) and a
+  Money column's `_base` twin were emitted as real columns a fresh rebuild would then create.
+- **A downloaded spec no longer fails its own lint** ([#572]).
+- **A renamed N:N relationship carries its deployed name**, so a rebuild does not create a second
+  intersect beside it, and it is reported as renamed rather than lost.
+- **Every dropped dashboard tile is reported**, naming the parameter it lacks, and id-passthrough
+  tiles are validated per tile type.
+- **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). It ran
+  `rm -rf` on the caller's path with no check that it was a workspace, immediately after a
+  *successful* teardown. It now requires the directory to carry the SDK's own workspace manifest —
+  the conventional name alone is not proof — and rejects roots and symlink escapes.
+- **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). This
+  **reverses earlier best-effort behaviour**; continue-on-error still applies to every later step.
+- **A security role whose sharing check cannot be read is retained, not deleted** ([#587]).
+- **A plain `--apply` halts when the changed-only snapshot cannot be invalidated** ([#587]) —
+  otherwise a later `--changed-only` run trusts a stale snapshot and skips work.
+- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]).
+- **A mistyped flag fails instead of quietly changing what the command does.** An unrecognised flag
+  was dropped *and* swallowed the token after it, so `--stagee ui` planned all 9 phases and exited 0.
+- **`--verify` proves the deployed form LAYOUT**, not just that a form exists — every wrong-layout
+  failure previously finished with an unqualified PASS. It checks the authored tabs, sections and
+  field placement, that no row carries more content than its section's grid allows, and that a span
+  you declared is the span that deployed. A span you did *not* declare is left alone, so a cell
+  widened by hand in the designer still verifies.
+- **`--verify` proves sort PRECEDENCE, not just membership**, so two views that return rows in
+  different orders are no longer both accepted.
+- **`--verify` checks that a sitemap-visible table really belongs to the app**, and fails closed when
+  the component list cannot be read.
+- **`--verify` gained three oracles**: the deployed default Main form, a view's filters/sort parsed
+  from `fetchxml`, and app-role associations. Each fails closed.
+- **`--verify` no longer demands a default form the build never promotes** on a reused or stock table.
+- **A tab's `columns` must be a list of form-columns.** `"columns": 2` on a tab validated clean and
+  was then discarded, silently shipping a one-column form.
+- **Duplicate sample-data names fail at author time**, not after tables and forms are deployed.
+- **`_seedKey` in `sampleData` is rejected** instead of reaching Dataverse as an attribute no table
+  has; the error names the real mechanism, a single-column alternate key.
+- **An explicit layout with no tabs, or a tab with no sections, is rejected** — it previously passed
+  the build gate and silently dropped every field the form declared.
+- **A form layout may not place the same field twice, or reuse a tab/section `name`.** A duplicated
+  field deployed two cells on a fresh build and one on the next.
+- **A business rule's `dataType` reaches Dataverse as a real type.** The platform *accepts* the wrong
+  value rather than rejecting it, so affected rules deployed and activated with a wrongly-typed
+  condition — rebuild any app with `businessRules[]` built against the previous release.
+- **A build no longer reports a default form it failed to set**, and a failed promotion warns with
+  the reason instead of being swallowed. An **existing** view's authored filters/sort are still not
+  reapplied, and that is now said out loud.
+- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.**
+- **The vendored SDK is refreshed** for upstream wire-correctness fixes (view joins, `addElement`
+  re-keying, dashboard parsing, duplicate sort attributes, a flow left disabled when an edit fails)
+  and a patched `@xmldom/xmldom` (0.8.15, parser denial-of-service fixes). Two change what you see:
+  **an app whose sitemap has an unpublished edit can now be torn down** — the delete carried a token
+  the platform refuses while an edit is pending, so it failed with 412 every time — and **each write
+  in a business process flow's create is conditioned on the token the previous write returned**, so
+  a concurrent edit is refused rather than activated or overwritten.
+- **A slow write is waited for, not abandoned and re-sent.** Writes now get up to 5 minutes (reads
+  keep 60 s), and a conditional write that gets no answer is reported rather than re-sent: it may
+  still commit, and a re-send could only be refused as a false version conflict. Activating a
+  business process flow on a newly created table can take longer than the old 60 s.
+- **An `already-exists` halt names the step that clears it.** A plain re-run keeps the workspace copy
+  that was never recorded as pushed and halts again; the message now says to delete `.maker-workspace`
+  first.
+
+### Changed
+
+- **`/app-builder` is GA.** The App Spec shape, the CLI flags and the build phases are now a stable
+  contract. `--changed-only` remains experimental and off by default.
+- **Connector authoring is GA and on by default.** The `connectors` flag is flipped to `true` and
+  kept for one release as a rollback switch (`GENPAGE_ENABLE_CONNECTORS=0`), then removed.
+  `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
+- **The Phase 4.5 dispatch value is the binding count, not the flag state**, so the dispatch stays
+  stable when the flag is removed.
+- **The App Spec schema is split** so the always-read half is smaller: 105 KB → 82 KB.
+- **The CLI flag contract is shared** rather than per-script, so the rules and the "did you mean"
+  suggestion cannot drift between commands.
+- **Deeper tests on the paths connectors GA made live**, including a connector *edit* eval.
+
+[#541]: https://github.com/microsoft/power-platform-skills/issues/541
+[#544]: https://github.com/microsoft/power-platform-skills/issues/544
+[#559]: https://github.com/microsoft/power-platform-skills/issues/559
+[#564]: https://github.com/microsoft/power-platform-skills/issues/564
+[#565]: https://github.com/microsoft/power-platform-skills/issues/565
+[#567]: https://github.com/microsoft/power-platform-skills/issues/567
+[#572]: https://github.com/microsoft/power-platform-skills/issues/572
+[#574]: https://github.com/microsoft/power-platform-skills/issues/574
+[#575]: https://github.com/microsoft/power-platform-skills/issues/575
+[#581]: https://github.com/microsoft/power-platform-skills/issues/581
+[#583]: https://github.com/microsoft/power-platform-skills/issues/583
+[#587]: https://github.com/microsoft/power-platform-skills/issues/587
+[#589]: https://github.com/microsoft/power-platform-skills/issues/589
+[#591]: https://github.com/microsoft/power-platform-skills/issues/591
+
+## [2.7.1]
+
+Three defects an author hits before reaching an environment, and a session-start warning.
+
+### Added
+
+- **`scripts/lint-app-spec.js` — lint and validate a spec without touching an environment** ([#560]).
+  `validateAppSpec` (the gate `--apply` enforces) and `lintAppSpec` (the authoring guardrails) were
+  library exports with no entry point, so a headless author or a CI job had to reach in with
+  `node -e`. The CLI runs migrate → validate → lint, tags each finding `schema:` or `lint:`, and
+  exits non-zero on errors. `--profile` defaults to `plan` (pages may still be intents), so gate a
+  final, deployable spec with `--profile deploy`. `--strict` also fails on warnings; `--json`
+  emits the report. Argument handling is deliberately strict — an unknown flag, or `--spec`/
+  `--profile` given without a value, is a usage error, never a silent fall back to the default
+  profile a CI job did not ask for.
+
+### Fixed
+
+- **A spec that declares `schemaVersion` per page but not at the top level no longer breaks every
+  page reference** ([#545]). Migration mints a stable key per page, and it did so *unconditionally* —
+  overwriting hand-authored keys with a slug of the page name. The references hold keys, not names,
+  so nothing rewrote them and validation reported one "not a known page key" / "unknown page" error
+  per page, none of which named the cause. Authored keys now survive migration; a key is minted only
+  for a page that has none, and every authored key is reserved first so a minted one cannot steal it.
+- **A `//` or `/* */` comment inside a JSX opening tag no longer makes a valid page look truncated**
+  ([#542]). `jsxTag` mode had no comment handling, so an apostrophe in the comment prose was read as
+  an attribute-value quote — and that scanner does not stop at a newline, because a JSX attribute
+  value legitimately may span lines. It ran to end of file, blanking the real `export default` and
+  miscounting every bracket after it, so `promote-intent-pages` rejected a complete page as
+  truncated. Promotion is transactional, so one such page blocked the whole batch. Block comments
+  had the same defect, which the report did not cover.
+- **`eq-businessid` / `ne-businessid` are accepted in a view filter** ([#546]). Both are value-less
+  FetchXML operators — the business-unit equivalents of `eq-userid` / `ne-userid` — and the lint
+  demanded a value they must not carry. The operator list is now the documented value-less set,
+  which also adds `eq-userlanguage`, the user-hierarchy operators, and the relative fiscal-period
+  ones. The reverse case now warns: a value-less operator that *carries* a value is not rejected by
+  Dataverse, it is ignored — so the filter silently does not do what the value says. An operator
+  outside the documented set also warns, with a "did you mean" hint, instead of being reported as
+  needing a value it cannot take.
+- **No more `hooks.json: unknown key "_comment" ignored` at every session start** ([#555], [#558],
+  affects `model-apps` and `mobile-apps`). The hooks manifest is validated against a closed schema,
+  so the documentation key it carried was reported as a misconfiguration on every launch. The prose
+  moved to `hooks/README.md`, and a repo-wide CI check now fails any manifest with an unrecognised
+  top-level key — the symptom is otherwise invisible to both tests and review.
+
+[#542]: https://github.com/microsoft/power-platform-skills/issues/542
+[#545]: https://github.com/microsoft/power-platform-skills/issues/545
+[#546]: https://github.com/microsoft/power-platform-skills/issues/546
+[#555]: https://github.com/microsoft/power-platform-skills/issues/555
+[#558]: https://github.com/microsoft/power-platform-skills/issues/558
+[#560]: https://github.com/microsoft/power-platform-skills/issues/560
+
+## [2.7.0]
+
+Multi-language Dataverse labels, granting access on roles this spec does not own, and the
+app-builder defects found while rebuilding a real app into a second environment.
+
+### Added
+
+- **Localized Dataverse metadata labels** (AB#6686428, [#537]). Any author-facing name — a table's
+  `displayName`/`pluralName`, its primary column's, a column's, a lookup's, an alternate key's, an
+  inline Choice option's — may be a map keyed by LCID instead of a string:
+
+  ```jsonc
+  "displayName": { "1033": "Project Baseline", "3082": "Línea base del proyecto" }
+  ```
+
+  A single-language label stays a plain string, so no existing spec changes shape. Three rules:
+  `globalChoices[]` is **rejected** (Dataverse stores only the base language there — use an inline
+  Choice on the column); a language **tag** (`"es-ES"`) is rejected rather than guessed; and a
+  localized `displayName` requires an explicit `pluralName`, because appending `"s"` is not a plural
+  rule outside English. An LCID the organization has not provisioned halts the build.
+  See `references/app-spec-schema.md` → *Localized labels*.
+- **`roleGrants[]` — extend a security role you did not author** (AB#6686429). Adds privileges to a
+  role that already exists, typically the ones an existing solution ships; `personas[]` remains the
+  surface for roles the spec owns. **Additive and one-way**: dropping the entry does not revoke, and
+  teardown never removes one. An unknown, ambiguous or stale role halts the build rather than
+  skipping, because granting on the wrong role is a silent access defect.
+- **`businessProcessFlows[].securityRoles` — who may run a flow** ([#513]). Same persona idiom as
+  `forms[].securityRoles`. The grant lands on the flow's activation-created backing table, so there
+  is no `scope` to author, and `securityRoles` on a **Draft** flow is rejected — the table does not
+  exist until activation.
+
+### Fixed
+
+- **AI features are written even when an org readiness gate reads off** (AB#6688904). The gate was a
+  precondition, and for four of the seven features that "gate" is the per-app row the write is about
+  to set — so a new app looked forbidden and the build reported success having written nothing. Every
+  write is now attempted and verified, a gate is read only to explain an absence, and the write is
+  re-issued after publish (no app-scope write persists before that).
+- **Localized labels were silently discarded on the real build path.** A broad metadata read issued
+  immediately before a create makes Dataverse keep only the base-language label, and the request body
+  is identical either way, so nothing reported the loss. The three create paths now use narrow reads.
+  The column path is the one reached when adding a column to an existing table.
+- **A requested row summary that was never created now FAILS verification** (AB#6689110). Build,
+  verify and teardown share one selector and one AI opt-in test, so what is verified is exactly what
+  was asked for, and a spec with no `ai` block is not checked for summaries at all.
+- **Teardown removes a row summary the build created by default.** It planned that removal only for
+  an explicit `ai.summaries` block, so for a spec carrying only `ai.appFeatures` the orphaned AI model
+  blocked the table delete — teardown finished *with errors* and left the table and its data behind.
+- **An SVG in a sitemap subarea's legacy `icon` is flagged** (AB#6688906), naming the `vectorIcon`
+  replacement; a raster `icon` beside a vector one stays legal as a deliberate fallback. A sitemap
+  attribute you remove from the spec is now removed from the deployed sitemap instead of surviving.
+- **A workspace-metadata race no longer halts a multi-form build** (AB#6688905). Wiring form events
+  could start before the SDK had persisted that form's metadata file, failing with a bare `UNKNOWN`.
+  The read is retried; a persistent failure says it is a local race and that a re-run clears it.
+- **`appendTo` no longer reports a false verification failure** — the access token was matched
+  case-sensitively against a lower-cased lookup, so a correctly granted role reported it as missing.
+- **A download says what it did not bring back** (AB#6686423). `download-model-app` does not
+  reconstruct `forms[]`, `views[]`, `charts[]`, `businessRules[]` or `globalChoices[]`, and a spec
+  with `"forms": []` was indistinguishable from an app that has none. Runs now name the counts and
+  artifacts and return a `notRoundTripped` block. It is a note, not a gate: the loss is real only
+  when rebuilding into a *different* environment. Every inventory read that **fails** — a failed
+  table-label read, an unreadable business-rule or global-choice list, or a component page that hit
+  its cap — is reported as an UNKNOWN class rather than an empty one, so "we could not look" never
+  reads as "the app has none".
+- **An inactive row-summary model no longer verifies clean.** The AI model row is created before it
+  is published, so an environment that does not license the capability leaves a committed but
+  unusable row behind; matching on the name alone reported PASS for a summary nobody can run.
+- **The Azure CLI identity is checked before any Dataverse read** (AB#6686427). A token from the
+  wrong tenant surfaced as an *empty download* — every best-effort read swallowed its 401. A terminal
+  401 now names the identity, tenant and environment (AB#6686424); a re-`az login` is the only fix,
+  because `az account get-access-token` is MSAL-cached.
+- **Default-form promotion is deterministic** (AB#6686426) — building several Main forms in parallel
+  could leave whichever finished last as the default. It now honours `forms[].isDefault`.
+- **The complete form-id map is signposted** (AB#6686425): `created.formIds`, keyed
+  `entity|type|name`. The ids were never lost — `created.forms` is a Main-form-only convenience map.
+- **A download no longer emits a raw Dataverse Label object as a column name**; an unlabelled
+  synthetic lookup column is omitted instead of failing the spec's own validation.
+
+### Changed
+
+- **SDK uptake `cds-maker-sdk 331b9f56`** — the platform halves of the bugs above: multi-language
+  label serialization, `formTypes` on the form listing, the additive `addEntityPrivilegesToRole`,
+  `setAppAiFeatures` no longer pre-empting a write, sitemap attribute removal, and retries around the
+  workspace file pair.
+- **Two label rules relaxed** after they were measured to break specs that build correctly: a blank
+  plain-string label is accepted (every create site falls back to the schema name), and a duplicate
+  **plain** option label is a warning. A blank entry inside a localized map, and a cross-language
+  collision, still fail.
+- **The role-privilege read moved onto the SDK's `getEntityPrivileges`**, retiring the last raw-HTTP
+  escape hatch in the app-builder scripts. No behaviour change — an unreadable privilege set still
+  fails the check closed.
+
+### Known limitations
+
+- **A single-language label loses its LCID on download.** A table labelled only in, say, 3082 comes
+  back as a plain string, and a rebuild applies it at the target build's resolved language — correct
+  in the same organization, wrong in one with a different base language. Pin `languageCode` in the
+  spec before a cross-organization rebuild.
+
+[#537]: https://github.com/microsoft/power-platform-skills/issues/537
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
+
+## [2.6.1]
+### Fixed
+
+- **A table key the build cannot honour now fails instead of being dropped** ([#537]).
+  `entities[].languageCode` and `entities[].localizedLabels` validated clean and were then silently
+  ignored, so asking for one table in Spanish produced a successful build with the request gone.
+  Unknown table keys are now rejected and the error names what to write instead. (2.7.0 adds
+  multi-language labels as an LCID map on the label field itself.)
+- **The `languageCode` error says what to write** — a concrete LCID, and an explicit rejection of a
+  language tag, which would otherwise build every label in the wrong language.
+- **A non-string `entities[].schemaName` is an error, not a raw `TypeError`** that discarded every
+  other problem found so far.
+
+[#537]: https://github.com/microsoft/power-platform-skills/issues/537
+
+## [2.6.0]
+
+Business process flows, plus an SDK uptake that changes how business rules fail on an environment
+that cannot host them.
+
+### Added
+
+- **`businessProcessFlows[]` — guided, staged processes on a table.** Ordered stages with steps bound
+  to that table's columns, activated on create. v1 is single-entity and linear — branching, stage
+  actions and role grants ([#513]) are rejected rather than silently dropped.
+
+### Changed
+
+- **A business rule is validated before it is written.** A rule the SDK's compiler cannot understand
+  used to deploy as an empty rule that never fires; the build now runs the designer's own validator
+  and fails with its findings.
+
+### Fixed
+
+- **A build no longer halts on an environment that cannot host business rules** — those rules are
+  skipped with a warning again, which matters because such environments are the common case.
+- **A failed push reports the SDK's own reason** instead of always blaming a concurrent Maker edit,
+  and a `VERSION_CONFLICT` still tells you to re-download.
+- **Download round-trips `app.newLook` and `app.headerNavigationRefresh`** ([#514]) — a rebuild
+  elsewhere previously produced a classic-shell app with nothing reporting the loss.
+- **`views[].columns` rejects a non-string entry** ([#525]). An object reached the view's fetchxml as
+  `[object object]` and left behind a view row that could not be read or deleted, so every later
+  build failed the same way.
+- **A business process flow whose derived unique name is already taken is refused up front** — that
+  name becomes a *table* name on activation, so a flow named after its own table collided silently.
+- **A reused business rule rejoins its solution on every build**, so it travels on export/import.
+- **A non-string table reference is rejected instead of coerced** (`charts[].entity`, a subgrid's
+  `childEntity`, a sitemap subarea's `entity`, a dashboard tile's `entity`).
+
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
+[#514]: https://github.com/microsoft/power-platform-skills/issues/514
+[#525]: https://github.com/microsoft/power-platform-skills/issues/525
+
+## [2.5.1]
+
+SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
+an environment that supports them**.
+
+### Changed
+
+- **Business rules are environment-gated.** An environment that does not declare the SDK's bound
+  `CreateProcessWithWfomJson` member **cannot host business rules at all** — the common case. Such
+  rules are skipped with a warning, and `--verify` reports them as *not applicable on this
+  environment*.
+
+### Added
+
+- **Generated pages can report to the customer's Application Insights** — behind the new default-OFF
+  `custom-telemetry` feature flag, via an optional `props.appInsights` surface. The flag is
+  permission, not instruction: even with it on, a page is instrumented only when the maker asked to
+  measure something, so existing prompts are unaffected. Ships OFF pending the host runtime,
+  authoring control, agent prompt and ECS setting. See `references/page-telemetry.md`. Unrelated to
+  the plugin's own usage telemetry (`/model-apps:telemetry`).
+- **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
+  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form; undo
+  with `everyone: true`, not by deleting the block. (AB#6648526)
+- **Boolean `defaultValue`, whole-number `integerFormat`, and per-column `isValidForCreate` /
+  `isValidForUpdate` / `isValidForRead`** — the last is how you make a column read-only.
+  ([#495], AB#6648523, AB#6648522, AB#6651276)
+- **Twelve more business-rule operators** and **multi-condition rules** (ANDed). Spelling matters:
+  `IsGreaterThan`, not `GreaterThan` — the SDK silently resolves an unknown operator to `Equals`, so
+  the spec rejects anything outside its table.
+- **A `description` on every artifact that accepts one**, written at create time and omitted when
+  absent, so a rebuild never blanks text typed in the maker.
+- **Per-field form control** — `readOnly`, `hidden` and `after`, via a form-level `fieldOptions` map
+  or inline on an explicit layout. `prune: false` edits part of a form without re-declaring it.
+- **The AI form-fill family is controllable per capability** — assist toolbar, edit-form predictions,
+  smart paste and file upload, instead of one flag that only governed the toolbar.
+
+### Fixed
+
+- **A `businessRules[]`-only edit is no longer treated as "nothing changed"** under `--changed-only`
+  ([#478], which also fixes downloads losing dashboard tiles).
+- **Descriptions converge on existing views and charts** — previously written only at create, so the
+  auto-created *"Active &lt;Plural&gt;"* view never got one ([#496]); **downloaded specs preserve
+  deployed descriptions** ([#494]).
+- **Teardown removes the activated copy of a business rule**, previously stranding an undeletable
+  row ([#493]), and clears column visualizations for a table the spec keeps.
+- **Existing columns honour an explicit `required` change on rebuild**; an omitted one leaves the
+  live column alone.
+- **Big Integer columns are no longer auto-placed on forms** — they have no Unified Interface control
+  and rendered *"Error loading control"* on every record.
+- **AI on/off is read with the platform's semantics** — `0` = platform default, `1` = disabled,
+  `2` = enabled. Treating any non-zero value as "on" reported a disabled feature as enabled.
+- **Presence operators** (`ContainsData` / `DoesNotContainData`) deploy ([#481]).
+- **`ai.summaries.default: "off"` no longer discards a per-table `enabled: true`**, and a
+  differently-cased `tables[]` key keeps its `instruction` and `columns`.
+- **A row summary an environment cannot license is skipped, not fatal** — and the row the refused
+  publish leaves behind is swept, so a rebuild does not fail on a duplicate key.
+- **A spec with no `appShell` reports what to add** instead of dying after the app was half-created.
+- **A malformed `businessRules` is a validation error**, not a raw `TypeError`.
+
+[#478]: https://github.com/microsoft/power-platform-skills/issues/478
+[#481]: https://github.com/microsoft/power-platform-skills/issues/481
+[#493]: https://github.com/microsoft/power-platform-skills/issues/493
+[#494]: https://github.com/microsoft/power-platform-skills/issues/494
+[#495]: https://github.com/microsoft/power-platform-skills/issues/495
+[#496]: https://github.com/microsoft/power-platform-skills/issues/496
+
+## [2.5.0]
+
+Takes up the current maker SDK, adds modern-shell and navigation controls, labels Dataverse
+metadata in the organization's own language instead of a hardcoded 1033, and makes persona roles
+and jobs-to-be-done checkable.
+
+### Added
+
+- **`businessRules[]` — declarative form logic, no code.** Show/hide, lock/unlock, set-required and
+  set-value, gated on a condition over the record, activated on create. Every field is checked
+  against the rule's own entity, because a rule naming a column that does not exist is accepted by
+  the platform and then simply never fires. Operators `Equals` · `DoesNotEqual`.
+- **Custom grid rendering (preview) — `entities[].columns[].visualization`.** Render a column as a
+  radial dial, line chart, heat map or star rating in every grid and view that shows it. Where the
+  platform has not provisioned the preview the build skips it and everything else still deploys.
+- **`app.newLook` — opt into the modern ("new look") shell**, written as the per-app
+  `NewLookAlwaysOn` setting so the result is deterministic rather than a per-user preference.
+  Best-effort: a tenant without the definition still gets a working app, with a warning.
+- **`app.headerNavigationRefresh` — control the Wave 2 header and navigation refresh.** A separate,
+  independent setting from `app.newLook`. The platform default is **ON**, so this exists as much to
+  turn the refresh off as on — `false` is written actively rather than treated as "do nothing".
+- **Labels honour the authoring language everywhere** ([#447], [#455]) — tables, columns, choices,
+  **form, dashboard and sitemap labels**. Previously only the data-model phase respected it, so
+  `--language-code 1031` produced German columns and English form labels. Precedence:
+  `--language-code` → App Spec `languageCode` → the organization's base language → 1033.
+- **An unprovisioned `languageCode` stops the build before any label is written** ([#456]), naming
+  the LCID you asked for and the ones the organization has. Dataverse otherwise fails
+  *inconsistently* — accepting it on tables and choices, rejecting it on `DateTime` and `Memo` — so
+  the build died phases away from the flag that caused it.
+- **A hand-pinned `languageCode` survives download.**
+- **`directEntry` on `pages[]`.** A page declaring `pageInput` must say what a no-input entry
+  renders: `{ "behavior": "selector" }` or `{ "behavior": "emptyState" }`. Every key in
+  `pageInput.data` must also be supplied by an incoming `navigatesTo[].data` edge.
+- **`verify` proves what a persona security role GRANTS**, not just that the role exists — a subset
+  check by design, failing closed on an unreadable role or table.
+- **`personas[].jobs[].surfaces[]` is checked, not documentary** — `spec-lint` warns when a surface
+  matches nothing, and `verify` reports a failure as the job it broke.
+- **Automatic plugin update notice** — a non-blocking preflight when a newer version is available.
+
+### Fixed
+
+- **Command buttons now actually run.** A JS command was created with no on-click parameters, so the
+  usual `function doThing(primaryControl)` shape threw on its first property access and the button
+  silently did nothing — with the build, the deployed rows and `--verify` all looking correct.
+  Buttons now receive the standard parameters for their location, overridable via `parameters`.
+- **Business rules no longer mistake the platform's activated copy for a duplicate**, which made the
+  build warn about a duplicate that did not exist and teardown fail on it.
+- **AI preflight no longer reports a running feature as disabled.** The readiness gate and a
+  feature's actual setting are different rows; preflight now resolves the effective value and stops
+  emitting an admin action for a feature that is already on.
+- **Rebuilds no longer duplicate sub-grids or skip field removals.** The SDK's artifact surface became
+  asynchronous upstream, and un-awaited that fails *silently* — a promise is truthy, so guards never
+  fired, producing duplicate sub-grids, re-added fields and removals that never landed, all behind
+  `2xx` responses and a green build.
+- **Dashboard chart tiles no longer fail the `dashboards` phase** — the tile emitted `ChartId` where
+  the FormXML schema requires `VisualizationId`.
+- **Publish failures are no longer silent**, and **a partially-wrong push no longer reads as a clean
+  success** — including the case where an app's system-administrator role assignment fails, which
+  yields an app nobody can open.
+- **A 412 version conflict could be swallowed**, dropping a concurrent Maker edit with no error.
+- **A sitemap subarea targeting a custom web resource round-trips** ([#430]) — `$webresource:<name>`
+  was rejected by the URL guard, so **no spec file was written at all**, blocking the whole
+  download → edit → rebuild flow over one nav entry.
+- **Malformed specs produce validation errors instead of raw `TypeError`s**, naming the exact path,
+  and can no longer pass validation and then crash *after* the solution and data model were written.
+- **`verify-model-app` reports a missing table as a finding**, not a raw Dataverse HTTP 400.
+
+### Changed
+
+- **An app now requires an image icon.** The SDK's auto-resolve demands an **image** web resource,
+  failing with `APP_ICON_UNRESOLVED` rather than falling back to any unmanaged web resource
+  (including a **JavaScript** file, which the platform then rejected opaquely). No change for
+  `/app-builder`, which always passes one explicitly.
+- **The vendored SDK records its provenance.** `scripts/vendor/PROVENANCE.json` carries the upstream
+  SHA and the bundle's own sha256, and the bundler **refuses** a stale, dirty or unidentifiable
+  source. "Built from master" is not provenance: a previously shipped bundle was built from a stale
+  build output several commits behind its nominal source, and nothing could reveal it.
+- **Three SDK contract changes are user-visible**: `deleteAppCascade` no longer deletes generative
+  pages (they are *referenced* by an app, not owned by one, and are reported in `retained[]`);
+  unconditional artifact writes are refused (`ARTIFACT_UPDATE_NO_ETAG`); and `pushArtifact` /
+  `publishArtifact` report failure by value instead of throwing.
+- **`download-model-app.js --app` accepts a display name**, and fails closed when one matches more
+  than one app.
+
+### Known limitations
+
+- **A classic dashboard does not survive `download-model-app.js`** — the vendored SDK throws while
+  deserializing the `<parameters>` block it itself serialized, so no tiles are recovered and the
+  download fails unless `--allow-lossy-download` is passed. Not a regression from this release's SDK
+  uptake; tracked upstream.
+
+[#430]: https://github.com/microsoft/power-platform-skills/issues/430
+[#447]: https://github.com/microsoft/power-platform-skills/issues/447
+[#455]: https://github.com/microsoft/power-platform-skills/issues/455
+[#456]: https://github.com/microsoft/power-platform-skills/issues/456
+
+## [2.4.2]
+
+Fixes a malformed app module: generated apps did not actually contain their tables.
+
+### Fixed
+
+- **Generated apps contained an invalid `entity` table component instead of their real tables**
+  (ADO 6612527), which also broke unrelated app-processing paths. Tables are now pinned by OData
+  **reference** — the only form that can also express an abstract table such as `activitypointer`.
+- **An unresolvable table halts the build, naming it.** One bad component fails the whole
+  `AddAppComponents` call, so a silently-skipped table used to empty the app's component list.
+- **App components are read back and verified after the write** — the write returned 204 for every
+  corrupt app, and `ValidateApp` reported success too.
+
+### Known limitations
+
+- **Download still drops entity components not in the sitemap** (ADO 6603388) — the hidden component
+  it describes could not be constructed live, so the download-side fix is unverified.
+
+## 2.4.1
+
+Bug fixes for apps built on **out-of-the-box** tables, and the matching SDK uptake. No change to
+any skill's public surface.
+
+### Fixed
+
+- **AI app features had no effect on a newly built app** — an app-scope setting write is a no-op
+  until the app is published, so the build wrote nothing while reporting success. **`--verify` passed
+  when they were never applied**; it now proves an app-scope override row, because reading the
+  setting back falls through to the environment value.
+- **`ai.appFeatures` accepts non-boolean values** such as `2` ("on for everyone").
+- **Download invented primary-name columns**, **replaced the solution's publisher prefix with
+  `new`**, and **dropped tables with no sitemap entry** — all three now read from Dataverse.
+- **Teardown could permanently burn an app's unique name** — an app is two rows with no server-side
+  cascade, so deleting only the app module stranded the sitemap and reserved its name forever. Both
+  rows are now deleted atomically in one OData `$batch`.
+
+### Changed
+
+- Re-vendored `cds-maker-sdk`. An injected `HttpClient` must now implement `postRaw` for the atomic
+  `$batch`.
+- **model-apps now runs in CI** (ubuntu × windows × macos, Node 20 × 22, plus the offline evals) —
+  previously every test workflow was scoped to another plugin, so this suite never ran on a PR.
+
+## 2.4.0
+
+A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps, plus
+local-dev ergonomics, sample coverage, and an automated eval suite. No breaking changes.
+
+### Added
+
+- **`/app-builder` (Preview)** — natural-language intent → deployed model-driven app: tables,
+  columns, relationships, adaptive forms with sub-grids, views, charts, dashboards, generative
+  pages, app + sitemap, and sample data, via the headless vendored `cds-maker-sdk`.
+- **Jobs-to-be-done drive the design** — authoring starts by asking who uses the app and what each
+  of them needs to get done, *before* the data model.
+- **Security roles per persona (`personas[]`)** — one role per persona, sized to the privileges its
+  jobs declare, associated with the app so it opens for non-admins.
+- **`model-app-plan.md`** — a readable, regenerable design document rendered from the spec, plus
+  design-gap warnings at the lint gate.
+- **Table icons are described before they are drawn** — each table proposes what its glyph will
+  *depict* in plain language, shown for approval before any SVG is authored.
+- **AI-first features** (`ai` block) — form fill, NL search, NL charts, M365 Copilot and row
+  summaries, admin-gated by a preflight.
+- **`--changed-only` partial apply (Preview, off by default)** — a page-only `.tsx` edit re-runs just
+  the pages phase; anything else falls back to a full build.
+- **`scripts/preview-app.js`** to review the whole design before building.
+
+### Changed
+
+- **Edits are first-class**: forms and views update in place, a form edit can *remove* a field, a
+  built main form becomes the entity default, and editing an existing app updates the sitemap for
+  page-less apps too.
+- **Identity is unambiguous** — forms resolve by `(entity, name, type)`, views by `entity|name`, and
+  an app round-trips by its real `uniquename`, so a rebuild cannot duplicate or cross-wire.
+- **Page generation reuses the `/genpage` worker** through a plan adapter, so an intent page can no
+  longer silently fail to become `.tsx`.
+- Re-vendored `cds-maker-sdk` (pagination, quick create, idempotent global choice, authored column
+  width, shared input-safety boundaries).
+
+### Fixed
+
+- **Teardown removes everything the app owns** — icon and app-icon web resources are removed, cascade
+  failures are reported rather than silently orphaning rows, and reused/system tables are skipped
+  with a reason. The **publisher** is deliberately left behind: it can own other solutions, so
+  removing it is not this app's decision.
+- **Exported solutions are self-contained** — the app icon and sitemap are added to the solution.
+- **The Dataverse token is never sent to another origin** — the HTTP client refuses any request
+  outside the absolute `https` org URL.
+- **A lossy download fails instead of reporting success** (`--allow-lossy-download` opts in), and
+  **CLI flags fail loudly** — notably `--apply --only` with no phase list used to run a *full* apply.
+- Assorted: relationships to system tables, classic dashboard round-trip, AI row summaries, and
+  sub-grid `targetEntity`.
+
+### Removed
+
+- Standalone entity/solution scripts, consolidated into `provision-entities.js` and
+  `provision-solution.js`.
+
+### Known limitations
+
+- **App EDIT does not re-pin a new chart** as an explicit app component — a chart added to an
+  existing app needs a manual pin or a rebuild.
+
+## 2.3.0 — 2026-07-23
+
+Plugin observability and authoring guardrails. No breaking changes.
+
+### Added
+
+- **Anonymous 1DS telemetry** (default-on, ships `disabled` until provisioned) with a local
+  diagnostic mirror, a `/model-apps:telemetry on|off|status` control skill, and a CI opt-out via
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1`. Fail-closed throughout, and carries **no
+  user-level identifier**.
+- **PostToolUse validators**, including a `@fluentui/react-icons` allowlist check that blocks a
+  hallucinated icon name at write time.
+- **PreToolUse write-safety guard** — flags writes outside the cwd during an active genpage session
+  only, so a globally-installed plugin never interferes with unrelated work.
+
+### Fixed
+
+- **Generated-page double-fetch / render flash on open.** The webplayer host double-mounts a page and
+  `dataApi` is a new reference each render, so a `useEffect` dep on it re-fires forever. Guidance and
+  every exemplar now use an in-flight-promise de-dupe plus a window cache; `dataApi` is forbidden in
+  any dependency array.
+- **Playwright MCP launcher** — exports `launch()` per the `.mcp.json` contract, avoids the npx
+  first-run prompt hang, and quotes config paths so Windows paths with spaces work.
+
+## 2.2.0
+
+Local-dev ergonomics, sample coverage, and an automated eval suite. No breaking changes.
+
+### Added
+
+- **Local-dev manifest** — working dirs get `package.json` and `genpage.d.ts`, so `npm install` and
+  editor IntelliSense work after generation.
+- **Eval suite** — TAP v13 runners for workflow and code assertions, 10 shipping fixtures, and
+  `capture-fixture.js` to turn a real `/genpage` run into one.
+- **Dialog and overlay guidance** plus samples — portalled Fluent surfaces are confined to the page
+  so a modal cannot escape the preview and cover the designer.
+- **Feature-flag gate for connectors (default OFF)**, with all connector work owned by a single
+  `genpage-connector-builder` agent invoked from both the create and edit flows.
+
+### Fixed
+
+- **`queryTable` returns a `DataTable`, not an array** — 7 samples and fixtures iterated the result
+  directly, producing `X.map is not a function` at runtime.
+
 
 ## 2.1.0 — 2026-05-13
 
-Replaces the Dataverse MCP server + Python SDK fallback with Node.js Web API
-scripts. Adds solution selection, prefix discipline, and a consolidated auth
-pre-flight. Trim of ~27K tokens on hot-path page-builder runs.
+Replaces the Dataverse MCP server + Python SDK fallback with Node.js Web API scripts. Adds solution
+selection, prefix discipline, and a consolidated auth pre-flight.
 
 ### Breaking
-- **Azure CLI (`az`) is now required** for entity creation. The `az` identity
-  must have access to the target Dataverse env (same as the active `pac` profile).
-- **Dataverse Skills plugin is no longer required.** Soft dep removed.
-- `.env`, `scripts/auth.py`, and device-code prompts from the Dataverse Skills
-  plugin no longer used.
+- **Azure CLI (`az`) is now required** for entity creation, with access to the target environment.
+- **The Dataverse Skills plugin is no longer required.**
 
 ### Added
-- Node.js Web API scripts under `plugins/model-apps/scripts/`:
-  `check-auth.js`, `dataverse-request.js`, `create-table.js`, `add-column.js`,
-  `create-relationship.js`, `create-record.js` (with `$batch` bulk),
-  `create-solution.js`, `add-to-solution.js`, `lib/dataverse-auth.js`.
-- Solution selection in planner with prefix-conflict warnings.
-- Transactional log at `<working-dir>/entity-creation-log.md`.
-- `node --test` coverage under `scripts/tests/` (47 tests).
+- Node.js Web API scripts under `scripts/` (auth, request, table/column/relationship/record
+  creation with `$batch` bulk, solution management).
+- Solution selection with prefix-conflict warnings, and a transactional creation log.
 
 ### Fixed
-- **Prefix drift made structurally impossible.** Plan stores logical-name
-  suffixes only; entity-builder constructs `${prefix}_${suffix}` from the
-  single `Publisher Prefix:` source of truth.
-- **`pac model create` always passes `--solution`.** Default value is `Default`.
-  The CLI's "active solution" fallback errors in practice.
-- **`--prompt` is now scoped per upload role**: full description on create,
-  delta only on every subsequent upload (PAGEREF, fix re-deploy, edit flow).
-- **Bulk-insert partial failure** emits structured JSON to stdout (not
-  `[object Object]`).
-- entity-builder bash snippets no longer mix JS template literals.
-- planner no longer shells `grep`/`awk`/`sed` (Windows-incompatible).
+- **Prefix drift is structurally impossible** — the plan stores logical-name suffixes only, and the
+  full name is constructed from one source of truth.
+- **`pac model create` always passes `--solution`** — the CLI's "active solution" fallback errors
+  in practice.
 
 ### Performance
-- Page-builder no longer loads `verified-icons.txt` upfront (~26K tokens
-  saved per run). Validation switched to post-write `Grep` only.
-- `rules.md` trimmed −98 lines: dropped duplicated DataAPI
-  type definitions (canonical source is `RuntimeTypes.ts`); tightened usage
-  examples.
-- `rules.md` Page Input section trimmed −25 lines: pure prose tighten.
-- Phase 7 (browser verification) extracted to `skills/genpage/verify-flow.md`,
-  loaded only when the user opts in. SKILL.md trimmed an additional −95 lines.
-- Reference docs renamed for consistency:
-  `genpage-rules-reference.md` → `rules.md`,
-  `genpage-plan-schema.md` → `plan-schema.md`,
-  `genpage-localization-reference.md` → `localization.md`,
-  `data-caching-pattern.md` → `data-caching.md`.
-- Removed stale `samples/3-poa-revocation-wizard.tsx` (327 lines, redundant
-  with `2-wizard-multi-step.tsx` for the wizard pattern; the DataGrid /
-  file-upload / multiselect patterns it composed are covered by other
-  samples). Renumbered 4–8 → 3–7 to close the gap.
+- ~27K tokens saved per page-builder run (icon list is no longer loaded upfront; reference docs and
+  the opt-in browser-verification flow were extracted or trimmed).
 
 ### Added (samples)
-- `samples/8-dashboard-with-charts.tsx` — KPI cards + two D3 charts (area +
-  donut) with the animation guard from rules.md. Covers the dashboard page
-  type and the D3 chart pattern that evals 2 and 6 expect.
-- `samples/9-list-with-caching.tsx` — list page using Rule 15's window cache
-  + inline async IIFE pattern. Cross-page navigation to the detail sample via
-  `PAGEREF_` placeholder.
-- `samples/10-detail-with-pageinput.tsx` — detail page paired with the list.
-  Receives `pageInput.recordId` synchronously, initial `loading: true` on
-  frame 0, `Map<recordId, row>` cache on `window`. Demonstrates the
-  formatted-value lookup for `_parentcustomerid_value`.
-- Added scope headers to `rules.md` "Common Errors" (generation-time
-  anti-patterns) and `troubleshooting.md` (deployment/runtime/env) so readers
-  can pick the right one without scanning.
+- Dashboard with D3 charts, a list page using the window-cache pattern, and its paired detail page
+  demonstrating `pageInput` and the formatted-value lookup.
 
 ### Migration from 2.0
 1. `az login` (use the same identity as `pac auth who`).
 2. Uninstall the Dataverse Skills plugin if it was only for `/genpage`.
-3. No code/page changes needed; existing pages keep working.
+3. No code or page changes needed; existing pages keep working.
 
 ---
 
@@ -128,35 +769,22 @@ pre-flight. Trim of ~27K tokens on hot-path page-builder runs.
 Major refactor of `/genpage` into an agent-orchestrated architecture.
 
 ### Breaking
-- **PAC CLI ≥ 2.7.0** required (for `pac model create`, `pac model list-tables --search`).
-- Skill output now lives in a per-invocation working directory
-  (`genpage-plan.md`, `RuntimeTypes.ts`, one `.tsx` per page, `workflow-log.md`).
-- Plan-mode approval is mandatory; no skip/auto-accept.
+- **PAC CLI ≥ 2.7.0** required.
+- Skill output now lives in a per-invocation working directory.
+- Plan-mode approval is mandatory; no skip or auto-accept.
 
 ### Added
-- Four specialist agents: `genpage-planner`, `genpage-entity-builder`,
-  `genpage-page-builder`, `genpage-edit-planner`.
-- Multi-page parallel generation; cross-page navigation via `PAGEREF_<filename>`
-  placeholders resolved in Phase 6.5.
-- `pac model create` inline app provisioning.
-- Plan schema contract at `references/plan-schema.md`.
-- Verified Fluent icon list at `references/verified-icons.txt` (~5000 names).
-- Eval suite: 16 evals across smoke/full/stress tiers + runbook.
-
-### Changed
-- Entity detection uses native `pac model list-tables --search` with exact
-  logical-name match.
-- Component template destructures `pageInput` in addition to `dataApi`.
-- Rules reference adds Rule 14 (batched async state) and Rule 15 (data-fetching
-  IIFE + cache guard).
+- Four specialist agents (planner, entity-builder, page-builder, edit-planner).
+- Multi-page parallel generation with cross-page navigation via `PAGEREF_<filename>` placeholders.
+- A plan schema contract, a verified Fluent icon list, and a 16-eval suite across three tiers.
 
 ### Migration from 1.x
 1. `dotnet tool update --global Microsoft.PowerApps.CLI.Tool` (to ≥ 2.7.0).
-2. Existing deployed pages keep working — only local workflow/layout changed.
+2. Existing deployed pages keep working — only the local workflow and layout changed.
 
 ---
 
 ## 1.0.6 — earlier in 2026
 
-PageInput support, FluentProvider flicker fix, lookup `$select` rule, data
-caching pattern. See git history for details.
+PageInput support, FluentProvider flicker fix, lookup `$select` rule, data caching pattern. See git
+history for details.

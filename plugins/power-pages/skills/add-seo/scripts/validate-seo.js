@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates SEO assets added to a Power Pages code site.
-// Runs as a Stop hook to verify robots.txt, sitemap.xml, and meta tags were created.
+// Runs as a PostToolUse(Skill) hook to verify robots.txt, sitemap.xml, and meta tags were created.
 
 const fs = require('fs');
 const path = require('path');

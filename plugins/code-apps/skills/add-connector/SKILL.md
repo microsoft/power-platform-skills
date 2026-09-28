@@ -19,6 +19,7 @@ Fallback skill for any connector not covered by a specific `/add-*` skill. For c
 - `/add-onedrive` -- OneDrive for Business
 - `/add-sharepoint` -- SharePoint Online
 - `/add-office365` -- Office 365 Outlook (calendar, email, contacts)
+- `/add-workiq` -- Work IQ (M365 Copilot Search)
 
 ## Workflow
 
@@ -38,15 +39,16 @@ Otherwise, ask the user which connector they want to add. Browse available conne
 
 **Before proceeding, check if the connector has a dedicated skill. If it does, delegate immediately and STOP:**
 
-| Connector API name      | Delegate to        |
-| ----------------------- | ------------------ |
-| `sharepointonline`      | `/add-sharepoint`  |
-| `teams`                 | `/add-teams`       |
-| `excelonlinebusiness`   | `/add-excel`       |
-| `onedriveforbusiness`   | `/add-onedrive`    |
-| `azuredevops`           | `/add-azuredevops` |
-| `office365`             | `/add-office365`   |
-| `commondataservice`     | `/add-dataverse`   |
+| Connector API name          | Delegate to        |
+| --------------------------- | ------------------ |
+| `shared_a365copilotchatmcp` | `/add-workiq`      |
+| `sharepointonline`          | `/add-sharepoint`  |
+| `teams`                     | `/add-teams`       |
+| `excelonlinebusiness`       | `/add-excel`       |
+| `onedriveforbusiness`       | `/add-onedrive`    |
+| `azuredevops`               | `/add-azuredevops` |
+| `office365`                 | `/add-office365`   |
+| `commondataservice`         | `/add-dataverse`   |
 
 Invoke the appropriate skill with the same `$ARGUMENTS` and **do not continue this skill's workflow**.
 
@@ -65,18 +67,18 @@ Run the `/list-connections` skill. Find the connector in the output. If none exi
 
 ```bash
 # Non-tabular connectors (Teams, Azure DevOps, etc.)
-npx power-apps add-data-source -a <connector-api-name> -c <connection-id>
+pa app add data-source --connector <connector-api-name> -c <connection-id>
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) -- also need dataset and table
-npx power-apps add-data-source -a <connector-api-name> -c <connection-id> -d '<dataset>' -t '<table>'
+pa app add data-source --connector <connector-api-name> -c <connection-id> -d '<dataset>' --table '<table>'
 ```
 
 **Parameter reference:**
 
-- `-a` (apiId) -- connector name (e.g., `sharepointonline`, `teams`)
+- `--connector` (apiId) -- connector name (e.g., `sharepointonline`, `teams`). On the flat `power-apps` binary this is `--api-id`/`-a`.
 - `-c` (connectionId) -- **required** for all non-Dataverse connectors. Get from `/list-connections`.
 - `-d` (dataset) -- required for tabular datasources (e.g., SharePoint site URL, SQL database). Not needed for Dataverse.
-- `-t` (table) -- table/list name for tabular datasources (e.g., SharePoint list, Dataverse table logical name)
+- `--table` (table) -- table/list name for tabular datasources (e.g., SharePoint list, Dataverse table logical name). On the flat `power-apps` binary this is `--resource-name`/`-t`.
 
 ### Step 4: Inspect & Configure
 

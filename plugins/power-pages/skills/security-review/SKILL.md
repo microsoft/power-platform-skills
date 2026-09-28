@@ -2,14 +2,14 @@
 name: security-review
 description: >-
   Runs a guided, end-to-end security review of a Power Pages site and
-  consolidates every finding into one HTML report covering the live
-  site, browser headers, firewall, authentication, and role-based
-  permissions. Use when the user wants a full security review, a
-  release-readiness check before publishing, an access-and-config
-  check during development, live site monitoring, or asks open-ended
-  questions like "review my site security", "is my site safe to ship",
-  "do a security check", "monitor my site" — even if they do not name
-  the individual checks.
+  consolidates every finding into one HTML report covering source code
+  and dependencies, the live site, browser headers, firewall,
+  authentication, and role-based permissions. Use when the user wants a
+  full security review, a release-readiness check before publishing, a
+  code-and-config check during development, live site monitoring, or
+  asks open-ended questions like "review my site security", "is my site
+  safe to ship", "do a security check", "monitor my site" — even if they
+  do not name the individual checks.
 user-invocable: true
 argument-hint: "[optional natural-language hint about the goal]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Skill, Agent
@@ -76,7 +76,7 @@ Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user 
 
 For the `monitor` and `release` goals (any goal that delegates to `scan-site` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
 
-For the `access-config` goal, the deploy check is not required: authentication, web roles, and table permissions are read from local YAML alone.
+For the `code-config` goal, the deploy check is not required: source code, dependencies, authentication, web roles, and table permissions are read from local files alone.
 
 ### 1.2 Prepare a temporary working folder
 
@@ -96,7 +96,7 @@ The final HTML always lives at `<PROJECT_ROOT>/docs/security-review-<YYYY-MM-DD-
 
 <!-- gate: security-review:2.1.goal | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · security-review:2.1.goal):** Capture the review goal — choice branches into one of three sub-skill sets (`access-config` / `release` / `monitor`).
+> 🚦 **Gate (plan · security-review:2.1.goal):** Capture the review goal — choice branches into one of three sub-skill sets (`code-config` / `release` / `monitor`).
 >
 > **Trigger:** Phase 2.1 entry, unless `$ARGUMENTS` already answers it.
 > **Why we ask:** Auto-picking `release` runs ALL sub-skills (slow; possibly hits scan/firewall endpoints unnecessarily); auto-picking the wrong goal mis-scopes the review.
@@ -108,7 +108,7 @@ Ask the user with a single `AskUserQuestion` call. If the user's initial request
 
 | Label | Description |
 |-------|-------------|
-| Access & config | Check authentication, web roles, and table permissions. Works on local files only. |
+| Code & config | Check source code, dependencies, authentication, web roles, and table permissions. Works on local files only. |
 | Release readiness | Full review before publishing — checks everything. (Recommended) |
 | Deployed site | Check the live site for issues. Requires deployment. |
 
@@ -116,13 +116,13 @@ Goal mapping (internal):
 
 | Label | Goal id | Skills |
 |-------|---------|------------|
-| Access & config | `access-config` | audit-permissions, setup-auth (read-only) |
-| Release readiness | `release` | scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
+| Code & config | `code-config` | scan-code, audit-permissions, setup-auth (read-only) |
+| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
 | Deployed site | `monitor` | scan-site |
 
 ### 2.2 Capture the chosen skill set
 
-Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `access-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 3.2 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 3.2 below). This is the **Access & Data Security Validation** component.
 
 ---
 
@@ -134,9 +134,9 @@ Spawn each selected skill as a background subagent via the `Agent` tool. Each su
 
 Skills run as **parallel subagents** using the `Agent` tool.
 
-**Default — launch every Agent-eligible skill in one parallel batch.** Spawn all selected subagents in a single message with multiple `Agent` tool calls so they start concurrently. Each subagent runs with `run_in_background: true`. The Agent-eligible set is `scan-site`, `manage-headers`, `manage-firewall` — these all support `--review` mode. `scan-site` is the slowest (server-side scan, several minutes); the others typically finish within seconds.
+**Default — launch every Agent-eligible skill in one parallel batch.** Spawn all selected subagents in a single message with multiple `Agent` tool calls so they start concurrently. Each subagent runs with `run_in_background: true`. The Agent-eligible set is `scan-code`, `scan-site`, `manage-headers`, `manage-firewall` — these all support `--review` mode. `scan-site` (server-side scan, several minutes) and `scan-code` (local static analysis + dependency scan, up to minutes on large projects) are the slowest; the others typically finish within seconds.
 
-**Fallback — staggered launch.** If the harness rejects a parallel-batch call for any reason, launch `scan-site` first and then the remaining skills in a follow-up message. This is a tool-affordance fallback, not the preferred path.
+**Fallback — staggered launch.** If the harness rejects a parallel-batch call for any reason, launch `scan-code` and `scan-site` first (the long-running ones) and then the remaining skills in a follow-up message. This is a tool-affordance fallback, not the preferred path.
 
 **Inline checks (run while subagents work).** `audit-permissions` and `setup-auth` do not support `--review` and MUST NOT be launched via `Agent` — handle them inline as described in § 3.2.
 
@@ -168,6 +168,7 @@ After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-revie
 
 ```text
 <SYSTEM_TEMP>/security-review/
+├── scan-code.json           (when invoked)
 ├── scan-site.json
 ├── manage-headers.json
 ├── manage-firewall.json
@@ -182,6 +183,7 @@ Only findings that come from a tool that genuinely outputs severity may carry a 
 
 | Section | Source | Severity allowed? |
 |---------|--------|-------------------|
+| `scan-code` | opengrep, trivy | Yes |
 | `scan-site` | deep-scan (ZAP) | Yes |
 | `manage-headers` | `transform-headers.js` (inventory) | **No** |
 | `manage-firewall` | `transform-firewall.js` (inventory) | **No** |

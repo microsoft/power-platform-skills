@@ -1,108 +1,205 @@
 # Tamagui Integration
 
-Internal reference used by `/create-mobile-app` Step 9b after `/design-system` writes `brand/tokens.ts`. This is not a user-invocable skill.
+Internal reference used by `/create-mobile-app` Step 9b after `/design-system`
+writes `brand/tokens.ts`. This is not a user-invocable skill.
 
-`/design-system` and this reference deliberately complement each other: `/design-system` captures the user's brand/design intent and writes artifacts; this reference translates those artifacts into Tamagui config/provider wiring. A default app still runs this reference in alias-only mode so generated screens have the same `$surface*` and `$accent*` token contract as a branded app.
+The native host owns the baseline Tamagui contract. Generated applications
+must extend that contract rather than copying its semantic aliases, color
+parsing, contrast selection, animations, or font fallback into each app.
 
 ## Goal
 
-Keep generated screens on one stable token contract:
-
-- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnBase`.
-- Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
-- Do not add outer `TamaguiProvider`, `PortalProvider`, `ToastProvider`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` composes them internally.
+- Keep `$surface0`-`$surface3`, `$mediaSurface`, `$accent*`, `$text*`, status
+  foreground/background pairs, and `fonts.mono` available in every app.
+- Use `createPowerAppsTamaguiConfig` as the only Tamagui config factory.
+- Use `withPowerAppsSemanticAliases` when applying `brand/tokens.ts`.
+- Export the resolved light and dark app themes so `PowerAppsProvider` and
+  Tamagui consume the same semantic values.
+- Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`,
+  `GestureHandlerRootView`, or `QueryClientProvider`.
 
 ## Mode Selection
 
 | Condition | Action |
 |---|---|
-| `brand/tokens.ts` exists | Import brand tokens into `tamagui.config.ts`, then add aliases. |
-| `## Design` says `tamagui-design-system: required` but no brand tokens exist | Create brand/custom tokens from the approved `## Design`, then add aliases. |
-| `## Design` says `tamagui-design-system: add-aliases` or no custom design tokens exist | Add aliases over `defaultConfig` only. |
+| `brand/tokens.ts` exists | Apply the brand-import implementation below. |
+| `## Design` requires custom tokens but `brand/tokens.ts` is missing | Materialize the approved tokens first, then use brand-import mode. |
+| No custom design tokens exist | Verify the template calls `createPowerAppsTamaguiConfig({})`; make no config edit. |
 
-Run `npx tsc --noEmit` after changing Tamagui config or root provider wiring.
+The alias-only path is now a verification step. The host factory already
+provides the complete semantic alias and font contract.
 
-## Alias Layer
+## Base Template
 
-Extend `defaultConfig.tokens.color`; do not replace `defaultConfig`.
+The current template starts with:
 
 ```ts
-import { defaultConfig } from '@tamagui/config/v4';
-import { createTamagui, createTokens } from 'tamagui';
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig';
 
-const aliasTokens = createTokens({
-  ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    surface0: '#ffffff',
-    surface0_dark: '#111113',
-    surface1: '#f7f7f8',
-    surface1_dark: '#1c1c1f',
-    surface2: '#efeff1',
-    surface2_dark: '#28282c',
-    surface3: '#e3e3e7',
-    surface3_dark: '#333338',
-    accentDeep: '#005a9e',
-    accentBase: '#0078d4',
-    accentSoft: '#cce4f7',
-    accentOnBase: '#ffffff',
-  },
-});
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
+// Add or replace Tamagui configuration values here.
+const customConfig = {};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT
 
-export const tamaguiConfig = createTamagui({
-  ...defaultConfig,
-  tokens: aliasTokens,
-});
-
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
 export default tamaguiConfig;
-export type Conf = typeof tamaguiConfig;
 
+export type Conf = typeof tamaguiConfig;
 declare module 'tamagui' {
   interface TamaguiCustomConfig extends Conf {}
 }
 ```
 
+Keep `createPowerAppsTamaguiConfig`, the exports, and the `declare module
+'tamagui'` block. Replace only the customization region and add the required
+imports.
+
 ## Brand Import
 
-When `brand/tokens.ts` exists, merge its token objects without re-keying them:
+When `brand/tokens.ts` exists, update `tamagui.config.ts` to this shape:
 
 ```ts
+import { createTokens } from '@tamagui/core';
+import { defaultConfig } from '@tamagui/config/v5';
+import {
+  createPowerAppsTamaguiConfig,
+  withPowerAppsSemanticAliases,
+} from '@microsoft/power-apps-native-host/config/tamaguiConfig';
+
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 import { tokens as brandTokens } from './brand/tokens';
 
 const tokens = createTokens({
   ...defaultConfig.tokens,
-  color: { ...defaultConfig.tokens.color, ...brandTokens.color, /* aliases here */ },
   space: { ...defaultConfig.tokens.space, ...brandTokens.space },
   size: { ...defaultConfig.tokens.size, ...brandTokens.size },
   radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
 });
+
+export const appLightTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.light,
+  brandTokens.color,
+);
+
+export const appDarkTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.dark,
+  {
+    primary: brandTokens.color.primary,
+    accent: brandTokens.color.accent,
+    statusSuccess: brandTokens.color.statusSuccess,
+    statusWarning: brandTokens.color.statusWarning,
+    statusDanger: brandTokens.color.statusDanger,
+    statusInfo: brandTokens.color.statusInfo,
+  },
+);
+
+const customConfig = {
+  tokens,
+  themes: {
+    ...defaultConfig.themes,
+    light: appLightTheme,
+    dark: appDarkTheme,
+  },
+};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
+export default tamaguiConfig;
+
+export type Conf = typeof tamaguiConfig;
+declare module 'tamagui' {
+  interface TamaguiCustomConfig extends Conf {}
+}
 ```
 
-Hard rule: never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`) onto Tamagui numeric keys (`1`, `2`, `3`, `4`, `0.25`, etc.). Screen-builder and Tamagui components rely on the default numeric scale. If a comment says `Map brand space names to Tamagui numeric token keys`, delete that override block.
+The generated schema has one palette. Light mode receives its approved
+surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces
+and text while carrying the approved accent and status colors.
+
+Never copy `parseColorChannels`, `readableForeground`, or
+`withSemanticAliases` into the app. The host helper owns those rules.
+
+Never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`,
+`4xl`) onto Tamagui numeric keys. Preserve the default numeric scale.
 
 ## Root Provider Wiring
 
-Current templates pass design values through `PowerAppsProvider`:
+Tamagui components read the themes above through `useTheme()`. Shared host
+components and navigation read `ThemeTokens` through `useThemeTokens()`.
+Build the provider themes from the exported app themes so both channels use
+the same semantic colors:
 
 ```tsx
+import {
+  PowerAppsProvider,
+  lightTheme as hostLightTheme,
+  darkTheme as hostDarkTheme,
+} from '@microsoft/power-apps-native-host';
+import type { ThemeTokens } from '@microsoft/power-apps-native-host';
+
+import tamaguiConfig, {
+  appDarkTheme,
+  appLightTheme,
+} from '../tamagui.config';
+
+const brandedLightTheme: ThemeTokens = {
+  ...hostLightTheme,
+  surface0: appLightTheme.surface0,
+  surface1: appLightTheme.surface1,
+  surface2: appLightTheme.surface2,
+  surface3: appLightTheme.surface3,
+  surface4: appLightTheme.color6,
+  text0: appLightTheme.text0,
+  text1: appLightTheme.text1,
+  text2: appLightTheme.text2,
+  text3: appLightTheme.text3,
+  accentDeep: appLightTheme.accentDeep,
+  accentBase: appLightTheme.accentBase,
+  accentSoft: appLightTheme.accentSoft,
+  accentOnAccent: appLightTheme.accentOnAccent,
+};
+
+const brandedDarkTheme: ThemeTokens = {
+  ...hostDarkTheme,
+  surface0: appDarkTheme.surface0,
+  surface1: appDarkTheme.surface1,
+  surface2: appDarkTheme.surface2,
+  surface3: appDarkTheme.surface3,
+  surface4: appDarkTheme.color6,
+  text0: appDarkTheme.text0,
+  text1: appDarkTheme.text1,
+  text2: appDarkTheme.text2,
+  text3: appDarkTheme.text3,
+  accentDeep: appDarkTheme.accentDeep,
+  accentBase: appDarkTheme.accentBase,
+  accentSoft: appDarkTheme.accentSoft,
+  accentOnAccent: appDarkTheme.accentOnAccent,
+};
+
 <PowerAppsProvider
-  authConfig={authConfig}
-  powerConfig={powerConfig}
   tamaguiConfig={tamaguiConfig}
   defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-  theme={lightTheme}
-  darkTheme={darkTheme}
+  theme={brandedLightTheme}
+  darkTheme={brandedDarkTheme}
 >
   <Slot />
 </PowerAppsProvider>
 ```
 
-If `brand/tokens.ts` exists, spread brand values over `lightTheme` / `darkTheme` with nullish fallback; do not rename imported `lightTheme`/`darkTheme` into local constants with the same names.
+Preserve the existing auth, app config, schema map, offline profile, telemetry,
+and custom provider props when applying this change.
 
-## Common Fixes
+`SafeAreaProvider` owns context only. Do not wrap `<Slot />` in a root
+`SafeAreaView`; rendered routes own their visible safe-area edges.
 
-| Symptom | Fix |
-|---|---|
-| `PortalDispatchContext cannot be null` | Pass config/theme props to `PowerAppsProvider`; do not add an outer `PortalProvider` unless on a verified legacy host. |
-| Reanimated error | Ensure `react-native-reanimated/plugin` is last in `babel.config.js`. |
-| Brand spacing blows up layouts | Remove numeric remapping of brand space keys; spread brand spaces verbatim. |
+## Validation
+
+After Tamagui or provider changes:
+
+```bash
+npx tsc --noEmit
+```
+
+Also verify that `tamagui.config.ts` contains no local color parser or semantic
+alias implementation and that both provider themes map every
+surface/text/accent value from `appLightTheme` / `appDarkTheme`.
