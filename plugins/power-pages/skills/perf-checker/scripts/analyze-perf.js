@@ -1205,11 +1205,9 @@ function loadSiteSettingsMap(projectRoot, rel) {
     try {
       records = loadSiteSettings(dir);
     } catch {
-      return {
-        map,
-        source: relDir,
-        layout: 'per-record',
-      }; // malformed YAML shouldn't abort the whole analysis
+      // If the site-settings metadata can't be parsed, skip settings-based rules rather than
+      // emitting "missing setting" findings that could drive unsafe auto-fixes.
+      return { map, source: null, layout: null };
     }
     for (const r of records) {
       if (typeof r.name === 'string') {
