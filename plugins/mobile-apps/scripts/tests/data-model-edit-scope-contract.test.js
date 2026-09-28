@@ -22,6 +22,64 @@ function section(text, start, end) {
 
 // Scope bugs occur between owners and leaves, so check the executed handoffs
 // and downstream selection/insertion rules, not just a new entry-point sentence.
+test('the existing editor forwards approved data context and a bounded seed allowlist', () => {
+  const edit = skill('edit-app');
+  const apply = section(edit, '### Step 5 — Apply app mutations', '#### Step 5.5');
+  for (const required of ['MOBILE_APP_ORCHESTRATING=1', 'orchestrator: edit-app', 'working_dir',
+    'phase: implementation', 'approved_scope', '--working-dir "<working_dir>"',
+    'offline_reconciliation_owner: edit-app', '--tables', 'retiring_tables']) {
+    assert.ok(apply.includes(required), required);
+  }
+  assert.match(apply, /verified newly created tables|createdThisEdit/);
+  assert.match(apply, /empty[\s\S]*skip seeding|skip seeding[\s\S]*empty/);
+  assert.match(edit, /seed table allowlist|seed.*allowlist/i);
+  const reconcile = section(edit, '#### Step 5.6', '### Step 6');
+  assert.match(reconcile, /--project-root "<working_dir>"/);
+  assert.match(reconcile, /Scoped helper\s+handoffs/);
+  assert.match(reconcile, /--working-dir "<working_dir>"/);
+});
+
+test('setup dispatches retained connector refresh with an explicit selector and registered identity', () => {
+  const refresh = section(setup, '**Retained-source refresh only:**', 'Run sequentially.');
+  assert.match(refresh, /Invoke skill: \/add-connector/);
+  assert.match(refresh, /approved_scope: <refresh operation, exact registered name, verified API\/dataset\/resource and connection ID\/reference>/);
+  const args = refresh.split('Arguments:')[1];
+  for (const required of ['--working-dir "<working_dir>"', '--connector <verified-api-id>',
+    '--refresh', '--data-source-name "<registered-name>"']) {
+    assert.ok(args.includes(required), required);
+  }
+  assert.doesNotMatch(args, /add-data-source|create-connection/);
+});
+
+test('offline checker failures stop setup before helper mutations or clean summaries', () => {
+  const offline = section(setup, '### Phase 6.5', '### Phase 7');
+  const failure = section(offline, 'Capture the exit status', 'For a valid successful check');
+  for (const condition of ['non-zero exit', 'status: error', 'missing/malformed JSON', 'unknown status']) {
+    assert.ok(failure.includes(condition), condition);
+  }
+  assert.match(failure, /offline_reconciliation: failed/);
+  assert.match(failure, /skip mutation helpers/);
+  assert.match(failure, /DONE_WITH_CONCERNS/);
+  assert.match(failure, /BLOCKED/);
+  assert.match(failure, /Do not claim completed reconciliation/);
+  assert.match(offline, /Re-check to `in-sync` using the same failure path/);
+});
+
+test('offline reconciliation owners forward explicit roots and exact approved helper scopes', () => {
+  const reference = read('shared/references/offline-profile-reconciliation.md');
+  const handoff = section(reference, '### Scoped helper handoffs', 'Re-run the delta check');
+  assert.match(handoff, /orchestrator: <current reconciliation owner>/);
+  assert.match(handoff, /working_dir: <owner's resolved absolute working_dir>/);
+  assert.match(handoff, /approved_scope: <exact environment\/profile identity/);
+  assert.equal((handoff.match(/--working-dir "<working_dir>"/g) || []).length, 2);
+  assert.match(handoff, /Never send `--all-new`/);
+  for (const owner of ['setup-datamodel', 'edit-app', 'add-dataverse', 'deploy']) {
+    const content = skill(owner);
+    assert.match(content, /Scoped helper\s+handoffs/, owner);
+    assert.ok(content.includes(`orchestrator: ${owner}`), owner);
+  }
+});
+
 test('setup-datamodel resolves the owner before inspecting project or environment', () => {
   const discovery = section(setup, '### Phase 1', '### Phase 2');
   assert.match(discovery, /Resolve one absolute `working_dir` before reading project files/);

@@ -79,7 +79,14 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 **Telemetry checkpoint: `assess_app_health_and_drift`**
 
+Before any project read or command, execute
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve the absolute `working_dir` once, bind every shell call to it with the
+fail-closed guard, and use absolute paths for file tools. Forward that same root
+to every data child; a previous `cd` or inherited launch cwd is not a handoff.
+
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
 test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
@@ -148,6 +155,7 @@ Infer from `$ARGUMENTS` when possible, but do not mutate files until you have a 
 First inspect the app so questions can use real options instead of abstractions:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 find app -name '*.tsx' -not -name '_layout.tsx' -not -name '+not-found.tsx' | sort
 ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
 ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\.ts$||'
@@ -377,7 +385,7 @@ For Native Capabilities (no separate agent), do it inline: read the current capa
 - `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
 - `pen-input` returns a PNG data URI; cancellation is a non-error state; Dataverse target must be Image, File, or child Evidence/Signature row.
 
-For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. If the connector drives new screens or forms, update the Screens section too before applying code.
+For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. Pass the data handoff context from Step 5 with `phase: planning`, the proposed scope, and `--plan-only --working-dir "<working_dir>"`; return a proposal, not mutations. If the connector drives new screens or forms, update the Screens section too before applying code.
 
 ### Step 3 — Gate intent, plan + app mutation preview
 
@@ -387,6 +395,8 @@ Show the user a side-by-side diff (or before/after) for every changed plan secti
 
 - Edit brief: intent, target screens/routes, data/native/JavaScript/design dependencies, and assumptions
 - Data/schema operations to run (`/add-dataverse --skip-planning`, connector add, native wrapper add)
+- Proposed seed table allowlist, count/media policy, and any lookup dependencies
+  requiring new records; no seed writes are authorized when this set is empty
 - Screen files to create, rewrite, rename, or delete
 - Navigation/layout files to update
 - Verification commands to run
@@ -424,9 +434,18 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
+For every data child (including connector routers), pass invocation-scoped
+`MOBILE_APP_ORCHESTRATING=1`, `orchestrator: edit-app`, absolute
+`working_dir: <working_dir>`, `phase: implementation`, and only the current
+Step 3-approved delta as `approved_scope`. Also pass the argument
+`--working-dir "<working_dir>"`. Forward this through nested data helpers.
+This legacy editor does not supply compact artifacts; keep the supported
+approved Markdown/live-reconciliation path rather than fabricating them.
+The marker is not consent and cannot turn a planning-phase call into a write.
+
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
-1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
-2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
+1. **Data Model** — read and execute `/add-dataverse --skip-planning --working-dir "<working_dir>"` with the data child context above, the approved Data Model delta, and `offline_reconciliation_owner: edit-app`. Step 5.6 owns offline reconciliation; the leaf returns its verified created/extended/reused table results without running its own offline check. It must create/extend only the approved delta, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
+2. **Sample Data** — intersect the Step 3-approved seed set with the leaf's verified newly created tables used by changed screens. Never derive the allowlist from the whole manifest or pass an empty/missing `--tables` to discovery. If the intersection is empty, skip seeding. Otherwise read and execute `/add-sample-data --working-dir "<working_dir>" --tables "<comma-separated approved logical names>"` with the data child context, the exact approved count/media policy in `approved_scope`, and `retiring_tables: <explicit exclusions or []>`. Newly needed seed dependencies require approval; do not silently expand the set. If seeding fails, record a concern and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
@@ -439,7 +458,7 @@ After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Ca
 Run this after any data-source/schema/connector mutation and before any screen-builder prompt:
 
 ```bash
-cd <working_dir>
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 for svc in src/generated/services/*.ts; do
   [ -e "$svc" ] || continue
   name=$(basename "$svc" .ts)
@@ -459,10 +478,23 @@ If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profi
 Run the local, no-network delta check:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+Capture the exit status and stdout/stderr and follow the failure dispatch in
+[offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)
+before continuing: a non-zero exit, `status: error`, malformed/missing JSON,
+or unknown status skips mutation helpers and ends with `DONE_WITH_CONCERNS`
+for already-applied changes (otherwise `BLOCKED`), never a clean success.
+For valid `no-manifest` / `no-profile` / `in-sync`, continue silently.
+For `delta`, obtain approval and execute the reference's **Scoped helper
+handoffs** with `orchestrator: edit-app`, the same absolute `working_dir`,
+`phase: implementation`, and the exact approved environment/profile/table
+scope. Pass `--working-dir "<working_dir>"` to each helper along with its table
+and column arguments, then re-check through the same failure dispatch.
+Record the outcome in the Step 8 memory-bank entry without clearing pending
+`offlineRetirement` outcomes.
 
 ### Step 6 — Rebuild affected screens
 
@@ -510,6 +542,7 @@ Shared scaffold algorithm:
 Run the navigation/skeleton gate before screen-builder work:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
@@ -556,6 +589,7 @@ Run verification after mutations. Batch-fix root causes, then rerun the failed g
 Required gates, selected by what changed:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas      # if any data source/schema/connector changed
 npx tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
@@ -564,12 +598,14 @@ npm run check-routes --if-present
 If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node scripts/check-routes.js
 ```
 
 When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
 node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```
