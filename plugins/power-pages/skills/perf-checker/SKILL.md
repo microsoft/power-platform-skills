@@ -196,9 +196,9 @@ Confirm each fixed finding's tag/location is gone (or downgraded from `warning` 
 
 ### 6.1 Review mode short-circuit
 
-Handled at Step 5.1 below — review mode never reaches the HTML render or the follow-up walk-through.
+Handled at Step 6.2 below — review mode never reaches the HTML render or the follow-up walk-through.
 
-### Step 5.1 — Write the review JSON
+### Step 6.2 — Write the review JSON
 
 Write the analyzer's `{ status, findings, details }` object (the Phase 5 re-scan result if a re-scan ran, otherwise the Phase 2 result) to a JSON file:
 
