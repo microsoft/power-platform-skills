@@ -93,6 +93,7 @@ function emitTrackedCheckpoint(payload, context, opts) {
     projectRoot: opts.cwd,
     skillName: invocation.skillName,
     checkpointName,
+    additionalInfo: invocation.additionalInfo,
     state,
   };
   let span;
@@ -300,6 +301,7 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
       'invalid_context',
       'invalid_skill',
       'invalid_checkpoint',
+      'invalid_additional_info',
       'missing_parent',
       'parent_finished',
       'invalid_parent',

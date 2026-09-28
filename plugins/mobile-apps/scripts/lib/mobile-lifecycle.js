@@ -20,11 +20,15 @@ function normalizePolicy(input) {
   if (!(input.trackedSkillNames instanceof Set) || typeof input.checkpointNames !== 'function') {
     throw new TypeError('Lifecycle telemetry requires skill and checkpoint validators');
   }
+  if (typeof input.isAdditionalInfo !== 'function') {
+    throw new TypeError('Lifecycle telemetry requires an additional-info validator');
+  }
   return Object.freeze({
     pluginName: input.pluginName,
     trackedSkillNames: new Set(input.trackedSkillNames),
     exemptSkillNames: new Set(input.exemptSkillNames || []),
     checkpointNames: input.checkpointNames,
+    isAdditionalInfo: input.isAdditionalInfo,
     terminalStates: new Set(input.terminalStates || [
       'completed', 'failed', 'blocked', 'cancelled', 'skipped', 'needs_context',
     ]),
@@ -135,6 +139,9 @@ function readSpan(policy, options) {
   if (record.spanType === 'checkpoint' && !checkpointNames(policy, record.skillName).has(record.checkpointName)) {
     throw new Error('invalid_context');
   }
+  if (record.additionalInfo != null && !policy.isAdditionalInfo(record.additionalInfo)) {
+    throw new Error('invalid_context');
+  }
   return { directory, run, record };
 }
 
@@ -155,6 +162,7 @@ function persistSpan(policy, options, context) {
   const record = { schemaVersion: 2, runId: run.runId, spanId, parentSpanId: parentSpanId || null,
     spanType: options.checkpointName ? 'checkpoint' : 'skill',
     skillName: options.skillName, checkpointName: options.checkpointName || null,
+    additionalInfo: options.additionalInfo || null,
     sessionId: run.sessionId, attempt, eventId: crypto.randomUUID(),
     startedMonotonicMs: clock.monotonicMs, startedUptimeMs: clock.uptimeMs,
     startedAtMs: clock.wallMs, time: new Date(clock.wallMs).toISOString(), state: 'started' };
@@ -171,6 +179,9 @@ function beginSpan(policy, options) {
   }
   if (checkpointName && !checkpointNames(policy, skillName).has(checkpointName)) {
     throw new Error('invalid_checkpoint');
+  }
+  if (options.additionalInfo && !policy.isAdditionalInfo(options.additionalInfo)) {
+    throw new Error('invalid_additional_info');
   }
   const clock = clockReading(options);
   if (!Number.isSafeInteger(clock.wallMs) || clock.wallMs < 0) throw new Error('invalid_clock');
@@ -316,7 +327,7 @@ function readJsonIfPresent(filename) {
 }
 
 function validateEnd(policy, start, end) {
-  for (const field of ['runId', 'spanId', 'parentSpanId', 'skillName', 'checkpointName', 'spanType', 'sessionId', 'attempt', 'startedAtMs', 'startedMonotonicMs', 'startedUptimeMs']) {
+  for (const field of ['runId', 'spanId', 'parentSpanId', 'skillName', 'checkpointName', 'additionalInfo', 'spanType', 'sessionId', 'attempt', 'startedAtMs', 'startedMonotonicMs', 'startedUptimeMs']) {
     if (start[field] !== end[field]) throw new Error('invalid_context');
   }
   if (!policy.terminalStates.has(end.state) || !GUID.test(end.eventId || '') ||
@@ -354,6 +365,7 @@ function reportRun(policy, options) {
     ...(span.state === 'started' ? {} : { finishedAt: new Date(span.time).toISOString() }),
     ...(span.durationMs === undefined ? {} : { durationMs: span.durationMs }),
     ...(policy.errorClasses.has(span.errorClass) ? { errorClass: span.errorClass } : {}),
+    ...(policy.isAdditionalInfo(span.additionalInfo) ? { additionalInfo: span.additionalInfo } : {}),
   }));
   return { schemaVersion: 2, supportId: run.runId, runId: run.runId,
     state: spans.find((span) => span.spanId === run.rootSpanId)?.state || 'incomplete', spans };

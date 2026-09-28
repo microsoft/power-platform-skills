@@ -120,6 +120,18 @@ test('durable lifecycle rejects unknown checkpoints and cross-project context', 
     /invalid_checkpoint/,
   );
   assert.throws(
+    () => lifecycle.beginSpan({
+      projectRoot,
+      configDir,
+      skillName: 'create-mobile-app',
+      runId: root.runId,
+      parentSpanId: root.spanId,
+      checkpointName: 'gather_app_requirements',
+      additionalInfo: 'customer_private_data',
+    }),
+    /invalid_additional_info/,
+  );
+  assert.throws(
     () => lifecycle.finishSpan({
       projectRoot: tempProject(context),
       configDir,
@@ -247,6 +259,55 @@ test('command wrapper preserves exit code without recording command content', (c
   });
   assert.equal(report.supportId, root.runId);
   assert.doesNotMatch(JSON.stringify(report), /private-executable|customer-secret/);
+});
+
+test('tracked checkpoints preserve allowlisted static classifications', (context) => {
+  const projectRoot = tempProject(context);
+  const telemetry = telemetryContext(projectRoot);
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir: telemetry.configDir,
+    skillName: 'create-mobile-app',
+  });
+  const spans = [];
+  const overrides = {
+    createTelemetryContext: () => telemetry,
+    emitLifecycle: (_telemetry, span) => spans.push(span),
+  };
+  const started = runCommand([
+    'create-mobile-app|gather_app_requirements|started|with_dataverse',
+    '--run-id', root.runId,
+    '--parent-span-id', root.spanId,
+    '--project-root', projectRoot,
+  ], overrides);
+  const completed = runCommand([
+    'create-mobile-app|gather_app_requirements|completed',
+    '--run-id', root.runId,
+    '--span-id', started.spanId,
+    '--project-root', projectRoot,
+  ], overrides);
+
+  assert.equal(started.state, 'started');
+  assert.equal(completed.state, 'completed');
+  assert.equal(spans.length, 2);
+  assert.equal(spans[0].additionalInfo, 'with_dataverse');
+  assert.equal(spans[1].additionalInfo, 'with_dataverse');
+
+  const event = emitLifecycle(telemetry, spans[1], {
+    cwd: projectRoot,
+    emit: () => {},
+    readAiAgent: () => ({}),
+  });
+  assert.equal(event.data.eventInfo.additionalInfo, 'with_dataverse');
+  const report = lifecycle.reportRun({
+    projectRoot,
+    configDir: telemetry.configDir,
+    runId: root.runId,
+  });
+  assert.equal(
+    report.spans.find((span) => span.spanId === started.spanId).additionalInfo,
+    'with_dataverse',
+  );
 });
 
 test('checkpoint CLI carries lifecycle context across fresh processes', (context) => {

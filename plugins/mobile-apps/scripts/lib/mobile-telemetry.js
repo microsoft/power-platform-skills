@@ -21,6 +21,7 @@ const {
   TELEMETRY_STATES,
   TRACKED_SKILL_NAMES,
   getTelemetryCheckpointNames,
+  isTelemetryStaticInfo,
 } = require('./mobileapp-hook-utils');
 
 const lifecycle = createLifecycle({
@@ -28,6 +29,7 @@ const lifecycle = createLifecycle({
   trackedSkillNames: new Set(TRACKED_SKILL_NAMES),
   exemptSkillNames: new Set(['telemetry']),
   checkpointNames: getTelemetryCheckpointNames,
+  isAdditionalInfo: isTelemetryStaticInfo,
   terminalStates: new Set(TELEMETRY_STATES.filter((state) => state !== 'started')),
   errorClasses: new Set(TELEMETRY_ERROR_CLASSES),
 });
@@ -363,7 +365,11 @@ function emitCheckpoint(context, invocation, opts = {}) {
 function emitLifecycle(context, span, opts = {}) {
   const fields = commonFields(
     { ...context, sessionId: span.sessionId },
-    { skillName: span.skillName, source: 'checkpoint' },
+    {
+      skillName: span.skillName,
+      source: 'checkpoint',
+      additionalInfo: span.additionalInfo,
+    },
     {
       ...opts,
       correlationId: span.eventId,

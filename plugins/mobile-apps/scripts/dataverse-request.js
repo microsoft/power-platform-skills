@@ -185,16 +185,13 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
       : READ_REQUEST_TIMEOUT_MS,
   });
 
-  if (res.statusCode >= 200 && res.statusCode < 300) {
+  if (
+    res.statusCode >= 200 &&
+    res.statusCode < 300 &&
+    /^WhoAmI(?:\(\))?(?:\?|$)/i.test(apiPath)
+  ) {
     try {
-      let whoAmI;
-      if (/^WhoAmI(?:\(\))?(?:\?|$)/i.test(apiPath)) {
-        try {
-          whoAmI = JSON.parse(res.body);
-        } catch {
-          // Identity enrichment is optional for a successful API response.
-        }
-      }
+      const whoAmI = JSON.parse(res.body);
       require('./lib/app-identity')
         .captureSuccessfulDataverseRequest(envUrl, token, whoAmI);
     } catch {
