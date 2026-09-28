@@ -1,14 +1,14 @@
 # Power Automate plugin
 
-Build, edit, run, and debug **Power Automate cloud flows** from Claude Code or
-GitHub Copilot CLI, powered by the **FlowAgent** MCP server.
+Build, edit, run, and debug **Power Automate cloud flows** from GitHub Copilot CLI or
+Claude Code, powered by the **FlowAgent** MCP server.
 
 This folder is the marketplace-packaged plugin: skills, MCP wiring, and a
 self-contained MCP engine bundled at `server/mcp.mjs`.
 
 ## Install
 
-From a Claude Code or GitHub Copilot CLI session:
+From a GitHub Copilot CLI or Claude Code session:
 
 ```bash
 /plugin marketplace add microsoft/power-platform-skills

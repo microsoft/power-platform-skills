@@ -1,19 +1,19 @@
 # Code Apps Plugin
 
-Copilot plugin for building Power Apps code apps with React and Vite. Works with both Claude Code and GitHub Copilot.
+Copilot plugin for building Power Apps code apps with React and Vite. Works with both GitHub Copilot and Claude Code.
 
 > **Preview:** This plugin is currently in preview and may change before general availability.
 
 ## Prerequisites
 
 - [Node.js v22+](https://nodejs.org/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started) or [GitHub Copilot](https://github.com/features/copilot)
+- [GitHub Copilot](https://github.com/features/copilot) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 
 ## Install
 
 The plugin marketplace is hosted in the `plugin` folder of the [microsoft/PowerAppsCodeApps](https://github.com/microsoft/PowerAppsCodeApps) repository.
 
-Open Claude Code or GitHub Copilot in any folder and run the following commands:
+Open GitHub Copilot or Claude Code in any folder and run the following commands:
 
 1. Add the marketplace:
    ```
@@ -52,4 +52,5 @@ Start with `/create-code-app` — it walks you through everything.
 
 - [Code Apps Overview](https://learn.microsoft.com/en-us/power-apps/developer/code-apps/overview)
 - [Power Apps CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/code)
+- [GitHub Copilot CLI Plugins](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing)
 - [Claude Code Plugins](https://docs.anthropic.com/en/docs/claude-code/plugins)

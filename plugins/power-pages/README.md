@@ -16,6 +16,8 @@ Create and deploy Power Pages code sites using modern frontend frameworks. This 
 ### From a local clone
 
 ```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+# or
 claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
 ```
 
