@@ -18,7 +18,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
 const { navReferencedKeys, navMalformedRefs, navTargetParity } = require('./lib/pageref-resolver.js');
@@ -84,12 +84,21 @@ function validatePage(page, absWorkingDir) {
 }
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const str = (v) => (typeof v === 'string' ? v : undefined);
-  const specArg = str(flags.spec) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const workingDir = str(flags['working-dir']);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/promote-intent-pages.js --spec @<app-folder>/app-spec.json --working-dir <dir>';
+  const flagError = validateFlags(argv, {
+    known: ['spec', 'working-dir'],
+    needValue: ['spec', 'working-dir'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const specArg = flags.spec || positional[0];
+  const workingDir = flags['working-dir'];
   if (!specArg || !workingDir) {
-    process.stderr.write('Usage: node scripts/promote-intent-pages.js --spec @<app-folder>/app-spec.json --working-dir <dir>\n');
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 

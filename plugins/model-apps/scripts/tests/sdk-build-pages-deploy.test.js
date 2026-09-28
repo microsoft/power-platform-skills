@@ -74,13 +74,13 @@ function mockSdk(opts = {}) {
     updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
     enrichDefaultViews: async () => ({ updated: [] }),
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); const id = `${t}-${++idc}`; store[`${t}:${id}`] = Object.assign({ id }, def); return JSON.parse(JSON.stringify(store[`${t}:${id}`])); },
-    getArtifact: (t, id) => store[`${t}:${id}`] || { id },
-    addElement: () => ({}),
-    updateElement: (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
-    removeElement: () => ({}),
-    pushArtifact: async (t, id) => ({ type: t, id, success: true }),
+    getArtifact: async (t, id) => { await Promise.resolve(); return store[`${t}:${id}`] || { id }; },
+    addElement: async () => { await Promise.resolve(); return {}; },
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve(); calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
+    removeElement: async () => { await Promise.resolve(); return {}; },
+    pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
-    publishArtifact: async () => {},
+    publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
   };
   return { sdk, calls };
 }
@@ -239,7 +239,7 @@ test('deploy: a rebuild re-binds ids from the live enumeration and issues only U
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// Sol review (dup-page-name fix): validateAppSpec TOLERATES a duplicate name when both pages carry a
+// Duplicate page names: validateAppSpec TOLERATES a duplicate name when both pages carry a
 // pageId, but a pageId is only a CLAIM. A STALE snapshot (a page deleted in Maker since download) reconciles
 // its id as ABSENT, so the upload loop would CREATE it fresh and re-materialize the duplicate. The
 // post-reconcile gate must HALT before any write; a fresh download (both ids live) must still build.
@@ -264,7 +264,7 @@ function makeDupNamePageApp() {
   return { appDir, spec, GA, GB, manifest };
 }
 
-test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe (Sol review)', async () => {
+test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe', async () => {
   const { appDir, spec, GA, manifest } = makeDupNamePageApp();
   try {
     const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
@@ -457,5 +457,50 @@ test('changed-only selectedKeysOnly: uploads ONLY the selected page(s), never cl
     assert.ok(!uploaded.includes('Detail'), 'the UNCHANGED page was NOT re-uploaded (no clobber)');
     assert.ok(r.created.pageDeployedShas.overview, 'a measured deployed hash is recorded for the uploaded page');
     assert.ok(!r.created.pageDeployedShas.detail, 'no deployed hash for the page we did not touch');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A page that SUPPLIES a blank prompt or agent message would otherwise have generated text deployed
+// in its place — the fabricated-provenance defect, reached through /app-builder rather than the
+// standalone CLI. The standalone path refuses it; this asserts app-builder refuses it too, and does
+// so BEFORE any upload so a bad spec cannot leave half the pages deployed.
+test('deploy: a page with a present-but-blank agent message HALTS before any upload', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    spec.pages[0].agentMessage = '   \n'; // whitespace-only: a blank file is how this really arrives
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-blank-provenance'
+    );
+    assert.strictEqual(genpageCli.uploads.length, 0, 'nothing may deploy when provenance is blank');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page with a present-but-blank prompt HALTS before any upload', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    spec.pages[0].prompt = '';
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-blank-provenance'
+    );
+    assert.strictEqual(genpageCli.uploads.length, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The control: an ABSENT key is not a claim, so the wrapper's default still applies and the build
+// proceeds. Without this, the guard above could be satisfied by refusing every page.
+test('deploy: pages that omit prompt/agentMessage entirely still deploy', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    for (const p of spec.pages) { delete p.prompt; delete p.agentMessage; }
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.ok(genpageCli.uploads.length > 0, 'an omitted key is not an authoring mistake');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });

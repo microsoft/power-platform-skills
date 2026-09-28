@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Skill|skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root)process.exit(0); try{require(path.resolve(root,'hooks','run-telemetry.js')).start('pretool');}catch{}\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root)process.exit(0); try{require(path.resolve(root,'hooks','run-telemetry.js')).start('prompt');}catch{}\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

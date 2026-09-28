@@ -47,14 +47,14 @@ export type StatusVariant =
   | 'draft'
   | 'cancelled';
 
-const STATUS_STYLES: Record<StatusVariant, { bg: string; text: string; label: string }> = {
+const STATUS_STYLES = {
   overdue:       { bg: '$statusOverdueBg',    text: '$statusOverdue',    label: 'Overdue' },
   complete:      { bg: '$statusCompleteBg',   text: '$statusComplete',   label: 'Complete' },
   'in-progress': { bg: '$statusInProgressBg', text: '$statusInProgress', label: 'In Progress' },
   pending:       { bg: '$statusPendingBg',    text: '$statusPending',    label: 'Pending' },
   draft:         { bg: '$statusDraftBg',      text: '$statusDraft',      label: 'Draft' },
   cancelled:     { bg: '$statusCancelledBg',  text: '$statusCancelled',  label: 'Cancelled' },
-};
+} as const satisfies Record<StatusVariant, { bg: string; text: string; label: string }>;
 
 export function StatusPill({
   status,
@@ -167,8 +167,8 @@ export function SectionHeader({
     <XStack items="center" justify="space-between" mb="$2">
       <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
-        <Button size="$2" chromeless onPress={action.onPress}>
-          <Text fontSize="$3" color="$blue10">{action.label}</Text>
+        <Button size="$3" hitSlop={8} chromeless onPress={action.onPress}>
+          <Text fontSize="$3" color="$accentDeep">{action.label}</Text>
         </Button>
       )}
     </XStack>
@@ -358,8 +358,8 @@ export function EmptyState({
       <Text fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
       <Text color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
-        <Button bg="$blue10" onPress={onAction}>
-          <Button.Text color="$color1">{actionLabel}</Button.Text>
+        <Button bg="$accentBase" onPress={onAction}>
+          <Button.Text color="$accentOnAccent">{actionLabel}</Button.Text>
         </Button>
       )}
     </YStack>
@@ -399,6 +399,7 @@ export function FloatingActionButton({
   extended?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const theme = useTheme();
   return (
     <Button
       position="absolute"
@@ -408,15 +409,15 @@ export function FloatingActionButton({
       height={56}
       px={extended ? '$4' : 0}
       rounded="$10"
-      bg="$blue10"
+      bg="$accentBase"
       boxShadow="0 4px 16px rgba(0, 0, 0, 0.12)"
       onPress={onPress}
       role="button"
       aria-label={label}
-      icon={<Ionicons name={iconName} size={22} color="white" />}
+      icon={<Ionicons name={iconName} size={22} color={theme.accentOnAccent.val} />}
       pressStyle={{ scale: 0.96 }}
     >
-      {extended ? <Button.Text color="$color1">{label}</Button.Text> : null}
+      {extended ? <Button.Text color="$accentOnAccent">{label}</Button.Text> : null}
     </Button>
   );
 }
@@ -454,7 +455,7 @@ export function FilterChipRow({
             rounded="$10"
             px="$3"
             minH={36}
-            bg={selected ? '$blue10' : '$surface2'}
+            bg={selected ? '$accentBase' : '$surface2'}
             borderWidth={selected ? 0 : 1}
             borderColor="$borderColor"
             onPress={() => onChange(option.key)}
@@ -463,7 +464,7 @@ export function FilterChipRow({
             aria-label={label}
             pressStyle={{ scale: 0.98 }}
           >
-            <Button.Text color={selected ? '$color1' : '$color11'}>{label}</Button.Text>
+            <Button.Text color={selected ? '$accentOnAccent' : '$color11'}>{label}</Button.Text>
           </Button>
         );
       })}
@@ -570,24 +571,30 @@ export function RowPick({
   selected: boolean;
   onPress: () => void;
 }) {
+  const theme = useTheme();
   return (
     <XStack
-      px="$3" py="$3" items="center" justify="space-between" rounded="$3"
+      px="$3" py="$3" minH={48} items="center" justify="space-between" rounded="$3"
       borderWidth={1}
-      borderColor={selected ? '$color12' : '$borderColor'}
-      bg={selected ? '$color12' : '$background'}
+      borderColor={selected ? '$accentBase' : '$borderColor'}
+      bg={selected ? '$accentBase' : '$background'}
       onPress={onPress}
+      role="button"
+      aria-label={label}
+      aria-pressed={selected}
       pressStyle={{ opacity: 0.7 }}
     >
       <YStack>
-        <Text fontSize={15} fontWeight="600" color={selected ? 'white' : '$color12'}>{label}</Text>
+        <Text fontSize={15} fontWeight="600" color={selected ? '$accentOnAccent' : '$color12'}>{label}</Text>
         {subtitle ? (
-          <Text fontSize={12} color={selected ? 'white' : '$color10'} mt="$1">
+          <Text fontSize={12} color={selected ? '$accentOnAccent' : '$color10'} mt="$1">
             {subtitle}
           </Text>
         ) : null}
       </YStack>
-      {selected && <Ionicons name="checkmark-circle" size={20} color="white" />}
+      {selected && (
+        <Ionicons name="checkmark-circle" size={20} color={theme.accentOnAccent.val} />
+      )}
     </XStack>
   );
 }

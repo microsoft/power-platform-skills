@@ -362,3 +362,35 @@ test('parseManifest REJECTS two keys mapping to the same pageId (case-insensitiv
   });
   assert.strictEqual(parseManifest(dup), null);
 });
+
+// The manifest is a STORED artifact — it lives in the solution and can be edited, truncated or
+// produced by an older build. Parsing it loosely defeats the point of parsing it at all: a
+// `directEntry` whose behavior is bogus would round-trip into a rebuild and fail App Spec
+// validation there, far from its cause. Reject it here instead.
+test('parseManifest rejects a directEntry whose behavior is not a legal value', () => {
+  const good = {
+    schemaVersion: 1,
+    pages: [{ key: 'detail', name: 'Detail', pageId: '11111111-1111-1111-1111-111111111111',
+      pageInput: { data: { orderId: 'string' } }, directEntry: { behavior: 'selector' } }],
+  };
+  assert.ok(parseManifest(JSON.stringify(good)), 'a legal behavior parses');
+
+  for (const behavior of ['shrug', '', null, 123, undefined]) {
+    const bad = JSON.parse(JSON.stringify(good));
+    bad.pages[0].directEntry = behavior === undefined ? {} : { behavior };
+    assert.strictEqual(parseManifest(JSON.stringify(bad)), null,
+      `directEntry.behavior=${JSON.stringify(behavior)} must be rejected whole`);
+  }
+
+  // Both legal behaviours parse, and an absent directEntry is still fine (only pages with
+  // pageInput are required to carry one, and that rule lives in App Spec validation).
+  for (const behavior of ['selector', 'emptyState']) {
+    const ok = JSON.parse(JSON.stringify(good));
+    ok.pages[0].directEntry = { behavior };
+    assert.ok(parseManifest(JSON.stringify(ok)), behavior + ' must parse');
+  }
+  const noDe = JSON.parse(JSON.stringify(good));
+  delete noDe.pages[0].directEntry;
+  delete noDe.pages[0].pageInput;
+  assert.ok(parseManifest(JSON.stringify(noDe)), 'a page with neither field parses');
+});

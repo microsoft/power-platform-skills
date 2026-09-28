@@ -22,6 +22,28 @@ test('pluginTestFiles covers the real tests directory (all 18+ suites)', () => {
   assert.ok(files.every((f) => f.endsWith('.test.js')));
 });
 
+// Discovery used to be a FLAT readdir, so a test file in `scripts/tests/<subdir>/` was committed,
+// reviewed, reported green — and never executed. Nothing downstream notices, because the runner
+// reports success over the files it did find. Every suite happens to be top-level today, which is
+// exactly why this needs a test rather than an observation.
+test('pluginTestFiles descends into subdirectories (a nested suite must not be silently skipped)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtests-nested-'));
+  fs.mkdirSync(path.join(dir, 'sub', 'deeper'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'top.test.js'), '');
+  fs.writeFileSync(path.join(dir, 'sub', 'mid.test.js'), '');
+  fs.writeFileSync(path.join(dir, 'sub', 'deeper', 'low.test.js'), '');
+  fs.writeFileSync(path.join(dir, 'sub', 'fixture.js'), '');       // not a test
+  fs.mkdirSync(path.join(dir, 'helpers'));
+  fs.writeFileSync(path.join(dir, 'helpers', 'mock.js'), '');      // helpers hold fixtures, not tests
+  const files = pluginTestFiles(dir);
+  assert.deepStrictEqual(files, [
+    path.join('scripts', 'tests', 'sub', 'deeper', 'low.test.js'),
+    path.join('scripts', 'tests', 'sub', 'mid.test.js'),
+    path.join('scripts', 'tests', 'top.test.js'),
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('sdkTestSpec resolves the package dir and reports presence', () => {
   const spec = sdkTestSpec('D:/nope', 'D:/also-nope');
   assert.ok(spec.pkgDir.endsWith(path.join('packages', 'cds-maker-sdk')));

@@ -23,22 +23,30 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { buildPagePlan, pageKey, pageFile, pageDataMode, mdText } = require('./lib/page-plan.js');
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs yields boolean `true` for a value-less flag; treat those as missing so a bare flag
-  // fails with usage instead of reaching path.resolve/readFile as a boolean.
-  const str = (v) => (typeof v === 'string' ? v : undefined);
-  const specArg = str(flags.spec) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const workingDir = str(flags['working-dir']);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
+    + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <path>]';
+  // Every flag here carries a value, so all of them go in needValue; a bare one would otherwise
+  // reach path.resolve/readFile as a boolean.
+  const flagError = validateFlags(argv, {
+    known: ['spec', 'working-dir', 'env', 'app', 'languages', 'out'],
+    needValue: ['spec', 'working-dir', 'env', 'app', 'languages', 'out'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const specArg = flags.spec || positional[0];
+  const workingDir = flags['working-dir'];
   if (!specArg || !workingDir) {
-    process.stderr.write(
-      'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
-      + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <path>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 
@@ -47,9 +55,9 @@ function main() {
   const absWorkingDir = path.resolve(workingDir);
 
   const markdown = buildPagePlan(spec, {
-    envUrl: str(flags.env),
-    appLabel: str(flags.app),
-    languages: str(flags.languages),
+    envUrl: flags.env,
+    appLabel: flags.app,
+    languages: flags.languages,
     // Forward slashes: the plan schema requires them on Windows because downstream agents embed the
     // path in shell commands where a backslash is an escape character.
     workingDir: absWorkingDir.replace(/\\/g, '/'),
@@ -59,7 +67,7 @@ function main() {
     pluginRoot: path.resolve(__dirname, '..').replace(/\\/g, '/'),
   });
 
-  const planPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(absWorkingDir, 'app-builder-page-plan.md');
+  const planPath = flags.out ? path.resolve(flags.out) : path.join(absWorkingDir, 'app-builder-page-plan.md');
 
   // Fail BEFORE writing if the plan names a sample that does not exist — the worker's Step 3 reads
   // `${PLUGIN_ROOT}/samples/<name>` and a missing file derails generation with a confusing error.

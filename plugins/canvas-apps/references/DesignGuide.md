@@ -57,12 +57,12 @@ the real user experience.
 
 ### Typography & Text Hierarchy
 
-- **Control Selection**: When there are multiple controls for the same purpose, and one of them is a "Classic" control, favor the modern controls:
-	- Favor `ModernText` over `Label`, `ModernCombobox` over `Classic/ComboBox`, `ModernRadio` over `Classic/Radio`, `Button` or `ModernButton` over `Classic/Button`, `ModernTabList` for in-screen tabs, `ModernButton` rows for cross-screen navigation, `ModernTextInput` over `Classic/TextInput`, and so on.
+- **Control Selection**: When there are multiple controls for the same purpose, favor the modern control whose interaction matches the data:
+	- Favor `ModernText` over `Label`, `ModernRadio` or a directly selectable modern dropdown for short static choices, `ModernCombobox` over `Classic/ComboBox` only for large searchable sets, `ModernRadio` over `Classic/Radio`, `Button` or `ModernButton` over `Classic/Button`, `ModernTabList` for in-screen tabs, `ModernButton` rows for cross-screen navigation, `ModernTextInput` over `Classic/TextInput`, and so on. Never choose a searchable control merely because it is modern when a required short choice should take one click or tap.
 - **Font Weight**: Use `ModernText` for headlines with `FontWeight: =FontWeight.Bold` and a large font size. Use `ModernText` with `FontWeight: =FontWeight.Normal` for body content.
 - **Size Contrast**: Create dramatic hierarchy with size differences. Headers at 24-32, subheaders at 18-20, body at 14-16.
 - **Alignment as Statement**: Mix `Align.Left`, `Align.Center`, `Align.Right` intentionally. Centered text for impact, left-aligned for readability.
-- **Font Properties**: Leverage `Size`, `FontWeight`, `Align`, `VerticalAlign`, and `Color` to create visual interest. On the modern React controls the text colour property is `Color` and the font size property is `Size` — `FontColor` and `FontSize` exist only on `Badge`. Confirm with `describe_control` rather than assuming.
+- **Font Properties**: Leverage `Size`, `FontWeight`, `Align`, `VerticalAlign`, and `Color` to create visual interest. On the modern React controls the text color property is `Color` and the font size property is `Size` — `FontColor` and `FontSize` exist only on `Badge`. Confirm with `describe_control` rather than assuming.
 
 ### Color & Visual Theme
 
@@ -80,7 +80,7 @@ the real user experience.
 - **Design for the narrowest width you claim to support**: A layout composed at 1440px and never re-checked will clip at 1024px and collapse on a phone. Size layout containers with `Parent.Width` or `FillPortions`, never a literal like `Width: =1120`. Reserve fixed pixel sizes for icons, avatars, and steppers — and keep interactive ones at 44px or larger.
 - **Every horizontal row of more than two controls needs a reflow strategy**: Set `LayoutWrap: =true`, or drive `LayoutDirection` from a width breakpoint, so rows stack instead of squeezing. This is the single most common defect in generated apps and it is invisible at the width you designed at.
 - **The screen root must scroll** whenever it holds a gallery, a form, or more than about three stacked sections: canvas screens do not scroll on their own, so give the root container `LayoutOverflowY: =LayoutOverflow.Scroll` and content below the fold stays reachable on short viewports.
-- **Set foreground wherever you set background**: Text does not inherit a contrasting colour. Every time you choose a container `Fill`, set `Color` on the text inside it — dark-on-dark passes every automated check and is unreadable.
+- **Set foreground wherever you set background**: Text does not inherit a contrasting color. Every time you choose a container `Fill`, set `Color` on the text inside it — dark-on-dark passes every automated check and is unreadable.
 - **Rows inside a `Gallery` need their own container**: `Gallery` is a Classic control and positions its template children absolutely, so a row authored at desktop width stays at desktop width everywhere. Put one AutoLayout `GroupContainer` in the template and build the row inside it. See `${PLUGIN_ROOT}/references/LayoutGuide.md`.
 - **Asymmetry & Breaking Grid**: Don't center everything. Offset elements. Use unexpected positioning.
 - **Spacing as Design**: Generous padding creates breathing room. Dense layouts create energy.

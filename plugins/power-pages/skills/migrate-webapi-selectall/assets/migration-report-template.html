@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en" data-report-template-version="2">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="color-scheme" content="light"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"/>
+<title>Web API Wildcard Migration</title>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1;
+  --border:#e1dfdd;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --critical:#d13438; --critical-bg:#d134380a; --critical-border:#d1343825;
+  --warning:#ca5010; --warning-bg:#ca50100a; --warning-border:#ca501025;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1025;
+  --info:#0078d4; --info-bg:#0078d40a; --info-border:#0078d425;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --topbar-h:72px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
+.skip-link{position:absolute;top:-100px;left:12px;z-index:200;padding:10px 16px;color:var(--text-bright);background:var(--surface);border:1px solid var(--accent);border-radius:var(--radius);}
+.skip-link:focus{top:12px;}
+
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.report-status{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.6px;background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+
+.layout{display:flex;min-height:calc(100vh - var(--topbar-h));}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;position:relative;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:14px;opacity:0.6;width:16px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.95;}
+.nav-badge{position:absolute;right:14px;font-size:10px;font-family:var(--mono);padding:1px 6px;border-radius:8px;font-weight:700;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
+
+.content{flex:1;min-width:0;padding:32px 40px 72px;max-width:1100px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;box-shadow:var(--shadow-4);}
+.stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+
+.severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;}
+.severity-critical{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
+.severity-warning{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
+.severity-info{color:var(--info);background:var(--info-bg);border:1px solid var(--info-border);}
+.severity-pass{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+
+.mig-table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+.table-scroll{overflow-x:auto;}
+.mig-table th{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);padding:10px 12px;border-bottom:2px solid var(--border);background:var(--surface2);}
+.mig-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;}
+.mig-table tbody tr:last-child td{border-bottom:none;}
+.row-summary:hover td{background:var(--surface2);}
+.col-toggle{width:36px;}
+.col-num{width:90px;text-align:right;}
+td.col-num{font-family:var(--mono);color:var(--text);text-align:right;}
+.cell-setting{font-family:var(--mono);font-weight:600;color:var(--text-bright);overflow-wrap:anywhere;}
+.row-toggle{background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:12px;padding:0;line-height:1;}
+.row-toggle[aria-expanded="true"] .chevron{transform:rotate(90deg);}
+.chevron{display:inline-block;transition:transform 0.2s;}
+.row-detail>td{background:var(--surface2);padding:4px 16px 16px 44px;}
+
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.field-block{margin-top:12px;}
+.field-chips{display:flex;flex-wrap:wrap;gap:4px;}
+.field-chip{font-family:var(--mono);font-size:11px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:2px 7px;overflow-wrap:anywhere;}
+.usage-list{list-style:none;display:flex;flex-direction:column;gap:6px;}
+.usage-loc{font-family:var(--mono);font-size:11px;color:var(--text-bright);background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:1px 6px;margin-right:8px;overflow-wrap:anywhere;}
+.usage-detail{font-size:12px;color:var(--text);}
+.reasoning-block{background:var(--surface);border-left:2px solid var(--accent);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--text);line-height:1.7;}
+.fix-block{background:var(--pass-bg);border-left:2px solid var(--pass);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--text);line-height:1.7;}
+.empty-note{color:var(--text-dim);}
+
+@media(max-width:900px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;display:flex;overflow-x:auto;padding:0;border-right:none;border-bottom:1px solid var(--border);}
+  .nav-btn{width:auto;white-space:nowrap;border-left:none;border-bottom:2px solid transparent;padding:12px 18px 12px 18px;}
+  .nav-btn.active{border-left-color:transparent;border-bottom-color:var(--accent);}
+  .nav-badge{position:static;margin-left:2px;}
+  .content{padding:20px 16px 72px;}
+}
+@media(max-width:600px){
+  /* Detail row repeats both counts; drop columns. */
+  .mig-table .col-num{display:none;}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto;}
+  .section.active{animation:none;}
+  .chevron{transition:none;}
+}
+@media(forced-colors:active){
+  .card,.stat-card,.mig-table,.severity,.field-chip,.report-status{border:1px solid CanvasText;}
+}
+@media print{
+  body{background:#fff;}
+  .topbar,footer{position:static;}
+  .sidebar,.col-toggle{display:none;}
+  .section{display:block!important;animation:none;}
+  .row-detail{display:table-row!important;}
+  .card,.stat-card,.mig-table tr{box-shadow:none;break-inside:avoid;}
+}
+</style>
+</head>
+<body>
+
+<a class="skip-link" href="#contentRoot">Skip to report content</a>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="./power-pages-icon.png" alt="Power Pages"/>
+    <div>
+      <div class="topbar-title">Web API Wildcard Migration</div>
+      <div class="topbar-sub">Least-privilege field settings &middot; Generated __GENERATED_AT__</div>
+    </div>
+  </div>
+  <span class="report-status"><span class="visually-hidden">Report status: </span>__REPORT_STATUS__</span>
+</div>
+
+<div class="layout">
+  <div class="sidebar" role="tablist" aria-label="Report sections">
+    <button class="nav-btn active" role="tab" id="nav-overview" aria-controls="tab-overview" aria-selected="true" data-tab="overview"><span class="nav-icon" aria-hidden="true">&#9673;</span> Overview</button>
+    <button class="nav-btn" role="tab" id="nav-wildcard" aria-controls="tab-wildcard" aria-selected="false" tabindex="-1" data-tab="wildcard"><span class="nav-icon" aria-hidden="true">&#9888;</span> Wildcard Fields <span class="nav-badge" id="badgeWildcard"></span></button>
+    <button class="nav-btn" role="tab" id="nav-explicit" aria-controls="tab-explicit" aria-selected="false" tabindex="-1" data-tab="explicit"><span class="nav-icon" aria-hidden="true">&#9638;</span> Explicit Fields <span class="nav-badge" id="badgeExplicit"></span></button>
+  </div>
+
+  <div class="content" id="contentRoot">
+
+    <div class="section active" id="tab-overview" role="tabpanel" aria-labelledby="nav-overview" tabindex="0">
+      <h2>Overview</h2>
+      <p class="section-desc">__SCOPE_NOTE__</p>
+      <div class="stats-grid" id="statsGrid"></div>
+    </div>
+
+    <div class="section" id="tab-wildcard" role="tabpanel" aria-labelledby="nav-wildcard" tabindex="0">
+      <h2>Wildcard Fields</h2>
+      <p class="section-desc">Settings whose <code>fields</code> value used <code>*</code>. Expand a row to see every usage, the replacement columns, and the evidence behind them.</p>
+      <div id="wildcardList"></div>
+    </div>
+
+    <div class="section" id="tab-explicit" role="tabpanel" aria-labelledby="nav-explicit" tabindex="0">
+      <h2>Explicit Fields</h2>
+      <p class="section-desc">Settings that already listed columns. Expand a row to compare the configured columns against the columns the site actually uses.</p>
+      <div id="explicitList"></div>
+    </div>
+
+  </div>
+</div>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+
+<script nonce="__ATTR_CSP_NONCE__">
+const WILDCARD_DATA = __JSON_WILDCARD_DATA__;
+const EXPLICIT_DATA = __JSON_EXPLICIT_DATA__;
+
+// Entry: { setting, status, usages: [{location, detail}], fields, finding, fix }
+// Unknown status values fall back to neutral.
+const STATUS_TONE = {
+  migrated: 'pass', 'least privilege': 'pass',
+  pending: 'warning', overbroad: 'warning', incomplete: 'warning',
+  blocked: 'critical',
+  removed: 'info',
+};
+
+// Resolved means the setting no longer carries `*`.
+const RESOLVED_STATUS = ['migrated', 'removed'];
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function escAttr(s) { return String(s == null ? '' : s).replace(/[^a-zA-Z0-9_-]/g, ''); }
+
+function toneOf(status) { return STATUS_TONE[String(status || '').toLowerCase()] || 'info'; }
+
+function fieldBlock(label, fields) {
+  if (!Array.isArray(fields) || fields.length === 0) return '';
+  const chips = fields.map(f => '<span class="field-chip">' + esc(f) + '</span>').join('');
+  return '<div class="field-block"><div class="field-label">' + esc(label) + ' (' + fields.length + ')</div>' +
+    '<div class="field-chips">' + chips + '</div></div>';
+}
+
+function usageBlock(usages) {
+  if (!usages.length) return '';
+  const items = usages.map(u =>
+    '<li><span class="usage-loc">' + esc(u.location) + '</span>' +
+    (u.detail ? '<span class="usage-detail">' + esc(u.detail) + '</span>' : '') + '</li>').join('');
+  return '<div class="field-block"><div class="field-label">Usages (' + usages.length + ')</div>' +
+    '<ul class="usage-list">' + items + '</ul></div>';
+}
+
+function textBlock(label, text, className) {
+  if (!text) return '';
+  return '<div class="field-block"><div class="field-label">' + esc(label) + '</div>' +
+    '<div class="' + className + '">' + esc(text) + '</div></div>';
+}
+
+function rowsHtml(entry, index, prefix, fieldsLabel) {
+  const detailId = prefix + '-detail-' + index;
+  const usages = Array.isArray(entry.usages) ? entry.usages : [];
+  const fields = Array.isArray(entry.fields) ? entry.fields : [];
+  return '<tr class="row-summary">' +
+      '<td class="col-toggle"><button type="button" class="row-toggle" aria-expanded="false" aria-controls="' + escAttr(detailId) + '">' +
+        '<span class="chevron" aria-hidden="true">&#9654;</span>' +
+        '<span class="visually-hidden">Details for ' + esc(entry.setting) + '</span></button></td>' +
+      '<td><span class="severity severity-' + toneOf(entry.status) + '">' + esc(entry.status) + '</span></td>' +
+      '<td class="cell-setting">' + esc(entry.setting) + '</td>' +
+      '<td class="col-num">' + usages.length + '</td>' +
+      '<td class="col-num">' + fields.length + '</td>' +
+    '</tr>' +
+    '<tr class="row-detail" id="' + escAttr(detailId) + '" hidden><td colspan="5">' +
+      usageBlock(usages) +
+      fieldBlock(fieldsLabel, fields) +
+      textBlock('Evidence', entry.finding, 'reasoning-block') +
+      textBlock('Outcome', entry.fix, 'fix-block') +
+    '</td></tr>';
+}
+
+function renderList(container, entries, prefix, fieldsLabel, emptyText) {
+  if (!entries.length) {
+    container.innerHTML = '<div class="card empty-note">' + esc(emptyText) + '</div>';
+    return;
+  }
+  container.innerHTML = '<div class="table-scroll"><table class="mig-table">' +
+    '<thead><tr><th class="col-toggle"><span class="visually-hidden">Expand</span></th>' +
+    '<th>Status</th><th>Site setting</th>' +
+    '<th class="col-num">Usages</th><th class="col-num">Columns</th></tr></thead><tbody>' +
+    entries.map((e, i) => rowsHtml(e, i, prefix, fieldsLabel)).join('') +
+    '</tbody></table></div>';
+}
+
+const wildcards = Array.isArray(WILDCARD_DATA) ? WILDCARD_DATA : [];
+const explicits = Array.isArray(EXPLICIT_DATA) ? EXPLICIT_DATA : [];
+const statusOf = (entry) => String(entry.status || '').toLowerCase();
+
+const stats = [
+  { num: wildcards.length, label: 'Wildcards Found', color: 'var(--warning)' },
+  { num: wildcards.filter(e => RESOLVED_STATUS.includes(statusOf(e))).length, label: 'Wildcards Resolved', color: 'var(--pass)' },
+  { num: wildcards.filter(e => statusOf(e) === 'blocked').length, label: 'Wildcards Blocked', color: 'var(--critical)' },
+  { num: explicits.length, label: 'Explicit Settings', color: 'var(--accent)' },
+];
+document.getElementById('statsGrid').innerHTML = stats
+  .filter(s => s.num > 0)
+  .map(s => '<div class="stat-card"><div class="stat-num" style="color:' + s.color + '">' + s.num + '</div><div class="stat-label">' + esc(s.label) + '</div></div>')
+  .join('');
+
+document.getElementById('badgeWildcard').textContent = wildcards.length;
+document.getElementById('badgeExplicit').textContent = explicits.length;
+
+renderList(document.getElementById('wildcardList'), wildcards, 'wildcard', 'Replacement columns',
+  'No wildcard field settings were found in any configuration scope.');
+renderList(document.getElementById('explicitList'), explicits, 'explicit', 'Configured columns',
+  'No already-explicit field settings were found in any configuration scope.');
+
+const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
+// An explicit behavior overrides the CSS reduced-motion rule.
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+function selectTab(btn) {
+  navButtons.forEach(b => {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    // Roving tabindex keeps a single tablist tab stop.
+    b.tabIndex = on ? 0 : -1;
+    document.getElementById('tab-' + b.dataset.tab).classList.toggle('active', on);
+  });
+  window.scrollTo({ top: 0, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+}
+navButtons.forEach((btn, index) => {
+  btn.addEventListener('click', () => selectTab(btn));
+  btn.addEventListener('keydown', event => {
+    const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = navButtons[(index + step + navButtons.length) % navButtons.length];
+    selectTab(next);
+    next.focus();
+  });
+});
+
+document.addEventListener('click', event => {
+  const toggle = event.target.closest('.row-toggle');
+  if (!toggle) return;
+  const detail = document.getElementById(toggle.getAttribute('aria-controls'));
+  if (!detail) return;
+  detail.hidden = !detail.hidden;
+  toggle.setAttribute('aria-expanded', String(!detail.hidden));
+});
+</script>
+
+</body>
+</html>

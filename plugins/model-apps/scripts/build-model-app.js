@@ -6,24 +6,31 @@
 //
 // Usage:
 //   node build-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
-//        [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>]
+//        [--sample-data] [--publish] [--verify] [--no-live-plan] [--stage <data|ui|app|publish>]
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
+// #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
+// bakes it into the App/Form/Dashboard adapters.
+const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
-const { annotateContentHashes } = require('./lib/content-hash.js');
+const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+// Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
+// on what "unattended" means. Re-exported from here because callers and tests already import it
+// from this file.
+const { envTruthy } = require('./lib/interaction-mode.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
@@ -39,27 +46,59 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (findTables/findColumns/fetchEntityMetadata) and every artifact
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
-function makeSdk(env, spec, workspaceDir) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, spec, workspaceDir, languageCode) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir, // unused (no workspace ops)
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: spec.solution && spec.solution.uniqueName,
-  });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  // `httpClient` is returned so the caller can wire verify's role-privilege reader, which needs the
-  // raw client (and the org URL) to compose an absolute `EntityDefinitions(...)?$select=Privileges`
-  // request — the SDK's entity metadata projects `Privileges` away. Returning the SAME instance
-  // rather than constructing a second one keeps token acquisition and retry state shared.
-  return { sdk, provisionSdk, httpClient, cleanup };
+  // Everything fallible after the directory exists runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands the throwaway workspace for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left both constructions
+  // outside the net. Matches provision-solution.js and ai-preflight.js, which already keep
+  // construction inside their protected region for this exact reason.
+  //
+  // `workspaceDir` is deliberately NOT removed — it is the caller's durable workspace, not a
+  // throwaway, so a failed run must leave it exactly as it found it.
+  let sdk;
+  let provisionSdk;
+  try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: spec.solution && spec.solution.uniqueName,
+      // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
+      // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
+      // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
+      ...(languageCode ? { languageCode } : {}),
+    });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    provisionSdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      instanceUrl: env,
+      httpClient,
+      // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
+      // language disagrees with the SDK performing it (for language-sensitive registrations), so two
+      // instances at different LCIDs would make every push of a fetched artifact fail.
+      ...(languageCode ? { languageCode } : {}),
+    });
+    await provisionSdk.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+  // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
+  // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
+  // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
+  // vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw client
+  // has no caller. Returning it anyway would advertise a bypass this file no longer takes.
+  return { sdk, provisionSdk, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -75,7 +114,16 @@ function cliEmit(log, opts = {}) {
   return (e) => {
     if (e.phase !== phase) { phase = e.phase; log(`\n▶ ${phase}`); }
     if (e.status === 'start') return; // header only; the terminal event prints the status line
-    if (!opts.apply) { log(`  [${e.n}/${e.total}] ▢ ${e.label}`); return; } // dry-run plan
+    if (!opts.apply) {
+      // #559: the dry run now resolves each item against the live environment, so say which way it
+      // will go. A glyph alone cannot carry three states, and an unresolved one must not look like
+      // either decision — so name it.
+      if (e.status === 'warn') { log(`  ⚠ ${e.label}`); return; }
+      const mark = e.state === 'create' ? '+ create' : e.state === 'reuse' ? '= reuse ' : e.state === 'unknown' ? '? unknown' : '▢';
+      const why = e.state === 'unknown' && e.stateWhy ? ` — ${e.stateWhy}` : '';
+      log(`  [${e.n}/${e.total}] ${mark} ${e.label}${why}`);
+      return;
+    }
     if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
     const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
     const tail = e.status === 'error' ? ` — ${e.detail || ''}` : '';
@@ -124,7 +172,7 @@ async function discoverOpDiffState(spec, provision) {
     const id = await resolveExistingFormId(provision, def);
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
-    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: provision.getArtifact('form', id) || {}, def });
+    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
   // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
   let sitemap = null;
@@ -132,7 +180,7 @@ async function discoverOpDiffState(spec, provision) {
     const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
     if (appId) {
       await provision.fetchArtifact('app', appId);
-      const deployed = provision.getArtifact('app', appId) || {};
+      const deployed = await provision.getArtifact('app', appId) || {};
       sitemap = { deployedTargets: sitemapTargets(deployed.siteMap || {}), wantTargets: sitemapTargets(spec.appShell) };
     }
   }
@@ -144,6 +192,8 @@ async function buildModelApp(spec, opts, deps) {
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
+  const fileErrors = pageSourceFileErrors(spec, opts.appDir);
+  if (fileErrors.length) return { ok: false, errors: fileErrors };
   const log = deps.log || (() => undefined);
   // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does
   // not create — see validateAppSpec). These no longer HALT the build; they are narrated so the maker
@@ -261,9 +311,19 @@ async function buildModelApp(spec, opts, deps) {
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
+        livePlan: opts.livePlan,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        languageCode: opts.languageCode,
+        // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
+        // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
+        // on 1033 while the SDK is already baked at the resolved LCID — the exact split-language
+        // build (translated FormXML, English columns) this threading exists to prevent.
+        preResolvedLanguageCode: opts.preResolvedLanguageCode,
+        // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
+        provisionedLanguages: deps.provisionedLanguages,
+        warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
@@ -284,6 +344,19 @@ async function buildModelApp(spec, opts, deps) {
       if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
       throw err;
     }
+  }
+  // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
+  // rather than only listing the spec back. `unknown` is counted separately and never folded into
+  // either real decision — an unresolved probe is missing information, not a verdict.
+  if (r && r.dryRun && Array.isArray(r.planItems)) {
+    const n = (s) => r.planItems.filter((p) => p.state === s).length;
+    const unprobed = r.planItems.filter((p) => !p.state).length;
+    const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
+    if (n('unknown')) parts.push(`${n('unknown')} could not be read`);
+    if (unprobed) parts.push(`${unprobed} not probed`);
+    log(r.livePlan
+      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan). Re-run with --apply to execute.`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
@@ -318,16 +391,34 @@ async function buildModelApp(spec, opts, deps) {
         // opts.verify without mustVerifyPages and no verifier → silently skip (no pages to enforce).
       } else {
         try {
-          const vr = await deps.verify(spec);
+          // Hand verify what the BUILD could not do on this environment, and which phases actually
+          // ran. Without the first, an environment-gated business-rule skip reports `not deployed`
+          // and drives `verify.ok` false forever — and that value gates the exit code,
+          // `.last-applied.json` AND the `--changed-only` snapshot, so the baseline would never be
+          // written and every later run would fall back to a full build. Without the second, the
+          // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
+          // at all) fails the same way on every run after the first.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
+          // Named explicitly rather than folded into the pass, so a green verify never reads as
+          // "everything the spec asked for is deployed" when part of it could not be. Two distinct
+          // causes get two distinct messages: telling an operator on a HEALTHY environment that it
+          // cannot host business rules — which is what a single shared message did on every
+          // `--changed-only` fast apply — is worse than saying nothing.
+          if (vr.environmentSkipped && vr.environmentSkipped.length) {
+            log(`  ⊘ ${vr.environmentSkipped.length} check(s) not applicable on this environment: ${vr.environmentSkipped.join(', ')}`);
+          }
+          if (vr.phaseSkipped && vr.phaseSkipped.length) {
+            log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
+          }
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
           // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {
@@ -372,41 +463,86 @@ function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
-// Env var truthiness for the unattended opt-in: '1' or 'true' (case-insensitive) count as set; a
-// missing/other value is false. Matches the dotnet-style boolean env convention used elsewhere in this
-// repo (see AGENTS.md "Shared Telemetry"). This gates PROMPT SUPPRESSION ONLY — it never grants
-// destructive authority (only --allow-destructive does).
-function envTruthy(v) {
-  if (v == null) return false;
-  const s = String(v).trim().toLowerCase();
-  return s === '1' || s === 'true';
-}
-
 function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
-async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
-  // bare flag fails with the usage message instead of (a) crashing later, or (b) — critically for the
-  // phase selectors — being read as `undefined` and SILENTLY SELECTING ALL PHASES. e.g. `--apply --only`
-  // with no value must NOT become a full apply on this destructive tool. Boolean switches
-  // (--apply/--publish/--verify/…) legitimately stay `true`.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  if (!env || !specArg) {
-    process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+// Read the language flag from either spelling, rejecting a conflicting pair rather than silently
+// preferring one.
+const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'languageCode');
+
+function parseLanguageCode(value) {
+  if (value === undefined) return undefined;
+  // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
+  // disagree about which LCIDs are valid.
+  const lc = normalizeLanguageCode(value);
+  if (lc === null) {
+    throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${value}')`);
+  }
+  return lc;
+}
+
+// Refuse to mutate unless the changed-only snapshot was demonstrably invalidated (#587 item 3).
+//
+// Extracted from main() so it can be tested by BEHAVIOUR. The first version of this guard was
+// covered only by a source-level test, and an adversarial review proved that test worthless: both
+// `if (false && …)` and a catch that manufactures `{ ok: true }` passed the whole file. A guard
+// whose test survives its own removal is not a guard.
+//
+// Throws on anything that is not a definite success — `{ ok: false }`, a thrown error, and a
+// missing/malformed return alike. A MISSING snapshot is not one of those: invalidateSnapshot
+// reports `{ ok: true, reason: 'no snapshot to invalidate' }`, so an ordinary first build is
+// unaffected. Halting costs a retry; continuing costs a silently incomplete deployment.
+function assertSnapshotInvalidated(store, workspaceDir) {
+  let inv;
+  try {
+    inv = store.invalidateSnapshot(workspaceDir);
+  } catch (e) {
+    inv = { ok: false, reason: e && e.message ? e.message : String(e) };
+  }
+  if (!inv || inv.ok !== true) {
+    throw new Error(
+      `refusing to apply: the changed-only snapshot in ${workspaceDir} could not be invalidated `
+      + `(${(inv && inv.reason) || 'unknown reason'}). A later --changed-only run would trust it and `
+      + 'skip work this apply is about to make necessary. Retry once any concurrent run has finished, '
+      + 'or delete the snapshot to re-baseline.'
     );
+  }
+  return inv;
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]';
+  // The declared flag contract, enforced before anything else runs.
+  //
+  // `needValue` lists every flag whose MISSING value would be read as a default rather than an
+  // error — critically the phase selectors, where a bare `--only` is dropped by
+  // list()/stagePhasesOrResolve and silently resolves to the full phase set. `--apply --only` must
+  // not become a full apply on this destructive tool.
+  //
+  // validateFlags additionally rejects an unrecognised flag, which parseArgs would otherwise drop
+  // while swallowing the token after it. Measured before this guard: `--stage ui` planned 3 steps
+  // but the one-letter typo `--stagee ui` planned all 9 and still exited 0 — a caller who believed
+  // they had scoped an apply to the UI phases got a full data-model apply with no diagnostic.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan',
+      'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
+      'allow-destructive', 'workspace'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
-  // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
-  // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace'].find((k) => flags[k] === true);
-  if (valuelessFlag) {
-    process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
+  // validateFlags has already rejected a bare or empty --env/--spec, so each is now either absent
+  // or a non-empty string; the typeof dance these lines used to carry is subsumed by it.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   // #changed-only (Preview): a SAFE partial apply. Incompatible with manual phase selection — the flow
@@ -420,22 +556,81 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const languageCode = parseLanguageCode(readLanguageFlag(flags));
+  const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
+  // Phases that stamp an authoring language onto something. `data-model` writes Dataverse label
+  // objects; `forms`, `dashboards` and `app-shell` write FormXML `<labels>` and sitemap
+  // `<Titles><Title LCID=…>` through the SDK, which since #455 takes the LCID as a construction
+  // option. Anything else (views, pages, web-resources, publish, sample-data) creates no labels.
+  //
+  // This list must stay in step with what actually consumes the language. When it drifted before,
+  // the warning told users the flag was ignored on `--stage ui` at the same time as the build was
+  // faithfully applying it — worse than no warning, because it stops them investigating.
+  const LANGUAGE_CONSUMING_PHASES = ['data-model', 'forms', 'dashboards', 'app-shell'];
+  // A selector that excludes ALL of them makes the flag a genuine no-op. Say so rather than accept
+  // it silently: a user who passed --language-code believes their labels are being pinned, and
+  // finding out otherwise means re-running the whole build.
+  if (languageCode !== undefined && Array.isArray(phases) && phases.length
+      && !phases.some((p) => LANGUAGE_CONSUMING_PHASES.includes(p))) {
+    process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — none of them create labels (${LANGUAGE_CONSUMING_PHASES.join(', ')} do).\n`);
+  }
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
+    // #559: a dry run resolves create-vs-reuse against the live environment by default, because a
+    // plan that cannot tell them apart is not a plan. `--no-live-plan` restores the offline,
+    // spec-only listing for a caller with no environment access.
+    livePlan: flags['no-live-plan'] !== true,
     verify: flags.verify === true,
-    phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    phases,
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
+    languageCode,
     appDir: path.dirname(specPath),
     env,
     workspaceDir,
   };
+  // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
+  // has to be resolved before the SDK exists — which is why this reads over the transport hatch
+  // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
+  // halt fires once, before anything is constructed or written. Dry runs skip it: they perform no
+  // writes, and a language read is a round trip a plan does not need.
+  //
+  // Resolution is best-effort in its *fallback* direction: an unreadable organization language, a
+  // failed probe, or a missing value all degrade to the 1033 default with a warning rather than
+  // failing the build. It is deliberately NOT best-effort in one direction — an EXPLICIT
+  // `--language-code` / spec `languageCode` that the organization has not provisioned halts here
+  // (#456), before the SDK is constructed and before any label is written. That halt is the point:
+  // Dataverse would otherwise accept some labels under the wrong language and reject others
+  // mid-build, phases away from the flag that caused it.
+  // AB#6686427 — prove the ambient Azure CLI identity can reach this org BEFORE anything else on an
+  // apply. Everything below (the language read, the destructive-apply safety probe, every phase)
+  // authenticates through that identity, and when it is wrong they each fail in their own vocabulary
+  // — "could not determine the organization's base language", "preflight safety check could not run"
+  // — none of which names the actual cause. Dry runs skip it: they perform no writes and need no
+  // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
+  if (opts.apply) {
+    const auth = await preflightAuth(env);
+    // A single, already-explained failure uses `error`, not `errors: [...]`. `emitResult` reserves
+    // the array for a genuine PARTIAL failure and summarises it as a COUNT ("completed with 1
+    // error(s); see stdout JSON") — which would replace a message written specifically to tell the
+    // operator which identity to sign in as. `download-model-app.js` uses `error` for the identical
+    // failure, so the array here also made two sibling CLIs report the same problem differently.
+    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+    if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
+  }
+  const authoringLanguageCode = opts.apply
+    ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
+    : undefined;
+  // Reuse the SAME resolved value for the data-model phase instead of repeating the org read and the
+  // provisioned-languages probe. A disagreement between the two would label columns in one language
+  // and FormXML/sitemap titles in another — assigned after resolution because `opts` is built above.
+  opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir);
+  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -449,7 +644,7 @@ async function main() {
   }
   // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
-  // only (it does not yet gate --apply; see docs/app-builder-roadmap.md). Never fatal.
+  // only (it does not yet gate --apply; see docs/app-builder-capabilities.md). Never fatal.
   const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
   // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
   // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't
@@ -487,14 +682,18 @@ async function main() {
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal,
-      // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
-      // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
-      // present, and `entityPrivileges` needs the raw client and the org URL to compose an absolute
-      // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
-      // clean PASS having never checked what any persona's role actually grants. Caught live —
+      // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
+      // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
+      // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`
+      // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env })),
+      // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
+      // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
+      // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
     if (changedOnly && opts.apply) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the
@@ -519,12 +718,15 @@ async function main() {
     } else {
       // Invariant: EVERY state-changing apply must invalidate the changed-only snapshot BEFORE it writes
       // (design core invariant). A plain `--apply` (or `--stage data --apply`) mutates the app outside the
-      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state. Best-effort
-      // + fail-safe: if a snapshot exists it is marked ineligible (the next `--changed-only` re-baselines via
-      // a full build); no snapshot ⇒ a harmless no-op. Never blocks the build.
-      if (opts.apply) {
-        try { applySnapshotStore.invalidateSnapshot(workspaceDir); } catch { /* best-effort — never block a build */ }
-      }
+      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state.
+      //
+      // FAIL CLOSED (#587 item 3). This used to be best-effort: the `{ ok, reason }` result was discarded
+      // and a throw was swallowed with "never block a build". But "the snapshot could not be invalidated"
+      // is not cosmetic — the snapshot is exactly what a later `--changed-only` run trusts to decide what
+      // it may SKIP. If a full apply mutates the environment while an ELIGIBLE snapshot survives (lease
+      // contention from a concurrent run, an unwritable workspace), that later run certifies pre-apply
+      // state and can skip work this apply just made necessary.
+      if (opts.apply) assertSnapshotInvalidated(applySnapshotStore, workspaceDir);
       r = await buildModelApp(spec, opts, deps);
     }
   } finally {
@@ -555,4 +757,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated };

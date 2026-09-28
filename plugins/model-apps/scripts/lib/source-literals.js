@@ -282,9 +282,51 @@ function blankLiterals(code) {
     }
 
     if (mode === 'jsxTag') {
+      // Comments come FIRST. A `//` or `/* */` comment between attributes is valid TSX, and a
+      // generator naturally emits one to explain an attribute. Without this branch the attribute-
+      // value case below sees an apostrophe in the comment prose ("Griffel's") and treats it as a
+      // quote — and that scanner deliberately does NOT stop at a newline, because a JSX attribute
+      // value may legitimately span lines, so it ran to EOF. The real `export default` was blanked
+      // and every bracket after it miscounted, which is the false-positive direction this file's
+      // header calls the worse one: a complete page refused as truncated. #542.
+      //
+      // `/` in a tag is otherwise only the start of `/>`, and `n` distinguishes all three cases.
+      if (c === '/' && n === '/') {
+        const end = src.indexOf('\n', i);
+        blank(i, end === -1 ? src.length : end);
+        i = end === -1 ? src.length : end;
+        continue;
+      }
+      if (c === '/' && n === '*') {
+        const end = src.indexOf('*/', i + 2);
+        const stop = end === -1 ? src.length : end + 2;
+        blank(i, stop);
+        i = stop;
+        continue;
+      }
       if (c === '"' || c === "'") {                 // attribute value
         let j = i + 1;
         while (j < src.length && src[j] !== c) j += 1;
+        blank(i + 1, j);
+        i = Math.min(j + 1, src.length);
+        continue;
+      }
+      // A template literal inside a tag can only be part of an explicit TYPE ARGUMENT, e.g.
+      //   <Link<`https://${string}`> to={u} />
+      // and its content is data, not code. Consuming it as one unit here is what keeps the `//`
+      // in a template-literal *type* from being mistaken for the comment branch above — which
+      // would blank to end of line and reject a valid module, and could also hide a genuinely
+      // malformed expression that follows on the same line. Mirrors the `code`-mode scanner:
+      // `${...}` interpolations are blanked with the rest rather than tracked.
+      if (c === '`') {
+        let j = i + 1;
+        let d = 0;
+        for (; j < src.length; j += 1) {
+          if (src[j] === '\\') { j += 1; continue; }
+          if (src[j] === '{' && src[j - 1] === '$') d += 1;
+          else if (src[j] === '}' && d > 0) d -= 1;
+          else if (src[j] === '`' && d === 0) break;
+        }
         blank(i + 1, j);
         i = Math.min(j + 1, src.length);
         continue;

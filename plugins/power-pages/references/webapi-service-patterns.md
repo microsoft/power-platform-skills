@@ -19,8 +19,8 @@ export interface ProductEntity {
   cr4fc_price?: number;
   cr4fc_status?: number;
   cr4fc_imageurl?: string;
-  // Lookup raw values use _<navigation>_value pattern
-  _cr4fc_category_value?: string;
+  // Lookup raw values use _<LogicalName>_value.
+  _cr4fc_categoryid_value?: string;
   // Expanded navigation properties
   cr4fc_Category?: { cr4fc_categoryid: string; cr4fc_name?: string };
   createdon?: string;
@@ -32,8 +32,8 @@ export interface ProductEntity {
 
 **Naming rules:**
 - Interface: PascalCase table name + `Entity` suffix
-- Properties: exact Dataverse logical names (all lowercase with publisher prefix)
-- Lookup raw values: `_<navigation_property>_value`
+- Properties: exact, case-sensitive Dataverse LogicalNames with the publisher prefix
+- Lookup raw values: `_<LogicalName>_value`
 - Expanded lookups: PascalCase navigation property with nested object type
 - Always include `[key: string]: unknown` for formatted value annotation access
 
@@ -113,8 +113,8 @@ export const mapProductEntity = (entity: ProductEntity): Product => ({
   price: entity.cr4fc_price ?? 0,
   status: STATUS_LABELS[entity.cr4fc_status ?? 0] ?? 'active',
   imageUrl: entity.cr4fc_imageurl ?? '',
-  category: getFormattedValue(entity, '_cr4fc_category_value') ?? 'Uncategorized',
-  categoryId: entity._cr4fc_category_value,
+  category: getFormattedValue(entity, '_cr4fc_categoryid_value') ?? 'Uncategorized',
+  categoryId: entity._cr4fc_categoryid_value,
   createdAt: entity.createdon ?? new Date().toISOString(),
   updatedAt: entity.modifiedon ?? entity.createdon ?? new Date().toISOString(),
 });
@@ -128,7 +128,7 @@ Lookups in Dataverse expose **two distinct properties**. Understanding the diffe
 
 **On retrieval (GET):**
 - **GUID property** — Automatically named `_{logicalname}_value`. Contains the raw lookup ID. Use for filtering, logic, and foreign-key references. Include in `$select`.
-- **Navigation property** — Named after the relationship (e.g., `cr4fc_Category`). Use with `$expand` to fetch related record details. **Case-sensitive** — must match the schema name exactly (typically PascalCase).
+- **Navigation property** — Named by relationship metadata (e.g., `cr4fc_Category`). Use with `$expand` to fetch related record details. It is case-sensitive and can use schema-style casing; read `ReferencingEntityNavigationPropertyName` instead of deriving it from an attribute name.
 
 ```typescript
 // $select includes the GUID property for the raw ID
@@ -142,6 +142,7 @@ Lookups in Dataverse expose **two distinct properties**. Understanding the diffe
 **On create/update (POST/PATCH):**
 - You **cannot** set a lookup by sending a GUID to the `_value` property. You **must** use `@odata.bind` on the **Navigation Property**.
 - Syntax: `"NavigationProperty@odata.bind": "/entity_set_name(GUID)"`
+- Add that exact case-sensitive Navigation Property to `Webapi/<table>/fields`.
 
 ```typescript
 // CORRECT — uses Navigation Property name (case-sensitive)
@@ -151,7 +152,7 @@ body['cr4fc_Category@odata.bind'] = `/cr4fc_categories(${categoryId})`;
 body['_cr4fc_categoryid_value'] = categoryId; // ❌ Does NOT work
 ```
 
-**Common error:** If you get an "Undeclared Property" error on POST/PATCH, you are likely using the logical name (all lowercase) instead of the **Navigation Property name** (case-sensitive, matches the schema name).
+**Common error:** If you get an "Undeclared Property" error on POST/PATCH, verify that the payload and `Webapi/<table>/fields` both use the exact relationship Navigation Property. It may use schema-style casing and is not necessarily the lookup attribute LogicalName or SchemaName.
 
 **To clear a lookup**, set the `@odata.bind` annotation to `null`:
 
@@ -187,7 +188,7 @@ const PRODUCT_SELECT = [
   'cr4fc_price',
   'cr4fc_status',
   'cr4fc_imageurl',
-  '_cr4fc_category_value', // Lookup GUID — use for filtering/logic
+  '_cr4fc_categoryid_value', // Lookup GUID — use for filtering/logic
   'createdon',
   'modifiedon',
 ].join(',');
@@ -506,7 +507,7 @@ Only create these methods if the target table actually has File or Image columns
 | Using `Accept: application/json` for download | Empty or error response | Use `Accept: */*` for blob downloads |
 | Using file MIME type as upload `Content-Type` (e.g. `image/png`) | `400 "Stream was not readable"` — OData routes to JSON deserializer instead of binary handler | Always use `Content-Type: application/octet-stream` for uploads |
 | Missing `Content-Type: application/octet-stream` on download | `404` — OData pipeline can't route to binary file handler | Add `Content-Type: application/octet-stream` to download headers |
-| Explicit column list in `Webapi/<table>/fields` with file columns | `403 "Attribute * not enabled for Web Api"` on `/$value` download — the endpoint internally does `SELECT *` | Set field allowlist to `*` when the table has File or Image columns |
+| File/Image column omitted from `Webapi/<table>/fields` | `403 Forbidden` on `/$value` download | Add the File/Image column's exact Dataverse LogicalName to the explicit fields list |
 
 ---
 
@@ -640,7 +641,7 @@ export interface OrderEntity {
   cr4fc_orderid: string;
   cr4fc_ordernumber?: string;
   cr4fc_totalamount?: number;
-  _cr4fc_category_value?: string;
+  _cr4fc_categoryid_value?: string;
   // Single-valued navigation property (lookup — returns object or null)
   cr4fc_Category?: CategoryEntity | null;
   // Collection-valued navigation property (one-to-many — returns array)
@@ -692,8 +693,8 @@ export const mapOrderEntity = (entity: OrderEntity): Order => ({
   id: entity.cr4fc_orderid,
   orderNumber: entity.cr4fc_ordernumber ?? '',
   totalAmount: entity.cr4fc_totalamount ?? 0,
-  categoryId: entity._cr4fc_category_value,
-  categoryName: entity.cr4fc_Category?.cr4fc_name ?? getFormattedValue(entity, '_cr4fc_category_value') ?? 'Uncategorized',
+  categoryId: entity._cr4fc_categoryid_value,
+  categoryName: entity.cr4fc_Category?.cr4fc_name ?? getFormattedValue(entity, '_cr4fc_categoryid_value') ?? 'Uncategorized',
   orderLines: (entity.cr4fc_order_lines ?? []).map(mapOrderLineEntity),
   createdAt: entity.createdon ?? new Date().toISOString(),
   updatedAt: entity.modifiedon ?? entity.createdon ?? new Date().toISOString(),
@@ -768,7 +769,7 @@ Use this approach when:
 
 ### Site Settings for Related Entity Columns
 
-When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup column's logical name (e.g., `cr4fc_categoryid`). The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns being selected in the `$expand`.
+When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup's OData property (for example, `_cr4fc_categoryid_value`). If POST/PATCH also sets that relationship, include the exact Navigation Property used before `@odata.bind`. The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns selected in `$expand`.
 
 ### Table Permissions for Related Entities
 

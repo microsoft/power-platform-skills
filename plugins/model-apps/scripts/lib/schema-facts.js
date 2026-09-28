@@ -6,7 +6,7 @@
 // offline eval harness diffs per build. Pure (no I/O, no SDK): it derives everything deterministically
 // from the App Spec, reusing the SAME naming/value rules the engine uses, so a fact equals what WOULD
 // be provisioned — not a naive spec echo. See docs/app-builder-design.md §13.2, §14.
-const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor } = require('./app-spec.js');
+const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor, labelText } = require('./app-spec.js');
 
 const lc = (s) => String(s || '').toLowerCase();
 const byKey = (k) => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
@@ -21,11 +21,23 @@ function isBuildableColumn(c) {
 
 // Choice/MultiChoice { value, label } pairs via the engine's shared rule (value = 100000000 + index;
 // inline options AND globalChoice refs) so the fact carries the exact values the build assigns
-// (app-spec.js choiceValueMap:35-55). Sorted by value (its natural, stable order).
+// (app-spec.js choiceValueMap). Sorted by value (its natural, stable order).
+//
+// `choiceValueMap` indexes a LOCALIZED option under every language it declares (so sample data in
+// either language resolves), which means several keys can share one value. An eval fact must carry
+// ONE label per value, so collapse to the FIRST alias seen.
+//
+// That resolves to the lowest-LCID label — but NOT because of V8's integer-key ordering, which does
+// not apply here: this map is keyed by label STRINGS, so it enumerates in INSERTION order. The
+// ascending-LCID property comes from `labelAliases`, which emits a localized label's values in LCID
+// order (that is where the integer-key rule applies), combined with `choiceValueMap` being
+// first-wins. Change either of those and the winning label changes.
 function choiceFacts(entity, spec, columnLogical) {
   const map = choiceValueMap(entity, spec)[columnLogical];
   if (!map) return undefined;
-  return Object.entries(map).map(([label, value]) => ({ value, label })).sort((a, b) => a.value - b.value);
+  const byValue = new Map();
+  for (const [label, value] of Object.entries(map)) if (!byValue.has(value)) byValue.set(value, label);
+  return [...byValue.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.value - b.value);
 }
 
 function tableFacts(spec, e) {
@@ -39,13 +51,13 @@ function tableFacts(spec, e) {
   }).sort(byKey('logicalName'));
   return {
     logicalName: lc(e.schemaName),
-    displayName: e.displayName || '',
+    displayName: labelText(e.displayName, spec && spec.languageCode) || '',
     hasNotes: e.hasNotes === true,
     // Whether the build enables "Allow quick create" (IsQuickCreateEnabled) on this table — the EXACT
     // engine rule (explicit entities[].quickCreate OR an authored QuickCreate form), so the eval grades
     // provisioned intent, not a naive spec echo. See entity-provision.js updateTable step.
     quickCreate: quickCreateEnabledFor(spec, e),
-    primary: { logicalName: lc(primary.schemaName), displayName: primary.displayName || '', autoNumber: !!primary.autoNumberFormat },
+    primary: { logicalName: lc(primary.schemaName), displayName: labelText(primary.displayName, spec && spec.languageCode) || '', autoNumber: !!primary.autoNumberFormat },
     columns,
     statusReasons: (e.statusReasons || []).map((sr) => ({ label: sr.label, state: sr.state || 'Active' })).sort(byKey('label')),
     alternateKeys: (e.alternateKeys || []).map((k) => ({ logicalName: lc(k.schemaName), columns: (k.columns || []).map(lc).sort() })).sort(byKey('logicalName')),
@@ -58,7 +70,7 @@ function relationshipFacts(spec) {
   for (const r of spec.relationships || []) {
     if (r.type === 'OneToMany') {
       rels.push({ kind: '1:n', schemaName: lc(relationshipSchemaName(r, prefix)), referenced: lc(r.referenced), referencing: lc(r.referencing),
-        lookup: { logicalName: lc(r.lookup && r.lookup.schemaName), displayName: (r.lookup && r.lookup.displayName) || '' } });
+        lookup: { logicalName: lc(r.lookup && r.lookup.schemaName), displayName: labelText(r.lookup && r.lookup.displayName, spec && spec.languageCode) || '' } });
     } else if (r.type === 'ManyToMany') {
       const fact = { kind: 'n:n', schemaName: lc(manyToManySchemaName(r, prefix)), entity1: lc(r.entity1), entity2: lc(r.entity2) };
       if (r.intersectEntityName) fact.intersect = lc(r.intersectEntityName);
@@ -73,7 +85,7 @@ function relationshipFacts(spec) {
 function schemaFacts(spec) {
   const s = spec || {};
   return {
-    globalChoices: (s.globalChoices || []).map((g) => ({ name: lc(g.name), options: (g.options || []).map((label, i) => ({ value: 100000000 + i, label })) })).sort(byKey('name')),
+    globalChoices: (s.globalChoices || []).map((g) => ({ name: lc(g.name), options: (g.options || []).map((label, i) => ({ value: 100000000 + i, label: labelText(label, s.languageCode) || '' })) })).sort(byKey('name')),
     tables: (s.entities || []).map((e) => tableFacts(s, e)).sort(byKey('logicalName')),
     relationships: relationshipFacts(s),
   };

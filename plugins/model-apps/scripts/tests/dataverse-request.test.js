@@ -32,6 +32,7 @@ function runCli(args, { errorMessage = null } = {}) {
       if (resolved === authPath) {
         return {
           parseArgs: realAuth.parseArgs,
+          validateFlags: realAuth.validateFlags,
           readJsonArg: realAuth.readJsonArg,
           dataverseRequest: async (envUrl, method, apiPath, body, opts) => {
             if (${JSON.stringify(errorMessage)} !== null) throw new Error(${JSON.stringify(errorMessage)});
@@ -101,7 +102,7 @@ test('--timeout without a value is rejected before the Dataverse request is invo
   const res = runCli(['https://org.crm.dynamics.com', 'GET', 'accounts', '--timeout']);
 
   assert.equal(res.status, 1);
-  assert.match(res.stderr, /--timeout must include a positive millisecond value/);
+  assert.match(res.stderr, /--timeout requires a value — a positive millisecond value/);
   assert.equal(res.stdout, '');
 });
 

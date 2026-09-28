@@ -6,6 +6,12 @@ description: >-
   propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
 color: yellow
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# shell and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate`/`TaskList` are NOT aliases anywhere —
+# `todo` is the portable name. See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -13,8 +19,32 @@ tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - AskUserQuestion
+  - read
+  - edit
+  - execute
+  - todo
 ---
+## Interaction contract — this agent is HEADLESS
+
+You run as a `Task` subagent: there is **no user on the other end**, and
+`AskUserQuestion` / `EnterPlanMode` / `ExitPlanMode` are not in your tool list.
+Never claim a user answered something.
+
+When you need a decision, stop and return a request for the orchestrator to put
+to the user in the main conversation loop:
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "multiSelect": false } ] }
+```
+
+Return what you have already discovered alongside it so the re-invocation does
+not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 
 # Genpage Entity Builder
 
@@ -159,6 +189,28 @@ PREFIX="<Publisher Prefix>"  # e.g. new
 ```
 
 ### JSON Structure
+
+Optional top-level field: **`languageCode`** — the LCID for the Dataverse labels this step creates.
+**Normally omit it.** `provision-entities.js` reads the organization's base language
+(`organization.languagecode`) and uses that, which is always a language the org has provisioned. Set
+it only to deliberately author labels in a *different* provisioned language. It must be a positive
+integer LCID up to 65535 (`1031`, not `"de-DE"`); an invalid value is rejected before any Dataverse
+write. `--language-code` / `--languageCode <lcid>` overrides it for one run.
+
+**If you pass an LCID the organization has not provisioned,** provisioning now stops at the start of
+the data-model step, before any label is written, and lists the languages the org does have.
+(The solution and publisher may already exist by then — they carry no language, so nothing lands
+mislabelled.) Previously this failed *partway through*:
+Dataverse accepts table and Choice labels in an unprovisioned language (silently storing them under
+the org's base language) but rejects `DateTime` and `Memo` columns with `The language code N is not a
+valid language for this organization` — so the table and Choice columns were created first and it
+died on the first `DateTime`/`Memo` column, which looked like an environment fault. Re-run with
+`--language-code <an LCID the org actually has>`; list them with
+`node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`. The
+check is best-effort: if that read fails, provisioning proceeds unchanged.
+
+A `⚠ could not determine the organization's base language …` warning on stderr
+means discovery failed and 1033 was assumed — pass the flag explicitly.
 
 The input JSON follows the App Spec format. Build it with:
 
@@ -369,7 +421,8 @@ Mark the task complete.
 
 ## Step 6 — Ask About Sample Data
 
-Use `AskUserQuestion`:
+Return a `needs_input` request (you are headless — the orchestrator asks and
+records it as `AskUserQuestion: … → …` in `workflow-log.md`):
 
 > "Entities created successfully:
 >

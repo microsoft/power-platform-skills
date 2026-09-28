@@ -8,17 +8,24 @@
 //   node scripts/preview-app.js --spec @<app-folder>/app-spec.json
 const path = require('node:path');
 const { renderAppPreview } = require('./lib/app-preview.js');
-const { parseArgs, readJsonArg } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const specArg = flags.spec || positional[0];
-  if (!specArg) {
-    process.stderr.write('Usage: node scripts/preview-app.js --spec @<app-folder>/app-spec.json\n');
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/preview-app.js --spec @<app-folder>/app-spec.json';
+  const flagError = validateFlags(argv, { known: ['spec'], needValue: ['spec'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
+  const specArg = flags.spec || positional[0];
+  if (!specArg) {
+    process.stderr.write(USAGE + '\n');
+    process.exit(1);
+  }
+  const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   process.stdout.write(renderAppPreview(spec));
 }

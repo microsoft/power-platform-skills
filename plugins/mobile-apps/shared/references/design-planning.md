@@ -188,7 +188,11 @@ Default stack — no customization needed.
 - tamagui-design-system: add-aliases
 ```
 
-> **`add-aliases` mode** — even on the default path, Step 9b applies `skills/design-system/references/tamagui-integration.md` in alias-only mode to add `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and `$accentOnAccent` as named theme values over `defaultConfig`. This keeps `tamagui.config.ts` on `defaultConfig` for everything else, but gives the screen-builder a stable semantic contract regardless of whether a custom design system was configured.
+> **`add-aliases` mode** — on the default path, Step 9b verifies that
+> `tamagui.config.ts` uses the native host's
+> `createPowerAppsTamaguiConfig`. The host factory already provides
+> `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and
+> `$accentOnAccent`, so the app does not copy a second alias implementation.
 
 ### If deviating:
 
@@ -268,8 +272,10 @@ per-screen specs so the builder knows which sections to apply.
 
 | `## Design` says | Step 9b action |
 |---|---|
-| `tamagui-design-system: add-aliases` | **Always run** — apply `skills/design-system/references/tamagui-integration.md` in alias-only mode. This is the default path. Adds `$surface0`–`$surface3` and `$accent*` aliases over `defaultConfig`. No brand tokens, no theme overrides. |
+| `tamagui-design-system: add-aliases` | Verify that `tamagui.config.ts` calls `createPowerAppsTamaguiConfig`. The host already supplies the semantic aliases. |
 | `tamagui-design-system: required` | Apply `skills/design-system/references/tamagui-integration.md` with brand tokens + theme from the `## Design` section. |
-| Custom font only (no design-system line) | `npx expo install expo-font` + `useFonts()` in `app/_layout.tsx`. Also apply alias-only mode so semantic tokens exist for the screen-builder. |
+| Custom font only (no design-system line) | `npx expo install expo-font` + `useFonts()` in `app/_layout.tsx`, preserving the host Tamagui factory. |
 
-**There is no "skip Step 9b" path.** Every plan now includes a `tamagui-design-system` line. `add-aliases` is the minimum — it always runs. `required` runs when there is a custom brand color, custom theme, or non-default font pairing.
+**There is no unchecked Step 9b path.** Every plan includes a
+`tamagui-design-system` line. `add-aliases` verifies host ownership; `required`
+applies generated brand tokens.

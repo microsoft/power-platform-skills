@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoDelivery", "displayName": "Contoso Delivery", "publisherPrefix": "new" },
+  "app": { "name": "Delivery", "description": "Plan projects and work items on hand-authored two-column forms" },
+  "globalChoices": [
+    { "name": "new_workstatus", "displayName": "Work Status", "options": ["Not Started", "In Progress", "Blocked", "Done"] }
+  ],
+  "entities": [
+    { "schemaName": "new_project", "displayName": "Project", "pluralName": "Projects",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Project Name" },
+      "columns": [
+        { "schemaName": "new_stage", "displayName": "Stage", "type": "Choice", "globalChoice": "new_workstatus" },
+        { "schemaName": "new_startdate", "displayName": "Start Date", "type": "DateTime" },
+        { "schemaName": "new_budget", "displayName": "Budget", "type": "Money" }
+      ] },
+    { "schemaName": "new_workitem", "displayName": "Work Item", "pluralName": "Work Items",
+      "primaryAttribute": { "schemaName": "new_title", "displayName": "Title" },
+      "columns": [
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "globalChoice": "new_workstatus" },
+        { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice",
+          "options": ["Low", "Normal", "High"] },
+        { "schemaName": "new_estimate", "displayName": "Estimate (days)", "type": "Decimal" },
+        { "schemaName": "new_completed", "displayName": "Completed", "type": "Boolean" },
+        { "schemaName": "new_duedate", "displayName": "Due Date", "type": "DateTime" },
+        { "schemaName": "new_reviewer", "displayName": "Reviewer", "type": "Text" },
+        { "schemaName": "new_requestedby", "displayName": "Requested By", "type": "Customer" },
+        { "schemaName": "new_notes", "displayName": "Notes", "type": "Memo" }
+      ] }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "new_project", "referencing": "new_workitem",
+      "lookup": { "schemaName": "new_ProjectId", "displayName": "Project" } }
+  ],
+  "forms": [
+    { "entity": "new_workitem", "type": "main", "name": "Work Item",
+      "tabs": [
+        { "name": "tab_details", "label": "Details", "expanded": true,
+          "columns": [
+            { "width": "65%",
+              "sections": [
+                { "name": "section_execution", "label": "Execution", "columns": 2, "showLabel": true,
+                  "fields": [
+                    { "name": "new_title", "colspan": 2 },
+                    "new_status",
+                    "new_priority",
+                    "new_estimate",
+                    "new_completed"
+                  ] },
+                { "name": "section_notes", "label": "Notes", "columns": 1, "showLabel": true,
+                  "fields": [ { "name": "new_notes", "rowspan": 2 } ] }
+              ] },
+            { "width": "35%",
+              "sections": [
+                { "name": "section_context", "label": "Planning Context", "columns": 1, "showLabel": true,
+                  "fields": ["new_projectid", "new_requestedby", "new_duedate"] }
+              ] }
+          ] },
+        { "name": "tab_admin", "label": "Administration", "expanded": false,
+          "sections": [
+            { "name": "section_audit", "label": "Audit", "columns": 2, "showLabel": true,
+              "fields": [ { "name": "new_reviewer", "readOnly": true } ] }
+          ] }
+      ] },
+    { "entity": "new_project", "type": "main", "name": "Project",
+      "tabs": [
+        { "label": "General",
+          "sections": [
+            { "label": "Project", "columns": 2, "showLabel": true,
+              "fields": ["new_name", "new_stage", "new_startdate", "new_budget"] }
+          ] }
+      ] }
+  ],
+  "views": [
+    { "entity": "new_project", "type": "main", "name": "Active Projects",
+      "columns": ["new_name", "new_stage", "new_startdate", "new_budget"], "activeOnly": true },
+    { "entity": "new_workitem", "type": "main", "name": "Open Work Items",
+      "columns": ["new_title", "new_status", "new_priority", "new_projectid", "new_duedate"], "activeOnly": true }
+  ],
+  "charts": [
+    { "entity": "new_workitem", "name": "Work Items by Status", "groupBy": "new_status", "measure": "count", "chartType": "Column" }
+  ],
+  "appShell": {
+    "areas": [
+      { "label": "Delivery", "groups": [
+        { "label": "Plan", "subAreas": [
+          { "entity": "new_project", "title": "Projects" },
+          { "entity": "new_workitem", "title": "Work Items" }
+        ] }
+      ] }
+    ]
+  }
+}

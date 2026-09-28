@@ -1,6 +1,6 @@
-# Canvas App YAML — Layout and Responsive Behaviour
+# Canvas App YAML — Layout and Responsive Behavior
 
-Sizing, positioning, scrolling, and the narrow-width behaviour that decides whether a
+Sizing, positioning, scrolling, and the narrow-width behavior that decides whether a
 screen works on a phone. The defects in this guide are invisible at the width you author
 and are reported by no compile diagnostic.
 
@@ -9,11 +9,12 @@ and are reported by no compile diagnostic.
 - Manual layout
 - Auto layout
 - Keep responsive layout out of state
+- Keep persistent visible labels with inputs
 - Grid layout
 - Galleries are Classic — their rows do not reflow
 - Horizontal rows must reflow at narrow widths
 - Give labelled controls room for their longest value
-- Text colour must be set wherever you set a background
+- Text color must be set wherever you set a background
 - Never hard-code a layout width
 - The screen root must be able to scroll
 - Layout rules of thumb
@@ -73,8 +74,8 @@ For flexible, responsive designs:
             FillPortions: =1    # Proportional share of the remaining space
 ```
 
-1. **Dynamic gallery height:**
-   `Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)`
+1. **Bounded gallery viewport:** explicit numeric `Height`, positive `TemplateSize`,
+   numeric `TemplatePadding`, `Items`, and row controls
 2. **Container scrolling:** `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout child properties:** `AlignInContainer`, `FillPortions`,
    `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
@@ -86,7 +87,8 @@ For flexible, responsive designs:
 ## Keep responsive layout out of state
 
 Layout must react to the current size, not to a variable captured during navigation.
-Write breakpoints directly in layout properties:
+Write breakpoints directly in layout properties. Use `Parent.Width` this way only when
+`Parent` is a proven nested local layout region whose width follows the rendered space:
 
 ```yaml
 LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)
@@ -94,16 +96,32 @@ LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirecti
 
 Do not set `varIsMobile`, `varColumns`, `varPageWidth` or similar values in `OnVisible`
 and then read them from `Width`, `Height`, grid, visibility or direction properties.
-Studio can render before `OnVisible` runs, and resizing does not re-run the event. Use
-`App.Width` for app-level breakpoints and `Parent.Width` or `Self.Width` for nested
-layout scopes.
+Studio can render before `OnVisible` runs, and resizing does not re-run the event.
+`App.Width`, a named root's `Width`, and root-level `Parent.Width` can describe the
+logical design canvas while an embedded or scale-to-fit host renders into a narrower
+physical viewport. Display settings are not available in `.pa.yaml`, so static acceptance
+cannot prove those values track the host. Required fields and actions must remain safe if
+the wide/default branch stays active: wrap, stack unconditionally, use deliberate
+scrolling, or fit the complete wide branch within a static numeric bound.
+
+## Keep persistent visible labels with inputs
+
+Every required classic or modern TextInput, NumberInput, Radio, DropDown, and ComboBox
+needs a persistent human-readable visible label in the same reachable field region.
+For static acceptance, a separate label and input must have the same immediate parent;
+put both in a dedicated field group rather than pointing to a label elsewhere on the
+screen. `AccessibleLabel` is for assistive technology, while `HintText` disappears
+during entry; neither tells every user what a populated field means. The current contract
+recognizes a native visible `Label` only on `ModernNumberInput`; all other input types
+need a real sibling label. Prefer separate stacked label/input rows or compact vertical
+field groups over an overlapping horizontal input strip.
 
 ## Grid layout
 
 GridLayout needs coordinated column, row and height math; a stale row count can produce a
 valid but visibly wrong screen. When planning a `GroupContainer` with
-`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact
-formulas in the screen brief. Builders do not read that conditional reference.
+`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact formulas in
+the screen brief. Builders do not read that conditional reference.
 
 ## Galleries are Classic — their rows do not reflow
 
@@ -164,11 +182,12 @@ reflow strategy. Pick one:
 LayoutDirection: =LayoutDirection.Horizontal
 LayoutWrap: =true
 
-# 2. Stack: the row becomes a column below a breakpoint.
+# 2. Stack in a proven nested local region: the row becomes a column below a breakpoint.
 LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)
 ```
 
-Every property is a formula, so a breakpoint can drive sizing and visibility too:
+Within that same proven nested local region, a breakpoint can drive sizing and visibility
+too:
 
 ```yaml
 Width: =If(Parent.Width < 640, Parent.Width, 320)
@@ -205,13 +224,28 @@ parent grow. Avoid parent `Height` formulas that read descendant `.Height` value
 those descendants also size from the parent; use collection counts and constants
 directly.
 
-Small bounded lists should not create a second hidden scroll region. For a local roster
-of roughly ten or fewer rows inside a scrollable root, include every row and its template
-padding in the gallery height, then let the root scroll:
+For text-bearing buttons, badges, status pills, and labels, budget the longest reachable
+literal or formatted value, not the shortest seed. A 44px-high control is only a
+single-line target. If a multiword value can wrap, include every wrapped line plus vertical
+padding in both the control height and its parent/row budget. Otherwise set `Wrap: =false`
+and provide enough width for the longest value. `LayoutWrap` on the parent moves controls;
+it does not increase a child's fixed height.
+
+Give list-driven galleries a conservative viewport-bounded height and let the Gallery
+scroll when its source has more rows. Always set explicit positive `TemplateSize`, numeric
+`TemplatePadding`, `Items`, and concrete row controls. Do not derive the Gallery's own
+height from `CountRows(...)` and `Self.TemplateHeight`/`Self.TemplateSize`/
+`Self.TemplatePadding`: exported apps have rendered zero rows with that shape despite
+populated collections.
 
 ```yaml
-Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
+Height: =320
+TemplateSize: =64
+TemplatePadding: =8
 ```
+
+Drive empty-state visibility from the source/filter count, never `Self.AllItems`,
+`Self.AllItemsCount`, or another rendered gallery property.
 
 ## Give labelled controls room for their longest value
 
@@ -220,9 +254,9 @@ control sits in a horizontal row, set `FillPortions: =0` plus a `Width` (or
 `LayoutMinWidth`) that fits the longest value it can display, and set `Wrap: =false` on
 single-line text so it cannot silently become two lines.
 
-## Text colour must be set wherever you set a background
+## Text color must be set wherever you set a background
 
-Text controls do not inherit a contrasting colour from their container. A dark `Fill` with
+Text controls do not inherit a contrasting color from their container. A dark `Fill` with
 an unset `Color` renders near-black text on a near-black surface — technically valid and
 completely unreadable:
 
@@ -275,6 +309,12 @@ For a responsive screen, that root must contain every visible section. The scree
 top-level `Children:` list contains the root and nothing else; a header or panel aligned
 as the root's sibling is outside AutoLayout and can overlap or cover the rest of the
 screen while still compiling cleanly.
+
+Record this as a `## Viewport Containment Contracts` row. Do not mark
+`QACHK-ROOT-CONTAINMENT` N/A for a responsive or unknown-device screen. A conditional
+receipt, alert, confirmation, or editor remains inside the root and uses a state-driven
+`Visible` predicate; hiding only its children leaves the fixed parent in the layout and
+can preserve blank space or clipping.
 
 A **direct** child of a scroll container must use `FillPortions: =0`, or it is pinned to
 the viewport height and the content is clipped rather than scrolled. Give stacked sections

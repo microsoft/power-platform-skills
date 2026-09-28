@@ -8,8 +8,8 @@ in the page `config.json`, and that Custom API must exist in the target environm
 
 > **Gated behind the `custom-api` feature flag (default OFF).** This reference is only used
 > when Custom API support is enabled — see the Feature Flags section in the plugin `AGENTS.md`
-> and `feature-flags.json`. When OFF, pages are Dataverse / mock-data (and, when their own
-> flag is on, connector) only; **no Custom API code is emitted and no `actionBindings` are
+> and `feature-flags.json`. When OFF, pages are Dataverse / mock-data / connector only;
+> **no Custom API code is emitted and no `actionBindings` are
 > written**. The `genpage-customapi-builder` agent is the single owner of this gate.
 
 > **Vocabulary.** Makers author **Custom APIs** (the Dataverse `customapi` artifact); each is

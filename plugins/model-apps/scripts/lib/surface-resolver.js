@@ -16,6 +16,7 @@
 'use strict';
 
 const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+const { labelText, labelAliases } = require('./app-spec.js');
 
 // Every artifact kind a surface may legitimately name, with the field(s) a human would write.
 // Sitemap subareas are included because an author frequently names the NAV ENTRY ("Work Orders")
@@ -45,8 +46,14 @@ function buildIndex(spec) {
   for (const e of spec.entities || []) {
     // A table itself is a surface when the app exposes it as a nav entry (grid + form). Accept the
     // display name and the schema name.
-    add(e && e.displayName, { kind: 'entity', name: e.displayName || e.schemaName, entity: e.schemaName });
-    add(e && e.schemaName, { kind: 'entity', name: e.displayName || e.schemaName, entity: e.schemaName });
+    //
+    // A LOCALIZED display name (an LCID map) is indexed under EVERY language it declares, not just
+    // the resolved one: a `surfaces[]` entry naming the Spanish label is as legitimate an answer to
+    // "what lets them do this job" as one naming the English label, and matching only the resolved
+    // language would report a real surface as unresolved on a bilingual spec (AB#6686428).
+    const resolved = labelText(e && e.displayName, spec && spec.languageCode) || (e && e.schemaName);
+    for (const alias of labelAliases(e && e.displayName)) add(alias, { kind: 'entity', name: resolved, entity: e.schemaName });
+    add(e && e.schemaName, { kind: 'entity', name: resolved, entity: e.schemaName });
   }
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     for (const g of (a && a.groups) || []) {

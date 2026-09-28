@@ -21,20 +21,29 @@ const {
   dataverseRequest,
   ensureOk,
   parseArgs,
+  validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
 const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 async function main() {
-  // Feature gate first (fail closed) — see lib/feature-flags.js. Exit 3 = "feature
-  // off", distinct from 1 = runtime/usage error, so callers can tell them apart.
+  // Rollback gate (fail closed) — see lib/feature-flags.js. connectors is GA and ships ON, so
+  // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
   exitIfConnectorsDisabled();
 
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node create-connection-reference.js <envUrl> <logicalName> <connectorId> [--connection-id <id>] [--display-name <name>]';
+  const flagError = validateFlags(argv, {
+    known: ['connection-id', 'display-name'],
+    needValue: ['connection-id', 'display-name'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 3) {
-    process.stderr.write(
-      'Usage: node create-connection-reference.js <envUrl> <logicalName> <connectorId> [--connection-id <id>] [--display-name <name>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl, logicalName, connectorId] = positional;

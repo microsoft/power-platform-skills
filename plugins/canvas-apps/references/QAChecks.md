@@ -16,7 +16,7 @@ are not part of the identifier.
 
 **Run first — these invalidate the whole file or the whole compile:**
 
-- Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` — `@version` suffix on a `Control:` value
+- Check 1 — `QACHK-CONTROL-CREATION-KEYWORDS` — creation keywords differ from `describe_control`
 - Check 2 — `QACHK-MISSING-FORMULA-PREFIX` — property value without the `=` prefix
 - Check 3 — `QACHK-DUPLICATE-PROPERTY-KEY` — same property key twice in one
   `Properties:` block
@@ -33,6 +33,7 @@ are not part of the identifier.
 - Check 9 — `QACHK-SCROLL-TRAP` — `FillPortions: =1` inside a scroll container
 - Check 10 — `QACHK-WRAP-MISSING` — single-line label without `Wrap: =false`
 - Check 11 — `QACHK-NO-HEIGHT-TRAP` — `FillPortions: =0` without an explicit `Height`
+  or fixed-height vertical content exceeds its numeric height budget
 - Check 12 — `QACHK-TEXT-PADDING` — `ModernText` / `Label` padding defaults to 5
 - Check 13 — `QACHK-FILLPORTIONS-HEIGHT-CONFLICT` — `FillPortions` and `Height` both set
 - Check 14 — `QACHK-FILLPORTIONS-WIDTH-CONFLICT` — `FillPortions` and `Width` both set
@@ -43,7 +44,7 @@ are not part of the identifier.
 - Check 19 — `QACHK-NO-REFLOW` — horizontal row with no narrow-width strategy
 - Check 20 — `QACHK-ROOT-NOT-SCROLLABLE` — screen content taller than the viewport cannot
   be reached
-- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text colour not set against a coloured background
+- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text color not set against a colored background
 - Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` — light foreground on a variant-supplied
   surface
 - Check 23 — `QACHK-CARD-PLACEHOLDER` — `ModernCard` slot left unset
@@ -55,14 +56,32 @@ are not part of the identifier.
   container
 - Check 28 — `QACHK-TIMER-LIFECYCLE` — timer has no automatic start/reset edge
 - Check 29 — `QACHK-READ-ONLY-ANCESTOR` — interactive control under a read-only ancestor
-- Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` — small bounded gallery hidden in nested scrolling
+- Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` — Gallery viewport is circular,
+  non-deterministic, or hidden in nested scrolling
 - Check 31 — `QACHK-SEMANTIC-VALUE-BINDING` — semantic display control missing its visible
   value binding
 - Check 32 — `QACHK-ACTION-LABEL-FIT` — multiword action label does not fit its control
+- Check 33 — `QACHK-ACTION-CONTRACT` — required action, record field, or declared
+  state-driven surface is missing, unreachable, or not wired
+- Check 34 — `QACHK-MUTATION-OUTCOME` — data changes without a visible post-action result,
+  or a dead staging variable feeds the mutation (staging-variable liveness)
+- Check 35 — `QACHK-BEHAVIOR-ACCEPTANCE` — advanced behavior omits a required acceptance path
+- Check 36 — `QACHK-HORIZONTAL-BUDGET` — row content exceeds its available width
+- Check 37 — `QACHK-MANUAL-BOUNDS` — visible ManualLayout controls overlap or leave the parent
+- Check 38 — `QACHK-TEXT-CONTENT-FIT` — text control cannot fit its longest visible value
+- Check 39 — `QACHK-VISUAL-CONTRACT` — screen styling diverges from the shared visual system
+- Check 40 — `QACHK-EXCESS-WHITESPACE` — layout sizing creates unintended empty regions
+- Check 41 — `QACHK-CORE-VISUALIZATION` — core visualization is blank, static, or incomplete
+- Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` — required action is clipped, covered,
+  undersized, or unavailable from the initial task path
+- Check 43 — `QACHK-LIFECYCLE-IDENTITY` — edit, delete, or review targets an unstable or
+  incorrect record identity, or a phantom LookUp key locates no row (LookUp key integrity)
+- Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` — filters, ordering, alerts, metrics, or
+  reports read a different source from mutations
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
-output before returning, and fix every issue inline. Report the outcome of
-**every** check by number in the result summary, as described below.
+output before returning, and fix every issue inline. Report complete coverage plus only
+repairs and non-applicable checks, as described below.
 
 ---
 
@@ -70,31 +89,32 @@ output before returning, and fix every issue inline. Report the outcome of
 
 1. Read the `.pa.yaml` file you just wrote
 2. Apply the checks in order. Checks 1-5 come first because each one invalidates the
-   whole file or the whole compile, and the flood of misleading diagnostics that follows
-   hides every other problem
-3. For every issue found: apply the fix directly using `Edit`
-4. Record an outcome for **every** check, by number — not a total
+whole file or the whole compile, and the flood of misleading diagnostics that follows
+hides every other problem
+3. For every issue found: apply the fix directly using `apply_patch`
+4. Record complete coverage, every repair, and every non-applicable check
 5. Do NOT re-run `compile_canvas` here — the orchestrator does that
 
 All checks are safe: they tighten existing YAML, never delete semantic content.
 
 ### Reporting
 
-A count of fixes is not evidence that a check ran. Report one line per check, using
-exactly these outcomes:
+A long row of self-asserted `PASS` values is not evidence that a check ran. Use this
+compact, machine-scannable form:
 
 ```text
-QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(30) ·
-    8 PASS · 9 PASS · 10 PASS · 11 PASS · 12 PASS · 13 PASS · 14 PASS · 15 PASS ·
-    16 PASS · 17 PASS · 18 FIXED(4) · 19 PASS · 20 PASS · 21 PASS · 22 FIXED(3) ·
-    23 FIXED(4) · 24 PASS · 25 N/A · 26 N/A · 27 PASS · 28 N/A · 29 PASS ·
-    30 N/A · 31 PASS · 32 PASS
+QA coverage: 1-44 COMPLETE
+QA repairs: QACHK-MISSING-FORMULA-PREFIX FIXED(7) · QACHK-CONTAINER-MIN-SIZE FIXED(2)
+QA N/A: QACHK-GRID-CONTRACT · QACHK-TIMER-LIFECYCLE · QACHK-MANUAL-BOUNDS
 ```
 
-- `PASS` — you inspected every control the check applies to and found nothing.
-- `FIXED(n)` — you found and repaired `n` occurrences.
-- `N/A` — the construct the check targets does not appear on this screen (no gallery, no
-  `ModernCard`). Use this honestly; it is not a synonym for "did not check".
+- `COMPLETE` means the persisted file was inspected against every check.
+- `FIXED(n)` names each check that caused a repair and its occurrence count.
+- `N/A` names each check whose construct does not appear on the screen. It is not a
+  synonym for "did not check".
+- Do not emit the legacy numbered `QA: 1 PASS` checklist.
+- `1-44 COMPLETE` is invalid if the loaded guide does not define checks 42, 43, and 44.
+Report `Status: Provenance Blocked` instead of fabricating outcomes for missing checks.
 
 `QACHK-CROSS-AXIS-ALIGNMENT`, `QACHK-ACCESSIBLE-LABEL-MISSING` and
 `QACHK-LOW-CONTRAST-TEXT` apply frequently, but their outcomes still depend on the file:
@@ -107,17 +127,52 @@ QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(
   surface.
 - `QACHK-ROOT-CONTAINMENT` is `N/A` only when the brief explicitly requires fixed
   ManualLayout with deliberate screen-level overlays.
+- `QACHK-BEHAVIOR-ACCEPTANCE` is `N/A` when the screen owns no advanced behavior named
+  by Check 35.
+- `QACHK-HORIZONTAL-BUDGET` is `N/A` when the changed scope has no horizontal AutoLayout
+  container.
+- `QACHK-NO-HEIGHT-TRAP` requires numeric vertical-budget evidence for every fixed-height
+  vertical AutoLayout container; the presence of `Height` alone is not a PASS.
+- `QACHK-MANUAL-BOUNDS` is `N/A` when the changed scope has no ManualLayout container.
+- `QACHK-TEXT-CONTENT-FIT` is `N/A` only when the changed scope has no visible text.
+- `QACHK-VISUAL-CONTRACT` applies to every created screen and every visually changed
+  region.
+- `QACHK-EXCESS-WHITESPACE` is `N/A` for a Modify action that changes no layout sizing,
+  spacing, or visibility.
+- `QACHK-CORE-VISUALIZATION` is `N/A` only when the screen brief names no hierarchy,
+  chart, comparison, board, timeline, map, or other core visualization.
+- `QACHK-PRIMARY-ACTION-REACHABILITY` applies to every screen owning a Required Actions
+  entry point.
+- `QACHK-LIFECYCLE-IDENTITY` is `N/A` only when the screen owns no edit, delete/remove,
+  cancel, approve, reject, or other selected-record mutation.
+- `QACHK-SHARED-SOURCE-DERIVATION` is `N/A` only when the screen owns no mutation,
+  search, filter, ordering, alert, KPI, dashboard, visualization, or report binding.
 
 `PASS` is valid when every applicable control was inspected and no defect was found.
 Never infer that a check was skipped solely from the number of controls on the screen.
+For `QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
+`QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY`, PASS also requires the
+numeric branch calculations in `QA layout evidence`; unsupported PASS text fails review.
+These calculations are static evidence. Browser execution remains necessary to prove the
+rendered controls are visible, scrollable, and pointer-reachable.
+
+For `QACHK-ROOT-CONTAINMENT`, a responsive or unknown-device screen passes only when its
+declared viewport root is the sole top-level child, uses `AutoLayout`, and has exact
+`Width: =Parent.Width` and `Height: =Parent.Height`. Every alert, receipt, confirmation,
+form, and navigation region must be nested beneath it.
+
+For `QACHK-TEXT-CONTENT-FIT`, test the longest reachable label/value. A wrapped multiword
+button, badge, or label needs height for every line plus vertical padding; a fixed 44px
+height is not evidence of two-line fit. If wrapping is disabled, prove the longest value
+fits the available width.
 
 ---
 
-## Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` (`Control:` value contains `@version`)
+## Check 1 — `QACHK-CONTROL-CREATION-KEYWORDS` (creation keywords differ from `describe_control`)
 
-**Problem:** Every control type resolves to exactly one template version per app. A single
-`Control: ModernText@1.5.0` anywhere in the app pins every `ModernText` instance to one
-version and reports every property belonging to the other version as unknown:
+**Problem:** `list_controls` provides discovery names, not authoritative authored YAML.
+Guessing or normalizing `Control:`, `ComponentName`, `ComponentLibraryUniqueName`,
+`Variant`, or `Layout` can select the wrong template or omit a required keyword:
 
 ```text
 Another instance of control type 'ModernText' has already been referenced using a
@@ -126,17 +181,19 @@ Unknown property 'Color' for control type 'Text'.
 Unknown property 'FontWeight' for control type 'Text'.
 ```
 
-Those properties are valid. Nothing is wrong with them. One stray suffix can produce
-hundreds of phantom diagnostics, and they name an internal control type (`'Text'`) that
-appears nowhere in the YAML — so they are extremely hard to diagnose after the fact. This
-check is cheap; run it first.
+The properties may be valid; fix the creation contract before changing them.
 
-**Detect:** For every `Control:` property, flag any value that contains an `@` character
-(e.g. `Control: Text@2.0.0`).
+**Detect:** For every control type, compare its creation keywords with the `Control
+creation keywords` block returned by `describe_control`. Flag changed `Control:` values
+and missing, added, or altered companion keywords.
 
-**Fix:** Strip the `@…` suffix, keeping only the bare control name (`Control: Text`).
+**Fix:** Copy the complete creation-keyword block from `describe_control` verbatim to
+every instance of that type. Do not independently add or strip an `@version` suffix.
 
-**Exception:** None. Always use the bare name that `list_controls` returned.
+**Exception:** None. `describe_control` is authoritative.
+
+Run this check against composed whole-screen text before its first save as well as against
+the persisted file. A rejected first write leaves no target file for normal self-QA.
 
 ---
 
@@ -215,12 +272,12 @@ An enum literal has two parts and each fails differently. Check both.
 fails with `Name isn't recognized`. The same property name maps to different enum types on
 different controls:
 
-| Control | Property | Correct enum name |
-|---------|----------|-------------------|
-| `ModernDropdown` / `ModernTextInput` / `ModernNumberInput` | `Appearance` | `Appearance` |
-| `ModernButton` | `Appearance` | `ButtonAppearance` |
-| `Badge` | `Appearance` / `Shape` / `ThemeColor` | `BadgeCanvas.Appearance` / `BadgeCanvas.Shape` / `BadgeCanvas.ThemeColor` |
-| `Progress` | `Shape` / `Thickness` / `ProgressColor` | `Progress.Shape` / `Progress.Thickness` / `Progress.ProgressColor` |
+| Control                                                    | Property                                | Correct enum name                                                         |
+| ---------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
+| `ModernDropdown` / `ModernTextInput` / `ModernNumberInput` | `Appearance`                            | `Appearance`                                                              |
+| `ModernButton`                                             | `Appearance`                            | `ButtonAppearance`                                                        |
+| `Badge`                                                    | `Appearance` / `Shape` / `ThemeColor`   | `BadgeCanvas.Appearance` / `BadgeCanvas.Shape` / `BadgeCanvas.ThemeColor` |
+| `Progress`                                                 | `Shape` / `Thickness` / `ProgressColor` | `Progress.Shape` / `Progress.Thickness` / `Progress.ProgressColor`        |
 
 **Detect:** For every property you set to an enum value, find that property in the control
 definition in your screen brief and compare your qualifier against its `Enum name:` line.
@@ -380,7 +437,7 @@ dimension (e.g., a 28px circular avatar inside a 44px horizontal row), use
 natural size and is centered.
 
 ⚠️ This check is per-control and there is no compile diagnostic behind it. A screen where
-`AlignInContainer` appears on *none* of its controls has not had this check run — say so
+`AlignInContainer` appears on _none_ of its controls has not had this check run — say so
 in your report rather than claiming a clean pass.
 
 ---
@@ -465,7 +522,7 @@ comment text. These should keep the default wrapping behavior.
 
 ---
 
-## Check 11 — `QACHK-NO-HEIGHT-TRAP` (`FillPortions: =0` without explicit `Height`)
+## Check 11 — `QACHK-NO-HEIGHT-TRAP` (missing `Height` or vertical budget overflow)
 
 **Problem:** When an AutoLayout child has `FillPortions: =0` (or `FillPortions`
 is absent, which defaults to 0) and no explicit `Height`, Power Apps defaults
@@ -474,6 +531,7 @@ inexplicable gaps or clipping.
 
 **Detect:** For every `GroupContainer` whose parent has `LayoutDirection`
 (AutoLayout child), check:
+
 - Is the parent's `LayoutDirection` **Vertical**? This check applies to the parent's main
   axis only. In a horizontal parent, `FillPortions` governs width, so apply the same test
   to `Width` instead of `Height`.
@@ -511,7 +569,10 @@ After confirming a fixed size exists, verify that it fits. For every fixed-heigh
 vertical section, evaluate each responsive branch and sum direct child heights, nested
 minimum content heights, gaps and padding. Include wrapped or `AutoHeight` text at its
 expected narrow-width line count. Flag any branch where the section height is smaller
-than that budget. Do not mark this check `PASS` merely because `Height` is present.
+than that budget. Protect Save and every required action from falling below the available
+height. For a directional mutation receipt, include the labeled operation, old, amount,
+expected, and actual fields together in the sum; a container that fits only a receipt
+heading fails. Do not mark this check `PASS` merely because `Height` is present.
 
 Avoid parent-height formulas that depend on descendant control `.Height` values when
 those descendants also size from their parent. Use collection counts and literal content
@@ -570,6 +631,7 @@ padding and gaps.
 The container renders one size at design time and another at runtime.
 
 **Detect:** For every control, check whether it has both:
+
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Height` (any non-formula numeric or a formula that doesn't
   reference Parent)
@@ -587,6 +649,7 @@ confuses the layout engine. The container renders one size at design time and
 another at runtime.
 
 **Detect:** For every control, check whether it has both:
+
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Width` (any non-formula numeric or a formula that doesn't
   reference Parent)
@@ -712,6 +775,20 @@ AccessibleLabel: ="Quantity on hand for " & ThisItem.Name
 **Exception:** Purely decorative controls — spacer containers, background rectangles,
 divider lines. Do not label those.
 
+Accessibility naming is separate from visible field labeling. For every required classic
+or modern TextInput, NumberInput, Radio, DropDown, and ComboBox—including
+`ModernTextInput`, `ModernNumberInput`, `ModernRadio`, `ModernDropdown`, and
+`ModernCombobox`—also require a persistent human-readable visible label under the same
+immediate field-region parent. `AccessibleLabel` and `HintText` alone fail this usability
+contract. Static acceptance recognizes a native visible `Label` only for
+`ModernNumberInput`; every other type needs a sibling Text/Label control.
+
+A validated plan-declared state-driven surface may conditionally gate both the input and
+its sibling label. That shared ancestor predicate does not make the label transient while
+the surface is visible. Still reject a label with its own false or conditional `Visible`
+formula, a label outside the input's immediate field region, a label nested under the
+input, or a conditional ancestor not declared as that shared surface.
+
 ---
 
 ## Check 19 — `QACHK-NO-REFLOW` (horizontal row with no narrow-width strategy)
@@ -780,18 +857,18 @@ viewport.
 
 ---
 
-## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text colour not set against a coloured background)
+## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text color not set against a colored background)
 
-**Problem:** Text controls do not inherit a contrasting colour from their container. A
+**Problem:** Text controls do not inherit a contrasting color from their container. A
 container with a dark `Fill` whose child text controls omit `Color` renders near-black on
 near-black. `compile_canvas` passes it.
 
 **Detect:** For every container that sets a non-default `Fill`, check every descendant
 text control (`ModernText`, `Badge`, and any control with a `Text` or `Content` property)
-for an explicit colour — `Color` on the modern React controls, `FontColor` on `Badge`,
+for an explicit color — `Color` on the modern React controls, `FontColor` on `Badge`,
 `TitleColor`/`SubtitleColor`/`DescriptionColor` on `ModernCard`.
 
-**Fix:** Set the colour explicitly wherever the background was set:
+**Fix:** Set the color explicitly wherever the background was set:
 
 ```yaml
 Color: =RGBA(239, 246, 250, 1)
@@ -803,7 +880,7 @@ Color: =RGBA(239, 246, 250, 1)
 
 ## Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` (light foreground on a variant-supplied surface)
 
-**Problem:** `QACHK-LOW-CONTRAST-TEXT` catches text that *omits* a colour. This is the
+**Problem:** `QACHK-LOW-CONTRAST-TEXT` catches text that _omits_ a colour. This is the
 opposite failure: the colour is set, and it is set against a surface the control derives
 from a **Fluent enum** rather than from `Fill`. The agent picks a near-white foreground
 for a dark theme, the variant supplies a near-white surface, and the control renders
@@ -812,12 +889,12 @@ an empty pill.
 
 These are the enum values that produce a **light** surface:
 
-| Property | Light-surface members |
-|----------|----------------------|
+| Property                       | Light-surface members                                               |
+| ------------------------------ | ------------------------------------------------------------------- |
 | `Appearance` on `ModernButton` | `ButtonAppearance.Secondary`, `.Outline`, `.Subtle`, `.Transparent` |
-| `Appearance` on inputs | `Appearance.Outline`, `.FilledLighter` |
-| `Appearance` on `Badge` | `'BadgeCanvas.Appearance'.Tint`, `.Ghost`, `.Outline` |
-| `ThemeColor` on `Badge` | `'BadgeCanvas.ThemeColor'.Informative`, `.Warning` |
+| `Appearance` on inputs         | `Appearance.Outline`, `.FilledLighter`                              |
+| `Appearance` on `Badge`        | `'BadgeCanvas.Appearance'.Tint`, `.Ghost`, `.Outline`               |
+| `ThemeColor` on `Badge`        | `'BadgeCanvas.ThemeColor'.Informative`, `.Warning`                  |
 
 **Detect:** For every control that sets `Color` or `FontColor` to a light value (any
 channel triple averaging above ~180), check whether its surface comes from one of the enum
@@ -854,12 +931,13 @@ never one from your palette and the other from an enum default.
 
 ---
 
+
 ## Check 23 — `QACHK-CARD-PLACEHOLDER` (`ModernCard` slot left unset)
 
 **Problem:** `ModernCard` does not render unset slots as empty. It substitutes placeholder
 content: a large stock photograph for `Image`, and the literal strings `Title`, `Subtitle`
 and `Description` for the text slots. The photo takes most of the card's height, so the
-value you *did* set is pushed out of view or clipped mid-glyph. Every card on the screen
+value you _did_ set is pushed out of view or clipped mid-glyph. Every card on the screen
 looks identical and none of them shows its data. `compile_canvas` reports nothing.
 
 **Detect:** For every `Control: ModernCard`, list the slots supported by the control
@@ -871,13 +949,13 @@ that the card's layout displays but the YAML leaves unset.
 
 ```yaml
 - KpiOpenCard:
-    Control: ModernCard
-    Properties:
-      Image: =Blank()
-      HeaderImage: =Blank()
-      Title: =CountRows(colOpenTasks) & ""
-      Subtitle: ="Open tasks"
-      Description: ="Across all projects"
+      Control: ModernCard
+      Properties:
+          Image: =Blank()
+          HeaderImage: =Blank()
+          Title: =CountRows(colOpenTasks) & ""
+          Subtitle: ="Open tasks"
+          Description: ="Across all projects"
 ```
 
 If the control definition includes `ImageAccessibleLabel` or
@@ -891,6 +969,7 @@ visible, use at least `Height: =180`; anything below 180 is a failure, not a com
 variant. Do not force all
 three text slots into a short fixed height.
 
+
 **Exception:** None. If you chose `ModernCard`, you own all of its slots.
 
 ---
@@ -899,7 +978,7 @@ three text slots into a short fixed height.
 
 **Problem:** `TemplateSize` fixes the row height; the template's content does not
 negotiate with it. A row sized for density — `TemplateSize: =If(Self.Width < 640, 320, 132)`
-— clips whatever does not fit at the *desktop* branch, so the app looks correct on a phone
+— clips whatever does not fit at the _desktop_ branch, so the app looks correct on a phone
 and loses its card titles on a laptop. It is easy to miss because the narrow branch, which
 is the one usually eyeballed, is fine.
 
@@ -907,11 +986,23 @@ The trap is worst with a `ModernCard` row template, whose image band alone can e
 row height you chose.
 
 **Detect:** For every `Gallery`, evaluate `TemplateSize` at **each** branch of its formula.
-For each branch, add up the stacked heights of the row template's children plus their gaps
-and padding — counting nested fixed-height descendants and a `ModernCard`'s image band.
-When a vertical row contains a `FillPortions: =1` child, calculate the minimum height of
-that child's descendants and include it in the sum; do not treat it as zero. Flag any
-branch where the total exceeds `TemplateSize`.
+First resolve the breakpoint scope. Inside a gallery template, a direct row child's
+`Parent.Width` is gallery/template-scoped and can differ from the outer container width
+that the Gallery's own `TemplateSize` formula sees. Pass only when `LayoutDirection` and
+`TemplateSize` use the same deliberate breakpoint source, or after evaluating every
+reachable cross-branch pair (for example, vertical-row/desktop-template as well as
+vertical-row/phone-template).
+
+For each case, write the numeric height budget. A vertical row needs
+`top/bottom padding + sum(child minimum/fixed heights) + inter-child gaps`; a horizontal
+row needs `top/bottom padding + tallest child minimum/fixed height`, plus any height added
+by wrapping. Count nested fixed-height descendants, required identity and quantity/status
+fields, badges, action controls, and a `ModernCard` image band. When a child has
+`FillPortions: =1`, calculate the minimum height of its descendants and include it; do not
+treat it as zero. Flag any case where the total exceeds `TemplateSize`, or where a required
+field can clip even though its control exists. For example, 24px padding + three child
+heights totaling 136px + two 8px gaps needs 176px; a 132px template fails.
+Record those numbers in QA evidence; unsupported `PASS` text is not sufficient.
 
 **Fix:** Raise the branch to fit, or reduce what the row renders at that width:
 
@@ -968,40 +1059,48 @@ action is not duplicate UI.
 
 ---
 
-## Check 27 — `QACHK-ROOT-CONTAINMENT` (responsive screen content outside its root container)
+## Check 27 — `QACHK-ROOT-CONTAINMENT` (responsive root malformed or content outside it)
 
-**Problem:** A responsive screen can compile with a correctly configured root AutoLayout
-container while the actual header, sections and galleries are mis-indented as sibling
-entries in the screen's top-level `Children:` list. The root is then empty. Those siblings
-use screen-level positioning instead of AutoLayout, overlap one another, intercept pointer
-events and leave large blank areas. Every property on the individual controls can be
-valid, so no compile diagnostic reports the failure.
+**Problem:** A responsive screen can compile with a root AutoLayout that was accidentally
+given a button, panel, or breakpoint width, producing a narrow strip of clipped content.
+It can also compile while the actual header, sections and galleries are mis-indented as
+sibling entries in the screen's top-level `Children:` list. Those siblings use
+screen-level positioning instead of AutoLayout, overlap one another, intercept pointer
+events and leave large blank areas. No compile diagnostic reports either failure.
 
 **Detect:** When the screen brief names a responsive root container, inspect the
-`Children:` list directly under the screen key. It must contain exactly that root
-container. Then confirm every visible section named in the brief is nested under the
-root's `Children:` list. A root followed by another screen-level `- [Prefix]Header`,
-`- [Prefix]Panel`, gallery or stage is a failure, not a second layout region.
+`Children:` list directly under the screen key:
 
-**Fix:** Move every screen-level sibling under the root container's `Children:` key,
-preserving their order and existing properties:
+1. It must contain exactly that root container.
+2. The root must set exact `Width: =Parent.Width`, `Height: =Parent.Height`,
+   `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`. Flag fixed values, breakpoint
+   branches, or any other formulas for those four properties.
+3. Every visible section named in the brief must be nested under the root's `Children:`
+   list. A root followed by another screen-level `- [Prefix]Header`, `- [Prefix]Panel`,
+   gallery or stage is a failure, not a second layout region.
+
+**Fix:** Restore the root's exact full-screen sizing and move every screen-level sibling
+under the root container's `Children:` key, preserving their order and existing
+properties:
 
 ```yaml
 Screens:
-  Screen1:
-    Children:
-      - AppRoot:
-          Control: GroupContainer
-          Variant: AutoLayout
-          Properties:
-            Width: =Parent.Width
-            Height: =Parent.Height
-            LayoutDirection: =LayoutDirection.Vertical
-          Children:
-            - AppHeader:
-                # ...
-            - AppContent:
-                # ...
+    Screen1:
+        Children:
+            - AppRoot:
+                  Control: GroupContainer
+                  Variant: AutoLayout
+                  Properties:
+                      Width: =Parent.Width
+                      Height: =Parent.Height
+                      LayoutMinWidth: =0
+                      LayoutMinHeight: =0
+                      LayoutDirection: =LayoutDirection.Vertical
+                  Children:
+                      - AppHeader:
+                        # ...
+                      - AppContent:
+                            # ...
 ```
 
 After moving the controls, re-run `QACHK-FILLPORTIONS-DEFAULT`, `QACHK-SCROLL-TRAP`,
@@ -1041,9 +1140,9 @@ new item, toggle `Reset` and restart explicitly:
 ```yaml
 # Screen OnVisible
 OnVisible: |-
-  =Set(varTimerRunning, false);
-  Set(varTimerReset, !varTimerReset);
-  Set(varTimerRunning, true)
+    =Set(varTimerRunning, false);
+    Set(varTimerReset, !varTimerReset);
+    Set(varTimerRunning, true)
 
 # Timer
 AutoStart: =true
@@ -1078,11 +1177,11 @@ or row-action buttons.
 
 ```yaml
 - EventGallery:
-    Control: Gallery
-    Variant: Vertical
-    Properties:
-      Selectable: =false
-      DisplayMode: =DisplayMode.Edit
+      Control: Gallery
+      Variant: Vertical
+      Properties:
+          Selectable: =false
+          DisplayMode: =DisplayMode.Edit
 ```
 
 Set `DisplayMode` only on the individual action when it genuinely needs to be disabled.
@@ -1091,35 +1190,42 @@ Set `DisplayMode` only on the individual action when it genuinely needs to be di
 
 ---
 
-## Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` (small bounded gallery hidden in nested scrolling)
+## Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` (Gallery viewport is circular, non-deterministic, or hidden)
 
-**Problem:** A short, known roster is placed in a fixed-height Gallery inside an already
-scrollable screen. The Gallery creates a second scroll region and silently hides rows;
-Studio may not render a visible scrollbar even when `ShowScrollbar: =true`. Users see
-four of six people and have no cue that more exist.
+**Problem:** A Gallery may compile with populated `Items` but render zero rows when its
+own height is derived from collection count and `Self.TemplateHeight`,
+`Self.TemplateSize`, or `Self.TemplatePadding`. A hidden nested scroll region can also
+make additional rows undiscoverable.
 
 **Detect:** For every Gallery inside a root scroll container:
 
-1. If its Items source is a bounded local collection with roughly ten or fewer rows,
-   compare `Height` with
-   `AllItemsCount * TemplateHeight + ((AllItemsCount + 1) * TemplatePadding)`.
-2. Flag it when the fixed height is smaller than the full list, regardless of
-   `ShowScrollbar`.
+1. Require a conservative viewport-bounded numeric `Height`, explicit positive
+   `TemplateSize`, numeric `TemplatePadding`, a nonempty `Items` formula, and row controls.
+2. Flag `Height` formulas combining `CountRows(...)` with `Self.TemplateHeight`,
+   `Self.TemplateSize`, or `Self.TemplatePadding`.
 3. Flag a list that can open at a non-zero internal scroll position without an explicit
    reset-to-top behavior.
+4. Flag `Height` or empty-state `Visible` formulas that read `Self.AllItems`,
+   `Self.AllItemsCount`, or the gallery's rendered `AllItemsCount`. Those values depend
+   on materialized rows; when height begins at zero, the formula can keep the gallery at
+   zero height even though its `Items` source contains records.
 
-**Fix:** Let small bounded lists grow and rely on the root scroll:
+**Fix:** Use a deterministic Gallery viewport:
 
 ```yaml
-Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
-ShowScrollbar: =false
+Height: =320
+TemplateSize: =64
+TemplatePadding: =8
+ShowScrollbar: =true
 ```
 
-For genuinely large or unbounded data, keep the internal scroll region but provide a
-visible affordance and reset it to the first row on screen entry.
+Drive empty-state visibility from the source/filter count. When row selection is the only
+path that assigns a required selected ID, the Gallery must satisfy this contract; a
+non-gallery selector event is the alternative.
 
-**Exception:** Large/unbounded datasets where virtualization and internal scrolling are
-intentional and visibly discoverable.
+**Exception:** Large or unbounded datasets may intentionally use virtualization and
+internal scrolling, but they still require the deterministic viewport, concrete row
+contract, and visible scroll affordance above.
 
 ---
 
@@ -1144,10 +1250,10 @@ An `AccessibleLabel` is not the visible value binding.
 
 ```yaml
 - StatusBadge:
-    Control: Badge
-    Properties:
-      Content: =ThisItem.Status
-      AccessibleLabel: ="Assignment status " & ThisItem.Status
+      Control: Badge
+      Properties:
+          Content: =ThisItem.Status
+          AccessibleLabel: ="Assignment status " & ThisItem.Status
 ```
 
 **Exception:** A purely decorative semantic control explicitly intended to have no
@@ -1184,3 +1290,555 @@ For four-item phone navigation, allocate equal widths that fit the parent withou
 wrapping; shorten labels or use icons when the full labels cannot fit.
 
 **Exception:** A deliberately compact icon-only action whose visible text is omitted.
+
+---
+
+## Check 33 — `QACHK-ACTION-CONTRACT` (required action, record field, or declared surface is missing)
+
+**Problem:** A screen can display the expected entity while omitting or failing to wire a
+required action. It can also render a sparse card or row that omits requested record
+fields, or fail to apply a plan-declared visibility predicate to the surface that owns
+the disclosure, even though its source and other actions are valid.
+
+**Detect:** First, for every row in the screen brief's `## Required Record Fields` table:
+
+1. Find the named control inside the declared card, row, or detail hierarchy.
+2. Confirm its formula references the required source field on the current record. For a
+   combined control, confirm the formula references every field assigned to it.
+3. Confirm it is visible in the normal state, non-zero-sized, readable, inside the record
+   surface, and not clipped or displaced at desktop and phone widths.
+4. Reject a time-only, identity-only, icon-only, tooltip-only, accessible-label-only, or
+   action-only surface when the brief requires additional visible fields.
+
+For every row in the screen brief's `## State-Driven Surface Visibility` table, or exact
+`Surface.Visible=state predicate` declaration in a Required Action:
+
+1. Find the named surface control and inspect its own `Visible` property.
+2. Confirm it uses the planned predicate or a provably equivalent Boolean form.
+3. Reject visibility applied only to a child control or replaced with navigation to
+   another screen.
+4. Do not infer this contract from implementation alone; apply it only to visibility
+   explicitly declared by the plan.
+
+Then, for every row in the screen brief's `## Required Actions` table:
+
+1. Find the named entry point and action control.
+2. Confirm it is visible, non-zero-sized, enabled, outside read-only ancestors, and
+   reachable from the normal screen state. Trace any visibility variable to a reachable
+   control that sets it.
+3. Confirm actions below the fold have a working scroll path and record actions use an
+   interactive control.
+4. Inspect the named event for the required navigation, mutation, state transition, or
+   search/filter binding.
+5. For search and filter, confirm the input participates in the target list's `Items`
+   formula over the fields named by the brief.
+6. For role-scoped primary-record management, require a visible Edit entry point; review
+   or status controls are not an edit path.
+7. For every primary-record row or immediately reachable detail, find a visible text
+   binding to the canonical human-readable identity field. Avatar initials, icons, IDs,
+   accessible labels, tooltips, and agent-inferred values do not pass.
+8. When the Required Actions include both Approve and Reject/Decline, confirm every
+   eligible pending record exposes both decisions on the same row or in the same
+   immediately reachable detail. A lone Approve or Reject control fails even when the
+   other action exists elsewhere on the screen.
+9. Evaluate the phone branch. Required record actions must remain visible in the row or
+   behind an immediately visible overflow/detail entry, not in clipped desktop columns.
+10. Trace the contract as one loop: precondition/eligibility -> entry point -> event ->
+    named source and stable ID -> postcondition -> observer -> visible evidence. Confirm
+    `Visible` and `DisplayMode` permit the Given state and every name in the trace exists.
+
+**Fix:** Restore every required field binding, planned surface visibility binding, and
+entry control, then implement each required event behavior. Keep field controls inside
+the record surface with readable layout bounds. Stack paired decisions or move both into
+the same immediately reachable detail rather than dropping one.
+
+**Exception:** None for a Required Actions row. If the brief cannot be implemented with
+the discovered controls or data source, return `Status: Blocked` rather than shipping a
+placeholder.
+
+---
+
+## Check 34 — `QACHK-MUTATION-OUTCOME` (data changes without a visible post-action result)
+
+**Problem:** A create, edit, delete, or state-transition formula can run successfully while
+the app continues to show stale or incomplete data. A success notification alone does not
+prove that the requested outcome occurred.
+
+**Detect:** For every Required Actions row whose handler uses `Patch`, `SubmitForm`,
+`Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or a connector mutation:
+
+1. Confirm the handler captures or preserves the returned record, changed stable ID
+   (`Patch` result, `Form.LastSubmit`, selected ID, or equivalent), or deletion snapshot
+   before resetting inputs or navigating.
+2. Confirm the new or edited record appears, the deleted record disappears, or the
+   transitioned record appears in the requested status, filter, or dashboard.
+3. Find an in-viewport mutation receipt whose visibility is set by the successful handler
+   and whose displayed identity, action, and verification fields bind to the captured state.
+   It must remain visible until dismissal or the next mutation.
+4. Compare the Required Action's mutation write set with its receipt proof set and the
+   handler formula. Every field or status changed by the formula must appear in the declared
+   write set. For create/edit, every user-entered or user-selected write-set field must also
+   appear in the proof set. Compare the Mutation Field Ledger as well: every handler
+   write is a Changed row with write/proof parity, while every user-visible or
+   lifecycle-significant value that must survive is a Preserved row. A Preserved row must
+   either be absent from a partial update or carry the exact canonical pre-state value and
+   must name a post-state observer. Defaults, display text, stale selection, and parallel
+   collections are not preservation sources.
+5. Inspect the receipt controls and confirm each proof-set field has a readable label and a
+   visible binding to the captured state. Input values before submission, hidden variables,
+   agent memory, unlabeled or truncated text, and fields available only in a scrolled list
+   do not count. A receipt formula may render literal label text, but static evidence must
+   expose exactly one unambiguous underlying dynamic value expression for that field:
+   either bind the value directly or decorate one dynamic value with literals. If multiple
+   dynamic expressions could be the value, report a dedicated
+   ambiguous-receipt-expression error rather than guessing. `Notify()` and navigation do
+   not pass.
+6. For edit, require stable-ID selection and update, complete prepopulation, preservation
+   of unchanged fields, and non-mutating Cancel behavior.
+7. For a shared create/edit form, require intentional state reset after create and save.
+8. Confirm the observer formula reads the same source, stable ID, and changed fields used
+   by the handler. A receipt copied from input controls, a parallel collection, a stale
+   `ThisItem`, or a badge bound to a different status field fails. Apply the complete mutation
+   lifecycle trace: identify the canonical source and the requested destination, then
+   confirm their observers, the mutation receipt, and the operation all use the same
+   stable ID. If the destination reads a cache, projection, related collection, or
+   external query rather than the canonical live source, require an exact refresh,
+   requery, or cache update on the successful path before destination evidence appears.
+   If the destination contains multiple records, require selection, filtering,
+   highlighting, or opening by that stable ID. Display text and list position do not
+   establish focus.
+9. Mentally substitute the Functional Test Scenario's concrete Given values into the
+   handler. Confirm its Then postcondition and every proof-set value follow from the
+   formula without assuming runtime state not established by the app.
+10. For opposing transitions, confirm each direction has a separate Required Action and
+    concrete scenario. A shared form may share controls but not contracts or expected
+    outcomes.
+    When directional selector events commit operation state and a distinct guarded event
+    consumes that state to mutate, inspect every directional selector event: each may set
+    only the common operation state plus selection, receipt, or display UI state, and must not
+    call `Patch`, `SubmitForm`, `Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or a connector
+    mutation. Confirm both directions name the same operation state and the same distinct
+    mutation event, and that this event is the only mutation entry point; its control name
+    or label is irrelevant. The actual operation state is the one that event consumes.
+    Confirm an event-bearing selector assigns it, its invalid gate blank-checks it, and the
+    gated control owns or routes to the mutation. Reject a dead gated control beside
+    direct-mutation buttons. Button, dropdown, and radio selectors all pass when they
+    commit explicit direction state. Do not apply the shared-handler restriction to
+    separate direct actions: they pass when each has its own complete eligibility gate and
+    mutation handler, provided no dead shared gate is claimed.
+    Confirm shared operation state is reset to `Blank()` on action-screen entry and/or
+    after successful Apply. An `App.OnStart`-only assignment is insufficient because it
+    does not reset later visits or actions. Blank-operation evidence must name the actual
+    operation state and reset event; an amount control's `Default: =Blank()` does not pass.
+    When a classic Dropdown with nonempty `Items` is the operation state, confirm
+    `AllowEmptySelection: =true`; otherwise a blank default/reset does not prove no
+    operation. For a Combo box, confirm `DefaultSelectedItems: =[]`; do not require
+    `AllowEmptySelection`. Do not prescribe unsupported empty-selection properties for a
+    List box. Prefer explicit operation state when control semantics are uncertain.
+    Independent direct actions do not require shared operation state/reset because each
+    control identifies its direction, but each action still requires selected-ID and
+    amount gates.
+11. Confirm the operation selector and required amount/value input are visible,
+    pointer-selectable, inside parent bounds, and reachable in the scenario's Given state.
+    Confirm the operation selector is a Dropdown, radio group, or visible button-group that
+    commits on click — not an autocomplete/searching combobox whose selection does not
+    deterministically and visibly commit. Confirm submit is disabled when either input is
+    hidden, clipped, blank, invalid, unset, or unreachable, and confirm the opposite: that
+    submit positively becomes enabled and clickable once a valid operation and positive
+    amount are set. A gate that can never enable in any state fails this check.
+    Confirm blank and non-positive amount states are representable. For
+    `ModernNumberInput`, inspect `Default`, `Min`, current `Value`, `ValidationState`, and
+    every `Reset(...)`: reject `Min: =1` when the scenario claims the user enters `0`, and
+    reject a reset claim when `Default` restores a valid positive value. `Default: =0`
+    passes when `Min <= 0`, the gate rejects zero, and Reset restores zero as the chosen
+    invalid state. Both blank and `Value <= 0` must disable submission and produce visible
+    validation. When `OnChange` stages the amount, apply these same checks to the source
+    input and confirm the gate rejects its current/staged invalid value.
+    Accept either explicit non-positive form supported by the acceptance contract:
+    `value <= 0` or `Not(value > 0)`. Do not require a syntactic spelling the validator
+    rejects.
+12. Trace the current selected operation into the mutation formula. Reject a hard-coded
+    default direction, a stale variable from an earlier interaction, or a toggle that
+    infers the requested direction from prior state.
+13. For arithmetic pairs, substitute the same concrete old value and amount into both
+    scenarios. Increase must produce `old + amount`; decrease must produce
+    `old - amount`. Trace the branch condition and reject a reversed sign when the increase
+    operation selects the subtraction branch or the decrease operation selects the
+    addition branch, even if both expressions occur somewhere in the handler. When both
+    directions act on the same record type, also trace a same-record compound sequence
+    (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and confirm the second operation's
+    old value is read from the canonical source the first mutation already updated, not a
+    stale original value.
+    Require a literal guard for each operation value. An `else` branch or default `Switch`
+    arm does not prove a direction because blank, stale, or unexpected operation values
+    can reach it.
+    Trace one nullable selected-record ID across initialization/reset (`Blank()`), row
+    selection assignment, selected-record display, gate, mutation `LookUp`, receipt, and
+    compound evidence. This is the default incomplete-state proof. Reject
+    `Control.Selected` / `.Selected.*` from a Gallery, Dropdown, List box, or Combo box as
+    proof of no explicit selection when nonempty `Items` can auto/default-select a record,
+    unless empty-selection semantics are explicitly configured and evidenced. Reject any
+    narrative/table that names an explicit ID while final code consumes control selection
+    (or vice versa).
+14. Confirm the receipt binds the selected operation, old value, amount, expected new
+    value, and actual persisted new value, and that the destination observer shows the
+    same actual value.
+15. **Staging-variable liveness.** When any operand the mutation reads — a `Patch`/`Collect`
+    change value, an arithmetic operand, an `If`/`Switch` condition, or a `LookUp`/`Filter`
+    key — is a variable meant to carry a user-entered or user-selected value (a *staging
+    variable* such as a global `varAmount`/`varOldQuantity` or screen-context
+    `locAmount`/`locOldQuantity`), trace every place that variable is written. It MUST be
+    written from the live input before the mutation consumes it: either in the mutation
+    event before `Patch`, or in a reachable input/selector event such as `OnChange` or
+    `OnSelect`
+    (`ModernNumberInput`, `ModernTextInput`, `ModernDropdown`, slider, combo box, …) that
+    runs `Set(varStaging, Control.Value)` / `Set(varStaging, Control.Selected)` or
+    `UpdateContext({locStaging: Control.Value})` /
+    `UpdateContext({locStaging: Control.Selected})`, or by reading `Control.Value` /
+    `Control.Selected` inline at mutation time. An assignment after `Patch` cannot supply
+    that write and fails. A staging variable initialized only in `App.OnStart` or
+    `Screen.OnVisible` and never re-written from a live input event is **dead**: it keeps
+    its seed value (`0`, `Blank()`) forever, so the mutation silently computes against the
+    seed instead of the typed amount, and the formula still compiles and still passes every
+    directional/sign check. Reject it. The preferred, grep-verifiable form is to read the
+    input directly at the point of mutation (`Value(txtAmount.Text)`,
+    `cmbItem.Selected.ID`); when a staging variable is used instead, its `Set(...)` or
+    `UpdateContext({...})` assignment from the corresponding input control must be present
+    and reachable before the mutation consumes it, not only its initialization seed.
+    `validate-canvas-acceptance.cs` enforces this bounded static provenance for directional
+    receipt old/amount operands; that liveness check does not establish that a staged
+    amount is valid, so separately inspect its `Default`, `Min`, current-value gate, and
+    reset behavior.
+    Runtime inspection remains necessary because a static formula match cannot prove that
+    `OnChange` fires, that a selector or mutation control
+    is pointer-reachable, or that an enabled control can actually be clicked.
+
+**Fix:** Preserve the affected record state, update or refresh the visible binding, and add
+the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
+binding per proof-set field. Complete the mutation lifecycle row and field ledger, including
+same-ID destination synchronization/focus and canonical preservation evidence. For
+opposing transitions, split merged contracts and
+scenarios, expose a reachable operation selector, fail closed on invalid inputs, repair the
+arithmetic direction, and show complete before/after receipt evidence. Wire every staging
+variable to its live input control (a reachable `Set`/`UpdateContext` before `Patch`, or an
+inline `Control.Value`/`Control.Selected` read at mutation time) rather than leaving it at
+an `App.OnStart`/`Screen.OnVisible` seed or assigning it after the write. For
+shared-operation flows, move mutations out of selectors and into the one distinct guarded
+mutation event. `Notify()` alone is not an observable outcome.
+
+This check is static inspection. It cannot prove that a runtime event fires, an external
+write or synchronization succeeds, or destination focus renders. Preserve
+`Runtime evaluation: NOT RUN` until those behaviors are executed in the running app.
+
+**Exception:** None for a mutation named in `## Required Actions`.
+
+---
+
+## Check 35 — `QACHK-BEHAVIOR-ACCEPTANCE` (advanced behavior omits an acceptance path)
+
+**Problem:** Advanced behavior can look complete while omitting a boundary, persistence,
+recalculation, or rejection path required by its Action Contract.
+
+**Detect:** Apply this check to every Required Actions row for search/filtering, moving or
+reordering, limits, metrics, versions, category management, ranking, role-scoped record
+management, review decisions, program periods, or export/report output:
+
+1. Apply the relevant acceptance criteria from `${PLUGIN_ROOT}/references/BehaviorGuide.md`.
+2. Match every path named by the brief to a reachable event or binding that reads and
+   writes the named source of truth.
+3. Confirm visible evidence reads that source rather than seeded or copied state.
+4. For short finite choices, require concrete visible options in radio buttons, visible
+   choice buttons, or a dropdown that commits by click or tap. Reject a searchable
+   combobox, typed filtering, or keyboard-only commitment unless search or free-form input
+   is required. Give required short choices valid defaults when the business rule permits.
+5. Mentally execute create → bound list → Edit → prepopulate → change two fields including
+   one finite choice → stable-ID save → verify both values. Flag any broken link.
+6. Execute every row in the brief's `## Functional Test Scenarios` symbolically. For each
+   Given/When/Then path, identify the exact eligibility formula, event formula, source
+   operation, observer formula, and evidence control. Any missing or contradictory link
+   fails even if the controls exist.
+7. For a filter scenario, confirm pointer selection commits a value consumed by the target
+   `Items` formula, keeps all matching seeded records, excludes the non-matching record,
+   visibly identifies the active choice, and clear/reset restores the eligible source.
+
+**Fix:** Implement the missing path from the brief and bind its evidence to the shared
+source of truth. Do not replace a missing behavior with explanatory text.
+
+**Exception:** None for a path named in `## Required Actions`. Return `Status: Blocked`
+when the discovered controls or source cannot implement it.
+
+---
+
+## Check 36 — `QACHK-HORIZONTAL-BUDGET` (row content exceeds its available width)
+
+**Problem:** A row can have a breakpoint and still overflow. Child minimum widths, gaps,
+and padding may total more than the parent, clipping right-side controls or forcing them
+off-canvas.
+
+**Detect:** For every horizontal AutoLayout container at each desktop, tablet, and phone
+branch:
+
+0. For nested coordinated branches, confirm the parent `Height`, child
+   `LayoutDirection`, and related formulas remain safe if a logical-width narrow branch
+   never activates. `App.Width`, named root width, and root `Parent.Width` may stay at
+   logical design width in embedded or scale-to-fit hosts. Because `.pa.yaml` does not
+   expose a proven display-setting contract, fail required horizontal field/action groups
+   unless the wide/default composition itself fits a static bound, wraps, deliberately
+   scrolls, or is replaced by an always-stacked composition. Layout Budget Evidence
+   cannot prove host viewport sensitivity.
+1. Record total available container/root width for the branch.
+2. Add left/right padding, the minimum or fixed widths of all visible children, and
+   `LayoutGap` for every gap.
+3. Compare that required total with total available width at each exact branch threshold
+   and record both numbers in QA evidence. Do not subtract padding from available width
+   and also add it to required width.
+4. If flexible children use `FillPortions`, confirm their `LayoutMinWidth` values still
+   fit before remaining width is distributed. A `FillPortions > 0` child contributes its
+   explicit numeric `LayoutMinWidth`; an absent or zero minimum contributes zero, and
+   `Width` is not required. Every non-fill child needs numeric `Width`; use the greater of
+   that value and numeric `LayoutMinWidth`. A positive minimum alone does not safely bound
+   a symbolic width.
+5. If the total does not fit, require a wrap or vertical-stack branch and repeat the
+   calculation for each resulting row.
+6. For a record row, confirm its phone branch keeps identity, status, and required
+   lifecycle actions visible or uses an immediately visible overflow/detail entry.
+
+An overflow escape must be exactly `Scroll` or `LayoutOverflow.Scroll`. A conditional
+formula that merely contains `Scroll` does not prove its other branches are reachable.
+
+**Fix:** Stack or wrap the row, reduce justified minimum widths, group related fields, add
+a deliberate horizontal scroll region with a visible affordance, or move to a higher
+breakpoint/vertical layout. Keep the primary mutation action, amount control, and required
+lifecycle actions in the visible composition. Do not shrink interactive controls below
+44px or hide required actions.
+
+**Exception:** A deliberately horizontally scrolling region with an obvious visible
+scroll affordance and a brief that explicitly requires it.
+
+---
+
+## Check 37 — `QACHK-MANUAL-BOUNDS` (visible ManualLayout controls overlap or leave the parent)
+
+**Problem:** Absolute `X`, `Y`, `Width`, and `Height` formulas can place controls on top of
+one another or outside the parent at narrower widths. The compiler accepts both.
+
+**Detect:** For every pair of simultaneously visible children in a ManualLayout container,
+evaluate their rectangular bounds at each supported width branch. Flag:
+
+- rectangles with intersecting interiors unless the brief explicitly defines the pair as
+  an overlay;
+- `X < 0`, `Y < 0`, `X + Width > Parent.Width`, or
+  `Y + Height > Parent.Height`;
+- an overlay that covers a required interactive control or intercepts its input.
+
+**Fix:** Move the composition into AutoLayout, add breakpoint-specific bounds, or resize
+and reposition the controls so their rectangles fit without intersection.
+
+**Exception:** Intentional overlays such as badges, modal scrims, or decorative layers
+that are named in the screen brief and do not block required controls.
+
+---
+
+## Check 38 — `QACHK-TEXT-CONTENT-FIT` (text control cannot fit its longest visible value)
+
+**Problem:** Correct text can be clipped, truncated, or reduced to one unreadable line
+because its width or height was sized for a shorter seed value.
+
+**Detect:** For every visible text-bearing control:
+
+1. Identify the longest literal, status, field value, or composed caption specified by
+   the brief.
+2. For single-line text, require enough width and `Wrap: =false`.
+3. For wrapping text, require `AutoHeight: =true` or a height budget covering all lines,
+   vertical padding, and line spacing.
+4. A fixed-height text control must be at least `Size * 1.5` plus vertical padding for
+   each planned line.
+5. Confirm the containing row, card, gallery template, or section is tall enough for the
+   resulting control; `AutoHeight` does not grow a fixed parent.
+
+**Fix:** Allocate responsive width, enable wrapping with sufficient height, shorten
+nonessential copy, or enlarge the containing section/template. Do not solve clipping by
+reducing body text below 14px.
+
+**Exception:** Deliberate ellipsis in a secondary preview when the full value is reachable
+in a detail view named by the brief.
+
+---
+
+## Check 39 — `QACHK-VISUAL-CONTRACT` (screen styling diverges from the shared visual system)
+
+**Problem:** Independently built screens drift into different type scales, accent colors,
+spacing, surfaces, and action styles. A screen can also lack hierarchy when every label
+has equal weight and every action looks primary.
+
+**Detect:** Compare the screen with `canvas-app-shared.md`:
+
+1. Map the page title, section headings, body, captions, and KPI values to the exact shared
+   type roles.
+2. Confirm gaps and padding use the shared spacing scale.
+3. Confirm page, panel, card, border, and shadow treatments match the shared surfaces.
+4. Confirm primary, secondary, destructive, and disabled actions use their shared styles.
+5. Require one clear page title and focal region. Do not allow all headings, cards, and
+   actions to have equal visual weight.
+
+**Fix:** Replace screen-local styling values with the shared contract and restore the
+intended hierarchy. Do not introduce another palette or spacing increment.
+
+**Exception:** A deliberate exceptional state, such as an error or destructive
+confirmation, whose distinct treatment is defined in the shared contract.
+
+---
+
+## Check 40 — `QACHK-EXCESS-WHITESPACE` (layout sizing creates unintended empty regions)
+
+**Problem:** `FillPortions: =1`, oversized fixed heights, `SpaceBetween`, or empty spacer
+controls can create large blank bands that push useful content below the fold and make the
+screen look unfinished.
+
+**Detect:** At each supported width:
+
+1. Flag empty spacer controls or gaps larger than the shared spacing scale permits.
+2. Flag content-sized sections with `FillPortions: =1` when they do not intentionally
+   absorb remaining viewport space.
+3. Flag vertical `LayoutJustifyContent.SpaceBetween` when it separates ordinary content
+   into distant islands.
+4. Compare each fixed section height with child heights, gaps, and padding. Unassigned
+   space greater than one approved spacing increment needs an explicit purpose.
+5. Confirm blank space does not push a required action or primary result below the initial
+   viewport unnecessarily.
+
+**Fix:** Size the section to content, set `FillPortions: =0`, use an approved gap, or
+assign remaining space to the primary gallery/content region rather than empty controls.
+
+**Exception:** Deliberate negative space defined by the shared Visual Contract around a
+hero, empty state, or focused form.
+
+---
+
+## Check 41 — `QACHK-CORE-VISUALIZATION` (core visualization is blank, static, or incomplete)
+
+**Problem:** A screen can contain a correctly titled "Org chart", "Version Compare",
+"Timeline", or "Dashboard" region that renders only a blank rectangle, disabled-looking
+inputs, or decorative cards. This passes compilation and keyword checks while the core
+experience is missing or broken.
+
+**Detect:** For every core visualization named by the screen brief:
+
+1. Identify the populated-state controls and confirm they bind to the specified shared
+   source. A background container or title is not populated-state content.
+2. Confirm meaningful seed or guaranteed source data makes the visualization non-empty on
+   first render. Otherwise require a truthful empty state and reachable setup action.
+3. For relationship visualizations, confirm visible records expose their group/parent,
+   layer/depth, and reporting or connection relationship rather than rendering a flat list.
+4. For comparisons, confirm two distinct selected sources render simultaneously with
+   visible labels. If the requirement says side by side, reject tabs, a single reused
+   panel, and vertical stacking.
+5. Confirm differences are derived by stable record identity across the selected sources
+   and that added, removed, moved, or changed states have a visible treatment.
+6. Confirm empty-state, overlay, and input controls cannot cover populated content or
+   intercept its interactions.
+
+**Fix:** Bind real populated-state controls to the shared source, add meaningful first-load
+data or a truthful setup path, and implement the relationship/comparison encoding required
+by the brief. Remove placeholder surfaces and overlays that obscure the result.
+
+**Exception:** None when the screen brief names a core visualization. If the discovered
+controls cannot implement the requested interaction exactly, render the strongest truthful
+approximation and report it as blocked or approximate; never ship a blank region.
+
+---
+
+## Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` (required action cannot be used)
+
+**Problem:** A required action can exist in YAML but remain unusable because it is below a
+clipped form, inside a zero-height container, covered by an overlay, permanently disabled,
+or too small to target reliably.
+
+**Detect:** Trace every Required Actions entry point from the screen's initial state.
+Confirm its ancestor chain is visible, its enabled precondition is satisfiable, its target
+is at least 44px by 44px, and its bounds do not intersect another visible control at
+desktop, tablet, or phone widths. An action below the initial viewport needs an obvious
+working scroll or menu affordance that passes the same checks.
+For an action inside AutoLayout, include the ancestor horizontal and vertical arithmetic
+that places it inside bounds; "visible in YAML" or an unsupported `PASS` is insufficient.
+Explicitly verify Save, the amount input, and the primary mutation action.
+For directional flows, the operation selector, amount input, submit control, and
+validation/status prompt must remain visible in no-selection, no-operation, and
+non-positive states. Disable submit while invalid; do not hide that surface or a required
+ancestor behind `Not(IsBlank(selectedId))`, a positive-amount condition, or another
+valid-state visibility gate.
+
+**Fix:** Move the action into the initial task path, repair the containing layout, enlarge
+its target, or expose it through an immediately visible menu.
+
+**Exception:** A destructive confirmation action may begin hidden when a reachable
+delete/remove entry point makes it visible.
+
+---
+
+## Check 43 — `QACHK-LIFECYCLE-IDENTITY` (selected-record mutation targets the wrong row)
+
+**Problem:** Edit, delete, approve, reject, and status actions can appear wired while
+targeting display text, gallery position, a stale copied record, or the first row.
+
+**Detect:** For every selected-record mutation, trace the selected stable ID or record
+object through edit prepopulation, the mutation target, preservation of unchanged fields,
+and the immediate result observer. Review/status actions must write the same status field
+that filters, badges, dashboards, and reports render.
+
+When the plan declares a conditional continuation, trace the stable ID returned by create directly
+into the later edit, delete, relationship, approval, or transition target. Require a
+reachable continuation action bound to that ID, and require continuation identity and
+mode to clear after successful downstream completion and after non-mutating cancellation.
+A failed downstream mutation may retain context for retry. Do not require continuation
+for create-only flows, and reject recovery by display name, list position, or implicit
+control selection.
+
+Also apply a **LookUp key integrity** pass to every `LookUp`/`Filter` used to locate a
+mutation target (`Patch`, `Remove`, `UpdateIf`, or a connector mutation). The key comparison
+must test the collection's real key field against the exact selected or context value —
+`LookUp(colInventory, ID = cmbItem.Selected.ID)` — with NO string concatenation, prefix,
+suffix, casing change, padding, or reshaping applied to either side
+(`... = cmbItem.Selected.ID & " ID"`, `"ITEM-" & cmbItem.Selected.ID`,
+`Left(...)`, `Trim(...)`, `Upper(...)`), UNLESS the collection's documented schema in the
+plan genuinely stores the key in that transformed form. A concatenated or reshaped key is a
+**phantom LookUp key**: it can never equal any stored key, so `LookUp`/`Filter` returns
+`Blank()`/empty and the `Patch` silently creates nothing or targets no row while the formula
+still compiles. The acceptance validator now rejects the most common shape of this defect —
+a directional-mutation key that appends a string-concat or arithmetic operator directly to
+the selected-record expression (`... = cmbItem.Selected.ID & " ID"`) — so it no longer slips
+past the directional and selected-ID checks. It does **not** model every reshaping: a prefix
+wrap (`"ITEM-" & cmbItem.Selected.ID`), a function reshape (`Left(...)`, `Trim(...)`,
+`Upper(...)`), or the same surgery inside a `Remove`/`UpdateIf`/`Filter` or connector
+mutation still compiles cleanly. Confirm by
+inspection that both sides of the comparison name real, identically-typed fields with no
+cosmetic string surgery, and that the key used to locate the target is the same identity the
+receipt and observer report.
+
+**Fix:** Store the selected stable ID or record, mutate that identity, and bind post-action
+evidence to the same source and identity. Compare the `LookUp`/`Filter` key against the raw
+selected/context value with no concatenation, prefix, suffix, or reshaping unless the
+documented schema requires it; remove any phantom key surgery so the target row is actually
+found. For declared continuations, bind the downstream target to the returned create ID
+and clear continuation state on completion or cancellation.
+
+**Exception:** Create has no prior identity, but must assign a unique stable ID used by
+later lifecycle actions.
+
+---
+
+## Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` (derived UI reads stale or unrelated data)
+
+**Problem:** CRUD can update one collection while filters, ordering, alerts, KPIs,
+dashboards, and reports read seed data, copied counters, or a screen-local collection.
+
+**Detect:** Identify the authoritative mutable source. Confirm every mutation writes it
+and every search, filter, ordering, alert, KPI, visualization, and report derives from it
+using the same field semantics.
+
+**Fix:** Remove duplicate or copied state and bind dependent surfaces to the authoritative
+source or a named formula derived from it. Refresh any intentional cache on every
+successful mutation path.
+
+**Exception:** An immutable version snapshot may use a separate source when the plan
+explicitly defines snapshot identity and comparison semantics.

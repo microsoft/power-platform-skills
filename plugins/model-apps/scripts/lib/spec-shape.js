@@ -45,6 +45,16 @@ const COLLECTIONS = {
   charts: {},
   forms: { children: { subgrids: {}, events: {}, quickViews: {}, tabs: { children: { sections: {} } } } },
   commands: { children: { buttons: { children: { children: {} } } } },
+  // Business rules and their nested collections. Omitted when `businessRules[]` was introduced, so
+  // an object-valued `businessRules`, `conditions` or `actions` reached a raw `for...of` and threw a
+  // TypeError instead of producing a validation error naming the field — the exact failure this map
+  // exists to prevent.
+  businessRules: { children: { conditions: {}, actions: {} } },
+  // Business process flows, for exactly the reason recorded above — and this collection repeated the
+  // mistake: an object-valued `businessProcessFlows`, `stages` or `steps` reached the phase's
+  // `for...of` and threw `object is not iterable` instead of "must be an array". A flow is edited
+  // stage-by-stage while a process is being designed, so a mid-edit object here is realistic.
+  businessProcessFlows: { children: { stages: { children: { steps: {} } } } },
   dashboards: { children: { tiles: {} } },
   pages: { children: { navigatesTo: {}, dataSources: { scalar: true } } },
   personas: { children: { jobs: { children: { privileges: {} } }, additionalPrivileges: {} } },

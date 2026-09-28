@@ -131,8 +131,8 @@ table in scope.
 >
 > **Fields-list breadth (advisory).** For every Data Summarization target whose Layer 1/2 status
 > is `ready`, also report whether the existing `Webapi/<table>/fields` includes any of:
-> (a) the primary key column (`<prefix>_<table>id`); (b) lookup write forms (e.g.
-> `cr4fc_categoryid` without the matching `_cr4fc_categoryid_value` read form); (c) columns the
+> (a) the primary key column (`<prefix>_<table>id`); (b) relationship Navigation Properties with
+> no matching non-AI `NavigationProperty@odata.bind` write; (c) columns the
 > AI surface won't read. Mark these targets `fields-broader-than-ai-mode` so Phase 3 can surface
 > the gap to the user — they can choose to narrow now or accept the broader posture.
 >

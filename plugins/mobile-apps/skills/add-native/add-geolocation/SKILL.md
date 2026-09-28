@@ -7,7 +7,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../../shared/shared-instructions.md)** - read first.
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - read first.
 
 # Add Geolocation
 
@@ -42,11 +42,11 @@ msdyn_locationrecords
 Do not ask the user for a table name and do not invent a custom table. `msdyn_locationrecords` must already exist before the control can be used.
 
 ```bash
-ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../../scripts/resolve-environment.js" "$(node -e "console.log(require('./power.config.json').environmentId)")")
+ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e "console.log(require('./power.config.json').environmentId)")")
 ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.environmentUrl || '')" "$ENV_JSON")
 
 TABLE="msdyn_locationrecords"
-node "${CLAUDE_SKILL_DIR}/../../../scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "EntityDefinitions?\$filter=EntitySetName eq '$TABLE'&\$select=LogicalName,EntitySetName"
 ```
 
@@ -58,7 +58,7 @@ Required result:
 When the table exists, verify every mapped column exists:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../../scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "EntityDefinitions(LogicalName='<logicalName>')/Attributes?\$select=LogicalName,AttributeType"
 ```
 

@@ -2,11 +2,11 @@
 name: create-mobile-app
 description: Use when the user wants to start a new Power Apps mobile app (Expo / React Native / TypeScript, targeting iOS and Android) from scratch.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill, Task, EnterPlanMode, ExitPlanMode
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
 
 # Create Power Apps Code App (Native)
 
@@ -14,15 +14,22 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+Resume/template checks → prerequisites → requirements (iOS + Android fixed) →
+rough plan preview → Gate 1 architecture (native capabilities, connectors,
+then data platform) → Gate 2 Dataverse model when selected → Gates 3 and 4
+screen graph/specifications → environment and template preparation → app
+initialization → design system → conditional Dataverse materialization and
+sample data → Mobile Offline Profile offer for Dataverse apps → native
+capabilities and connectors → navigation and screens → validation, preview,
+and summary.
 
 ---
 
 ## Fresh-template working-directory mode
 
-This skill assumes the user already has a **fresh** `pa-wrap-tools/templates/expo-app-standalone` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `expo-app-standalone` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
 
 Use these markers:
 
@@ -31,7 +38,7 @@ Use these markers:
 | Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
 | Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
 | Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`. |
+| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
 
 This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
 
@@ -68,6 +75,8 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ### Step 0 — Resume check + fresh-template gate
 
+**Telemetry checkpoint: `validate_fresh_template`**
+
 If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
 
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
@@ -82,12 +91,14 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 - If `memory-bank.md` exists and the user confirms resume, resume as documented above.
 - If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`.
+- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
 - If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
 ### Step 1 — Prerequisites
+
+**Telemetry checkpoint: `validate_development_toolchain`**
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
@@ -109,7 +120,7 @@ az account show --query "user.name" -o tsv          # Azure CLI logged in (neede
 git --version                                       # optional
 ```
 
-**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${CLAUDE_SKILL_DIR}/../../shared/version-check.md) — only the **Always required** tier matters here.
+**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
 
 | Missing | Action |
 |---|---|
@@ -136,7 +147,7 @@ if [ -z "$TARGET_ENV" ] && [ -f power.config.json ]; then
   TARGET_ENV=$(node -e "try { const id=require('./power.config.json').environmentId || ''; console.log(id); } catch { console.log(''); }")
 fi
 test -n "$TARGET_ENV" || { echo "✗ Environment missing. Provide an environment ID."; exit 2; }
-ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$TARGET_ENV")
+ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$TARGET_ENV")
 printf '%s\n' "$ENV_JSON" > .resolved-environment.json
 ACTIVE_ENV_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentId || '')" "$ENV_JSON")
 ACTIVE_ENV_NAME=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.displayName || j.environmentUrl || '')" "$ENV_JSON")
@@ -158,8 +169,15 @@ If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenan
 
 Detect the publisher prefix for the env's Default solution so the planner uses the correct prefix rather than assuming `cr_`.
 
+**Deferred execution:** do not run the query at this point. The architecture
+gate first selects `required` or `connector-only`; only `required` runs execute
+the block below. Connector-only runs set
+`$DETECTED_PUBLISHER_PREFIX = ""` and make no Dataverse prefix query.
+
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" "$ACTIVE_ENV_URL"
+PUBLISHER_PREFIX_JSON=$(node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" \
+  "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
+echo "$PUBLISHER_PREFIX_JSON"
 ```
 
 Output is one line of JSON, e.g.:
@@ -189,6 +207,8 @@ If the script exits non-zero (rare — should always exit 0 with `prefix: null`)
 
 ### Step 2 — Gather requirements
 
+**Telemetry checkpoint: `gather_app_requirements`**
+
 Skip questions the user already answered in `$ARGUMENTS`.
 
 If the user gave no description, ask one open-ended question first:
@@ -200,13 +220,16 @@ Then collect with `AskUserQuestion` (batch where possible):
 | Question | Default |
 |---|---|
 | App display name | derived from description |
-| Target platforms | `ios`, `android` (multi-select, default both) |
 | Aesthetic | minimal / playful / professional / matches existing brand |
 | Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
 
+Set `<target_platforms> = "ios, android"` for every new app. Do not ask the
+user to choose between iOS and Android; the mobile template targets both and
+downstream planning must retain platform-specific behavior for each.
+
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`.
+**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
 
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
@@ -226,6 +249,8 @@ Re-prompt for name if (1). If (2), send the user to Maker portal to delete the e
 If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
+
+**Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, note it for a post-creation `/setup-app-insights` run (Application Insights is no longer configured during creation) and explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific custom events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomEventsLogger()`; do not convert them into connectors or data-model artifacts.
 
 ### Step 2b — Requirements discovery
 
@@ -262,7 +287,7 @@ Print the chosen tier so the user knows which path is running:
 
 #### Step 2b.1 — Walk-through path (only when tier = `walk-through`)
 
-Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
+Read [`references/requirements-discovery.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
 
 Wait for the user's response. Summarize their answers into a **requirements brief** — 4–8 bullet points covering what users can do, what data is tracked, and integrations.
 
@@ -305,11 +330,35 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 
 **Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
+Infer a provisional Dataverse planning mode before Step 2c:
+
+- `connector-only` only when every record source and write target is an
+  explicit non-Dataverse connector/system of record, and the app needs no
+  app-owned persistent rows, retained File/Image
+  artifact, existing Dataverse table, or Dataverse-backed native capability.
+- `required` for every other case, including ambiguity. Do not infer
+  connector-only merely because the brief names a connector.
+
+Apply
+[`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
+while classifying the brief.
+
+Store the recommendation as `<recommended_dataverse_planning_mode>`. The first
+user-visible data-platform choice happens in the planner's architecture gate
+after native capabilities and connectors have been presented. Dataverse
+discovery does not run before that gate.
+
+Also stash `<exact_target_facts_required> = yes` when planning depends on any
+existing/standard/managed table, reuse or extension decision, proposed-name
+collision decision, relationship target, computed column, or target
+customizability fact. Otherwise set it to `no`. This flag controls only safe
+planning degradation; it never relaxes `/add-dataverse` reconciliation.
+
 **Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
 
-Set tentative defaults (used by Step 3b before `/design-system` runs):
+Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
+- `<visual_companion> = yes` — automatically open `_plan_preview.html` in the browser at Step 6.75, after the design choice. Gate 4 remains markdown-only regardless of this preference. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
@@ -325,9 +374,9 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Output | Input proxy | Computation | Confidence |
 |---|---|---|---|
 | Tables | Distinct nouns in confirmed brief | `count(unique_nouns) × [0.7, 1.3]` rounded | low — architect may merge or split |
-| Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
+| Connectors | Connector keywords in the confirmed brief | `len(candidates)` | low — Gate 1 confirms the actual list |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
-| Planning min | Tables + screens | `tables × 0.3 + screens × 0.4 + 2` | low |
+| Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 2 data-model budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
@@ -340,12 +389,12 @@ Based on your confirmed brief, before any agent runs:
 
 Scope (proxy estimates — actual numbers come from architects):
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
+  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 1)
   Screens     ~<low>-<high>       ← from <N> features × ~2-3 screens each
-  Approval gates  4               ← fixed (data model, native, connectors, screen plan)
+  Approval gates  4               ← architecture, data model when applicable, screen graph, screen specs
 
 Time (rough — agent time only, excludes your approval latency at gates):
-  Planning      ~<low>-<high> min ← architects + your gate approvals add to this
+  Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
   Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
 
@@ -353,7 +402,7 @@ Token tier: Opus everywhere in v0 (model routing not yet shipped).
 
 ⚠ These are proxies, not measurements:
   • Table count is "noun count in brief" — architect may collapse or split
-  • Time excludes your approval latency at the 4 gates
+  • Time excludes your approval latency at up to 4 applicable gates
   • If industry inference is low-confidence, +1 picker prompt
   • If you opted into the design vibe picker, +1 prompt + planner re-spawn
   • If any gate is rejected, that section regenerates (~2-3 min each)
@@ -377,25 +426,250 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
-> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Total time is 5–12 minutes:
->  • Gate 1 (data model) — ~60–90s
->  • Gate 2 (native capabilities) — ~10s (quick)
->  • Gate 3 (connectors) — ~30–60s
->  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
+> "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
+>  • Gate 1 (architecture) — confirm Dataverse choice, native capabilities, and connectors before schema work
+>  • Gate 2 (data model, Dataverse only) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks; auto-skipped for no-Dataverse apps
+>  • Gate 3 (screen graph) — approve destinations, navigation, and shared conventions
+>  • Gate 4 (screen specs) — **3–8 minutes** for detailed screen contracts
 >
-> Between gates the spinner will sit quiet — sub-agents can't stream their progress to this view. If a gate hasn't surfaced after 12 minutes, something is stuck and you should interrupt."
+> For Dataverse-required apps, factual foreground milestones will show
+> environment, inventory, candidate, detail, and timing counts within 30
+> seconds of starting metadata work after Gate 1 approval. Connector-only apps
+> skip those metadata milestones. While the
+> architect runs, new milestone IDs from
+> `.tmp/data-model-planning-status.json` are rendered without inventing
+> percentages. If Gate 2 has not surfaced after 15 minutes of data-model planning, inspect the last
+> applicable milestone before interrupting."
 
 ### Step 2d — Template-only mode
 
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
-### Step 3 — Plan (planner agent + 4 approval gates)
+### Step 3 — Plan (planner agent + up to 4 applicable approval gates)
 
-First, create the empty working directory so the planner has a place to write:
+**Telemetry checkpoint: `plan_app_architecture`**
+
+First, create the working and planning-artifact directories:
 
 ```bash
-mkdir -p <working_dir>
+mkdir -p <working_dir> <working_dir>/.tmp
 ```
+
+### Architecture gate
+
+Run the planner once in architecture-only mode before any Dataverse discovery:
+
+```
+Spawn agent: mobile-app:native-app-planner
+
+Prompt:
+  Plan and approve architecture inputs for a Power Apps mobile app.
+  Architecture phase: gate-only
+  Requirements brief: <requirements_brief>
+  Original prompt: <full $ARGUMENTS verbatim>
+  Wizard answers: <Step 2 answers>
+  Target platforms: iOS and Android
+  Recommended Dataverse planning mode: <recommended_dataverse_planning_mode>
+  Working directory: <absolute path>
+  Plugin root: ${PLUGIN_ROOT}
+  Dataverse planning snapshot: NOT SUPPLIED
+  Dataverse planning evidence: NOT SUPPLIED
+```
+
+The planner presents native capabilities, then connectors, then the
+data-platform choice in Gate 1. On approval it writes
+`<working_dir>/.tmp/approved-architecture.md` and returns exactly
+`NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>`.
+
+Treat that signal as the successful architecture result, set
+`<dataverse_planning_mode>` only after the architecture-result checks in the
+canonical status switch below pass, and continue. Any other terminal status
+follows that switch. If the nested planner is unavailable, prepare and approve
+all three architecture decisions inline: native capabilities, connectors, and
+the data-platform choice. Use the planner's Gate 1 dependency checks, write
+the same approved artifact, and continue without adding another approval.
+
+Now execute the deferred Step 1.7 publisher-prefix detection for `required`.
+For `connector-only`, set `$DETECTED_PUBLISHER_PREFIX = ""`, print
+`↷ Publisher-prefix discovery skipped — connector-only planning.`, and do not
+call `detect-publisher-prefix.js`.
+
+### Foreground Dataverse planning snapshot and evidence
+
+Planning stays read-only. The resolver's `--no-cache` mode may read existing
+identity metadata, but must not persist the environment cache, auth settings,
+or telemetry cluster, and must not replay pending telemetry. Normal resolution
+in Step 4 retains those post-approval behaviors.
+
+Branch on the Gate 1-approved
+`<dataverse_planning_mode>`:
+
+- `connector-only` — skip every command in this section. Set `SNAPSHOT_PATH`
+  and `ARCHITECT_EVIDENCE_PATH` to empty/not supplied, print
+  `↷ Foreground planning snapshot skipped — the confirmed brief is connector-only.`, and
+  continue to planner dispatch. Connector-only planning does not perform
+  Dataverse metadata reads; the skill's existing global prerequisites remain
+  unchanged.
+- `required` — resolve the already selected environment again in the
+  foreground and create one normalized foreground planning snapshot as below. Do not make the
+  nested planner or architect rediscover the tenant.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant
+```
+
+The command validates both required fields before returning JSON. On exit `0`,
+use its `environmentUrl` as `$ACTIVE_ENV_URL` and `tenantId` as
+`$ACTIVE_TENANT_ID` in the following commands, replacing the previous values.
+Read these fields directly from the structured command result; do not run
+separate JSON-extraction commands. On a nonzero exit, follow foreground
+recovery below and do not create a snapshot or reuse stale environment values.
+
+Build `<working_dir>/.tmp/dataverse-concepts.json` as a JSON array of typed
+concepts from the confirmed brief and Gate 1-approved architecture. Account for
+approved native capture/storage targets. Discover only app-owned Dataverse
+records or explicitly approved Dataverse projections; exclude connector-owned
+records from Dataverse candidate selection. Each item has `phrase`, `kind`,
+`discoverTable`, and a short `evidence` quote. Use `kind: entity` and
+`discoverTable: true` only for a plausible persistent business record with an
+independent lifecycle; classify people/actors as `role`, fields as `attribute`,
+workflow verbs as `action`, enum values as `status`, and operating limits as
+`constraint`, all with `discoverTable: false`. Preserve multiword/header-child
+families such as `medical assessments`, `care activities`, `release events`,
+`custody transfers`, `test results`, and `evidence attachments`. Do not turn
+every noun into an entity merely to increase recall. Add known standard or
+required-existing logical names to `<EXPLICIT_TABLES>`. Build
+`<PROPOSED_TABLES>` from the detected publisher prefix for every clearly
+proposed custom table so collisions and missing names are explicit; leave a
+name out rather than inventing it when the concept is not yet stable.
+
+Detailed advisory discovery is quality-bounded:
+
+- Keep the complete customizable-table inventory and ranking.
+- Required exact-name tables are always detailed and do not consume advisory
+  capacity.
+- A concept credibly covered by an exact table does not receive speculative
+  advisory alternatives.
+- Every typed entity concept receives its primary candidate and at most one
+  ambiguity candidate. Roles, attributes, actions, statuses, and constraints
+  never trigger table discovery.
+- A lower-ranked proposed-name collision is promoted only when its display
+  phrase strongly matches a multiword entity concept.
+- Strong exact/suffix/contains matches and explicit/collision candidates load
+  full details. Weak advisory candidates load `core` details and cannot
+  authorize Reuse, Extend, or Adapt until bounded expansion upgrades them.
+- Inventory-only alternatives remain available for bounded exact-name
+  expansion, at most once per newly selected logical name.
+
+```bash
+SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
+ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
+INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
+
+run_dataverse_planning_attempt() {
+if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --output "$SNAPSHOT_PATH" \
+  --concepts-file "$CONCEPTS_PATH" \
+  --tables "<EXPLICIT_TABLES>" \
+  --proposed-tables "<PROPOSED_TABLES>" \
+  --progressive-detail \
+  --combined-base-read \
+  --read-concurrency 1 \
+  --inventory-cache "$INVENTORY_CACHE_PATH"; then
+  printf 'NEEDS_RECOVERY: dataverse-snapshot\n' >&2
+  return 2
+fi
+
+if ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$ARCHITECT_EVIDENCE_PATH" \
+  || ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+    --snapshot "$SNAPSHOT_PATH" --output "$ARCHITECT_EVIDENCE_PATH" --validate-only; then
+  printf 'NEEDS_RECOVERY: dataverse-evidence\n' >&2
+  return 2
+fi
+
+node -e '
+  const s=require(process.argv[1]);
+  const t=s.timings;
+  const d=s.detailLoadSummary;
+  console.log(`✓ Dataverse inventory: ${s.inventoryFacts.customizableTables} customizable + ${s.inventoryFacts.exactNameTables} bounded exact-name discoveries (${s.inventoryFacts.requiredExactNameTables} required, ${s.inventoryFacts.proposedCollisionTables} proposed collisions) (${t.inventoryRetrievalMs} ms)`);
+  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed (${d.primaryCandidates || 0} primary, ${d.ambiguityCandidates || 0} ambiguity, ${d.strongCollisionCandidates || 0} strong collision, ${d.deferredCandidates || 0} deferred; ${t.candidateSelectionMs} ms)`);
+  console.log(`✓ Detail loading: ${d.loadedCandidates} loaded (${d.coreCandidates || 0} core, ${d.fullCandidates || 0} full), ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
+  console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
+  console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
+' "$SNAPSHOT_PATH" || return 2
+echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
+}
+run_dataverse_planning_attempt
+```
+
+`--combined-base-read` loads attributes, three relationship collections, and
+alternate keys through one entity-definition GET per selected table, following
+any nested continuation links before normalization. Typed constraints, choices,
+lookup targets, and computed metadata remain separate full-detail GETs.
+`--read-concurrency 1` is the production default. Concurrency `2` through `8`
+is an explicit operator choice only; metadata writes are never sent
+through this read worker pool. The inventory cache stores inventory-level facts
+only, has a five-minute TTL, fails open on corruption or identity mismatch, and
+is never read by `--reconcile-exact`. After any metadata publish, invalidate it
+with `dataverse-inventory-cache.js --file "$INVENTORY_CACHE_PATH" --invalidate`.
+
+**Foreground recovery, not agent termination.** A nonzero command result or
+`NEEDS_RECOVERY` returns control to the foreground agent. Keep working on the
+failure; only dependent summaries, architect dispatch, approval, and mutation
+wait for trustworthy evidence. This also applies to environment resolution,
+token acquisition, transport access, broad inventory, exact-name identity
+resolution, parsing, and evidence validation failures in this step.
+
+- Diagnose the actual error, then repair recoverable project-local command,
+  path, or concept-input mistakes. Let the request executor handle its bounded
+  transient retries; do not launch parallel retry loops or repeat an unchanged
+  permanent error. Invalid cached or old-format metadata is regenerated from
+  live reads, never edited into apparent validity.
+- After a targeted repair, rerun `run_dataverse_planning_attempt` (or
+  rerun the block with that invocation if the shell function is unavailable).
+  Allow at most two repair-and-retry attempts per failing stage. Re-resolve the
+  selected environment first if resolution failed.
+- Resume automatically only after the current attempt succeeds and its fresh
+  snapshot and matching evidence validate. File existence is not success:
+  prior artifacts can survive a failed atomic write. Never substitute stale
+  evidence, invent metadata, change the selected account/environment, relax
+  validation, or downgrade a requirement to make the check pass.
+- Ask the user only when recovery needs interactive sign-in, missing privileges,
+  an explicit scope decision, or the bounded repairs are exhausted. Preserve
+  the working context and resume this stage after that blocker is resolved;
+  a recoverable command failure alone is not terminal `BLOCKED`.
+- Individual table-detail failures do not stop planning. Keep the snapshot,
+  record each failure in `detailLoadFailures`, list it in the evidence
+  appendix, and classify the affected exact or advisory table as `Defer` at
+  Gate 2 unless the user chooses a materially different business design.
+- `Defer` is non-executable. Step 8 still requires fresh complete evidence for
+  every approved `Reuse`, `Extend`, `Create`, or `Adapt` operation; unresolved
+  metadata never authorizes a write.
+- `--proposed-tables` performs collision checks only. Missing proposed names
+  are not required-table failures and must never be selected for detail loading
+  solely because they were proposed.
+
+The snapshot script emits factual `DATAVERSE_SNAPSHOT_PROGRESS` lines after
+inventory, candidate selection, and detail loading. Print them immediately;
+never replace them with estimates or percentages. Once the architect starts,
+watch `<working_dir>/.tmp/data-model-planning-status.json` and print each new
+milestone ID once with its counts and elapsed time. The first environment or
+snapshot milestone must be visible within 30 seconds. The foreground
+orchestrator owns this rendering; the architect only owns the status artifact.
+
+For `required`, pass `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim to
+the planner prompt and every direct `data-model-architect` fallback/revision.
+The model reads the compact sidecar, not the full snapshot; deterministic tools
+retain the full snapshot for hash binding and validation. A supplied matching
+pair activates the architect's `snapshot-only` path: no Bash discovery and no
+live Dataverse calls inside the agent. For `connector-only`, pass the mode
+explicitly and state that both paths are not supplied; never provide placeholder
+file paths.
 
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
@@ -412,7 +686,8 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
-> "→ Spawning planner agent. First prompt (data model) appears in ~60–90 seconds while the data-model architect analyzes your requirements. Later gates take longer — see the timing breakdown above."
+- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 2/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
+- `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
 
@@ -430,50 +705,318 @@ Prompt:
 
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
+  Target platforms: iOS and Android (fixed; no platform question)
   Working directory: <absolute path of <working_dir>>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Plugin root: ${PLUGIN_ROOT}
+  Architecture phase: complete
+  Approved architecture artifact:
+  <working_dir>/.tmp/approved-architecture.md
+  Dataverse planning mode: <required | connector-only>
+  Dataverse planning failure reason: none
+  Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Compact Dataverse architect evidence: <absolute ARCHITECT_EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Structured schema contract: <absolute
+  `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
+  NOT SUPPLIED>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
+  Follow native-app-planner.md. Restore the approved architecture without
+  re-asking Gate 1, then run conditional Dataverse modeling and the remaining
+  applicable approval gates. On terminal return, emit one of
+  `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal
+  first line per AGENTS.md rule #10.
 ```
 
-The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
+The planner runs gates internally for architecture → conditional data model →
+screen graph → screen specs, and writes `<working_dir>/native-app-plan.md`.
+Wait for it to return before continuing — do not proceed on a
+partially-approved plan.
+On a successful `required` return, require both
+`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
+before continuing. If the receipt is missing, STOP as `BLOCKED`; this
+orchestrator must not synthesize it after the planner has returned.
 
 #### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs the four gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
+When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs all applicable gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
 
 > "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
 
 Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
-1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
-2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
+1. Read `<working_dir>/.tmp/approved-architecture.md`. If it is missing or malformed, return to the Architecture gate
+  above and recover the artifact from recorded user acceptance, or run that
+  gate inline when approval is absent. Do not invent approval or infer the
+  data platform from missing artifacts. Only then perform the conditional
+  foreground snapshot step and resume here; retain a valid existing approval
+  without re-asking it.
+2. Restore the approved native capabilities, connectors, and data-platform
+   mode without re-presenting Gate 1:
+   - In `connector-only`, write an explicit zero-table/no-Dataverse
+     `## Data Model` section and no schema contract or data-model approval
+     receipt.
+   - In `required`, spawn `mobile-app:data-model-architect` directly via
+     `Task`, passing `Approved native capabilities:` and
+     `Approved connectors:` verbatim along with the foreground
+     snapshot/evidence paths. Present its result as Gate 2 and require approval
+     before screen planning.
 
-   **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+  **MUST forward the approved architecture in the direct architect prompt.**
+  Include the exact Gate 1-approved native capabilities and connectors. In
+  `required`, pass `Dataverse planning mode: required` and forward
+  `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim. The full snapshot is
+  validator input only; read only the compact evidence. Do not resolve the
+  environment or run Dataverse discovery again. A
+  `connector-only` run never dispatches this architect.
 
-  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt:** *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+
+  In `required`, also require the direct architect to write and normalize
+  `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
+  A draft Markdown section without that sidecar is not an executable Gate 2
+  result.
+
+  Before presenting Gate 2, run
+  `validate-dataverse-planning-decisions.js --contract <contract> --snapshot <snapshot>`.
+  Apply the native planner's Step 5 decision-validation handling: preserve the
+  exact metadata signal on exit `3`, revise against the same compact evidence
+  on exit `4`, and permit approval only on exit `0`. This check also applies to
+  every direct revision and the fully-inline fallback; architecture approval
+  never substitutes for data-model approval.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
-4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
+3. **Prepare and approve screens in order.** Create the `native-app-plan.md` skeleton
+   from the planner's Step 6 template, including the approved architecture,
+   approved or not-applicable Data Model, an empty `## Screens`, and
+   `## Approvals` containing only approvals actually received.
+   For both screen dispatches, pass `plan_path: <working_dir>/native-app-plan.md`
+   and the approved model, native capabilities, and connectors verbatim. Pass
+   `skip_preview: true` for deferred or skipped design; graph generation never
+   renders a preview. Keep any explicitly selected legacy preview policy for
+   the specs phase separate from its canonical-plan write target.
+   - Spawn `mobile-app:screen-planner` with `phase: graph` first. Present its
+     navigation, screen map, and shared conventions as Gate 3 after its Step 5b
+     completeness repair; wait for approval.
+   - Embed the approved graph from `_screens_section.md` into `## Screens` in
+     `native-app-plan.md` and record Gate 3 acceptance before proceeding.
+   - Verify that the canonical plan contains the locked graph, then spawn
+     `mobile-app:screen-planner` with `phase: specs`. It reads that plan and
+     replaces only the phase-owned subsections using its Step 5 single-write
+     contract, without rewriting the approved graph or graph scratch file.
+   - On `NEEDS_CONTEXT: graph missing <thing>` from specs, leave the failed
+     specs output uncommitted, mark the screen approvals pending, and rerun
+     `phase: graph` with the missing items and approved context. Reopen Gate 3
+     and require fresh user approval before merging the corrected graph and
+     resuming specs. Do not retry specs against the same incomplete graph.
+   - Present the expanded canonical plan as Gate 4. On rejection revise only
+     specs using replacement, not append, unless the user changes the graph,
+     which requires Gate 3 again.
+   Print each phase and its ETA before dispatch. Design picking remains at
+   Step 6.75 via `/design-system`; do not generate a default-design preview.
+4. **Finalize the existing `native-app-plan.md`**, preserving the approved graph
+  and current specs. Update `## Approvals` with each actual user acceptance
+   and timestamp; do not rebuild it from `_screens_section.md`.
 
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
+   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 6):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode: orchestrator drafts the data model from a Dataverse OData probe (`resolve-environment.js` + table list filter on the brief's domain keywords), drafts native caps + connectors heuristically, drafts the screen graph + specs against `shared/references/screen-templates.md`, and runs the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
+5. **Record the same structured approval receipt as the planner path in
+  `required` mode only.** At data-model acceptance, initialize
+   `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
+   contract content/hash. After each later gate is accepted, update only that
+  gate's approval record and the current plan hash; after Gate 4, record the
+   final structured service dependencies and integrity hash. Follow
+   `agents/native-app-planner.md` Step 6 exactly. Never call the operation
+   manifest builder to create or restamp this receipt. A changed approved
+   section invalidates its record until the existing inline gate approves it
+   again.
 
-**Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
+  In `connector-only`, do not create `.tmp/mobile-plan-status.json` or any
+  Dataverse schema/approval artifact.
+
+If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even
+leaf agents cannot be spawned), fall further to fully-inline mode. Draft and
+approve native capabilities, connectors, and data platform first. In
+`required`, then draft the data model from `ARCHITECT_EVIDENCE_PATH`, using
+`SNAPSHOT_PATH` only through deterministic validation. With no live OData probe,
+write/normalize the same structured schema
+contract required by `agents/data-model-architect.md`. In `connector-only`,
+write an explicit zero-table/no-Dataverse `## Data Model` section and no
+contract or Data Model gate. Then draft the screen graph + specs against
+`shared/references/screen-templates.md`. This is the last-resort path —
+functional but slower because the orchestrator does work the architects
+normally perform.
+
+**Hard rule:** never silently skip an applicable gate just because the planner
+could not run. Connector-only intentionally skips the non-applicable Data Model
+gate; every other section must be approved before mutation starts.
+
+The architecture-only pass is the sole owner of the
+`NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>` signal.
+During the completion pass, receiving that signal again is malformed and must
+be treated as `BLOCKED`.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
-Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+**Architecture-gate result (handle before generic retries).** Only a planner
+dispatched with `Architecture phase: gate-only` may return exactly
+`NEEDS_CONTEXT: dataverse-planning-mode:required` or
+`NEEDS_CONTEXT: dataverse-planning-mode:connector-only` as success. Read
+`.tmp/approved-architecture.md`: its mode must match the returned value, it
+must contain the exact approved Native Capabilities and Connectors sections,
+the data-platform choice, and a user-approval timestamp. A missing or malformed
+artifact returns to the Architecture gate recovery path, not to metadata
+discovery. On success, restore those inputs, set `<dataverse_planning_mode>`,
+and continue to deferred publisher/snapshot work only for `required`. This
+does not consume the generic retry budget and must not re-present Gate 1.
+In `complete` phase or from any other agent, that signal is malformed; do not
+let it change an already approved data platform.
+
+**Screen-graph recovery (handle before generic retries).** A `screen-planner`
+dispatched with `phase: specs` may return `NEEDS_CONTEXT: graph missing <thing>`.
+Follow the graph-repair and Gate 3 approval loop in Step 3.0a above (or the same
+loop inside `native-app-planner`). Preserve other approved sections, invalidate
+the affected screen approvals, and require fresh user acceptance before specs
+resume. This does not authorize a specs pass to modify the approved graph.
+
+For all other first lines, use the plugin-wide protocol in
+[`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #12 for every `Task` return.
+`DONE` continues after output validation; `DONE_WITH_CONCERNS:` surfaces and
+queues concerns for the memory bank; `NEEDS_CONTEXT:` re-dispatches with missing
+non-Dataverse context, capped at 2 retries; `BLOCKED:` reports the blocker. Unknown first
+lines are malformed. Recoverable artifact/input failures return to their
+owning phase for repair; they never authorize skipping an applicable gate.
+
+The structured Dataverse signals below use monotonic name tracking or
+deterministic revision instead of the generic retry cap. In `required` only,
+initialize two in-memory sets from the current validated snapshot before
+handling either metadata signal:
+
+- `DETAIL_ATTEMPTED_NAMES` — every logical name already present in
+  `selectedTables` with `detailLevel: full`,
+  `exactNameResolution.unavailableTables`, or `detailLoadFailures`. A
+  `selectedTables` entry with `detailLevel: core` is not fully attempted and
+  remains eligible for one full-detail expansion.
+- `PROPOSED_CHECKED_NAMES` — every logical name in
+  `proposedNameChecks.checked`.
+
+Expansion is monotonic: each network request contains only names not already in
+the applicable set, and no expansion reruns broad inventory discovery. There
+is no fixed expansion-round count. Continue automatically while the planner
+identifies new exact names derived from the approved brief or current evidence.
+Every re-dispatch preserves the approved architecture and `complete` phase;
+metadata recovery does not reopen Gate 1 or change connector ownership.
+
+**Data-model deterministic revision:** when the planner returns
+`NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>`, do not
+route it through the generic `NEEDS_CONTEXT` retry cap. Immediately run the
+existing inline data-model revision path with the same snapshot, compact
+evidence, and approved architecture. Perform no metadata read and ask no user
+question. Reclassify known collisions or attempted unavailable detail as
+`Reuse`, `Extend`, `Adapt`, or `Defer` as the verified evidence permits,
+regenerate and validate the contract, and then present Gate 2. Ask the user
+only if the remaining alternatives change business semantics.
+
+**Data-model exact-name expansion:** when the planner or direct architect
+returns exactly
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>`, sort and
+de-duplicate those names. This signal is valid only in `required` mode with a
+validated base snapshot, whether it came from the planner or the direct
+architect fallback; receiving it in `connector-only` mode is `BLOCKED`.
+Compute `NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES`.
+
+- If `NEW_DETAIL_NAMES` is non-empty, perform the exact foreground expansion
+  below for only those names. Reuse the existing snapshot inventory and do not
+  run another broad inventory query.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  explicit fact that every requested name was already attempted. The architect
+  must use the current full evidence, or classify an unavailable/incompatible
+  dependency as `Defer`. It may ask the user only when a genuine business
+  choice remains, such as choosing between a shared existing system of record
+  and a new app-owned table.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --base-snapshot "$SNAPSHOT_PATH" \
+  --output "$SNAPSHOT_PATH" \
+  --tables "<NEW_DETAIL_NAMES as exact comma-separated logical names>" \
+  --combined-base-read \
+  --read-concurrency 1
+
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$ARCHITECT_EVIDENCE_PATH"
+
+node -e '
+  const s=require(process.argv[1]);
+  const x=s.expansion;
+  const d=s.detailLoadSummary;
+  console.log(`✓ Expansion requested: [${x.requestedTables.join(", ")}]`);
+  console.log(`✓ Expansion loaded: [${x.loadedTables.join(", ")}]`);
+  console.log(`✓ Expansion unavailable: [${x.unavailableTables.join(", ")}]`);
+  console.log(`✓ Expansion details: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed`);
+  console.log(`✓ Expansion timing: metadata ${s.timings.inventoryRetrievalMs} ms, selection ${s.timings.candidateSelectionMs} ms, details ${s.timings.detailLoadingMs} ms, total ${s.timings.totalDurationMs} ms`);
+' "$SNAPSHOT_PATH"
+```
+
+Print the expansion's requested/loaded/unavailable names and timings
+immediately, add every attempted name to `DETAIL_ATTEMPTED_NAMES`, then
+re-dispatch the same planner or architect with the same
+snapshot/architect-evidence paths. A later detail signal is handled by the same
+set-difference rule. Never repeat a name, broaden concepts, or defer exact
+validation to mutation.
+
+**Data-model proposed-name expansion:** when the planner or direct architect
+returns exactly
+`NEEDS_CONTEXT: proposed-dataverse-names:<logical names>`, sort and de-duplicate
+those names. This signal is valid only in `required` mode with a validated
+snapshot. Compute
+`NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES`.
+
+- If `NEW_PROPOSED_NAMES` is non-empty, perform the collision-only foreground
+  expansion below for only those names.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  existing present/missing results. A checked-missing name can support
+  `Create`; a collision must be reconciled as `Reuse`, `Extend`, or `Adapt`.
+  If `Adapt` produces a new final logical name, that new name flows through
+  this same set-difference rule automatically.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --base-snapshot "$SNAPSHOT_PATH" \
+  --output "$SNAPSHOT_PATH" \
+  --proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>" \
+  --combined-base-read \
+  --read-concurrency 1
+
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$ARCHITECT_EVIDENCE_PATH"
+```
+
+This expansion checks collisions only; it does not treat absent proposed names
+as required existing tables or load their details. Add every checked name to
+`PROPOSED_CHECKED_NAMES` and re-dispatch. Later proposed-name signals use the
+same set-difference rule. If a collision is found and the architect needs
+compatibility facts, it may request incremental
+`detailed-dataverse-metadata` for that existing table.
+
+**No-progress fallback:** if an agent repeats a metadata signal containing only
+already-attempted names after receiving the explicit no-new-names instruction,
+do not block the create flow for another metadata retry. Run the existing
+inline data-model revision path against the current compact evidence. Preserve
+safe decisions, classify unresolved required-existing or incompatible targets
+as `Defer`, regenerate and validate the contract, and present the result at
+Gate 2. Ask the user only when the remaining choice changes business semantics;
+do not ask merely because metadata is unavailable.
 
 Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
 
@@ -487,9 +1030,11 @@ INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternative
 
 Example: `INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce`
 
-This fires before Gate 1 — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
+This fires during the completion pass before screen planning — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
 
-**Skip this section if `<design_vibe_opt_in>` is `yes` or `skip`** — in those cases the user is either driving design explicitly (`yes`) or has opted out of design entirely (`skip`), so industry inference doesn't matter.
+**Skip this section if `<design_vibe_opt_in>` is `yes`, `done`, `deferred`, or
+`skip`**. The normal create flow uses `deferred`, so `/design-system` owns the
+user-facing design decision without another planning question.
 
 **When you see `INDUSTRY_CONFIRM_REQUESTED:` and `<design_vibe_opt_in>` is `no`:**
 
@@ -548,36 +1093,26 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
-#### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
+#### Step 3b — Structural review and legacy preview output
 
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before each Gate 4 plan-mode entry. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
+Gate 4 remains markdown-only in this create flow, including reject/re-plan loops.
+For deferred or skipped design, screen-planner receives `skip_preview: true`, so
+no `PLAN_PREVIEW_PATH:` token is expected. Its absence is not an error, and
+`<visual_companion> = yes` does not request an earlier preview.
 
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
+If a legacy planner emits `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html`,
+ignore that early preview output. Do not open it or request a replacement HTML
+preview at Gate 4. Step 6.75 produces the fresh preview after the design choice,
+using locked brand tokens or the design-system Skip path's defaults, and honors
+the persisted Visual Companion preference for automatic browser opening.
 
-**What to do:**
+After the structural review, print:
 
-1. Print the link in a dedicated message so the user always has the fallback (clickable in most terminals):
+> "Gate 4 reviewed structurally. Visual preview is deferred to Step 6.75."
 
-   > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
+With `--no-design`, Step 6.75 and its HTML preview are both skipped. Print instead:
 
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
-
-3. **Else** attempt to open in the user's default browser via the OS-portable chain:
-
-   ```bash
-   open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<abs-path>\_plan_preview.html'" 2>/dev/null \
-     || echo "Auto-open failed. Use the link above."
-   ```
-
-4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
-
-If the planner returns without emitting a `PLAN_PREVIEW_PATH:` line, that is **expected** — the planner passes `skip_preview: true` to screen-planner since `/design-system` (always installed) renders the single visual preview at Step 6.75 after brand locks. Print:
-
-> "→ Gate 4 reviewed structurally. Visual preview will appear at Step 6.75 after `/design-system` locks your brand tokens (~5 min from now after scaffold)."
-
-…and continue without attempting any browser open. **Do not warn or treat this as an error** — it is the documented behavior.
+> "Gate 4 reviewed structurally. HTML preview skipped (--no-design)."
 
 #### 3.9 — Post-plan publisher-prefix gate
 
@@ -596,15 +1131,53 @@ fi
 
 If mismatches are reported, sweep `native-app-plan.md` (and any auxiliary files like `.datamodel-manifest.json` if already written) replacing the wrong prefix with `${DETECTED_PUBLISHER_PREFIX}_` before Step 4. Do NOT proceed to Step 5 with a wrong-prefix plan — the sweep cost grows ~500 occurrences once services are generated.
 
-### Step 4 — Auth & environment selection
+For `required`, apply the same prefix correction to
+`.tmp/dataverse-schema-contract.json`, then normalize it. Before Step 4, require
+both approved artifacts:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
+test -f "$WORKING_DIR/native-app-plan.md"
+test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
+  --contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --snapshot "$SNAPSHOT_PATH"
+```
+
+The same validation MUST run before Gate 2 is shown in the planner and inline
+paths. On exit `3`, preserve and branch on the exact stderr first line:
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` uses the incremental
+detail set-difference path, while
+`NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` uses the separate
+incremental collision-check path. Never rewrite one signal as the other or
+repeat a network request for an already-attempted name.
+On exit `4`, preserve
+`NEEDS_REVISION: dataverse-plan-validation` plus its safe error lines and route
+them through the existing planner/direct-architect revision path with the same
+snapshot and compact evidence. This path performs no metadata read and asks no
+user question. If the same conflict survives re-dispatch, use the inline
+data-model revision path; ask the user only when choosing among materially
+different business designs. Exit `2` is reserved for an invalid
+contract/snapshot artifact and is `BLOCKED`. Do not approve Reuse, Extend, or
+Adapt from `core` or missing detail, or Create/Adapt names without
+checked-missing collision evidence. Do not fall back to parsing the Markdown
+ER diagram when a sidecar is missing or malformed.
+
+### Step 4 — Auth & environment selection
+
+**Telemetry checkpoint: `select_app_environment`**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 ```
 
 If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
 
 ### Step 5 — Prepare existing template
+
+**Telemetry checkpoint: `prepare_template_files`**
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
@@ -625,22 +1198,49 @@ If any required template file is missing, STOP:
 If `node_modules/expo` is missing, STOP:
 > "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
-If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
+If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
 > "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
 
-Then apply these **safe idempotent** prep steps:
+Run the deterministic preparation script once:
 
-1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
-2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
-3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
-4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
-5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
-6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
-7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
+```bash
+PREPARE_SCRIPT="${PLUGIN_ROOT}/scripts/prepare-mobile-template.js"
+node - "$PREPARE_SCRIPT" <<'NODE'
+const { prepareMobileTemplate } = require(process.argv[2]);
 
-Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
+// Replace these placeholders with JSON.stringify(...) output so user-provided
+// quotes and dollar signs remain data rather than becoming shell syntax.
+const result = prepareMobileTemplate({
+  workingDir: <JSON_STRING_OF_WORKING_DIR>,
+  displayName: <JSON_STRING_OF_DISPLAY_NAME>,
+  slug: <JSON_STRING_OF_SLUG>,
+});
+process.stdout.write(`${JSON.stringify(result)}\n`);
+NODE
+```
 
-After preparation, continue to Step 6.
+Capture `result.writtenFiles` as the exact project-relative preparation validation targets.
+This list contains only files created or changed by this preparation call, excluding unchanged
+preserved files and deletions. Keep `removedPowerConfig` and `removedLegacyFiles` as removal
+outcomes, not `--file` targets: Step 6 can recreate the same config path with a different owner.
+Union targets across any preparation reruns rather than replacing earlier pending changes.
+Do not rebuild this list from `git status` or a directory scan after initialization.
+
+The script is the only owner of Step 5 mutations. It updates identity, removes
+only recognized legacy example hooks/query-client files, copies shared helpers
+only when missing, verifies that TypeScript inherits the host configuration,
+and structurally verifies the root provider/theme/safe-area contract. It
+preserves custom navigation, existing helper bytes, `offlineProfile`, provider
+props, and the template's `@ts-ignore` generation boundaries.
+
+**Generated ownership boundary:** Step 5 must not create, reset, delete, or
+write anything under `src/generated/`. Only Power Apps schema/data-source
+generation commands own that directory. A generated file required later is
+created by its owning command, never by a placeholder barrel.
+
+The script fails visibly for unsupported root-layout shapes or dangling legacy
+imports. Do not fall back to a full-file rewrite or regex patch. After it
+returns successfully, continue to Step 6.
 
 **Fix 1 — App identity in `app.config.js` and `package.json`**
 
@@ -654,63 +1254,53 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
-**Fix 2 — Delete `power.config.json`**
+**Fix 1b — Verify captured dev logging path**
 
-`npx power-apps init` in Step 6 creates the correct one for the user's environment. Remove the template copy:
-
-```bash
-rm -f "<working_dir>/power.config.json"
-```
-
-**Fix 3 — Clean `src/generated/` and `src/hooks/` (idempotent)**
-
-Newer template snapshots **no longer ship** the example models / services / hooks (Contacts / Accounts / UserProfile / Office365Users) — `src/` only contains app infrastructure files such as `global.d.ts` and `playerConfig.ts`. Older snapshots still do. If a copied template includes `src/queryClient.ts`, remove it: `PowerAppsProvider` already owns the React Query `QueryClientProvider` and screen code should use `useQueryClient()`, not an app-owned singleton. The block below is **idempotent** — a no-op on the new template, a real cleanup on the old one. Always run it; never assume one snapshot.
+Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
 
 ```bash
-# Remove example generated artefacts if present (no error if missing)
-rm -rf "<working_dir>/src/generated/models" \
-        "<working_dir>/src/generated/services" \
-        "<working_dir>/src/generated/index.ts"
-
-# Wipe example React Query hooks and stale app-owned query client if present
-rm -f  "<working_dir>/src/hooks/useContacts.ts" \
-  "<working_dir>/src/hooks/useAccounts.ts" \
-  "<working_dir>/src/hooks/useUserProfile.ts" \
-  "<working_dir>/src/queryClient.ts"
-
-# Reset the generated barrel so `import … from '../generated'` resolves to nothing
-mkdir -p "<working_dir>/src/generated"
-printf '// Populated by npx power-apps add-data-source. Do not edit.\nexport {};\n' \
-  > "<working_dir>/src/generated/index.ts"
+node - "<working_dir>" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const packagePath = path.join(root, 'package.json');
+const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+if (!pkg.scripts || pkg.scripts.dev !== 'expo start') {
+  throw new Error('Expected package.json scripts.dev to be "expo start". Do not route dev through a wrapper.');
+}
+if (pkg.scripts.predev !== 'npm run generate-schemas && npm run type-check') {
+  throw new Error('Expected predev to run schema generation followed by type-checking.');
+}
+NODE
 ```
 
-**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a minimal RN stub (`View` + `Text` from `react-native`) that compiles cleanly. Our screen-builder replaces it at Step 11. Replacing it with a Tamagui stub before Fix 8 (which threads brand `tamaguiConfig` into `PowerAppsProvider`) would render under the upstream default Tamagui config instead of the project's brand tokens.
+**Fix 2 — Remove only an empty placeholder `power.config.json`**
+
+The preparation script parses `power.config.json` and removes it only when
+`environmentId` is empty or missing. A populated file is preserved and later
+validated against the approved environment. Do not use an unconditional
+delete.
+
+**Fix 3 — Remove recognized legacy examples without touching generated code**
+
+Newer snapshots do not ship the Contacts / Accounts / UserProfile example
+hooks or the old app-owned query client. The preparation script removes only
+those recognized files when present. It never traverses or mutates
+`src/generated/`; generated models, services, schemas, and barrels remain
+owned by Power Apps generation commands.
+
+**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a
+safe-area-aware, semantic-token starter route. The screen-builder replaces it
+only when the approved Screen Map assigns that route.
 
 Keep `src/hooks/` itself — screen-builders write new hooks into it.
 
 **Fix 3b — Scan for dangling imports referencing deleted files (back-compat only)**
 
-Only meaningful on older template snapshots that shipped the example hooks. On the current template the scan returns zero matches and you can skip it. Run it unconditionally — it is fast and self-skipping.
-
-```bash
-# Scan for any remaining imports of the deleted modules
-grep -rn \
-  -e "useContacts" \
-  -e "useAccounts" \
-  -e "useUserProfile" \
-  -e "from.*generated/services" \
-  -e "from.*generated/models" \
-  --include="*.ts" --include="*.tsx" \
-  "<working_dir>/app/" "<working_dir>/src/" \
-  || true
-```
-
-**If matches found:**
-- For screen files (`app/(app)/*.tsx`): replace the entire file with the same minimal stub used for `home.tsx` (screen-builder will overwrite at Step 11).
-- For layout files (`_layout.tsx`): remove only the import lines and any code referencing the deleted symbols. Do NOT replace the whole file — layouts have navigation structure that must be preserved.
-- For barrel/index files: remove the re-export lines.
-
-**If no matches:** Continue — template is clean.
+The preparation script scans `app/` and non-generated `src/` files after
+cleanup. Any remaining legacy example import is an explicit failure. Do not
+replace whole screens or layouts to make the scan pass; use a supported fresh
+template or repair the precise stale import before continuing.
 
 **Fix 6 — Schema generation boundary**
 
@@ -720,116 +1310,47 @@ Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a sp
 
 **Why `tsc` already passes post-clone (current template, PR #30):** the template's `app/_layout.tsx` and `src/playerConfig.ts` carry `// @ts-ignore` comments above the `power.config.json` and `connectorSchemas` imports specifically so the project type-checks before `power.config.json` and `connectorSchemas.ts` exist. **Never strip these `@ts-ignore` lines** — Fix 8 below preserves them when patching `app/_layout.tsx` to thread the project's `tamaguiConfig` into `PowerAppsProvider`, and any future `Edit` to either file MUST keep them. Removing them resurfaces a `tsc` failure against missing generated files.
 
-**Fix 7 — Create `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`**
+**Fix 7 — Seed shared code only when missing**
 
-Copy the shared code structure into the project. This gives screen-builders a production-grade layout with path aliases:
+The preparation script creates the shared source directories and copies each
+approved sample helper only when its destination does not exist. Existing
+helpers are byte-for-byte preserved, so reruns cannot overwrite user or
+builder changes.
 
-```bash
-mkdir -p "<working_dir>/src/components"
-mkdir -p "<working_dir>/src/hooks"
-mkdir -p "<working_dir>/src/utils"
-mkdir -p "<working_dir>/src/tokens"
+**Fix 8 — Thread the project's `tamaguiConfig` and active theme into the host provider**
 
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/components/index.tsx" "<working_dir>/src/components/index.tsx"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/index.ts" "<working_dir>/src/hooks/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useCursorListData.ts" "<working_dir>/src/hooks/useCursorListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useListData.ts" "<working_dir>/src/hooks/useListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useSearchFilter.ts" "<working_dir>/src/hooks/useSearchFilter.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/index.ts" "<working_dir>/src/utils/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/formatters.ts" "<working_dir>/src/utils/formatters.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/text.ts" "<working_dir>/src/utils/text.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/choices.ts" "<working_dir>/src/utils/choices.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/dataverse.ts" "<working_dir>/src/utils/dataverse.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/tokens/index.ts" "<working_dir>/src/tokens/index.ts"
-```
+The template ships `PowerAppsProvider` with host-owned light and dark theme
+defaults. Fix 8 ensures the project `tamaguiConfig` and color-scheme-driven
+`defaultTheme` are present. It preserves explicit `theme` and `darkTheme`
+overrides when an app already has them, but does not add redundant overrides
+to a fresh template. Step 9b adds explicit themes only when applying generated
+brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider`
+composes it internally and duplicating triggers "useTheme must be used within
+a TamaguiProvider" warnings on hot reload.
 
-**Fix 8 — Thread the project's `tamaguiConfig` into the host provider** (required so screens render under brand tokens, not upstream defaults)
-
-The template ships `PowerAppsProvider` (composed-tree API, v0.2.0+). Fix 8 adds `tamaguiConfig`, `defaultTheme`, `theme`, and `darkTheme` props so screens render under brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider` composes it internally and duplicating triggers "useTheme must be used within a TamaguiProvider" warnings on hot reload.
-
-Write `app/_layout.tsx` (run AFTER `npm install`):
-
-```tsx
-import { Slot } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import { useColorScheme } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host';
-import type { ThemeTokens } from '@microsoft/power-apps-native-host';
-
-import authConfig from '../auth.config.json';
-// @ts-ignore - power.config.json is auto-generated at build time
-import powerConfig from '../power.config.json';
-// @ts-ignore - connectorSchemas is auto-generated at build time
-import { schemaMap } from '../src/generated/connectorSchemas';
-import tamaguiConfig from '../tamagui.config';
-
-// lightTheme / darkTheme are the built-in defaults from @microsoft/power-apps-native-host.
-// When brand/tokens.ts exists, the Brand-token wiring block (Step 9b) replaces
-// these props with brand-derived ThemeTokens objects instead.
-
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  return (
-    <SafeAreaProvider>
-      <PowerAppsProvider
-        msalConfig={authConfig.msal}
-        powerConfig={powerConfig}
-        schemaMap={schemaMap}
-        tamaguiConfig={tamaguiConfig}
-        defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-        theme={lightTheme}
-        darkTheme={darkTheme}
-      >
-        <StatusBar style="auto" />
-        <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
-          <Slot />
-        </SafeAreaView>
-      </PowerAppsProvider>
-    </SafeAreaProvider>
-  );
-}
-```
+The preparation script edits the existing root layout structurally. It adds
+missing imports and provider props, then wraps `PowerAppsProvider` with
+`SafeAreaProvider` only when needed. It does not replace the file and it does
+not wrap `<Slot />` with `SafeAreaView`; each rendered route owns its content
+edges to avoid double insets.
 
 Key points:
 - **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
-- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
+- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
+- Import `app.json` and pass it through the `appConfig` prop. `PowerAppsProvider` reads `expo.extra.appInsightsConfig` and enforces its `enabled` opt-in; this explicit app-config boundary is required because the fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`. Never print the connection string, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
-Write the file directly when applying this fix.
+**Fix 4 — Shared TypeScript configuration**
 
-**Fix 4 — Path aliases in `tsconfig.json` (idempotent JSON merge)**
-
-The upstream template's `tsconfig.json` only ships `paths` polyfills for `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser` — it does NOT define the `@/components`, `@/hooks`, `@/utils`, `@/tokens` aliases that screens (and the helpers Fix 7 just copied) import from. Without this fix, every `import { lookupName, formattedValue, newId } from '@/utils'` at screen-build time fails to resolve at both `tsc --noEmit` and Metro bundle time. Run this merge script in `<working_dir>`:
-
-```bash
-node -e '
-  const fs = require("fs");
-  const file = "tsconfig.json";
-  const json = JSON.parse(fs.readFileSync(file, "utf8"));
-  json.compilerOptions = json.compilerOptions || {};
-  json.compilerOptions.baseUrl = json.compilerOptions.baseUrl || ".";
-  json.compilerOptions.paths = json.compilerOptions.paths || {};
-  const aliases = {
-    "@/components": ["src/components"],
-    "@/hooks":      ["src/hooks"],
-    "@/utils":      ["src/utils"],
-    "@/tokens":     ["src/tokens"],
-    "@/generated":  ["src/generated"],
-    "@/native":     ["src/native"],
-  };
-  for (const [k, v] of Object.entries(aliases)) json.compilerOptions.paths[k] = v;
-  fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
-'
-```
-
-Key points:
-- **Idempotent.** Re-running the script (e.g. on `/create-mobile-app` resume) overwrites the six alias keys with the same values — it does NOT touch `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser`, or any other existing `paths` entries.
-- **Six aliases, not four.** `@/generated` and `@/native` are pre-wired so `npx power-apps add-data-source` output (`src/generated/services/...`) and `/add-native` output (`src/native/camera.ts`, etc.) can be imported via the alias too. Costs nothing now and avoids a second tsconfig patch later.
-- **`baseUrl: "."`** is preserved if already set (the template ships it). The merge script defaults it to `"."` only if missing.
-- Metro auto-resolves `paths` defined in `tsconfig.json` for any project running `expo`-based bundling, so this single edit covers both the type checker AND the bundler. No `babel.config.js` plugin needed.
+The current template extends
+`@microsoft/power-apps-native-host/config/tsconfig`. That host configuration
+owns the runtime package paths and the six shared-code aliases:
+`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
+`@/native`. The preparation script verifies this inheritance and does not
+create a second template-local alias map. Expo Metro consumes the resulting
+effective TypeScript paths, so no Babel alias plug-in is required.
 
 `<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
 
@@ -839,15 +1360,26 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ### Step 6 — Initialize
 
+**Telemetry checkpoint: `initialize_power_apps_project`**
+
 **Print before starting:**
 > "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
+npx power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
 ```
 
-Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.
+Substitute the approved Step 2 display name and Step 4 environment ID using
+shell-safe quoting; do not ask for either value again. Step 5 must leave
+`power.config.json` absent. If a populated file remains, STOP and report its
+environment instead of overwriting it or running `init` again.
+
+Verify `power.config.json` exists and both its `environmentId` and
+`appDisplayName` match the approved Step 2/Step 4 values. If initialization
+fails, report the exact error and STOP.
+Record the successful CLI command as the config's writer. These checks are read-only;
+do not add this CLI-generated file to Step 5's manual validation targets or hand-edit it.
 
 ### Step 6.5 — Verify dependencies
 
@@ -859,59 +1391,19 @@ This step verifies dependencies only. The user must have run `npm install` befor
 
 If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
 
-### Step 6.5b — Ensure SafeAreaProvider wraps the root layout (always runs, idempotent)
+### Step 6.5b — Root runtime contract verification
 
-> **Why this step exists.** This step idempotently ensures safe-area context is present in the root layout so screens do not render under system bars.
-
-**Print before starting:**
-> "→ [Step 6.5b/13] Verifying SafeAreaProvider wraps the root layout (idempotent — usually a no-op)…"
-
-```bash
-cd <working_dir>
-
-if [ -f app/_layout.tsx ] && ! grep -q 'SafeAreaProvider' app/_layout.tsx; then
-  echo "→ [6.5b] Patching app/_layout.tsx to add SafeAreaProvider + SafeAreaView"
-  node -e '
-    const fs = require("fs");
-    const FILE = "app/_layout.tsx";
-    let src = fs.readFileSync(FILE, "utf8");
-    // 1. Add the import if missing — splice in right after the react-native
-    //    import; fallback is prepend after the first import line.
-    if (!/from\s*["\047]react-native-safe-area-context["\047]/.test(src)) {
-      const importLine = "import { SafeAreaProvider, SafeAreaView } from \"react-native-safe-area-context\";\n";
-      if (/^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?/m.test(src)) {
-        src = src.replace(/(^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?\n)/m, "$1" + importLine);
-      } else {
-        src = src.replace(/(^import[^\n]*\n)/m, "$1" + importLine);
-      }
-    }
-    // 2. Wrap the outermost <PowerAppsProvider> ... </PowerAppsProvider> with
-    //    <SafeAreaProvider> AND wrap the inner <Slot /> with <SafeAreaView>.
-    src = src.replace(
-      /<PowerAppsProvider([\s\S]*?)>([\s\S]*?)<\/PowerAppsProvider>/,
-      "<SafeAreaProvider>\n      <PowerAppsProvider$1>$2</PowerAppsProvider>\n    </SafeAreaProvider>"
-    );
-    if (!/<SafeAreaView/.test(src)) {
-      src = src.replace(
-        /<Slot\s*\/>/,
-        "<SafeAreaView edges={[\"top\", \"bottom\"]} style={{ flex: 1 }}>\n          <Slot />\n        </SafeAreaView>"
-      );
-    }
-    fs.writeFileSync(FILE, src);
-    console.log("  ✓ app/_layout.tsx wrapped with SafeAreaProvider + SafeAreaView");
-  ' || { echo "SafeArea patch of app/_layout.tsx failed — see error above"; exit 19; }
-elif [ ! -f app/_layout.tsx ]; then
-  echo "  ↷ app/_layout.tsx does not exist yet, skipping patch"
-else
-  echo "  ↷ SafeAreaProvider already present, skipping"
-fi
-
-echo "✓ [Step 6.5b] SafeAreaProvider verified"
-```
-
-**If the patch fails:** the node script exits with an error. The most common cause is an unusual `_layout.tsx` shape (custom rewrite). Fix manually by importing `SafeAreaProvider` + `SafeAreaView` from `react-native-safe-area-context`, wrapping the outermost provider with `<SafeAreaProvider>`, and wrapping the inner `<Slot />` with `<SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>`.
+Step 5 already performs the idempotent structural update and postcondition
+checks. Do not mutate `_layout.tsx` again here. Verify only that the prepared
+layout still contains `SafeAreaProvider`, `tamaguiConfig`, `offlineProfile`,
+and the color-scheme-driven `defaultTheme`. If brand-token wiring has already
+run, also verify its explicit `theme` and `darkTheme` props. If any applicable
+contract element is missing, rerun the Step 5 preparation script and stop if
+it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
+
+**Telemetry checkpoint: `validate_scaffold_typescript`**
 
 **Print before starting:**
 > "→ [Step 6.6/13] Running scaffold tsc smoke check (~10–30 seconds)."
@@ -929,17 +1421,23 @@ This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capt
 ### Step 6.7 — Seed the memory bank
 
 ```bash
-cp "${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md" "<working_dir>/memory-bank.md"
+cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
+
+Before leaving this step, run the shared changed-file gate on Step 5's `writtenFiles`, `memory-bank.md`,
+and any other pending skill/subagent-authored files or scaffold repairs, using an exact `--file`
+argument for each. Exclude files verified as CLI-generated and not manually modified afterward;
+`power.config.json` is covered by the read-only identity checks in Step 6, not this write gate.
+The successful TypeScript check does not replace either validation.
 
 Immediately after creating `memory-bank.md`, flush any queued planner concerns from `DEFERRED_CONCERNS[]` into `## Concerns` (append-only). This flush is unconditional: if the queue is non-empty, write it now before continuing to Step 6.75.
 
 **Also persist the Visual Companion preference** so re-runs (`/edit-app`, `/preview-screens`, future `/design-system` runs) honor it without re-asking. Append to the Project facts section:
 
 ```
-visual_companion: <yes|no>   # set in Step 2b — controls whether browser previews open automatically
+visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and later previews
 ```
 
 `/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
@@ -963,7 +1461,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → finish the applicable preview branch below, then continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -985,7 +1483,7 @@ The user skipped the design system but still deserves to see their screens befor
 
 2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
 
-3. **Open in browser** (if `<visual_companion> = yes`):
+3. **Print the preview path; open in browser only if `<visual_companion> = yes`:**
    ```bash
    open "<working_dir>/_plan_preview.html" 2>/dev/null \
      || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
@@ -993,49 +1491,22 @@ The user skipped the design system but still deserves to see their screens befor
      || true
    ```
 
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
+4. **Auto-continue — no prompt.** The user already approved the applicable planning gates; the preview does not introduce another approval gate. Print one line and proceed:
 
   > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
+**Preview timing:** For current and legacy planner output, Gate 4 remains markdown-only.
+Step 6.75 is the only screen-preview stage in this create flow: Branch A uses locked
+brand tokens; Branch B uses defaults. `visual_companion: no` disables automatic
+browser opening, not rendering. `--no-design` skips this stage and its HTML preview.
 
-**Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
-
-### Step 6.85 — Offline profile (always asked)
-
-**Print before starting:**
-> "→ [Step 6.85/13] Asking whether to set up an offline profile…"
-
-Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. **This question must be asked on every run of `/create-mobile-app`** — do NOT skip it based on the initial prompt's wording, the feature picker checkboxes, the requirements brief content, or any keyword heuristic. The user's intent for offline support is not reliably inferrable from any earlier step; the only authoritative signal is an explicit answer here. The plugin owns the setup via [`/setup-offline-profile`](../setup-offline-profile/SKILL.md).
-
-**Pre-conditions — only TWO branches skip this question, both with the explicit print line shown:**
-
-| Condition | Action |
-|---|---|
-| App uses zero Dataverse tables (connectors-only — no `.datamodel-manifest.json`) | Skip — offline profiles are Dataverse-only. Print: `↷ Step 6.85 skipped — no Dataverse tables in this app.` Continue to Step 7. |
-| `memory-bank.md` `## Offline profile` already has `status: done` OR `status: not-applicable` from a prior run | Skip — answered previously. Print: `↷ Step 6.85 skipped — offline profile already <done\|not-applicable> from a prior run.` Continue to Step 7. |
-| Anything else (default — including "user didn't say 'offline' anywhere") | **Ask the question below.** |
-
-> **Important — do NOT add other skip conditions.** Earlier versions of this skill had an "auto-detect / keyword scan" preamble (`offline · field · remote · ...`) that varied the question default based on whether the initial prompt mentioned offline-indicator keywords. That heuristic was removed because it caused the orchestrator to skip the question entirely when no keywords matched, leaving users with a stale or missing profile on the next sync. The question is now unconditional for any Dataverse-backed app that hasn't already answered.
-
-**Ask one `AskUserQuestion`** — phrased neutrally, no implication that the user "should" answer Yes or No based on app type:
-
-> **Question header**: `Offline support`
->
-> **Question body**: "Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. Set one up now?"
->
-> **Options** (default = `Yes`):
-> - `Yes — create profile now (recommended)` — invokes `/setup-offline-profile`, walks the 3-gate flow, then continues to Step 7
-> - `Skip — I'll add it later via /setup-offline-profile` — continues to Step 7 with no profile (memory-bank status stays unset so the question fires again on the next `/create-mobile-app` run against this dir)
-> - `Skip — this app doesn't need offline support` — continues to Step 7; sets `memory-bank.md` `## Offline profile` `status: not-applicable` so future re-runs don't re-ask
-
-If the user picks Yes, invoke `/setup-offline-profile` as a sub-skill. It reads the same `.datamodel-manifest.json` you just wrote (Step 6 `/add-dataverse`'s Step 6d output) — no need to pass arguments. The sub-skill returns `DONE` / `DONE_WITH_CONCERNS:` / `BLOCKED:` per the agent return-status protocol. On `BLOCKED:`, propagate up. On `DONE_WITH_CONCERNS:`, surface concerns to the user inline, then continue.
-
-**State transfer:** `/setup-offline-profile` updates `memory-bank.md` `## Offline profile` and writes `offline-profile.json` to the project root. Step 13 (final summary) reads these for the wrap-up summary.
-
-**Hooked into `/add-dataverse`:** Step 6 (just before this step) sets `IsAvailableOffline=true` + `ChangeTrackingEnabled=true` on every new custom table (see [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) Step 5b body skeleton). That means `/setup-offline-profile` Gate 1 will be a no-op pass-through for fresh scaffolds — saving the user one approval click.
+Offline profile setup is intentionally deferred until after the approved
+Dataverse model has been materialized. Follow the shared connectivity-intent
+ownership contract during this phase.
 
 ### Step 7 — Auth config
+
+**Telemetry checkpoint: `configure_native_authentication`**
 
 **Print before starting:**
 > "→ [Step 7/13] Configuring app authentication (Entra ID app registration)…"
@@ -1148,12 +1619,112 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 
 ### Step 8 — Apply data model
 
+**Telemetry checkpoint: `apply_dataverse_data_model`**
+
+If `<dataverse_planning_mode> = connector-only`, verify the approved
+`## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
+exists, print `↷ Step 8 skipped — connector-only app has no Dataverse data model.`,
+skip sample data and offline-profile setup, print
+`↷ Offline profile skipped — no Dataverse tables in this app.`, and continue to Step 9. A non-empty Dataverse plan in
+this mode is a planning mismatch and must be corrected before continuing.
+
 **Print before starting:**
-> "→ [Step 8/13] Invoking /add-dataverse to create/extend tables and generate TypeScript services. This is the longest single phase — expect 2–5 minutes for a typical 4–6 table model."
+> "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
 
 **Environment pre-check (before invoking /add-dataverse):** Verify that `.resolved-environment.json` / `power.config.json` match the environment captured in Step 1. If they differ, warn the user immediately — creating tables in the wrong environment is the #1 silent breakage in this step. `/add-dataverse` Step 3a does its own check, but catching it here saves a failed attempt.
 
-Read the `## Data Model` section from `native-app-plan.md`. Invoke `/add-dataverse` with the working directory and a flag to skip its own planning (since the plan section is already approved):
+For the fast-v2 `required` path, keep the foreground planning snapshot as
+planning evidence only. It never authorizes a write. Without changing any
+approval gate, Step 8 must perform one fresh bounded reconciliation for every
+exact table in the approved structured schema; each existing table reloads
+ordinary typed columns, lookups, M:N/1:N relationships, and alternate keys.
+Create/adapt table reruns also reload and compare creation-significant table
+behavior: ownership, activities, notes, offline availability, change tracking,
+labels/schema identity, and primary-name identity.
+The exact/proposed scope also includes every effective M:N intersect entity
+name, and 1:N reuse requires complete matching `CascadeConfiguration`
+evidence. An absent or colliding intersect name, or missing/mismatched cascade
+evidence, is non-executable.
+Step 8 also binds the structured artifact to the current fully approved plan
+content hash and the gate-owned approval receipt's exact contract hash and
+service dependencies. Step 8 cannot create or refresh this receipt. Use
+resolved context and these structured artifacts, never values inferred from
+free-form Markdown:
+
+```bash
+SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
+APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
+FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
+EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
+OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
+PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
+ACTIVE_SOLUTION_UNIQUE_NAME="Default"
+
+test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
+  -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
+  -a -f "<working_dir>/native-app-plan.md"
+
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --bind-plan "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$SCHEMA_CONTRACT"
+
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --reconciliation-scope "$SCHEMA_CONTRACT" \
+  --output "$RECONCILIATION_SCOPE"
+
+EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
+PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
+
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --tables "$EXACT_TABLES" \
+  --proposed-tables "$PROPOSED_TABLES" \
+  --reconcile-exact \
+  --output "$EXECUTION_RECONCILIATION"
+
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$OPERATION_MANIFEST" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT"
+```
+
+The manifest builder mechanically verifies the approved `Reuse`, `Extend`,
+`Create`, `Adapt`, `Defer`, and `Unverified` decisions. It must not invent or
+change architecture decisions. Any mismatch is a non-executable verification
+conflict and returns to the orchestrator; do not add another opportunistic read
+loop or fall back to agent reconciliation. No operation may execute until:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --validate "$OPERATION_MANIFEST" \
+  --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT" \
+  --require-executable
+```
+
+Invoke `/add-dataverse` with the working directory, approved plan, and exact
+artifact paths:
 
 ```
 Invoke skill: /add-dataverse
@@ -1161,10 +1732,27 @@ Invoke skill: /add-dataverse
 Arguments:
   --working-dir <working_dir>
   --plan-section <native-app-plan.md#data-model>
+  --schema-contract <working_dir>/.tmp/dataverse-schema-contract.json
+  --approval-receipt <working_dir>/.tmp/mobile-plan-status.json
+  --execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json
+  --operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json
+  --publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json
   --skip-planning   (the planner already ran)
 ```
 
-`/add-dataverse` creates Tier 0 → N tables, applies extensions, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, type-checks, returns.
+`/add-dataverse` validates the bindings and consumes valid phases immediately.
+Any supplied artifact/binding failure returns to this orchestrator; it must
+not silently enter standalone reconciliation. A non-executable manifest
+authorizes no metadata writes.
+The publish checkpoint is retained across schema/PublishXml failure and
+deleted only after successful publish, so a rerun retries pending publication
+even when schema writes are already idempotent.
+It creates Tier 0 → N tables, applies extensions, runs
+`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
+--resource-name <name>` per service-required table from the app root,
+type-checks, and returns. Real matched A/B runs are still required to quantify
+the end-to-end time saved; do not present local manifest timing as a guaranteed
+1–3 minute Dataverse result.
 
 After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 
@@ -1176,6 +1764,21 @@ npx tsc --noEmit
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
 ### Step 8.5 — Seed sample data (auto)
+
+Before sample data or offline setup, require the materialized table inventory
+from `/add-dataverse` Step 6d, including verified reused tables. Compare its
+coverage with the validated operation manifest's `service.requiredTables` and
+run `verify-dataverse-services.js --project-root "<working_dir>" --manifest "$OPERATION_MANIFEST"`.
+Zero schema writes is a valid reuse-only result, not failed materialization.
+If an older run produced an empty or partial table inventory, recover through
+`/add-dataverse` Steps 6c–6d using the approved service list and verified live
+metadata. Rebuild the local manifest without replaying successful metadata
+writes, then rerun coverage/service verification.
+
+If `.datamodel-manifest.json` is missing, malformed, or contains no Dataverse
+tables after that recovery, return `BLOCKED: Dataverse materialization did not
+produce a usable .datamodel-manifest.json` with the remaining verification
+failure. Do not seed or offer offline setup from unverified table names.
 
 **Print before starting:**
 > "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
@@ -1191,11 +1794,56 @@ Arguments:
 
 `/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
 
-If `.datamodel-manifest.json` is missing, surface as `DONE_WITH_CONCERNS` and continue — it means Step 8 didn't complete cleanly.
+If the seeding step fails (network drop, permission error, etc.), surface the
+failure but continue to the offline-profile phase — the app is still usable,
+just empty on first launch. The user can re-run `/add-sample-data` later to
+retry.
 
-If the seeding step fails (network drop, permission error, etc.), surface the failure but continue to Step 9 — the app is still usable, just empty on first launch. The user can re-run `/add-sample-data` later to retry.
+### Offline profile (Dataverse-backed apps)
+
+**Print before starting:**
+> "→ [Offline profile] Asking whether to set up a Mobile Offline Profile…"
+
+Mobile Offline Profiles let the runtime package continue against Dataverse
+when connectivity is unavailable and synchronize queued changes later. This phase owns Mobile Offline Profile opt-in. Apply
+[`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md).
+
+Before asking, parse `.datamodel-manifest.json` and require at least one
+verified Dataverse table, including reused tables. If the manifest is missing,
+malformed, empty, or missing a service-required table, use the read-only manifest
+recovery in Step 8.5 before asking. If verification still fails, report
+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`
+with the specific remaining failure.
+Do not infer connector-only from a missing manifest.
+
+Skip only when `memory-bank.md` `## Offline profile` already records
+`status: done` or `status: not-applicable`. Print:
+`↷ Offline profile skipped — already <done|not-applicable> from a prior run.`
+
+Otherwise ask one neutral foreground question:
+
+> **Question header:** `Offline support`
+>
+> **Question body:** "Mobile Offline Profiles let users continue working when
+> their device is disconnected — Dataverse syncs queued changes when
+> connectivity returns. Set one up now?"
+>
+> **Options:**
+> - `Yes — create profile now (recommended)` — invoke
+>   `/setup-offline-profile`, then continue to Step 9
+> - `Skip — I'll add it later via /setup-offline-profile` — continue to Step 9
+>   without recording a final answer
+> - `Skip — this app doesn't need offline support` — record
+>   `status: not-applicable`, then continue to Step 9
+
+If the user selects Yes, invoke `/setup-offline-profile` from the project root.
+It consumes the materialized manifest, owns its own profile approval flow, and
+writes `offline-profile.json`. Surface concerns and stop on a substantive
+failure. Do not reopen data-model or screen approvals after this choice.
 
 ### Step 9 — Apply native capabilities
+
+**Telemetry checkpoint: `configure_native_capabilities`**
 
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
@@ -1216,58 +1864,94 @@ If the plan says "None — this app uses only standard React Native components a
 
 ### Step 9a — Install approved pure-JavaScript dependencies
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+**Telemetry checkpoint: `install_approved_javascript_dependencies`**
 
-Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+
+Gate 4 approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
 ### Step 9b — Apply design system
 
-`/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
+`/design-system` owns user-facing brand/design choices. The native-host
+`createPowerAppsTamaguiConfig` factory owns the baseline semantic aliases,
+contrast handling, animations, and font fallback. This step applies generated
+brand tokens without copying that host logic into the app.
 
-Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/design-planning.md):
+Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md):
 
 | Condition | Action |
 |---|---|
-| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, then wire brand `ThemeTokens` into `app/_layout.tsx` (see below). |
+| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, export the resolved app light/dark themes, then wire matching `ThemeTokens` into `app/_layout.tsx`. |
 | `## Design` says `required` | Apply the same reference using the approved `## Design` section. Builds custom token system + aliases. |
-| `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
-| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
+| `## Design` says `add-aliases` | Verify `tamagui.config.ts` uses `createPowerAppsTamaguiConfig`; the host already provides the semantic aliases. |
+| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No unchecked path.** Screen-builders require `$surface0`–`$surface3` and
+`$accent*` aliases. On the default path, verify the host factory rather than
+rewriting the config. Pass the complete `## Design` section verbatim — not a
+summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 
-**Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
+**Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
+exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
+into the host themes so `useTheme()` and `useThemeTokens()` cannot drift:
 
 ```tsx
-import { tokens as brandTokens } from '../brand/tokens';
-import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
+import {
+  PowerAppsProvider,
+  lightTheme as hostLightTheme,
+  darkTheme as hostDarkTheme,
+} from '@microsoft/power-apps-native-host';
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
+import tamaguiConfig, {
+  appDarkTheme,
+  appLightTheme,
+} from '../tamagui.config';
 
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
-  surface0: brandTokens.color.bg,
-  surface1: brandTokens.color.surface,
-  surface2: brandTokens.color.surface,
-  surface3: brandTokens.color.border,
-  text0: brandTokens.color.text,
-  text1: brandTokens.color.textMuted,
+  surface0: appLightTheme.surface0,
+  surface1: appLightTheme.surface1,
+  surface2: appLightTheme.surface2,
+  surface3: appLightTheme.surface3,
+  surface4: appLightTheme.color6,
+  text0: appLightTheme.text0,
+  text1: appLightTheme.text1,
+  text2: appLightTheme.text2,
+  text3: appLightTheme.text3,
+  accentDeep: appLightTheme.accentDeep,
+  accentBase: appLightTheme.accentBase,
+  accentSoft: appLightTheme.accentSoft,
+  accentOnAccent: appLightTheme.accentOnAccent,
 };
 const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
+  surface0: appDarkTheme.surface0,
+  surface1: appDarkTheme.surface1,
+  surface2: appDarkTheme.surface2,
+  surface3: appDarkTheme.surface3,
+  surface4: appDarkTheme.color6,
+  text0: appDarkTheme.text0,
+  text1: appDarkTheme.text1,
+  text2: appDarkTheme.text2,
+  text3: appDarkTheme.text3,
+  accentDeep: appDarkTheme.accentDeep,
+  accentBase: appDarkTheme.accentBase,
+  accentSoft: appDarkTheme.accentSoft,
+  accentOnAccent: appDarkTheme.accentOnAccent,
 };
 
 // In RootLayout:
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-The generated schema has one brand palette, so dark surfaces and text retain the host defaults while brand accents carry across modes. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `@microsoft/power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
+The generated schema has one brand palette, so the exported dark app theme
+retains Config v5 dark surfaces and text while carrying brand accents and
+statuses. For runtime theme switching, use `useThemeControl()` from
+`@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors
+
+**Telemetry checkpoint: `generate_connector_data_sources`**
 
 **Print before starting:**
 > "→ [Step 10/13] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."
@@ -1286,6 +1970,8 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 **Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
 ### Step 10b — Wire navigation layout
+
+**Telemetry checkpoint: `wire_app_navigation`**
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
 
@@ -1312,6 +1998,12 @@ Build two lists from the classification:
 
 **Sanity check before writing anything:** if any folder has children but no `index.tsx` row in the Screen Map, STOP and report: `BLOCKED: folder app/(app)/<folder>/ has children (<list>) but no index.tsx row in the Screen Map. The screen-planner must emit an index.tsx row for every folder.` This catches a planner mistake that would render the folder unreachable from the outer tab.
 
+Normalize every Screen Map file to its Expo route (strip `.tsx`, collapse trailing `/index`, preserve dynamic segments). If two files normalize to the same route, STOP before writing layouts. In particular, reject `<parent>/[id].tsx` together with `<parent>/[id]/<child>.tsx`; move the detail contract to `<parent>/[id]/index.tsx`.
+
+```text
+BLOCKED: duplicate Expo route <route> from <file-a> and <file-b>. Use [id]/index.tsx when a dynamic detail route owns child screens.
+```
+
 #### Step 10b.2 — Write per-folder inner `_layout.tsx` files (if any folders exist)
 
 For each entry in the Inner stacks list, create the folder if missing and write `app/(app)/<folder>/_layout.tsx` with this template:
@@ -1334,7 +2026,7 @@ Rules:
 - `headerShown: false` at the Stack level — each screen sets its own header inline via `<Stack.Screen options={{...}}>` at the top of its component (the Expo Router idiom).
 - `<Stack.Screen name="index" />` is required — without it, the folder root won't render.
 - `presentation: 'modal'` and `presentation: 'formSheet'` come from the Screen Map's Presentation column. Skip the `options` prop entirely for `default` presentation.
-- `name` for `[id].tsx` is literally `[id]` (with brackets).
+- `name` for `[id].tsx` is literally `[id]` (with brackets). When `[id]` owns child routes, create `<folder>/[id]/_layout.tsx` with `<Stack.Screen name="index" />` and child entries; do not register both `[id].tsx` and a `[id]/` folder.
 - Folder name in the function name is PascalCase (e.g. `InspectionsLayout`).
 
 **Why this must run BEFORE Step 11:** screen-builders write their files in parallel, multiple builders may target the same folder, and any of them creating `_layout.tsx` would race. The orchestrator owns these files.
@@ -1478,6 +2170,8 @@ Write the result into `native-app-plan.md` as a new section **immediately after 
 If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
 
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
+
+**Telemetry checkpoint: `generate_shared_code_and_screen_skeletons`**
 
 **Print before starting:**
 > "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
@@ -1716,6 +2410,8 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 ### Step 11 — Build screens (parallel)
 
+**Telemetry checkpoint: `build_and_validate_screens`**
+
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
 **Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
@@ -1796,6 +2492,14 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 
 **After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
 
+Then run the canonical route-contract gate from the app root:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
+```
+
+This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
+
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 
 > "tsc found <N> error(s) in <files>. Patch + continue, or stop and let me investigate?"
@@ -1811,6 +2515,8 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 ### Step 11.4 — Stylistic fix sweep (parallel)
 
+**Telemetry checkpoint: `validate_screen_design_quality`**
+
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
 **Print before starting:**
@@ -1821,8 +2527,8 @@ Run one controlled stylistic debt sweep after all screen-builder waves and TypeS
 **Available validators in v0:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
 ```
 
 `validate-screen-quality` includes accessibility-label/role, safe-area, touch-target, raw-hex, token, empty-state, shadow, and status-visual checks. If future stylistic hooks exist (for example `validate-accessibility-labels.js`), include them here only if they support `--report` and emit the same JSON issue shape.
@@ -1873,68 +2579,78 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 ---
 
-### Step 12 — Start dev server (background)
+### Step 12 — Start dev server (Metro writes project-local logs)
+
+**Telemetry checkpoint: `launch_metro_dev_server`**
 
 **Print before starting:**
-> "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."
+> "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
 
-This skill **launches** Metro in an async/background terminal so:
+This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
 
-1. The QR code prints in the terminal — the user can scan with their dev client immediately.
+1. Expo prints the native Metro URL and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
-3. **The agent owns the terminal** — when the user says "the screen is blank" / "data isn't showing" / "it crashed", the agent can read Metro's `console.log`, BUNDLE errors, and red-box stack traces directly via `BashOutput` (or its equivalent terminal-output tool) without asking the user to copy-paste.
+3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
-**Launch commands:**
+The native host Metro logger stores runtime-only logs under `<working_dir>/.powernative/metro-logs/`:
+
+- `metro-<timestamp>-pid-<pid>-port-<port>.log` — ANSI-free Metro output and HTTP bundle failures, with sensitive lines removed before persistence
+
+The **port** is the log identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to pick the latest live log. Expo rolls to the next free port when 8081 is taken, so always report the port discovered from the log/helper rather than assuming 8081.
+
+`.powernative/` is gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
+
+**Launch command:**
 
 ```bash
-cd <working_dir>
-npm run generate-schemas    # refresh schema map for any data sources added since last run (idempotent)
-npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
+cd "<working_dir>"
+npm run dev
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro async:
+`npm run dev` runs `predev` first: `npm run generate-schemas && npm run type-check`. npm does not launch `expo start` when either gate fails. Capture the full failing gate output once, batch-fix by root cause, then rerun `npm run dev`; continue only when `predev` passes and Expo prints its Metro URL.
+
+This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
+
+Read the initial terminal output and locate the generated `.powernative` log directly:
 
 ```bash
-# Async / background — DO NOT block on this. Capture the terminal id.
-npx expo start
+ls -t "<working_dir>/.powernative/metro-logs"/metro-*-pid-*-port-*.log 2>/dev/null | head -1
 ```
 
-Use `npx expo start` here instead of `npm run dev` because the orchestrator has already run `npm run generate-schemas` for the final gate. The template keeps `predev: npm run generate-schemas` as a safety net for humans running `npm run dev` manually, but the orchestrated path should not regenerate schemas twice.
+Branch as follows:
 
-When invoking the Bash tool: set `run_in_background: true` (or the equivalent async flag in your tool surface). Capture the returned terminal/shell id as `$METRO_TERMINAL_ID`.
+| State | Action |
+|---|---|
+| Latest log exists and Expo printed a Metro URL | Continue with QR handling. Report the port from the URL/log filename to the user. |
+| No log exists yet | Wait for Expo's `Waiting on ...` line, then check the log directory once more. If still absent, print the terminal output and stop without guessing a URL. |
+| A stale log exists but no current Metro output appears | Tell the user to stop stale Metro processes and rerun `npm run dev`; do not diagnose from that log. |
 
-**After launch, wait ≤8s for the "Metro waiting on" line, then:**
+**When Expo prints a Metro URL:** Do not rely on Expo's terminal-rendered QR as the only presentation path.
 
-1. Read the terminal output once (`BashOutput` with the captured id).
-2. **Extract the native Metro URL** from the terminal output:
-   - Locate the line beginning `› Metro:` — it has the form `exp+<scheme>://expo-development-client/?url=<encoded-http-url>`. Capture the full Metro URL.
-3. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
-  - Verify the PNG was created: `test -f <working_dir>/.expo/metro-qr.png` (exit code 0 = success). If it fails, print the qrcode error and continue to step 4.
-  - **Chat-first render (best effort):** read and base64-encode the file (`base64 <working_dir>/.expo/metro-qr.png`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
-  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable in the host UI, open the PNG directly in the default system image viewer/browser (`open <working_dir>/.expo/metro-qr.png` on macOS, `xdg-open ...` on Linux, `start "" ...` on Windows). This fallback is required whenever chat image rendering is unavailable.
+1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
+  - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
+  - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
+  - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
+  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable, use the host's file-open tool when present. Otherwise use the quoted OS command (`open "$METRO_QR"` on macOS, `xdg-open "$METRO_QR"` on Linux, or `cmd /c start "" "$METRO_QR"` on Windows). If opening fails, print the quoted path. Never interpolate an unquoted project path.
   - Surface only the native Metro URL immediately after the image/fallback message.
-4. **Optional: ASCII terminal QR for power users.** Extract and print the terminal's ASCII QR banner as a secondary/backup option:
-   - Locate the first line composed of unicode block glyphs (`▀ ▄ █`) — that is the top of the QR.
-  - Print every line from that line through the `› Metro:` line.
-   - Cap at 30 lines as a safety net. Print as-is inside a fenced code block so terminal renderers preserve glyph alignment.
-  - If the ASCII QR banner is not yet in the output, re-read `BashOutput` once more after another 4s before giving up. If still absent, skip the ASCII QR — PNG delivery from step 3 is the primary path.
-5. Follow with:
+2. Follow with:
 
-   > "✓ Metro is running in background terminal `<id>`.
+  > "✓ Metro is running on port `<port>`.
   > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
-  > 🔄 Edits hot-reload automatically."
+  > 🔄 Edits hot-reload automatically. Debug logs: `<working_dir>/.powernative/metro-logs/`."
 
-**Persist the terminal id to memory bank** so resumed sessions and downstream skills (`/preview-screens`, `/edit-app`, `/add-*`) can find it:
+**Persist only stable discovery paths to memory bank** so resumed sessions and downstream skills can find the session without coupling to a host terminal:
 
 ```markdown
 ## Project facts
 ...
-- Metro terminal id: <id> (started <ISO date>)
-- Metro launch cmd: cd <working_dir> && npx expo start
+- Metro logs: .powernative/metro-logs/
+- Metro launch cmd: npm run dev
 ```
 
-This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
+Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from the latest `.powernative` log when needed.
+
+After Step 12 starts the long-running server, continue through the optional Step 12.5 debug handoff and print the Step 13 summary, then return so the user can iterate locally. Production build + tenant push remains a separate, explicit user action via the `/deploy` skill.
 
 ### Step 12.5 — Optional debug handoff
 
@@ -1942,9 +2658,9 @@ Do not perform screen-by-screen runtime verification. Do not crawl routes, open 
 
 After Metro is running and the QR has been presented, offer a single optional debug handoff:
 
-> "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the Metro terminal logs."
+> "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the project-local Metro log."
 
-Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` must use the captured Metro terminal output as its diagnostic source; it must not probe `localhost`, request a bundle URL, or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
+Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` uses `.powernative/metro-logs/` as its primary diagnostic source; it must not request a bundle URL or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
 
 When the user is ready to deploy:
 
@@ -1954,7 +2670,7 @@ When the user is ready to deploy:
 
 ### Step 13 — Summary
 
-Print a compact status block, then present exactly 4 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
+Print a compact status block, then present exactly 6 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
 
 ```
 ✅ Native code app created
@@ -1966,14 +2682,18 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
-Dev server    : npx expo start — running in background terminal <id>
-                (scan QR there when you want to run locally)
+Planning      : metadata <N ms> | local <N ms> | architect <N ms> | screens <N ms>
+Approval wait : <N ms> (excluded from agent performance)
+Execution     : scaffold <N ms or not recorded> | mutation <N ms or not recorded>
+App Insights  : <enabled for selected customer-owned resource | disabled>
+Dev server    : Metro running on port <port>
+Debug logs    : .powernative/metro-logs/
 ─────────────────────────────────────────────
 ```
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-Then present exactly these 4 options:
+Then present exactly these 6 options:
 
 ```
 What now?
@@ -1983,6 +2703,7 @@ What now?
 3. Edit the app                (/edit-app)
 4. Add more capabilities       (/add-dataverse, /add-connector, /add-native)
 5. Configure auth later        (/set-app-registration-native)
+6. Set up Application Insights (/setup-app-insights)
 
 Which option? (or "none — I'll keep iterating locally")
 ```
@@ -2002,6 +2723,6 @@ Which option? (or "none — I'll keep iterating locally")
 
 ## Reference
 
-- [shared/shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)
-- [shared/references/screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md)
-- [agents/native-app-planner.md](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md)
+- [shared/shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)
+- [shared/references/screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md)
+- [agents/native-app-planner.md](${PLUGIN_ROOT}/agents/native-app-planner.md)

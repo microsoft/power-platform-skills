@@ -4,39 +4,55 @@
 // a structured JSON result. Dry-run by default; --apply writes. --sample-data opt-in.
 //
 // Usage:
-//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data]
+//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor } = require('./lib/app-spec.js');
+const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
 //                  solution via the MSCRM.SolutionUniqueName header).
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
-function makeSdk(env, input) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, input) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir,
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: input.solution && input.solution.uniqueName,
-  });
-  sdk.initWorkspace();
-  const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
-  provision.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
   };
+  // Everything fallible after the directories exist runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands both temp directories for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left the first
+  // construction outside the net. Matches provision-solution.js and ai-preflight.js, which already
+  // keep construction inside their protected region for this exact reason.
+  let sdk;
+  let provision;
+  try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: input.solution && input.solution.uniqueName,
+    });
+    await sdk.initWorkspace();
+    provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
+    await provision.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   return { sdk, provision, cleanup };
 }
 
@@ -116,7 +132,7 @@ function buildPlan(input, opts) {
 }
 
 // The testable core: validates, computes plan, runs the shared provision functions.
-// `deps` injects { sdk, provision, emit, log } so tests never touch the network.
+// `deps` injects { sdk, provision, emit, log, warn } so tests never touch the network.
 async function provisionEntities(input, opts = {}, deps = {}) {
   // 1. Validation gate first — if invalid, return errors with ZERO SDK writes.
   const v = validateProvisionInput(input);
@@ -133,6 +149,7 @@ async function provisionEntities(input, opts = {}, deps = {}) {
   // 3. Apply: run the shared core (solution → data-model → sample-data-if-requested).
   const log = deps.log || (() => undefined);
   const emit = deps.emit || (() => undefined);
+  const warn = deps.warn || (() => undefined);
   const sdk = deps.sdk;
   const provision = deps.provision;
   
@@ -146,18 +163,31 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     relationships: input.relationships || [],
     globalChoices: input.globalChoices || [],
     sampleData: input.sampleData,
+    // Carried through so a caller can pin the label LCID here exactly as an App Spec can. Without
+    // it the field would be silently dropped on this path while working on the build path.
+    ...(input.languageCode !== undefined ? { languageCode: input.languageCode } : {}),
   };
   
   // Provision solution
   await provisionSolution({ sdk, provision, runner, solution: spec.solution });
   
   // Provision data model (entities, columns, relationships)
+  // `warn` is threaded so a fallback to the default label LCID is REPORTED here too. This CLI is the
+  // genpage create flow's data-model path, so without it a non-English org would hit the same opaque
+  // "language code 1033 is not a valid language for this organization" that #447 describes, with no
+  // diagnostic — the build path would explain itself and this one would not.
   const dataModel = await provisionDataModel({
     sdk,
     provision,
     runner,
     spec,
     apply: true,
+    languageCode: opts.languageCode,
+    // Same guard as the build path: an explicit override the org has not provisioned fails here,
+    // before any write, rather than half-succeeding (labels silently coerced to the base language,
+    // then a hard 400 on the first DateTime/Memo column).
+    provisionedLanguages: deps.provisionedLanguages,
+    warn,
   });
   
   // Provision sample data (if requested)
@@ -261,37 +291,59 @@ async function provisionEntities(input, opts = {}, deps = {}) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs represents a value-less flag as boolean true. These are value-bearing flags, so
-  // coerce bare `--env` / `--input` to missing and let the usage guard produce the same clear error
-  // as an omitted value instead of passing a boolean into auth or path resolution.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const inputArg = (typeof flags.input === 'string' ? flags.input : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  
-  if (!env || !inputArg || flags.input === true) {
-    process.stderr.write(
-      'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data]\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]';
+  // A value-less `--language-code` must never fall through to the org default, and an unknown flag
+  // must never be dropped while swallowing the token after it.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'input', 'apply', 'sample-data', 'language-code', 'languageCode'],
+    needValue: ['env', 'input', 'language-code', 'languageCode'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  
+  const env = flags.env;
+  const inputArg = flags.input || positional[0];
+
+  if (!env || !inputArg) {
+    process.stderr.write(USAGE + '\n');
+    process.exit(1);
+  }
+
   const inputPath = path.resolve(typeof inputArg === 'string' && inputArg.startsWith('@') ? inputArg.slice(1) : inputArg);
   const input = readJsonArg('@' + inputPath);
   
+  const rawLang = readAliasedFlag(flags, 'language-code', 'languageCode');
+  let languageCode;
+  if (rawLang !== undefined) {
+    languageCode = normalizeLanguageCode(rawLang);
+    if (languageCode === null) {
+      process.stderr.write(`✗ --language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${rawLang}')\n`);
+      process.exit(1);
+    }
+  }
+
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
+    languageCode,
   };
   
   // Construct SDK clients (offline until first call)
-  const { sdk, provision, cleanup } = makeSdk(env, input);
+  const { sdk, provision, cleanup } = await makeSdk(env, input);
 
   let r;
   try {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk,
       provision,
+      // Only consulted for an explicit override, and any failure resolves to null so a build never
+      // breaks on the diagnostic itself.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
 
     r = await provisionEntities(input, opts, deps);

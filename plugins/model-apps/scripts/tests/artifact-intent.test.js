@@ -653,3 +653,107 @@ test('findFieldCellPointer: skips null-fieldName controls (notes/subgrid)', () =
   // null fieldName must not match anything
   assert.strictEqual(findFieldCellPointer(formJson, ''), null);
 });
+
+// The App Spec has documented `enabled`, `passExecutionContext` and `parameters` on
+// `forms[].events[]` all along, but the intent builder HARDCODED all three and never read the
+// authored values. An author who wrote `"enabled": false` got a handler that ran anyway — the
+// worst shape of bug, because the spec, the docs and the deployed form all disagreed silently.
+test('form event handler honours enabled / passExecutionContext / parameters', () => {
+  const attrsOf = (region) => {
+    const handler = region.c[0].c[0].c[0];
+    return Object.fromEntries(handler.a);
+  };
+
+  // Defaults: both flags true, parameters empty — what an author wiring a handler almost always wants.
+  const def = attrsOf(formEventsRegionIntent([{ event: 'onload', library: 'new_lib.js', function: 'onLoad' }]));
+  assert.strictEqual(def.enabled, 'true');
+  assert.strictEqual(def.passExecutionContext, 'true');
+  assert.strictEqual(def.parameters, '');
+
+  // Authored values must actually reach the FormXML.
+  const set = attrsOf(formEventsRegionIntent([{
+    event: 'onload', library: 'new_lib.js', function: 'onLoad',
+    enabled: false, passExecutionContext: false, parameters: 'a,b',
+  }]));
+  assert.strictEqual(set.enabled, 'false', 'enabled:false must disable the handler, not be discarded');
+  assert.strictEqual(set.passExecutionContext, 'false');
+  assert.strictEqual(set.parameters, 'a,b');
+
+  // FormXML attribute values are strings, so booleans must be rendered rather than passed through.
+  for (const [k, v] of Object.entries(set)) assert.strictEqual(typeof v, 'string', k + ' must serialize as a string');
+});
+
+test('form event parameters accepts an explicit empty string and ignores null', () => {
+  const attrsOf = (ev) => Object.fromEntries(formEventsRegionIntent([ev]).c[0].c[0].c[0].a);
+  assert.strictEqual(attrsOf({ event: 'onsave', library: 'l.js', function: 'f', parameters: '' }).parameters, '');
+  // Dataverse writes parameters="" itself, so an absent value is the empty string, not a dropped attribute.
+  assert.strictEqual(attrsOf({ event: 'onsave', library: 'l.js', function: 'f', parameters: null }).parameters, '');
+});
+
+test('explicit layout: colspan/rowspan are emitted only when they exceed the adapter default', () => {
+  const spec = makeSpec();
+  const form = { entity: 'new_item', name: 'Item', layout: 'explicit', tabs: [{ label: 'General', sections: [
+    { label: 'Details', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_status', { name: 'new_cost', rowspan: 2 }] },
+  ] }] };
+  const intent = compileFormIntent(spec, form);
+  const cells = intent.tabs[0].columns[0].sections[0].rows.flatMap((r) => r.cells);
+  const byField = Object.fromEntries(cells.map((c) => [c.control.fieldName, c]));
+  assert.strictEqual(byField.new_name.colspan, 2, 'an authored colspan reaches the cell');
+  assert.strictEqual(byField.new_cost.rowspan, 2, 'an authored rowspan reaches the cell');
+  // An ordinary cell must carry NO span key: emitting the default would overwrite a span a maker
+  // widened by hand on a form the spec never claimed to own that of.
+  assert.ok(!('colspan' in byField.new_status), 'no colspan is written for a field that did not ask');
+  assert.ok(!('rowspan' in byField.new_status), 'no rowspan is written for a field that did not ask');
+});
+
+test('explicit layout: a colspan cell consumes its full width when packing rows', () => {
+  const spec = makeSpec();
+  const form = { entity: 'new_item', name: 'Item', layout: 'explicit', tabs: [{ label: 'G', sections: [
+    { label: 'D', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_status', 'new_cost'] },
+  ] }] };
+  const rows = compileFormIntent(spec, form).tabs[0].columns[0].sections[0].rows;
+  // Packing by cell COUNT would put new_name and new_status in row 0, even though new_name already
+  // spans the whole 2-column section.
+  assert.deepStrictEqual(rows.map((r) => r.cells.map((c) => c.control.fieldName)), [['new_name'], ['new_status', 'new_cost']]);
+});
+
+test('explicit layout: tab expanded/visible and section visible are author-controlled', () => {
+  const spec = makeSpec();
+  const form = { entity: 'new_item', name: 'Item', layout: 'explicit', tabs: [
+    { label: 'Collapsed', expanded: false, sections: [{ label: 'A', fields: ['new_name'] }] },
+    { label: 'Hidden', visible: false, sections: [{ label: 'B', visible: false, fields: ['new_status'] }] },
+  ] };
+  const intent = compileFormIntent(spec, form);
+  assert.strictEqual(intent.tabs[0].expanded, false, 'expanded: false collapses the tab');
+  assert.strictEqual(intent.tabs[0].visible, true, 'and leaves visibility alone');
+  assert.strictEqual(intent.tabs[1].visible, false);
+  assert.strictEqual(intent.tabs[1].columns[0].sections[0].visible, false);
+});
+
+test('explicit layout: multi-column tabs split width evenly unless authored', () => {
+  const spec = makeSpec();
+  const form = { entity: 'new_item', name: 'Item', layout: 'explicit', tabs: [{ label: 'G', columns: [
+    { sections: [{ label: 'L', fields: ['new_name'] }] },
+    { sections: [{ label: 'M', fields: ['new_status'] }] },
+    { sections: [{ label: 'R', fields: ['new_cost'] }] },
+  ] }] };
+  const cols = compileFormIntent(spec, form).tabs[0].columns;
+  assert.deepStrictEqual(cols.map((c) => c.width), ['34%', '33%', '33%'], 'widths total exactly 100');
+  // Generated section names stay collision-free across columns while column 0 keeps the legacy
+  // `section_<tab>_<i>` form, so already-deployed single-column forms still match themselves.
+  assert.deepStrictEqual(cols.map((c) => c.sections[0].name), ['section_0_0', 'section_0_1_0', 'section_0_2_0']);
+});
+
+test('fieldCellIntent writes a span the author EXPRESSED, including an explicit 1', () => {
+  // The real asymmetry is OMISSION vs VALUE, not 1 vs >1. An ordinary cell never passes a span at
+  // all, so the "don't overwrite a hand-widened designer span" concern is served by omission — and
+  // it is asserted below. Folding an explicit 1 to undefined additionally made a RESET
+  // unrepresentable: 2 -> 1 compiled to "no colspan" and the deployed cell stayed at 2.
+  assert.strictEqual(fieldCellIntent('new_name', { colspan: 1 }).colspan, 1, 'an explicit 1 is a claim and must be written');
+  assert.strictEqual(fieldCellIntent('new_name', { rowspan: 1 }).rowspan, 1);
+  assert.strictEqual(fieldCellIntent('new_name', { colspan: 3 }).colspan, 3);
+  // The concern the old rule was protecting, stated directly: saying NOTHING must write nothing.
+  assert.ok(!('colspan' in fieldCellIntent('new_name', {})), 'omission must not emit a span');
+  assert.ok(!('rowspan' in fieldCellIntent('new_name', {})), 'omission must not emit a span');
+  assert.ok(!('colspan' in fieldCellIntent('new_name', { colspan: undefined })), 'an undefined span is omission');
+});

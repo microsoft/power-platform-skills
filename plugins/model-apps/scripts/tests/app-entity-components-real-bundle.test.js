@@ -21,6 +21,19 @@ const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const { appDef } = require('../lib/sdk-build.js');
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const APP_UNIQUE_ID = '33333333-3333-3333-3333-333333333333';
@@ -54,8 +67,8 @@ function specFor(tables) {
  *   componentStatus - HTTP status for the component read-back
  *   noAppUnique     - the app read returns no `appmoduleidunique`
  */
-function freshSdk(tables, opts = {}) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(tables, opts = {}) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entcomp-'));
   tempDirs.push(dir);
   const reqs = [];
@@ -90,14 +103,14 @@ function freshSdk(tables, opts = {}) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, reqs };
 }
 
 async function pushApp(sdk, tables) {
   const def = appDef(specFor(tables), { forms: {}, views: {}, charts: {}, dashboards: {} });
-  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_customermanagement', description: '', siteMap: def.siteMap, components: def.components });
+  const art = await sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_customermanagement', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   return sdk.pushArtifact('app', art.id);
 }
 const addComponentsCall = (reqs) => reqs.find((r) => r.method === 'POST' && /AddAppComponents/i.test(r.url));
@@ -106,7 +119,7 @@ test('REAL BUNDLE: sitemap tables are pinned as OData REFERENCES, never as `enti
   // The regression that shipped: an `@odata.type` instance payload naming the `entity` table pinned
   // the metadata table itself, producing `schemaName="entity"` in the export.
   const tables = ['account', 'contact', 'activitypointer'];
-  const { sdk, reqs } = freshSdk(tables);
+  const { sdk, reqs } = await freshSdk(tables);
   await pushApp(sdk, tables);
   const call = addComponentsCall(reqs);
   assert.ok(call, 'AddAppComponents must be called');
@@ -126,7 +139,7 @@ test('REAL BUNDLE: every declared table is pinned — none is silently dropped',
   // explicable as one having been dropped before the call. N components must produce N rows;
   // AddAppComponents does not de-duplicate.
   const tables = ['account', 'contact', 'activitypointer'];
-  const { sdk, reqs } = freshSdk(tables);
+  const { sdk, reqs } = await freshSdk(tables);
   await pushApp(sdk, tables);
   const comps = addComponentsCall(reqs).body.Components || [];
   const refs = comps.map((c) => c['@odata.id']).filter(Boolean);
@@ -138,7 +151,7 @@ test('REAL BUNDLE: an UNRESOLVABLE table refuses the whole push rather than pinn
   // "the rest" would leave nav pointing at a table the app does not contain. The refusal must NAME
   // the table so the message is actionable.
   const tables = ['account', 'contact'];
-  const { sdk, reqs } = freshSdk(tables, { unresolvable: 'contact' });
+  const { sdk, reqs } = await freshSdk(tables, { unresolvable: 'contact' });
   await assert.rejects(() => pushApp(sdk, tables), (e) => {
     assert.ok(/contact/.test(e.message), `the refusal must name the table: ${e.message}`);
     return true;
@@ -151,7 +164,7 @@ test('REAL BUNDLE: components are READ BACK and a missing one fails, even though
   // A 2xx says the request was accepted, not which rows it wrote. Model a platform that accepts the
   // write and stores only one of the two tables.
   const tables = ['account', 'contact'];
-  const { sdk } = freshSdk(tables, { componentRows: [{ objectid: META.account, componenttype: 1 }] });
+  const { sdk } = await freshSdk(tables, { componentRows: [{ objectid: META.account, componenttype: 1 }] });
   await assert.rejects(() => pushApp(sdk, tables), (e) => {
     assert.ok(/contact/.test(e.message), `the failure must name the missing table: ${e.message}`);
     return true;
@@ -164,7 +177,7 @@ test('REAL BUNDLE: the exact 6612527 corruption is caught — components present
   // carry the `entity` table's MetadataId instead of account's/contact's.
   const ENTITY_TABLE_META = 'eeeeeeee-0000-0000-0000-00000000000e';
   const tables = ['account', 'contact'];
-  const { sdk } = freshSdk(tables, {
+  const { sdk } = await freshSdk(tables, {
     componentRows: [
       { objectid: ENTITY_TABLE_META, componenttype: 1 },
       { objectid: ENTITY_TABLE_META, componenttype: 1 },
@@ -179,7 +192,7 @@ test('REAL BUNDLE: the exact 6612527 corruption is caught — components present
 test('REAL BUNDLE: an INCONCLUSIVE read-back fails closed (cannot check is not fine)', async () => {
   for (const opts of [{ componentStatus: 503 }, { noAppUnique: true }]) {
     const tables = ['account'];
-    const { sdk } = freshSdk(tables, opts);
+    const { sdk } = await freshSdk(tables, opts);
     await assert.rejects(() => pushApp(sdk, tables), `expected a refusal for ${JSON.stringify(opts)}`);
   }
 });
@@ -187,13 +200,13 @@ test('REAL BUNDLE: an INCONCLUSIVE read-back fails closed (cannot check is not f
 test('REAL BUNDLE: an app with no sitemap tables neither pins nor verifies (no phantom work)', async () => {
   // A page-only app has nothing to pin; the verification must not invent a failure, and the SDK
   // should not spend a network call on an empty component list.
-  const { sdk, reqs } = freshSdk([]);
+  const { sdk, reqs } = await freshSdk([]);
   const def = appDef(
     { solution: { uniqueName: 'EntCompB', publisherPrefix: 'contoso' }, app: { name: 'Pageless', description: '' }, entities: [],
       appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ url: 'https://x/y', title: 'Link' }] }] }] } },
     { forms: {}, views: {}, charts: {}, dashboards: {} }
   );
-  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_pageless', description: '', siteMap: def.siteMap, components: def.components });
+  const art = await sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_pageless', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id));
   const call = addComponentsCall(reqs);
   const refs = call ? (call.body.Components || []).filter((c) => c['@odata.id']) : [];

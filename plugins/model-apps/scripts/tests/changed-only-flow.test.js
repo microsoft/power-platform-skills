@@ -148,7 +148,7 @@ test('resolveLiveIdentity: WhoAmI orgId + app discovery', async () => {
     whoAmI: async () => ({ status: 200, data: { OrganizationId: 'org-9' } }),
     sdk: { queryRecords: async () => [{ appmoduleid: 'app-9' }] },
   });
-  assert.deepStrictEqual(id, { orgId: 'org-9', envUrl: 'https://e', appUniqueName: 'new_app', appId: 'app-9' });
+  assert.deepStrictEqual(id, { orgId: 'org-9', envUrl: 'https://e', appUniqueName: 'new_app', appId: 'app-9', appIdKnown: true });
 });
 
 test('resolveLiveIdentity: WhoAmI failure -> null (degrade to full build)', async () => {
@@ -164,6 +164,21 @@ test('resolveLiveIdentity: app not found -> appId null (tolerated; fresh baselin
   });
   assert.strictEqual(id.appId, null);
   assert.strictEqual(id.orgId, 'org-9');
+  assert.strictEqual(id.appIdKnown, true, 'an empty result is a PROVEN absence, not an unreadable one');
+});
+
+// #587.4 — a FAILED app query used to collapse to the same `appId: null` as a proven absence, and
+// that null is the single fact certifying a fresh (ELIGIBLE) changed-only baseline. So one transient
+// error against a PRE-EXISTING app minted an eligible baseline for an additive build that may not
+// have converged, and a later page edit rode the fast path on it.
+test('resolveLiveIdentity: a FAILED app query is distinguishable from a proven absence', async () => {
+  const id = await flow.resolveLiveIdentity({
+    envUrl: 'https://e', appUniqueName: 'a',
+    whoAmI: async () => ({ data: { OrganizationId: 'org-9' } }),
+    sdk: { queryRecords: async () => { throw new Error('transient 503'); } },
+  });
+  assert.strictEqual(id.appId, null, 'no id was read');
+  assert.strictEqual(id.appIdKnown, false, 'and the caller must be able to tell it was UNREADABLE');
 });
 
 // ---- assembleBaselineSnapshot ----
@@ -365,5 +380,44 @@ test('run: --sample-data requested but baseline did not seed rows -> forced FULL
     assert.strictEqual(r.changedOnly.decision, 'full');
     assert.match(r.changedOnly.reason, /sample-data/);
     assert.strictEqual(record.length, 1, 'a full build ran to seed the sample data');
+  } finally { rm(dir); }
+});
+
+// #587.4, end to end: the consequence of the identity distinction, not just the field.
+// An unreadable app id must produce an INELIGIBLE baseline carrying `uncertified-baseline` debt,
+// exactly as a known-pre-existing app does — otherwise a later page edit takes the fast path on a
+// baseline that was never proven to be a fresh create.
+test('run: an unreadable app id must not certify an eligible fresh baseline', async () => {
+  const dir = ws();
+  try {
+    const unreadable = async () => ({ ...LIVE, appId: null, appIdKnown: false });
+    await flow.runChangedOnlyApply({
+      spec: baseSpec(),
+      opts: { workspaceDir: dir, apply: true },
+      deps: baseDeps(dir, { resolveLiveIdentity: unreadable }),
+    });
+    const snap = store.readSnapshot(dir);
+    assert.ok(snap, `a snapshot must still be written; got ${JSON.stringify(snap)}`);
+    assert.strictEqual(snap.eligible, false,
+      'an identity we could not read cannot certify a fresh create');
+    assert.ok(JSON.stringify(snap.debt || []).includes('uncertified-baseline'),
+      `the reason must be recorded as debt; got ${JSON.stringify(snap.debt)}`);
+  } finally { rm(dir); }
+});
+
+// The control: a PROVEN absence still certifies a fresh baseline, so the fix cannot be satisfied by
+// making every baseline ineligible.
+test('run: a PROVEN absent app still certifies an eligible fresh baseline', async () => {
+  const dir = ws();
+  try {
+    const absent = async () => ({ ...LIVE, appId: null, appIdKnown: true });
+    await flow.runChangedOnlyApply({
+      spec: baseSpec(),
+      opts: { workspaceDir: dir, apply: true },
+      deps: baseDeps(dir, { resolveLiveIdentity: absent }),
+    });
+    const snap = store.readSnapshot(dir);
+    assert.strictEqual(snap.eligible, true,
+      `a fresh create must still yield an eligible baseline; debt=${JSON.stringify(snap.debt)}`);
   } finally { rm(dir); }
 });

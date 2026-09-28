@@ -1,7 +1,7 @@
 {
   "name": "mcp-apps",
-  "version": "1.0.0",
-  "description": "Generate MCP App widgets for MCP tools. Produces self-contained HTML widgets using the MCP Apps protocol.",
+  "version": "1.2.0",
+  "description": "Generate JavaScript server runtimes and CDN-free or CDN-enabled MCP App widgets.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"
@@ -12,6 +12,9 @@
   "keywords": [
     "mcp-apps",
     "mcp",
+    "codeful-tool",
+    "dataverse",
+    "javascript",
     "widget",
     "ext-apps",
     "fluent-ui",

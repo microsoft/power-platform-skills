@@ -32,6 +32,9 @@ test("off writes the per-plugin opt-out and confirms", () => {
   assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
   assert.match(stdout, /eventInfo\.aadObjectId/);
   assert.match(stdout, /when PAC exposes it/);
+  assert.match(stdout, /eventInfo\.framework/);
+  assert.match(stdout, /react, vue, angular, or astro/);
+  assert.match(stdout, /never a site name or path/);
   assert.match(stdout, /When plugin telemetry is enabled/);
   assert.match(stdout, /committed telemetry\s+config has disabled: true/);
   assert.match(stdout, /hard-disabled and writes no log/);
@@ -74,6 +77,9 @@ test("status reports ON by default and never reads ikey.json", () => {
   assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
   assert.match(stdout, /eventInfo\.aadObjectId/);
   assert.match(stdout, /when PAC exposes it/);
+  assert.match(stdout, /eventInfo\.framework/);
+  assert.match(stdout, /react, vue, angular, or astro/);
+  assert.match(stdout, /never a site name or path/);
   assert.match(stdout, /When plugin telemetry is enabled/);
   assert.match(stdout, /committed telemetry\s+config has disabled: true/);
   assert.match(stdout, /hard-disabled and writes no log/);

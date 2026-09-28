@@ -6,24 +6,34 @@ These examples target Tamagui 2 with Config v5 and the standalone template's cus
 
 ## Rule #1 — Extend, don't replace
 
-Always spread `defaultConfig` first:
+Pass only the overrides to the native-host factory. It preserves the complete
+Config v5 baseline:
 
 ```ts
-import { createTamagui } from '@tamagui/core'
+import {
+  createPowerAppsTamaguiConfig,
+  withPowerAppsSemanticAliases,
+} from '@microsoft/power-apps-native-host/config/tamaguiConfig'
 import { defaultConfig } from '@tamagui/config/v5'
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME
-import { animations } from '@tamagui/config/v5-rn'
-
 const customConfig = {
-  ...defaultConfig,
-  animations,
   tokens: { ...defaultConfig.tokens, /* non-color overrides */ },
-  themes: { ...defaultConfig.themes, /* overrides */ },
+  themes: {
+    ...defaultConfig.themes,
+    light: {
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.light),
+      /* light overrides */
+    },
+    dark: {
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
+      /* dark overrides */
+    },
+  },
 }
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 
-export const tamaguiConfig = createTamagui(customConfig)
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
 ```
 
 Replacing the whole config means you lose all the built-in themes (light, dark, red, blue, etc.) and have to rebuild them. Don't.
@@ -33,12 +43,13 @@ Replacing the whole config means you lose all the built-in themes (light, dark, 
 Config v5 color values live in themes. Define each custom name in both root themes so `$brand500` follows the active light/dark theme.
 
 ```ts
-import { createTamagui } from '@tamagui/core'
+import {
+  createPowerAppsTamaguiConfig,
+  withPowerAppsSemanticAliases,
+} from '@microsoft/power-apps-native-host/config/tamaguiConfig'
 import { defaultConfig } from '@tamagui/config/v5'
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME
-import { animations } from '@tamagui/config/v5-rn'
-
 const lightBrandColors = {
   brand50:  '#FFF4E6',
   brand100: '#FFD9B3',
@@ -58,23 +69,21 @@ const darkBrandColors = {
 const themes = {
   ...defaultConfig.themes,
   light: {
-    ...defaultConfig.themes.light,
+    ...withPowerAppsSemanticAliases(defaultConfig.themes.light),
     ...lightBrandColors,
   },
   dark: {
-    ...defaultConfig.themes.dark,
+    ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
     ...darkBrandColors,
   },
 }
 
 const customConfig = {
-  ...defaultConfig,
-  animations,
   themes,
 }
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 
-export const tamaguiConfig = createTamagui(customConfig)
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
 ```
 
 Use it as `<Button bg="$brand500" />`.
@@ -85,14 +94,14 @@ A "theme" in Tamagui is a set of colors keyed to semantic slots. To add a brand 
 
 ```ts
 const customConfig = {
-  ...defaultConfig,
-  animations,
   themes: {
     ...defaultConfig.themes,
+    light: withPowerAppsSemanticAliases(defaultConfig.themes.light),
+    dark: withPowerAppsSemanticAliases(defaultConfig.themes.dark),
 
     // Light brand
     light_brand: {
-      ...defaultConfig.themes.light,
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.light),
       background: lightBrandColors.brand500,
       color: '#fff',
       borderColor: lightBrandColors.brand700,
@@ -100,7 +109,7 @@ const customConfig = {
 
     // Dark brand
     dark_brand: {
-      ...defaultConfig.themes.dark,
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
       background: darkBrandColors.brand700,
       color: '#fff',
       borderColor: darkBrandColors.brand900,
@@ -172,11 +181,10 @@ const headingFont = createFont({
 })
 
 const customConfig = {
-  ...defaultConfig,
-  animations,
   fonts: {
     ...defaultConfig.fonts,
     heading: headingFont,
+    mono: defaultConfig.fonts.body,
   },
 }
 ```
@@ -239,11 +247,11 @@ const darkStatusColors = {
 const themes = {
   ...defaultConfig.themes,
   light: {
-    ...defaultConfig.themes.light,
+    ...withPowerAppsSemanticAliases(defaultConfig.themes.light),
     ...statusColors,
   },
   dark: {
-    ...defaultConfig.themes.dark,
+    ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
     ...darkStatusColors,
   },
 }
@@ -275,4 +283,9 @@ You probably need at most: 4–6 brand color tokens, named status tokens (above)
 
 ## Config version
 
-The standalone template uses Tamagui 2 with `@tamagui/config/v5`. Keep `createTamagui`, `createTokens`, and `createFont` imports on `@tamagui/core`, preserve the template's `declare module '@tamagui/core'` augmentation, and keep customization code between the marker lines. Use `createTokens` for non-color token groups; put color values in `light` and `dark` themes.
+The standalone template uses Tamagui 2 with `@tamagui/config/v5`. Keep
+`createPowerAppsTamaguiConfig` imported from the native host, keep
+`createTokens` and `createFont` on `@tamagui/core`, preserve the template's
+`declare module 'tamagui'` augmentation, and keep customization code between
+the marker lines. Use `createTokens` for non-color token groups; put color
+values in `light` and `dark` themes.

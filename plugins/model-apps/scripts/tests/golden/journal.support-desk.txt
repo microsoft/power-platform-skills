@@ -54,9 +54,10 @@ forms	start	form "Customer"
 forms	start	form "Ticket"
 forms	start	form "Comment"
 forms	ok	form "Customer"
-forms	ok	form "Ticket"
 forms	ok	form "Comment"
+forms	ok	form "Ticket"
 app-shell	start	app icon (generated) new_supportdesk_icon
 app-shell	ok	app icon (generated) new_supportdesk_icon
 app-shell	start	app "Support Desk"
 app-shell	ok	app "Support Desk"
+pages	skip	finalize sitemap (genpage subareas) (fresh page-less app — sitemap written on create)

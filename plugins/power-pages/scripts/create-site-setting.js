@@ -27,7 +27,8 @@ function getArg(name) {
 }
 
 const projectRoot = getArg('projectRoot');
-const settingName = getArg('name');
+const settingNameArg = getArg('name');
+const settingName = settingNameArg === null ? null : settingNameArg.trim();
 const settingValue = getArg('value');
 const description = getArg('description');
 const valueType = getArg('type') || 'string';
@@ -65,6 +66,16 @@ if (!usesEnvironmentVariable && valueType !== 'boolean' && valueType !== 'string
 
 if (!usesEnvironmentVariable && valueType === 'boolean' && settingValue !== 'true' && settingValue !== 'false') {
   console.error(`Error: --value must be "true" or "false" when --type is "boolean", got "${settingValue}"`);
+  process.exit(1);
+}
+
+const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName);
+const hasWildcardField = !usesEnvironmentVariable
+  && settingValue.split(',').some(column => column.trim() === '*');
+if (isWebApiFieldsSetting && hasWildcardField) {
+  // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
+  // Reject it here so generated site settings remain deployable after that cutoff.
+  console.error('Error: Webapi/<table>/fields requires an explicit comma-separated column list. Use LogicalNames for ordinary columns, _<LogicalName>_value for lookup reads, and the exact Navigation Property before @odata.bind for lookup writes; wildcard field access is unsupported beginning September 14, 2026.');
   process.exit(1);
 }
 

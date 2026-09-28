@@ -242,3 +242,32 @@ test('security #2 least-privilege assertion: passes faithful mapping, catches ov
     granted: { new_order: { read: 'user' }, appmodule: { read: 'organization' } },
   })).reason, /leak/);
 });
+
+// The form-shape oracle used to FLATTEN sections across form-columns on both sides, so a section
+// that moved from column 0 to column 1 — keeping its order and fields — produced identical flat
+// lists and passed. That is precisely the topology this assertion exists to prove, so the oracle was
+// blind to the defect class it was written for. Both projections now group by form-column.
+test('the form-topology assertion sees a section moved between form-columns', () => {
+  const check = ASSERTIONS.get('ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)');
+  const sec = (label, fields) => ({ label, columns: 1, fields });
+  const tab = (byColumn) => ({
+    label: 'General', expanded: true, columnCount: byColumn.length,
+    declaredWidths: byColumn.map(() => null), sectionsByColumn: byColumn,
+  });
+  const authored = [tab([[sec('L', ['a'])], [sec('R', ['b'])]])];
+  const run = (compiled) => check({ facts: { ui: { forms: [{ name: 'F', authoredShape: authored, compiledShape: compiled, placements: [] }] } } });
+
+  assert.strictEqual(run([tab([[sec('L', ['a'])], [sec('R', ['b'])]])]).status, 'pass',
+    'the authored topology compiled faithfully must still pass');
+
+  // Both sections collapsed into column 0. Flattened, this is still [L, R] — indistinguishable from
+  // the correct shape, which is exactly how it used to slip through.
+  const collapsed = run([tab([[sec('L', ['a']), sec('R', ['b'])], []])]);
+  assert.strictEqual(collapsed.status, 'fail', 'a section moved out of its form-column must fail');
+  assert.match(collapsed.reason, /form-column 0/, `the failure must name the form-column: ${collapsed.reason}`);
+
+  // Same section count per column, but swapped between them — the subtlest version, where every
+  // per-column count matches and only the contents moved.
+  const swapped = run([tab([[sec('R', ['b'])], [sec('L', ['a'])]])]);
+  assert.strictEqual(swapped.status, 'fail', 'sections swapped between form-columns must fail');
+});

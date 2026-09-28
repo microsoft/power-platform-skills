@@ -16,7 +16,7 @@
 //
 // Output: { "ok": true, "solutionId": "...", "uniqueName": "...", "publisherUniqueName": "...", "publisherPrefix": "..." }
 
-const { parseArgs, emitResult } = require('./lib/dataverse-auth');
+const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth');
 const { createAzHttpClient } = require('./lib/sdk-http-client');
 const { odataLit } = require('./lib/odata.js');
 
@@ -129,11 +129,21 @@ async function runProvisionSolution(args, deps) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node provision-solution.js <envUrl> <uniqueName> <friendlyName> [--description <text>] [--version 1.0.0.0] [--publisher <uniqueName>]';
+  // All three optional flags carry a value that is written into the solution record; a bare
+  // `--publisher` would otherwise reach Dataverse as boolean true.
+  const flagError = validateFlags(argv, {
+    known: ['description', 'version', 'publisher'],
+    needValue: ['description', 'version', 'publisher'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 3) {
-    process.stderr.write(
-      'Usage: node provision-solution.js <envUrl> <uniqueName> <friendlyName> [--description <text>] [--version 1.0.0.0] [--publisher <uniqueName>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl, uniqueName, friendlyName] = positional;
@@ -143,17 +153,17 @@ async function main() {
   let result;
   let error;
   try {
-    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
     const httpClient = createAzHttpClient(envUrl);
     const sdk = createMakerSdk({
-      workspacePath: sdkTempDir, // unused workspace (no metadata persistence needed)
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused workspace (no metadata persistence needed)
       instanceUrl: envUrl,
       httpClient,
     });
     // initWorkspace() is INSIDE the try so the finally below always removes the temp workspace, even
     // if SDK construction or init itself throws (otherwise a failed constructor leaked sdkTempDir).
     // Consistent with teardown-model-app's fail-safe pattern; harmless for the Dataverse-only ops here.
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     result = await runProvisionSolution(
       {
         envUrl,

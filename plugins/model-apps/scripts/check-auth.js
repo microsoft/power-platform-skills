@@ -33,21 +33,25 @@
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileSync } = require('child_process');
-const { dataverseRequest } = require('./lib/dataverse-auth');
+const { dataverseRequest, parseArgs, validateFlags } = require('./lib/dataverse-auth');
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
 // the literal string "--env" as the URL (the prior positional-only parse did exactly that).
+//
+// `--env` is read through the shared parseArgs, which already encodes the rule that a flag followed
+// by another FLAG is boolean `true` rather than a value — so `--env --require-pac` cannot read the
+// next flag as the URL.
+//
+// The positional fallback deliberately does NOT use parseArgs' `positional` array. parseArgs has no
+// flag contract, so it cannot know `--require-pac` is a boolean switch and consumes the token after
+// it as its value: `check-auth.js --require-pac <url>` would lose the URL entirely and fall back to
+// `pac org who`, silently probing a different environment than the caller named. The header
+// documents both orderings, and an agent assembling this command does not control the order.
 function parseEnvUrl(argv) {
-  const flagIdx = argv.indexOf('--env');
-  if (flagIdx !== -1) {
-    const value = argv[flagIdx + 1];
-    // `--env --require-pac` used to treat the next flag as the URL, sending a bogus Dataverse
-    // request to a flag string. A value-bearing flag must have a following non-flag token.
-    if (value && !value.startsWith('--')) return value;
-    return null;
-  }
-  const positional = argv.find((a) => !a.startsWith('--'));
+  const { flags } = parseArgs(argv);
+  if (flags.env !== undefined) return typeof flags.env === 'string' && flags.env.trim() ? flags.env : null;
+  const positional = argv.find((a) => typeof a === 'string' && !a.startsWith('--'));
   return positional || null;
 }
 
@@ -90,6 +94,16 @@ function normalizeUser(u) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  // This tool always exits 0 so callers can parse stdout, so a usage error is reported as a
+  // structured blocker rather than a non-zero exit — a `--requir-pac` typo must not silently
+  // downgrade a hard pac requirement to a warning.
+  const flagError = validateFlags(argv, { known: ['env', 'require-pac'], needValue: ['env'] });
+  if (flagError) {
+    return emit(buildResult({
+      blocker: 'usage',
+      message: `${flagError}. Usage: node check-auth.js --env <url> [--require-pac]`,
+    }));
+  }
   let envUrl = parseEnvUrl(argv);
   // Genpage deploys pages via `pac model genpage ...`, so its callers pass --require-pac to keep a
   // missing pac login a hard blocker. The app-builder build path only needs the az token, so it

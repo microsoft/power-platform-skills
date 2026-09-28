@@ -284,7 +284,6 @@ Run `scripts/poll-async-operation.js`:
 node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
   --asyncJobId "{AsyncOperationId}" \
   --envUrl "{envUrl}" \
-  --token "{token}" \
   --intervalMs 8000 \
   --maxAttempts 75
 ```

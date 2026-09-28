@@ -20,7 +20,7 @@ Generates a self-contained HTML file that renders every screen in the app as a p
 
 ## When NOT to use
 
-- To run the actual app → use `npx expo start`
+- To run the actual app → use `npm run dev`
 - To modify screens → use `/edit-app`; `screen-builder` is an internal agent invoked by orchestrator skills
 
 ## Workflow
@@ -53,6 +53,8 @@ Grep pattern="^# " path="<working_dir>/memory-bank.md"
 Fallback: read `name` from `package.json`.
 
 ### Step 2 — Discover screens
+
+**Telemetry checkpoint: `discover_app_screens`**
 
 Find all TSX files under the app directory:
 
@@ -94,7 +96,7 @@ Do not drop any screens — this rule only reorders. Every discovered screen sti
 Load the Tamagui-to-HTML mapping reference:
 
 ```text
-Read file_path="${CLAUDE_SKILL_DIR}/../../shared/references/tamagui-html-mapping.md"
+Read file_path="${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md"
 ```
 
 Internalize:
@@ -112,6 +114,8 @@ Glob pattern="tamagui.config.ts" path="<working_dir>"
 If found, read it and extract any custom color tokens (look for `tokens: { color: { ... } }`). Add them as additional CSS custom properties in the generated HTML.
 
 ### Step 4 — Read and convert each screen
+
+**Telemetry checkpoint: `render_screen_preview_frames`**
 
 **Print before starting:**
 > "→ Reading + converting <N> screens to HTML/CSS (one print per screen as I go)."
@@ -157,6 +161,8 @@ If the project has custom brand tokens (from Step 3), add them to the `:root` CS
 
 ### Step 6 — Write the file
 
+**Telemetry checkpoint: `write_screen_preview_document`**
+
 ```text
 Write file_path="<working_dir>/preview.html"
 ```
@@ -170,6 +176,8 @@ Print confirmation:
 ```
 
 ### Step 7 — Open in browser
+
+**Telemetry checkpoint: `open_screen_preview`**
 
 **Do NOT prompt.** The `visual_companion` flag in `<working_dir>/memory-bank.md` already encodes the answer; asking again is redundant. The flag is set by `/design-system` (Step 6.75) during project creation, or defaults to `yes` if `/design-system` was not run.
 

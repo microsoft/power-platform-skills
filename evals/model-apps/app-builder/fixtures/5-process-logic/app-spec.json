@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ProcessLogic", "displayName": "Process Logic", "publisherPrefix": "new" },
+  "app": {
+    "name": "Process Logic",
+    "description": "Exercises the two DECLARATIVE-LOGIC surfaces — businessRules[] and businessProcessFlows[] — whose shared failure mode is an artifact the platform accepts and then does nothing with."
+  },
+  "entities": [
+    {
+      "schemaName": "new_customer",
+      "displayName": "Customer",
+      "pluralName": "Customers",
+      "description": "The organisation a case belongs to.",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "new_tier", "displayName": "Tier", "type": "Choice", "options": ["Free", "Pro"], "description": "Support entitlement." }
+      ]
+    },
+    {
+      "schemaName": "new_case",
+      "displayName": "Case",
+      "pluralName": "Cases",
+      "description": "A unit of support work, worked through a staged process.",
+      "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
+      "columns": [
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "options": ["New", "Investigating", "Resolved"], "description": "Where the case sits in its lifecycle." },
+        { "schemaName": "new_summary", "displayName": "Summary", "type": "Memo", "description": "What the customer reported." },
+        { "schemaName": "new_owner", "displayName": "Owner", "type": "Text", "description": "Who is accountable for the case." },
+        { "schemaName": "new_diagnosis", "displayName": "Diagnosis", "type": "Memo", "description": "What was found during investigation." },
+        { "schemaName": "new_resolution", "displayName": "Resolution", "type": "Memo", "description": "What was done to close the case." }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "type": "OneToMany",
+      "referenced": "new_customer",
+      "referencing": "new_case",
+      "lookup": { "schemaName": "new_AccountRef", "displayName": "Customer" }
+    }
+  ],
+  "businessRules": [
+    {
+      "entity": "new_case",
+      "name": "Lock the summary once resolved",
+      "description": "A resolved case is history, so its reported summary stops being editable.",
+      "scope": "Entity",
+      "status": "Active",
+      "conditions": [
+        { "field": "new_status", "operator": "Equals", "value": "100000002", "dataType": "Picklist" }
+      ],
+      "actions": [
+        { "type": "LockUnlock", "field": "new_summary", "lock": true },
+        { "type": "SetBusinessRequired", "field": "new_resolution", "required": true }
+      ]
+    },
+    {
+      "entity": "new_case",
+      "name": "Hide the diagnosis until investigation starts",
+      "description": "The diagnosis field is noise while a case is still new.",
+      "scope": "Entity",
+      "status": "Active",
+      "conditions": [
+        { "field": "new_status", "operator": "Equals", "value": "100000000", "dataType": "Picklist" },
+        { "field": "new_owner", "operator": "DoesNotContainData" }
+      ],
+      "actions": [
+        { "type": "SetVisibility", "field": "new_diagnosis", "visible": false }
+      ]
+    }
+  ],
+  "businessProcessFlows": [
+    {
+      "entity": "new_case",
+      "name": "Case Resolution Process",
+      "description": "Intake, investigation and closure — the stages an agent works a case through.",
+      "status": "Active",
+      "stages": [
+        {
+          "name": "Intake",
+          "steps": [
+            { "name": "Subject", "field": "new_subject", "required": true },
+            { "name": "Customer", "field": "new_accountref", "required": true },
+            { "name": "Summary", "field": "new_summary" }
+          ]
+        },
+        {
+          "name": "Investigate",
+          "steps": [
+            { "name": "Owner", "field": "new_owner", "required": true },
+            { "name": "Diagnosis", "field": "new_diagnosis" }
+          ]
+        },
+        {
+          "name": "Resolve",
+          "steps": [
+            { "name": "Resolution", "field": "new_resolution", "required": true },
+            { "name": "Status", "field": "new_status", "required": true }
+          ]
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "entity": "new_case",
+      "type": "main",
+      "name": "Open Cases",
+      "description": "Cases that have not been resolved.",
+      "columns": ["new_subject", "new_status", "new_owner"],
+      "sort": [{ "attr": "new_subject", "dir": "asc" }],
+      "activeOnly": true
+    }
+  ],
+  "forms": [
+    {
+      "entity": "new_case",
+      "type": "main",
+      "name": "Case",
+      "description": "The form the staged process runs over.",
+      "layout": "auto"
+    }
+  ],
+  "appShell": {
+    "areas": [
+      {
+        "label": "Main",
+        "groups": [
+          {
+            "label": "Records",
+            "subAreas": [
+              { "entity": "new_customer", "title": "Customers" },
+              { "entity": "new_case", "title": "Cases" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -17,7 +17,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { renderAppSpecDoc } = require('./lib/app-spec-doc.js');
 
@@ -53,11 +53,17 @@ function designGaps(spec) {
 }
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const str = (v) => (typeof v === 'string' ? v : undefined);
-  const specArg = str(flags.spec) || (typeof positional[0] === 'string' ? positional[0] : undefined);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/write-app-spec-doc.js --spec @<app-folder>/app-spec.json [--env <orgUrl>] [--out <path>]';
+  const flagError = validateFlags(argv, { known: ['spec', 'env', 'out'], needValue: ['spec', 'env', 'out'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const specArg = flags.spec || positional[0];
   if (!specArg) {
-    process.stderr.write('Usage: node scripts/write-app-spec-doc.js --spec @<app-folder>/app-spec.json [--env <orgUrl>] [--out <path>]\n');
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 
@@ -70,12 +76,12 @@ function main() {
     return;
   }
 
-  const markdown = renderAppSpecDoc(spec, { envUrl: str(flags.env) });
+  const markdown = renderAppSpecDoc(spec, { envUrl: flags.env });
   // Compute the gaps BEFORE writing: a failure here used to leave a written document behind and then
   // exit with a raw stack, so the caller saw a crash next to a file that looked fine.
   const warnings = designGaps(spec);
   // Default next to the spec, which is the working directory the skill created in Phase 0.
-  const docPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(path.dirname(specPath), 'model-app-plan.md');
+  const docPath = flags.out ? path.resolve(flags.out) : path.join(path.dirname(specPath), 'model-app-plan.md');
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
   fs.writeFileSync(docPath, markdown, 'utf8');
 

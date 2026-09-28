@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **References:**
 
@@ -27,7 +27,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 Also confirm this is a mobile app:
 
@@ -36,6 +36,8 @@ test -f power.config.json && test -f app.config.js && echo "OK" || echo "ERROR: 
 ```
 
 ### Step 2: Plan
+
+**Telemetry checkpoint: `plan_sharepoint_data_source`**
 
 Ask the user:
 
@@ -83,6 +85,8 @@ Present findings to user with `AskUserQuestion`:
 
 ### Step 5: Create Lists (if creating lists)
 
+**Telemetry checkpoint: `create_sharepoint_lists`**
+
 **Print before starting:**
 > "→ Creating SharePoint lists via Graph API (sequential per list, columns added after list exists)…"
 
@@ -94,7 +98,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Get the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+Get the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 ```bash
 npx power-apps create-connection --api-id shared_sharepointonline --json
@@ -136,6 +140,8 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 
 ### Step 9: Add Connector
 
+**Telemetry checkpoint: `generate_sharepoint_data_source`**
+
 **Print before starting:**
 > "→ Running `npx power-apps add-data-source` per list (sequential, ~10–20 seconds each)."
 
@@ -151,7 +157,7 @@ Run once per list or document library.
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
 
-Use `Grep` to find methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large — see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large — see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
 Sample usage:
 
@@ -182,6 +188,8 @@ await SharePointOnlineService.PatchItem({
 ```
 
 ### Step 11: Type-check
+
+**Telemetry checkpoint: `validate_sharepoint_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify SharePoint services compile (~15–30 seconds)."
