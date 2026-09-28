@@ -13,6 +13,33 @@ const seed = skill('add-sample-data');
 const edit = skill('edit-app');
 const create = skill('create-mobile-app');
 
+for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  test(`every seed Dataverse command forwards the resolved tenant (${eolName})`, () => {
+    const commands = [...seed.replace(/\n/g, eol).replace(/\r\n?/g, '\n')
+      .matchAll(/^ *```bash\n([\s\S]*?)\n *```/gm)]
+      .map((match) => match[1])
+      .filter((block) => block.includes('node "${PLUGIN_ROOT}/scripts/dataverse-request.js"'));
+    assert.equal(commands.length, 8, 'Cover reads, both batch paths, and resumed parent lookup');
+    for (const command of commands) {
+      assert.equal((command.match(/scripts\/dataverse-request\.js/g) || []).length, 1);
+      assert.match(command, /--tenant-id '<tenantId-from-resolve-environment>'/);
+    }
+  });
+}
+
+test('seed media and recovery keep the selected tenant instead of ambient credentials', () => {
+  const identity = section(seed, 'Capture the **environment URL**', '### Step 2');
+  assert.match(identity, /validated Step 1 value again in every fresh shell call/);
+  assert.match(identity, /Missing or conflicting tenant context returns `NEEDS_CONTEXT` before the call/);
+  const media = section(seed, '#### Step 5d', '#### Step 5e');
+  assert.match(media, /Pass the Step 1 environment URL and tenant ID explicitly/);
+  assert.match(media, /authentication and token-refresh path/);
+  assert.match(media, /do not invoke it\s+or fall back to ambient credentials/);
+  const retry = section(seed, '#### Step 5f', '### Step 6');
+  assert.match(retry, /explicit `--tenant-id` from the validated Step 1 identity/);
+  assert.match(retry, /never switch tenants to recover/);
+});
+
 function section(text, start, end) {
   const from = text.indexOf(start);
   const to = text.indexOf(end, from + start.length);
