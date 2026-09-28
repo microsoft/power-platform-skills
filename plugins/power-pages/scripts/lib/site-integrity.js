@@ -15,7 +15,7 @@ const {
   validateLocalization,
 } = require('../../skills/add-localization/scripts/validate-localization');
 
-function validateSiteIntegrity(projectRoot) {
+function validateSiteIntegrity(projectRoot, options = {}) {
   const configPath = path.join(projectRoot, 'powerpages.config.json');
   if (!fs.existsSync(configPath)) {
     return {
@@ -27,7 +27,9 @@ function validateSiteIntegrity(projectRoot) {
     };
   }
 
-  const localizationErrors = validateLocalization(projectRoot);
+  const localizationErrors = options.skipLocalization === true
+    ? []
+    : validateLocalization(projectRoot);
   const bidiAudit = auditBidirectionalReadiness(projectRoot);
   const manifest = readJson(path.join(projectRoot, MANIFEST_NAME));
   const unavailableLocales = new Set(

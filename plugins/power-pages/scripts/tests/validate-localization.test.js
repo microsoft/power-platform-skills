@@ -123,7 +123,16 @@ test('finalizes an active verification only after full localization validation',
     },
   });
   beginLocalizationVerification(projectRoot, ['fr-FR']);
-  markLocalizationVerificationPassed(projectRoot);
+  markLocalizationVerificationPassed(projectRoot, null, {
+    profile: 'extensive',
+    representativeLocaleIds: { ltr: 'en', rtl: 'pseudo-rtl' },
+    manualReview: [],
+    evidence: {
+      schemaVersion: 1,
+      inputFingerprint: 'a'.repeat(64),
+      specFingerprint: 'b'.repeat(64),
+    },
+  });
   const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   manifest.unavailableLocales = [];
@@ -373,6 +382,57 @@ function createManifestlessAngularStaticProject(t) {
     'src/app/language-selector.ts',
     "export class LanguageSelector { switchLanguage(){ document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr'; } }"
   );
+  const artifact = {
+    version: '19.1.0',
+    registry: 'https://registry.npmjs.org/',
+    tarballUrl: 'https://registry.npmjs.org/@angular/localize/-/localize-19.1.0.tgz',
+    integrity: 'sha512-dGVzdA==',
+  };
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'angular',
+    mode: 'static',
+    packageName: '@angular/localize',
+    packageVersion: '19.1.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+      license: 'MIT',
+      licenseReview: { status: 'automatically-accepted' },
+      artifact,
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/locale/messages.en-US.xlf',
+      'fr-FR': 'src/locale/messages.fr-FR.xlf',
+    },
+    generatedFiles: ['src/app/language-selector.ts'],
+    managedFiles: ['angular.json'],
+    unavailableLocales: [],
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      'node_modules/@angular/localize': {
+        version: artifact.version,
+        resolved: artifact.tarballUrl,
+        integrity: artifact.integrity,
+      },
+    },
+  }));
   return projectRoot;
 }
 
@@ -394,6 +454,39 @@ function createManifestlessAstroStaticProject(t) {
     'src/pages/index.astro',
     "---\nconst href = getRelativeLocaleUrl('ja-JP');\n---\n<html lang=\"en-US\" dir=\"ltr\"><a href={href}>LanguageSelector</a></html>"
   );
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'astro',
+    mode: 'static',
+    packageName: 'astro-built-in',
+    packageVersion: '6.1.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'ja-JP'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/i18n/en-US.json',
+      'ja-JP': 'src/i18n/ja-JP.json',
+    },
+    generatedFiles: ['src/pages/index.astro'],
+    managedFiles: ['astro.config.mjs'],
+    unavailableLocales: [],
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ja-JP': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
   return projectRoot;
 }
 
@@ -432,6 +525,15 @@ function createAngularRuntimeProjectWithStaticResidue(t) {
     packageVerification: {
       status: 'verified',
       source: 'known-capability',
+      license: 'MIT',
+      licenseReview: { status: 'automatically-accepted' },
+      artifact: {
+        version: '7.6.0',
+        registry: 'https://registry.npmjs.org/',
+        tarballUrl:
+          'https://registry.npmjs.org/@jsverse/transloco/-/transloco-7.6.0.tgz',
+        integrity: 'sha512-dGVzdA==',
+      },
     },
     locales: ['en-US', 'fr-FR'],
     defaultLocale: 'en-US',
@@ -455,6 +557,16 @@ function createAngularRuntimeProjectWithStaticResidue(t) {
     adoptedExistingConfiguration: false,
     lastOperation: 'reconfigure',
     updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      'node_modules/@jsverse/transloco': {
+        version: '7.6.0',
+        resolved:
+          'https://registry.npmjs.org/@jsverse/transloco/-/transloco-7.6.0.tgz',
+        integrity: 'sha512-dGVzdA==',
+      },
+    },
   }));
   return projectRoot;
 }
@@ -1429,7 +1541,7 @@ test('blocks a framework-package-mode mismatch', (t) => {
   const projectRoot = createLocalizedReactProject(t, { mode: 'static' });
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /does not support the configured localization mode/);
+  assert.match(result.stderr, /react does not support "static" mode in add-localization/);
   assert.match(result.stderr, /does not match the manifest framework and mode/);
 });
 

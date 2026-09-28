@@ -221,6 +221,16 @@ test('accepts structured official-documentation package verification evidence', 
     generatedFiles: ['src/components/LanguageSelector.tsx'],
     managedFiles: ['src/i18n/index.ts'],
     adoptedExistingConfiguration: false,
+    unavailableLocales: [],
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
     lastOperation: 'create',
     updatedAt: '2026-10-02T00:00:00.000Z',
   });
@@ -640,6 +650,7 @@ test('requires explicit maker disposition for approved bidirectional limitations
     packageVerification: {
       status: 'verified',
       source: 'known-capability',
+      ...verifiedNpmArtifact('i18next', '25.0.0'),
     },
     unavailableLocales: [],
   };
@@ -841,6 +852,7 @@ test('scopes readiness findings to only the locales proven affected', () => {
     packageVerification: {
       status: 'verified',
       source: 'known-capability',
+      ...verifiedNpmArtifact('i18next', '25.0.0'),
     },
   };
   const arabicFinding = {

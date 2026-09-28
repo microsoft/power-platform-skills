@@ -1686,9 +1686,21 @@ Parse the JSON output and record all violations.
 
 ### 6.2b Run Rendered Bidirectional Audit
 
-Read `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`, then
-rebuild the component/state/viewport specification from the current
-implementation if add-localization changed the site, then run it:
+Read `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. If
+add-localization returned a successful report, first validate and reuse it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --reuse-report "<ADD_LOCALIZATION_REPORT_PATH>"
+```
+
+This succeeds only while source, resources, dependencies, build configuration,
+and locale availability match the child report. Readiness-only metadata does
+not invalidate it. If reuse succeeds, do not rebuild the specification or
+repeat the matrix. If reuse is stale—such as after accessibility remediation
+changed relevant source—rebuild the component/state/viewport specification
+from the current implementation and run it:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
@@ -1712,6 +1724,12 @@ focus order, portals/overlays, unknown/third-party surfaces, and runtime
 round-trip preservation when applicable. A visible opaque external surface is
 blocking unless it is replaced or intentionally unavailable for the affected
 locale.
+
+Use the rendered-verification reference's grouped execution model:
+`maxConcurrency: 3` by default, `reload` state isolation unless a deterministic
+reset exists, `resettable` only with explicit reset actions, and `isolated`
+for global or destructive state. Independent route/viewport/locale groups may
+run concurrently; locale-transition sequences remain serial.
 
 > **GATE: Do NOT proceed to Phase 7 while the create-site report contains an
 > error affecting an available locale or the available site experience, or an

@@ -8,6 +8,9 @@ const {
   resolveLocale,
   validateLocalizationManifestShape,
 } = require('./localization-config');
+const {
+  VERIFICATION_PROFILES,
+} = require('./localization-verification-profile');
 
 const TRANSACTION_FILE = '.powerpages-localization-verification.json';
 const TRANSACTION_LOCK_FILE = `${TRANSACTION_FILE}.lock`;
@@ -51,6 +54,12 @@ function validateTransactionShape(transaction) {
       '"verified" or "remediation-required".'
     );
   }
+  if (transaction.verificationProfile !== undefined &&
+      !VERIFICATION_PROFILES.has(transaction.verificationProfile)) {
+    errors.push(
+      `${TRANSACTION_FILE} verificationProfile must be standard, extensive, or targeted.`
+    );
+  }
   if (typeof transaction.runId !== 'string' ||
       !/^[0-9a-f-]{36}$/i.test(transaction.runId)) {
     errors.push(`${TRANSACTION_FILE} runId must be a UUID.`);
@@ -61,6 +70,18 @@ function validateTransactionShape(transaction) {
   if (transaction.state === 'verified' &&
       !isExactIsoDate(transaction.verifiedAt)) {
     errors.push(`${TRANSACTION_FILE} verifiedAt must be an ISO date-time.`);
+  }
+  if (transaction.state === 'verified') {
+    if (!transaction.verification ||
+        typeof transaction.verification !== 'object' ||
+        Array.isArray(transaction.verification)) {
+      errors.push(`${TRANSACTION_FILE} verified runs require verification evidence.`);
+    } else if (transaction.verification.profile !==
+        (transaction.verificationProfile || 'extensive')) {
+      errors.push(
+        `${TRANSACTION_FILE} verification evidence profile must match verificationProfile.`
+      );
+    }
   }
   if (transaction.state === 'remediation-required' &&
       !isExactIsoDate(transaction.failedAt)) {
@@ -151,7 +172,11 @@ function validateTransactionAgainstManifest(
   return errors;
 }
 
-function beginLocalizationVerification(projectRoot, targetLocales) {
+function beginLocalizationVerification(
+  projectRoot,
+  targetLocales,
+  verificationProfile = 'extensive'
+) {
   const transactionPath = path.join(projectRoot, TRANSACTION_FILE);
   if (fs.existsSync(transactionPath)) {
     throw new Error(
@@ -169,6 +194,12 @@ function beginLocalizationVerification(projectRoot, targetLocales) {
   const normalizedTargets = normalizeLocales(targetLocales);
   if (normalizedTargets.length === 0) {
     throw new Error('At least one target locale is required.');
+  }
+  if (!VERIFICATION_PROFILES.has(verificationProfile) ||
+      verificationProfile === 'targeted') {
+    throw new Error(
+      'New locale verification must use the standard or extensive profile.'
+    );
   }
   const unavailable = new Set(manifest.unavailableLocales || []);
   for (const locale of normalizedTargets) {
@@ -193,6 +224,7 @@ function beginLocalizationVerification(projectRoot, targetLocales) {
     startedAt: new Date().toISOString(),
     targetLocales: normalizedTargets,
     priorUnavailableLocales: [...unavailable].sort(),
+    verificationProfile,
   };
   publishExclusiveJson(
     transactionPath,
@@ -200,6 +232,32 @@ function beginLocalizationVerification(projectRoot, targetLocales) {
     `${TRANSACTION_FILE} already exists. Recover or finalize that run first.`
   );
   return transaction;
+}
+
+function extendLocalizationVerification(
+  projectRoot,
+  verificationProfile = 'extensive'
+) {
+  return withTransactionLock(projectRoot, () => {
+    const transaction = readCurrentTransaction(projectRoot);
+    if (transaction.state !== 'verified' ||
+        (transaction.verificationProfile || 'extensive') !== 'standard' ||
+        verificationProfile !== 'extensive') {
+      throw new Error(
+        'Only a verified standard run can be extended to extensive verification.'
+      );
+    }
+    const updated = {
+      ...transaction,
+      state: 'in-progress',
+      verificationProfile,
+      extendedAt: new Date().toISOString(),
+    };
+    delete updated.verifiedAt;
+    delete updated.verification;
+    atomicWriteJson(path.join(projectRoot, TRANSACTION_FILE), updated);
+    return updated;
+  });
 }
 
 function beginLocalizationVerificationAudit(projectRoot, expectedRunId) {
@@ -247,12 +305,17 @@ function markLocalizationVerificationFailed(projectRoot, expectedRunId = null) {
       failedAt: new Date().toISOString(),
     };
     delete updated.verifiedAt;
+    delete updated.verification;
     atomicWriteJson(path.join(projectRoot, TRANSACTION_FILE), updated);
     return updated;
   });
 }
 
-function markLocalizationVerificationPassed(projectRoot, expectedRunId = null) {
+function markLocalizationVerificationPassed(
+  projectRoot,
+  expectedRunId = null,
+  verification = null
+) {
   return withTransactionLock(projectRoot, () => {
     const transaction = readCurrentTransaction(projectRoot, expectedRunId);
     if (transaction.state !== 'in-progress') {
@@ -260,17 +323,25 @@ function markLocalizationVerificationPassed(projectRoot, expectedRunId = null) {
         `${TRANSACTION_FILE} must be in-progress before it can be verified.`
       );
     }
+    if (!verification ||
+        verification.profile !==
+          (transaction.verificationProfile || 'extensive')) {
+      throw new Error(
+        `${TRANSACTION_FILE} requires verification evidence for its active profile.`
+      );
+    }
     const updated = {
       ...transaction,
       state: 'verified',
       verifiedAt: new Date().toISOString(),
+      verification,
     };
     atomicWriteJson(path.join(projectRoot, TRANSACTION_FILE), updated);
     return updated;
   });
 }
 
-function finalizeLocalizationVerification(projectRoot) {
+function finalizeLocalizationVerification(projectRoot, options = {}) {
   return withTransactionLock(projectRoot, () => {
     const transaction = readCurrentTransaction(projectRoot);
     const lease = readAuditLease(projectRoot);
@@ -300,6 +371,19 @@ function finalizeLocalizationVerification(projectRoot) {
         `${TRANSACTION_FILE} cannot be finalized before the rendered audit ` +
         'records a verified or remediation-required result.'
       );
+    }
+    const manualReview = transaction.verification?.manualReview || [];
+    if ((transaction.verificationProfile || 'extensive') === 'standard' &&
+        manualReview.length > 0 &&
+        options.manualReviewCompleted !== true) {
+      throw new Error(
+        `${TRANSACTION_FILE} standard verification requires the maker to ` +
+        'complete the generated complex-component locale review or extend the ' +
+        'run to extensive verification.'
+      );
+    }
+    if (options.manualReviewCompleted === true) {
+      transaction.manualReviewCompletedAt = new Date().toISOString();
     }
     fs.unlinkSync(path.join(projectRoot, TRANSACTION_FILE));
     return transaction;
@@ -484,6 +568,7 @@ module.exports = {
   abandonLocalizationVerificationAudit,
   beginLocalizationVerificationAudit,
   beginLocalizationVerification,
+  extendLocalizationVerification,
   endLocalizationVerificationAudit,
   finalizeLocalizationVerification,
   listVerificationTransactionArtifacts,

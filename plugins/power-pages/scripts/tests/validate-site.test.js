@@ -224,7 +224,7 @@ test('create-site validator rejects incomplete or unknown direct arguments', (t)
   assert.match(unknown.stderr, /Usage: validate-site\.js/);
 });
 
-test('create-site validator blocks direction-sensitive physical CSS', (t) => {
+test('create-site validator leaves cross-cutting bidi checks to the shared hook', (t) => {
   const projectRoot = createProject(
     t,
     '<html lang="en-US" dir="ltr"><body><div id="root"></div></body></html>'
@@ -232,8 +232,7 @@ test('create-site validator blocks direction-sensitive physical CSS', (t) => {
   writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
 
   const result = runValidator(projectRoot);
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /Bidirectional readiness.*directional-physical-css/);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('create-site validator allows an exact blocker isolated behind an unavailable locale', (t) => {
@@ -272,6 +271,22 @@ test('create-site validator allows an exact blocker isolated behind an unavailab
     }
   `);
   writeProjectFile(projectRoot, 'src/theme.css', '.card { margin-left: 1rem; }');
+  const packageArtifact = {
+    version: '16.0.0',
+    registry: 'https://registry.npmjs.org/',
+    tarballUrl:
+      'https://registry.npmjs.org/react-i18next/-/react-i18next-16.0.0.tgz',
+    integrity: 'sha512-dGVzdA==',
+  };
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      'node_modules/react-i18next': {
+        version: packageArtifact.version,
+        resolved: packageArtifact.tarballUrl,
+        integrity: packageArtifact.integrity,
+      },
+    },
+  }));
   const recordedFinding = auditBidirectionalReadiness(projectRoot).findings.find(
     (finding) => finding.rule === 'directional-physical-css'
   );
@@ -281,7 +296,13 @@ test('create-site validator allows an exact blocker isolated behind an unavailab
     mode: 'runtime',
     packageName: 'react-i18next',
     packageVersion: '^16.0.0',
-    packageVerification: { status: 'verified', source: 'known-capability' },
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+      license: 'MIT',
+      licenseReview: { status: 'automatically-accepted' },
+      artifact: packageArtifact,
+    },
     locales: ['en-US', 'ar-SA'],
     defaultLocale: 'en-US',
     translationMethod: 'agent',

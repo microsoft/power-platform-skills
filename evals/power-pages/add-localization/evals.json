@@ -186,8 +186,11 @@
         "Canonicalizes ar and he",
         "Sets documentElement.dir to rtl for both",
         "Restores ltr for non-RTL locales",
-        "Browser-tests Arabic and Hebrew independently, including real activation, localized content, script fonts, formatting, wrapping, component states, viewports, console errors, and accessibility",
-        "Runs default-to-locale and locale-to-default round trips for each real non-default locale without requiring every possible locale pair",
+        "Runs real activation, localized content, script-font, formatting, lang/dir, resource, and console smoke checks independently for Arabic and Hebrew",
+        "Chooses one newly added RTL locale as the representative for the full component-state and viewport matrix and puts the other locale's complex components in the maker review checklist",
+        "Runs default-to-locale-to-default for every real non-default locale and requires the reverse round trip for representative locales in standard verification",
+        "Offers extensive verification before finalization when the maker wants the full component matrix and both round trips repeated for every locale",
+        "Groups compatible component states by route, viewport, and locale, uses explicit reset actions before navigation reuse, and runs independent groups with bounded concurrency while keeping locale transitions serial",
         "Flags directional icons, fixed direction, physical utility classes, asymmetric shorthands, and raw horizontal scrolling assumptions for remediation or review"
       ]
     },
@@ -322,8 +325,8 @@
       "files": [],
       "expectations": [
         "Starts Arabic fail-closed, then temporarily exposes only Arabic under an exclusive verification transaction without changing the previously ready Hebrew locale",
-        "Runs the full Arabic resource, activation, lang and dir, font, formatting, wrapping, component-state, viewport, console, and accessibility checks",
-        "Regression-tests Hebrew on any shared direction-sensitive surfaces changed while adding Arabic",
+        "Runs Arabic resource, activation, lang and dir, font, formatting, wrapping, console, and accessibility checks and selects Arabic as the RTL component-matrix representative",
+        "Runs Hebrew locale smoke coverage and places its high-risk complex components in the maker review checklist instead of automatically repeating the full RTL matrix",
         "Records the calendar font failure with locale scope and affectedLocales containing only ar-SA",
         "Keeps he-IL ready and available because current evidence does not identify it as affected",
         "Sets only ar-SA to pending-remediation and makes unavailableLocales exactly [ar-SA]",
@@ -331,7 +334,7 @@
         "Applies the Arabic exclusion to selectors, automatic detection, alternate-language metadata, and production output",
         "Exercises Arabic through the real selector and public locale coordinator, then restores Arabic to unavailable after the failure",
         "Does not require all RTL locales to be unavailable merely because Arabic failed",
-        "Runs English to Arabic to English and Arabic to English to Arabic runtime round trips; pseudo locales are not used for application switching",
+        "Runs English to Arabic to English and Arabic to English to Arabic because Arabic is the RTL representative; pseudo locales are not used for application switching",
         "Final summary clearly reports Hebrew as available and Arabic as unavailable"
       ]
     }

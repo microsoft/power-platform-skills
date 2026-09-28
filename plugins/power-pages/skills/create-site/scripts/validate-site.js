@@ -11,9 +11,6 @@ const {
   resolveLocale,
   resolveSiteLanguageContext,
 } = require('../../../scripts/lib/localization-config');
-const {
-  validateSiteIntegrity,
-} = require('../../../scripts/lib/site-integrity');
 
 function validateSite(cwd, input = {}) {
   const configPath = findPath(cwd, 'powerpages.config.json');
@@ -129,10 +126,6 @@ function validateSite(cwd, input = {}) {
       }
     }
   }
-
-  // 8. Reuse lifecycle validation so exact blockers isolated behind unavailable
-  // locales do not prevent completion of the remaining available site.
-  errors.push(...validateSiteIntegrity(projectRoot).errors);
 
   if (errors.length > 0) {
     block('Power Pages site validation failed:\n- ' + errors.join('\n- '));
