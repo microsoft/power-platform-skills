@@ -8,12 +8,22 @@ const path = require('node:path');
 const test = require('node:test');
 
 const pluginRoot = path.resolve(__dirname, '../..');
+const nativeRoot = path.join(pluginRoot, 'skills/add-native');
 const normalize = (text) => text.replace(/\r\n?/g, '\n');
 const read = (file) => normalize(fs.readFileSync(file, 'utf8'));
+const reference = read(path.join(pluginRoot, 'shared/references/native-artifact-compatibility.md'));
+const rootLink = '[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root)';
 const appRootReference = read(path.join(pluginRoot, 'shared/references/app-working-directory.md'));
 const appRootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)';
 const guard = 'cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }';
 const powershellGuard = "Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop";
+const files = [
+  path.join(nativeRoot, 'SKILL.md'),
+  ...fs.readdirSync(nativeRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(nativeRoot, entry.name, 'SKILL.md'))
+    .filter((file) => fs.existsSync(file)),
+];
 
 function shellBlocks(text, language = 'bash') {
   const unquoted = normalize(text).replace(/^> ?/gm, '');
@@ -21,11 +31,11 @@ function shellBlocks(text, language = 'bash') {
     .map((match) => match[1]);
 }
 
-function assertRootBinding(text) {
+function assertRootBinding(text, link = rootLink) {
   text = normalize(text);
   assert.match(text, /before any project read or command, execute/);
-  assert.ok(text.includes(appRootLink));
-  assert.ok(text.indexOf(appRootLink) < text.indexOf('```bash'), 'Bind root before the first gate');
+  assert.ok(text.includes(link));
+  assert.ok(text.indexOf(link) < text.indexOf('```bash'), 'Bind root before the first gate');
   assert.match(text, /every shell call and\s+file tool/);
   const blocks = shellBlocks(text);
   assert.ok(blocks.length > 0);
@@ -43,6 +53,14 @@ const bashPaths = process.platform === 'win32'
   : [];
 const bash = bashPaths.find((entry) => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
 const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const dependencies = {
+  'expo-camera': '1.0.0',
+  'expo-secure-store': '1.0.0',
+  'expo-print': '1.0.0',
+  '@microsoft/power-apps-native-pdf-viewer': '0.2.9',
+  '@microsoft/power-apps-native-pen-input': '1.0.0',
+  '@microsoft/power-apps-native-bglocation': '1.0.0',
+};
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'app-working-dir-'));
@@ -50,7 +68,7 @@ function fixture(t) {
   const owner = path.join(directory, "owner's app [test] $root `literal`");
   const caller = path.join(directory, 'different app');
   for (const root of [owner, caller]) {
-    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.join(root, 'src/native'), { recursive: true });
     fs.writeFileSync(path.join(root, 'app.config.js'), 'module.exports = {};');
     fs.writeFileSync(path.join(root, 'power.config.json'), JSON.stringify({ environmentId: root === owner ? 'owner' : 'caller' }));
     fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# Plan\n');
@@ -58,13 +76,21 @@ function fixture(t) {
     for (const name of ['dataverse-operation-all.json', 'dataverse-operation-phase-fixture.json']) {
       fs.writeFileSync(path.join(root, '.tmp', name), '[]');
     }
-    fs.writeFileSync(path.join(root, 'package.json'), '{"dependencies":{}}');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+      dependencies: root === owner ? dependencies : {},
+    }));
+    const installed = path.join(root, 'node_modules/@microsoft/power-apps-native-pdf-viewer');
+    fs.mkdirSync(installed, { recursive: true });
+    fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ version: '0.2.9' }));
   }
   return { directory, owner, caller };
 }
 
 function run(block, owner, caller) {
-  const command = block.replaceAll('"<working_dir>"', shellQuote(owner.replaceAll('\\', '/')));
+  const command = block
+    .replaceAll('"<working_dir>"', shellQuote(owner.replaceAll('\\', '/')))
+    .replaceAll('<approved-artifact-keys-json>', '["scanner"]')
+    .replaceAll('<expo-module-name>', 'expo-secure-store');
   // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
     input: `node() { "$REAL_NODE" "$@"; }\n${command}`,
@@ -84,17 +110,10 @@ function run(block, owner, caller) {
 test('shared root contract distinguishes direct defaults from required child context and file-tool scope', () => {
   const scope = appRootReference;
   const shared = read(path.join(pluginRoot, 'shared/shared-instructions.md'));
-  const heading = '## Data-source invocation scope';
-  const start = shared.indexOf(heading);
-  assert.ok(start >= 0, 'Data-source invocations must have a shared scope preflight');
-  const end = shared.indexOf('\n---', start);
-  assert.ok(end > start);
-  const invocation = shared.slice(start, end);
   const binding = '[app-working-directory.md](references/app-working-directory.md)';
-  assert.ok(invocation.includes(binding));
-  assert.match(invocation, /before (?:reading|any project read)/);
-  assert.ok(invocation.indexOf(binding) < invocation.indexOf('`power.config.json`'),
-    'Bind the owner root before reading the selected app environment');
+  assert.ok(shared.includes(binding));
+  assert.ok(shared.indexOf(binding) < shared.indexOf('Classify the current request'));
+  assert.match(reference, /## 0\. Bind every operation to the app root[\s\S]*\[app-working-directory\.md\]\(app-working-directory\.md\)/);
   assert.match(scope, /Child invocation[\s\S]*owner's absolute\s+`working_dir`/);
   assert.match(scope, /Never fall back to the process cwd/);
   assert.match(scope, /Missing or\s+relative owner context returns `NEEDS_CONTEXT` before project access/);
@@ -185,21 +204,84 @@ test('shared connector command examples retain the same per-call root guard', ()
   }
 });
 
-const sampleData = read(path.join(pluginRoot, 'skills/add-sample-data/SKILL.md'));
-for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
-  test(`sample-data discovery, insertion, and retry commands re-enter the app root (${eolName})`, () => {
-    assert.match(sampleData, /before any project read or command\. Bind the absolute `working_dir` first/);
-    assert.match(sampleData, /reuse it for every shell call, file tool, media path, and retry/);
-    // Numbered instructions indent some command fences by three spaces.
-    const content = sampleData.replace(/\n/g, eol);
-    const blocks = shellBlocks(content.replace(/^ {3}/gm, ''));
-    assert.ok(blocks.length > 0);
-    assert.equal(blocks.length, [...sampleData.matchAll(/^ {0,3}```bash$/gm)].length);
-    for (const block of blocks) {
-      assert.ok(block.startsWith(`${guard}\n`), 'Each seed command needs a fail-closed root guard');
-    }
-  });
+for (const name of ['add-dataverse', 'add-sample-data']) {
+  const content = read(path.join(pluginRoot, 'skills', name, 'SKILL.md')).replace(/^> ?/gm, '');
+  for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`${name} roots all Bash commands, including indented recipes (${eolName})`, () => {
+      // Numbered instructions indent command fences by two or three spaces.
+      const source = content.replace(/\n/g, eol).replace(/^ {1,3}/gm, '');
+      const blocks = shellBlocks(source);
+      assert.equal(blocks.length, [...content.matchAll(/^ {0,3}```bash$/gm)].length);
+      assertRootBinding(source, appRootLink);
+      for (const block of blocks) {
+        const unguarded = normalize(source).replace(block, block.slice(guard.length + 1));
+        assert.throws(() => assertRootBinding(unguarded, appRootLink));
+      }
+    });
+  }
 }
+
+test('Dataverse nested metadata and generated-file paths stay literal and app-rooted', () => {
+  const content = read(path.join(pluginRoot, 'skills/add-dataverse/SKILL.md'));
+  assert.match(content, /--operations "\$\(cat "<working_dir>\/\.tmp\/derived-metadata-operations\.json"\)"/);
+  assert.match(content, /Glob: <working_dir>\/src\/generated\/services\/\*Service\.ts/);
+  assert.match(content, /Glob: <working_dir>\/src\/generated\/models\/\*Model\.ts/);
+});
+
+test('documented seed commands block missing roots before any script or CLI call', (t) => {
+  const { directory, owner, caller } = fixture(t);
+  const content = read(path.join(pluginRoot, 'skills/add-sample-data/SKILL.md')).replace(/^> ?/gm, '');
+  const blocks = shellBlocks(content.replace(/^ {1,3}/gm, ''));
+  assert.equal(blocks.length, 11);
+  const trace = path.join(owner, 'seed-root-commands.jsonl');
+  const callerTrace = path.join(caller, 'seed-root-commands.jsonl');
+  const ownerConfig = fs.readFileSync(path.join(owner, 'power.config.json'));
+  const callerConfig = fs.readFileSync(path.join(caller, 'power.config.json'));
+  fs.writeFileSync(path.join(owner, '.datamodel-manifest.json'), '{"tables":[]}');
+  // Script/cloud commands are recorders; only the fixed local logger uses real Node.
+  const probes = `
+record_call() {
+  "$REAL_NODE" -e 'require("node:fs").appendFileSync("seed-root-commands.jsonl", JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1) }) + "\\n")' "$@"
+}
+node() {
+  record_call node "$@"
+  if [ "$1" = "-p" ]; then printf 'owner\\n'; else printf '{}\\n'; fi
+}
+az() { record_call az "$@"; printf 'fixture-account\\n'; }
+npx() { record_call npx "$@"; }
+npm() { record_call npm "$@"; }
+`;
+  const prepare = (block, root) => {
+    const command = block
+      .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
+        shellQuote(root.replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
+      .replaceAll(/<[^>]+>/g, 'fixture');
+    assert.doesNotMatch(command, /<[^>]+>/);
+    return `${probes}\nPLUGIN_ROOT=${shellQuote(pluginRoot.replaceAll('\\', '/'))}\n${command}`;
+  };
+  for (const block of blocks) {
+    const valid = run(prepare(block, owner), owner, caller);
+    assert.equal(valid.status, 0, `${block}\n${valid.stderr}`);
+    assert.equal(valid.stderr, '');
+    const before = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '';
+    const missing = run(prepare(block, path.join(directory, 'missing seed app')), owner, caller);
+    assert.equal(missing.status, 1, missing.stderr);
+    assert.match(missing.stderr, /BLOCKED: cannot enter working_dir/);
+    assert.doesNotMatch(missing.stderr, /syntax error|unexpected token|unexpected EOF/);
+    assert.equal(fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '', before, 'Failed cd must invoke no script or CLI');
+    assert.equal(fs.existsSync(callerTrace), false);
+  }
+  const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(calls.length, 11);
+  for (const call of calls) {
+    assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
+  }
+  assert.ok(calls.some((call) => call.args[0] === 'az'));
+  assert.ok(calls.some((call) => call.args.includes('BATCH-RECORDS')));
+  assert.ok(calls.some((call) => call.args.some((arg) => arg.endsWith('/resolve-environment.js')) && call.args.includes('owner')));
+  assert.deepEqual(fs.readFileSync(path.join(owner, 'power.config.json')), ownerConfig);
+  assert.deepEqual(fs.readFileSync(path.join(caller, 'power.config.json')), callerConfig);
+});
 
 for (const file of dataFiles) {
   const name = path.basename(path.dirname(file));
@@ -207,16 +289,16 @@ for (const file of dataFiles) {
   const blocks = shellBlocks(content);
   for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     test(`${name} binds addition, discovery, and verification to the app root (${eolName})`, () => {
-      assertRootBinding(content.replace(/\n/g, eol));
+      assertRootBinding(content.replace(/\n/g, eol), appRootLink);
     });
   }
   test(`${name} rejects missing or deferred root guards`, () => {
-    assert.throws(() => assertRootBinding(content.replace(appRootLink, '') + `\n${appRootLink}`));
+    assert.throws(() => assertRootBinding(content.replace(appRootLink, '') + `\n${appRootLink}`, appRootLink));
     for (const block of blocks) {
-      assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1))));
+      assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1)), appRootLink));
     }
     for (const block of shellBlocks(content, 'powershell')) {
-      assert.throws(() => assertRootBinding(content.replace(block, block.slice(powershellGuard.length + 1))));
+      assert.throws(() => assertRootBinding(content.replace(block, block.slice(powershellGuard.length + 1)), appRootLink));
     }
   });
   test(`${name} executes documented Bash operations only in the owner app`, (t) => {
@@ -306,3 +388,59 @@ test('SharePoint PowerShell root guards preserve literal paths and fail before a
     assert.equal(fs.existsSync(path.join(caller, 'powershell-root.txt')), false);
   }
 });
+
+for (const file of files) {
+  const name = path.relative(nativeRoot, file);
+  const content = read(file);
+  const blocks = shellBlocks(content);
+
+  for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`${name} binds every shell call and file tool before project access (${eolName})`, () => {
+      assertRootBinding(content.replace(/\n/g, eol));
+    });
+  }
+
+  test(`${name} rejects a deferred root preflight or a missing later cd`, () => {
+    assert.throws(() => assertRootBinding(content.replace(rootLink, '') + `\n${rootLink}`));
+    for (const block of blocks) {
+      assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1))));
+    }
+  });
+
+  test(`${name} executes project and package gates against the owner, not the launch directory`, (t) => {
+    const { owner, caller } = fixture(t);
+    const projectGate = blocks[0];
+    const packageGate = blocks.find((block) => block.includes("require('./package.json')"));
+    assert.ok(packageGate);
+    for (const gate of new Set([projectGate, packageGate])) {
+      const result = run(gate, owner, caller);
+      assert.equal(result.status, 0, result.stderr);
+    }
+
+    fs.unlinkSync(path.join(owner, 'app.config.js'));
+    const invalidProject = run(projectGate, owner, caller);
+    assert.equal(invalidProject.status, 1);
+    assert.match(invalidProject.stderr, /BLOCKED: working_dir is not an initialized app/);
+    fs.writeFileSync(path.join(owner, 'app.config.js'), 'module.exports = {};');
+
+    fs.writeFileSync(path.join(owner, 'package.json'), '{"dependencies":{}}');
+    fs.writeFileSync(path.join(caller, 'package.json'), JSON.stringify({ dependencies }));
+    const missingPackage = run(packageGate, owner, caller);
+    assert.equal(missingPackage.status, 1);
+    assert.match(missingPackage.stderr, /MISSING/);
+  });
+
+  test(`${name} roots relative write probes and stops before writes when cd fails`, (t) => {
+    const { directory, owner, caller } = fixture(t);
+    const probe = "node -e \"require('node:fs').writeFileSync('src/native/root-probe.txt', 'scoped')\"";
+    // Probe the actual per-call guard without executing network or type-check commands.
+    const command = `${blocks[0].split('\n')[0]}\n${probe}`;
+    assert.equal(run(command, owner, caller).status, 0);
+    assert.equal(fs.readFileSync(path.join(owner, 'src/native/root-probe.txt'), 'utf8'), 'scoped');
+    assert.equal(fs.existsSync(path.join(caller, 'src/native/root-probe.txt')), false);
+    const missingRoot = run(command, path.join(directory, 'missing app'), caller);
+    assert.equal(missingRoot.status, 1);
+    assert.match(missingRoot.stderr, /BLOCKED: cannot enter working_dir/);
+    assert.equal(fs.existsSync(path.join(caller, 'src/native/root-probe.txt')), false);
+  });
+}

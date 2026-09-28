@@ -9,6 +9,11 @@ model: sonnet
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
+**Working directory:** before any project read or command, execute
+[native-artifact-compatibility.md Step 0](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md#0-bind-every-operation-to-the-app-root).
+Inherit `/add-native`'s resolved absolute `working_dir`; bind every shell call and
+file tool to it, even when this helper starts from another directory.
+
 # Add Pen Input
 
 **Internal helper.** Users should invoke `/add-native pen-input`, `/add-native signature`, or `/add-native @microsoft/power-apps-native-pen-input`; `/add-native` routes here after resolving the capability.
@@ -20,7 +25,8 @@ Generate or verify the native pen input wrapper and show how to call its **nativ
 ### 1. Verify app
 
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
@@ -28,14 +34,29 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
 ```
 
 If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
 
+### 2a. Reconcile requested artifacts
+
+Read and execute [native-artifact-compatibility.md](${PLUGIN_ROOT}/shared/references/native-artifact-compatibility.md)
+Steps 1–3 for the pen input row before any writes or reuse. Inherit the current
+approval/mode from `/add-native`; do not repeat a valid scoped approval.
+Inspect `src/native/penInput.ts` for `captureSignature`, `stripDataUriPrefix`,
+`PenInputResult`, requested options, PNG data URI output, and non-error
+`USER_CANCELLED`. Check approved Image/File payload requirements as well as
+capture: a missing normalizer or unknown required generated service signature
+cannot be ignored. Missing required storage or an incompatible artifact outside
+approval returns `NEEDS_CONTEXT` to the owner, or asks standalone.
+
 ### 3. Write or verify `src/native/penInput.ts`
 
-Create `src/native/penInput.ts` if it does not exist. If it already exists, inspect it and patch only if cancellation is treated as an error or the wrapper can throw.
+Apply Step 2a's decision for `src/native/penInput.ts`: create when requested and
+missing, reuse unchanged only if compatible, or make only the approved scoped
+update. Preserve custom code, exports, and callers; do not overwrite from the example.
 
 The wrapper MUST:
 
@@ -94,6 +115,8 @@ export function stripDataUriPrefix(dataUri: string): string {
 
 ### 4. Use the wrapper
 
+Integration guidance for the owner; do not edit screens in this helper.
+
 Screens import the wrapper, not the native package directly:
 
 ```ts
@@ -134,6 +157,11 @@ Notes:
 
 ### 5. Optional Dataverse save
 
+Optional means unrequested, not skippable when retention is approved. Step 2a
+verifies wrapper payload support and the generated signature; the owner supplies
+the screen-side save/upload below. Return missing helper-owned support or unknown
+required storage as `NEEDS_CONTEXT`, not a capture-only success.
+
 If the user wants to save the signature to a Dataverse Image/File column, use generated services only. Do not write direct Dataverse Web API calls.
 
 Image column pattern: normalize the data URI to the generated service's expected image payload. If raw base64 is required, strip the prefix.
@@ -158,10 +186,14 @@ File column pattern: save or update the parent row first, then upload the PNG by
 ### 6. Type-check
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix only in-scope helper errors, then execute the shared compatibility contract's
+Step 4. Recheck requested capture/normalization/storage behavior, including user
+cancellation, missing native module, capture failure, and Image versus File payloads.
+Type-check success alone is insufficient; do not fix screen/generated files.
 
 ### 7. Native rebuild note
 
@@ -178,6 +210,10 @@ import { PenInputExtension } from "@microsoft/power-apps-native-pen-input";
 Do not wire Companion PCF or `PenInputExtension`. In Power Apps native code apps, use the native React Native API above.
 
 ### 9. Summary
+
+Return the shared compatibility result and actual created/updated/reused paths
+before this summary. Report owner-side save/integration separately; update
+memory-bank only after success, and leave final updates to the owner when orchestrated.
 
 Tell the user:
 

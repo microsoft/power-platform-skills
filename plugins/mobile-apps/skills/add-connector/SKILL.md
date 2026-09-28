@@ -15,28 +15,17 @@ model: sonnet
 Use its resolved absolute `working_dir` for every shell call and file tool,
 including referenced commands and delegated skills; never inherit a prior `cd`.
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before the workflow below. This skill owns connector/flow bindings and generated
-services, not a full-app plan or screen implementation.
-
-For a standalone request, approve the current data-source delta before each
-mutation: the exact connector/flow, environment, binding, and dataset/table or
-procedure as applicable. Connection creation needs explicit approval too.
-An approved child reuses only its owner's current scope; a missing choice may
-be resolved read-only, but a changed scope returns to that owner.
-For `--plan-only` or a planning-phase handoff, return the proposed bindings and
-unresolved choices before connection creation, `add-flow`, or `add-data-source`.
-Do not update the app plan, memory-bank, configuration, or generated files on
-that path; missing discovery access is not permission to create a connection.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 Action connectors and cloud flows do not imply Dataverse Data Model changes.
 
-**Removal branch:** after resolving invocation scope, if `--remove` or the approved scope
+**Removal branch:** after entry routing, if `--remove` or the approved scope
 requests removal, execute
 [data-source-removal.md](../../shared/references/data-source-removal.md) and return.
 Do not run Steps 1-6, connection creation, or `add-data-source` for a removal.
 
-**Refresh branch:** after resolving invocation scope, `--refresh` or an approved retained-source
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-source
 refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
 and returns before Steps 1-6. Preserve the exact `--data-source-name` and approved
 binding identity; do not create connections or run `add-data-source`.
@@ -107,9 +96,7 @@ If the user actually needs table CRUD, use the delegation table below.
 | `sharepointonline`, `shared_sharepointonline` | `/add-sharepoint` |
 | `dataverse`, `commondataservice`, `shared_commondataservice`, `commondataserviceforapps`, `shared_commondataserviceforapps` (table CRUD only) | `/add-dataverse` |
 
-Invoke the appropriate skill with the same `$ARGUMENTS`, absolute `working_dir`,
-current request, owner/phase/scope, and proposal-only mode. **Do not continue this
-skill's workflow** or infer execution approval from this routing decision.
+Invoke the appropriate skill with the same `$ARGUMENTS` and **do not continue this skill's workflow**.
 
 Common connector API names:
 
@@ -248,9 +235,9 @@ For each method the user needs:
 2. Read just that method's section (use `offset` and `limit` parameters on Read)
 3. Identify required vs optional parameters and response type
 
-Return the needed method signatures and usage guidance to the user or current
-owner. Do not change screens or launch another app workflow. Report generated
-service availability separately from consumer integration.
+Return the needed method signatures and integration notes to the orchestrator.
+Screen implementations belong to `/edit-app` or `/create-mobile-app`; in
+implementation-only mode provide usage guidance without changing screens.
 
 ### Step 5 — Build
 
@@ -272,7 +259,7 @@ dependency, inspect its package contents before choosing a repair. Do not instal
 native packages absent from the template. Return a JS-only dependency requirement
 to the orchestrator for the approved exact-version
 [JavaScript dependency plan](../../shared/references/javascript-dependency-planning.md);
-for a standalone call obtain that approval before installation. Do not
+in implementation-only mode obtain that approval before installation. Do not
 install an unplanned package merely to silence TypeScript.
 
 Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
@@ -283,10 +270,9 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 
 ## Remove a data source or flow
 
-Apply the data-source invocation scope first for removals too. Identify consuming
-screens/services before deleting a dependency. Standalone removal must stop if
-it would leave broken consumers; report the required consumer work separately
-rather than automatically invoking another workflow.
+Apply the entry routing first for removals too. `/edit-app` must identify consuming
+screens/services and approve their update or removal before deleting a dependency;
+implementation-only removal must stop if it would leave broken consumers.
 
 Read and execute
 [data-source-removal.md](../../shared/references/data-source-removal.md) for the

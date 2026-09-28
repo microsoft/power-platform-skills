@@ -21,22 +21,20 @@ model: sonnet
 Use its resolved absolute `working_dir` for every shell call and file tool,
 including referenced commands and delegated skills; never inherit a prior `cd`.
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before the workflow below. Standalone calls approve only their SharePoint
-schema/binding delta and verify it here; they do not start a full-app workflow.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 Keep SharePoint list/library schemas in Connectors, not the Dataverse
 Data Model. Forward supplied site/list/connection choices and ask only for missing
-values; return scope changes to the current owner, or ask the standalone user,
-before mutation. Reuse supplied approval only for the exact current data delta.
+values; return scope changes to the orchestrator before mutation.
 
-**Removal branch:** after resolving invocation scope, `--remove` or an approved list/library
+**Removal branch:** after entry routing, `--remove` or an approved list/library
 binding removal executes
 [data-source-removal.md](../../shared/references/data-source-removal.md) and
 returns. Do not create a connection/list or run Steps 1-12 for removal; the
 SharePoint list/library and its contents remain on the server.
 
-**Refresh branch:** after resolving invocation scope, `--refresh` or an approved retained-list
+**Refresh branch:** after entry routing, `--refresh` or an approved retained-list
 service refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
 and returns before Steps 1-12. Preserve the exact `--data-source-name` and approved
 binding identity; do not create a list/connection or run `add-data-source`.
@@ -87,9 +85,7 @@ create a connection.
 - Ask about the data they need and design an appropriate schema
 - Reuse existing lists when possible (don't duplicate)
 - Enter plan mode with `EnterPlanMode`, present the list designs with columns and types
-- Get approval with `ExitPlanMode`, unless the exact list/schema delta already
-  has current owner approval. Read-only discovery that changes that delta must
-  return for approval before Step 5.
+- Get approval with `ExitPlanMode`
 
 ### Step 3: Setup Graph API Auth (if creating lists)
 
@@ -130,9 +126,7 @@ Present findings to user with `AskUserQuestion`:
 **Print before starting:**
 > "→ Creating SharePoint lists via Graph API (sequential per list, columns added after list exists)…"
 
-Require explicit current approval for the exact create/extend operations before
-writing; reuse matching owner approval rather than prompting twice. Use safe
-functions from [list-management-reference.md](./references/list-management-reference.md):
+Get explicit confirmation before creating. Use safe functions from [list-management-reference.md](./references/list-management-reference.md):
 
 - `New-SharePointListIfNotExists`
 - `Add-SharePointColumnIfNotExists`
@@ -209,9 +203,9 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 
 SharePoint is tabular: use `--dataset` and `--resource-name` with the exact
 binding selected in Step 6. Confirm approval covers this environment, connection
-ID/reference, site, and list/library before registration. Ask the standalone
-user to approve any newly resolved binding; return a changed child scope to its
-owner. A picker selection alone is not execution approval.
+ID/reference, site, and list/library before registration. Obtain approval for
+newly resolved bindings; return a changed child scope to its owner. A picker
+selection alone is not execution approval.
 Run only the applicable command:
 
 ```bash
@@ -227,9 +221,9 @@ Run once per list or document library.
 
 ### Step 10: Configure
 
-Inspect and return service signatures and usage guidance to the user or current
-owner. Do not independently edit screens or launch another app workflow;
-explicitly report that this data-source operation did not wire screens.
+In orchestrated mode, inspect and return service signatures to the owner for
+screen integration; do not independently edit screens. In implementation-only
+mode provide usage guidance and explicitly report that screens were not wired.
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
 

@@ -10,10 +10,10 @@ model: sonnet
 
 # Add Sample Data
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before any project read or command. Bind the absolute `working_dir` first and
-reuse it for every shell call, file tool, media path, and retry. This data-only
-workflow does not require creating a full app plan or changing screens.
+**App root:** before any project read or command, execute
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Use its resolved absolute `working_dir` for every shell call and file tool,
+including media paths and retries; never inherit a prior `cd`.
 
 Populate Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Generates rows from each table's schema and inserts them in dependency order. Use after `/add-dataverse` (or `/setup-datamodel`) has created the tables.
 
@@ -26,7 +26,7 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
   coverage, fanout, prototype-reuse, media, and retry rule below.
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
-- **Scenario-aware rows.** Read `native-app-plan.md` when present, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md); otherwise use the current data request and verified schema. Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
+- **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
 - **Fail gracefully.** On insertion failure, log the error and continue with remaining records — never auto-rollback. The user can re-run after fixing the issue.
 - **Idempotent re-runs.** If a previous run partially completed, the second run reads `memory-bank.md`'s seeded-data table and skips records already inserted.
 - **Solution-scoped inserts.** Always pass `--solution <uniqueName>` so records land in our solution, not the default.
@@ -240,7 +240,7 @@ For the selected tables, build a dependency graph from lookup columns:
 
 If a selected table references an UNSELECTED parent, reuse a verified existing
 parent record through a bounded read when that lookup is within the approved
-data scope. Reading a lookup parent is not permission to insert/update it. If no
+feature. Reading a lookup parent is not permission to insert/update it. If no
 suitable record exists, return `NEEDS_CONTEXT` to the owner (or ask standalone)
 to extend the seed scope or explicitly omit an optional lookup. Never auto-add
 a parent to `seedTables`, create a retiring parent, or omit a required lookup.

@@ -15,21 +15,20 @@ model: opus
 Use its resolved absolute `working_dir` for every shell call and file tool,
 including referenced commands and delegated skills; never inherit a prior `cd`.
 
-**Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before the workflow below. Standalone calls use this skill's own data-delta
-approval and verification; do not start a full-app plan or screen workflow.
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
 
 An existing plan alone does not mean it includes or approves the new request;
 never replay the old Data Model instead of resolving the requested delta.
 
-**Removal branch:** after resolving invocation scope, `--remove` or an approved app-binding
+**Removal branch:** after entry routing, `--remove` or an approved app-binding
 removal executes
 [data-source-removal.md](../../shared/references/data-source-removal.md), then
 returns without entering Steps 1-9. Removing a plan row is not implemented by
 re-running table creation or by deleting Dataverse metadata. For a mixed edit,
 the owner adds/refreshes first and invokes removal separately after consumer edits.
 
-**Refresh branch:** after resolving invocation scope, `--refresh` or an approved service-only
+**Refresh branch:** after entry routing, `--refresh` or an approved service-only
 refresh executes [Refresh a retained source](../../shared/references/data-source-removal.md#refresh-a-retained-source)
 and returns before Steps 1-9. Preserve the exact `--data-source-name` and approved
 binding identity. Do not replay schema writes, publish, or run `add-data-source`.
@@ -81,7 +80,7 @@ test -f native-app-plan.md
 ```
 
 **Resolve the current request before consuming an existing plan.** A direct
-standalone invocation must compare its requested tables/columns/service
+implementation-only invocation must compare its requested tables/columns/service
 changes with the existing plan and read-only live evidence. Present and approve
 that exact delta at Step 2.7 after shared planning validation, then save only
 the accepted plan changes before implementation.
@@ -99,28 +98,14 @@ artifact flags in Step 2a. When all are present, only confirm
 `native-app-plan.md` exists for hash validation; do not parse its Data Model
 section or build operations/service lists from Markdown.
 
-For all non-fast-path Dataverse proposals from `/setup-datamodel` or a standalone
-request, including an existing-plan delta, read and execute
+For all non-fast-path Dataverse proposals, including an existing-plan delta,
+read and execute
 [dataverse-change-planning.md](../../shared/references/dataverse-change-planning.md).
 Use its scoped evidence/contract for the diagram, architect, or inline path.
 An approved child with `planning_snapshot`, `architect_evidence`, and
 `schema_contract` instead enters Step 2b to verify that supplied scope; it must
 not rediscover or re-approve it. New-binding requests use this planning path;
 service-only refreshes and retirements have already returned from their branches.
-
-Older callers, including existing `/edit-app`, may not supply the new structured
-handoff. Do not assume compact evidence or complete approval from the caller's
-name. Without a complete approved handoff, resolve the current requested delta
-and use this leaf's normal proposal and Step 2.7 approval path before execution.
-Resolve required invocation context first; a missing or conflicting child root
-still returns `NEEDS_CONTEXT` before project access. Never silently replay the
-saved plan or treat `--skip-planning` as consent.
-
-An approved legacy child without compact-planning artifacts keeps the supported
-Markdown/live-reconciliation path below only when its current request, absolute
-root, implementation phase, and exact approved delta are all established.
-Never use this legacy path to bypass a partial or invalid compact-planning
-handoff, or to skip setup/standalone proposal validation.
 
 **Legacy input only, if present and `<operation_manifest_mode> = fallback`
 without a shared scoped contract:** read the
@@ -136,12 +121,6 @@ For legacy callers without scoped planning artifacts, build
 2. every table in Creation Order;
 3. every table named by screen/hook data requirements.
 
-Keep this full service inventory as retained context. Only the current approved
-delta and its necessary dependencies enter live schema reconciliation. With a
-complete approved legacy handoff, proceed to Step 3 after this initialization;
-do not repeat proposal Steps 2.5–2.7 or require new compact artifacts from that
-owner. A planning-phase caller still returns without implementation.
-
 For the shared scoped path, use the normalized contract's non-deferred
 `serviceRequired` declarations instead. Keep the broader existing-app service
 inventory as retained context, not a registration or mutation work list.
@@ -152,14 +131,13 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
 This classification belongs to planning: after approval, a changed decision
 returns to the owner for revision/approval before any write.
 
-For a scoped handoff, restrict schema writes to the exact `approved_scope` delta;
+For an edit handoff, restrict schema writes to the exact `approved_scope` delta;
 unaffected plan rows are context, not permission to replay their mutations.
 Apply the same restriction to the newly approved standalone request delta.
 Retain the full required-service set for existing screens. If reconciliation
 would change an approved name, storage target, or screen contract, return the
-proposed adaptation to the owner (or standalone user) before writing. Report
-dependent consumer changes for separate approval; do not silently rename
-underneath the app or treat data approval as permission to edit screens.
+proposed adaptation to the owner before writing; update and approve the dependent
+plan/screen changes together rather than silently renaming underneath the app.
 
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
@@ -213,8 +191,7 @@ return the proposal without entering Step 3.
 
 #### Step 2b — Approved scoped planning context
 
-Enter only for a shared compact-planning handoff, not an approved legacy child
-or a creation fast-path candidate. The data owner passes the
+Enter only for scoped context, not a creation fast-path candidate. Setup/edit pass the
 absolute `planning_snapshot`, `architect_evidence`, and `schema_contract` paths
 plus accepted operations, `contract_sha256`, and `plan_sha256` in
 `approved_scope`. Require all fields and real implementation approval;
@@ -275,7 +252,7 @@ parse failure requires resolving the intended entities, not silently inventing
 a replacement model.
 
 If they need new tables and refuse both paths, recommend `/setup-datamodel` for
-data-only planning and stop. Do not start another workflow without a new request.
+data-only planning or `/edit-app` for full app integration. STOP if neither.
 
 ### Step 2.7 — Validate and approve the standalone delta
 
@@ -1384,8 +1361,7 @@ During an edit with pending removals, preserve retiring entries until the
 removal branch verifies that their app bindings/services are gone. The owner
 then reconciles the final inventory; a shortened plan alone is not cleanup.
 Return the actual created/extended/reused table sets for this invocation to the
-user or current owner; historical manifest status is not evidence of creation
-in this invocation. Seeding must use an
+owner; historical manifest status is not `createdThisEdit`. Seeding must use an
 explicit approved allowlist excluding retirements, never this transitional
 inventory as its insertion scope.
 
@@ -1474,10 +1450,9 @@ Fix any errors. Common: missing peer dependencies — `npx expo install <package
 A schema change here (new table or new column) can leave an existing Mobile Offline Profile behind — new tables never sync to devices and new columns come down blank. Reconcile the profile with what you just created.
 
 **Skip this step only for a valid scoped orchestrator handoff with
-`--skip-planning`** whose owner explicitly takes responsibility for offline
-reconciliation, as `/create-mobile-app` and `/setup-datamodel` do in their existing
-flows. Return the verified delta to that owner without double-prompting.
-The flag alone must not suppress standalone reconciliation.
+`--skip-planning`**. `/create-mobile-app`, `/setup-datamodel`, and `/edit-app`
+own offline reconciliation in their own flow, so running it here too would
+double-prompt. The flag alone must not suppress standalone reconciliation.
 
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 

@@ -14,6 +14,7 @@ const skill = (name) => read(`skills/${name}/SKILL.md`);
 const planningPath = 'shared/references/dataverse-change-planning.md';
 const planning = read(planningPath);
 const setup = skill('setup-datamodel');
+const edit = skill('edit-app');
 const dataverse = skill('add-dataverse');
 const create = skill('create-mobile-app');
 
@@ -114,7 +115,7 @@ test('scope and selected environment are established before compact discovery', 
   assert.match(scope, /do not copy historical creation rows from the full plan/);
   assert.match(scope, /Preserve unrelated services outside this contract/);
   assert.match(scope, /missing dependency[\s\S]*additional mutations goes into the proposal for approval/);
-  assert.match(scope, /Connector-only,[\s\S]*removal-only, and retained-service-only\n\s+refresh requests skip/);
+  assert.match(scope, /Connector-only, native\/design-only, removal-only, and retained-service-only\n\s+refresh requests skip/);
   assert.match(scope, /do not create empty Dataverse artifacts or require a data-model receipt/);
   assert.match(scope, /environment ID, HTTPS URL, and tenant to match/);
   assert.match(scope, /`NEEDS_CONTEXT` to the owner before discovery/);
@@ -159,17 +160,20 @@ test('all scoped proposal sources share required snapshot-only architect inputs 
   assert.match(proposal, /do not replace its unaffected sections with the scoped contract/);
 
   const setupPlanner = section(setup, '#### Path B', '#### Path C');
-  assert.match(setupPlanner, /Dataverse planning mode: required/);
-  assert.match(setupPlanner, /snapshot \(validator input only\): <SNAPSHOT_PATH>/);
-  assert.match(setupPlanner, /Compact Dataverse architect evidence: <ARCHITECT_EVIDENCE_PATH>/);
-  assert.match(setupPlanner, /Structured schema contract output: <working_dir>\/\.tmp\/dataverse-schema-contract\.json/);
-  assert.doesNotMatch(setupPlanner, /Dataverse planning mode: (?:default|optional|legacy)/);
+  const editPlanner = section(edit, 'For the Data Model handoff', 'For Native Capabilities (no separate agent)');
+  for (const handoff of [setupPlanner, editPlanner]) {
+    assert.match(handoff, /Dataverse planning mode: required/);
+    assert.match(handoff, /snapshot \(validator input only\): <SNAPSHOT_PATH>/);
+    assert.match(handoff, /Compact Dataverse architect evidence: <ARCHITECT_EVIDENCE_PATH>/);
+    assert.match(handoff, /Structured schema contract output: <working_dir>\/\.tmp\/dataverse-schema-contract\.json/);
+    assert.doesNotMatch(handoff, /Dataverse planning mode: (?:default|optional|legacy)/);
+  }
   assert.match(section(setup, '#### Path A', '#### Path B'), /same decision validation as Path B before[\s\S]*Phase 4 approval/);
   assert.match(section(dataverse, '### Step 2.5', '### Step 2.6'), /decision validation for the diagram just as for\nan architect result/);
   assert.match(section(dataverse, '### Step 2.6', '### Step 2.7'), /If the host cannot spawn agents, produce both inline from that same evidence/);
 });
 
-test('the architect fails closed in required mode and preserves non-persisting legacy planning', () => {
+test('the architect refuses live-discovery fallback when required compact evidence is missing', () => {
   const architect = read('agents/data-model-architect.md');
   const snapshotOnly = section(architect, '## Snapshot-only', '## Step 1');
   inOrder(snapshotOnly, 'render-dataverse-architect-evidence.js', '--validate-only', 'Read the compact architect evidence once');
@@ -177,12 +181,7 @@ test('the architect fails closed in required mode and preserves non-persisting l
   assert.match(snapshotOnly, /Do \*\*not\*\* run Bash discovery or call `resolve-environment\.js`/);
   assert.match(snapshotOnly, /`NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`/);
   assert.match(snapshotOnly, /Do not fall back to\nlive discovery from `required` mode/);
-  assert.match(snapshotOnly, /Setup\/standalone data planning must not omit `required`/);
-  assert.match(snapshotOnly, /legacy live path below remains only\nfor callers that omit the new planning mode entirely/);
-  const legacy = section(architect, '## Step 1', '## Step 2');
-  assert.match(legacy, /Legacy live path only\. Skip entirely in the validated snapshot-only path/);
-  assert.match(legacy, /^node "\$\{PLUGIN_ROOT\}\/scripts\/resolve-environment\.js" <environment-id-or-url> --no-cache --require-tenant$/m);
-  assert.match(legacy, /do not remove these flags or\nredirect output into app\/auth configuration/);
+  assert.match(snapshotOnly, /Bundled\nsetup\/edit\/standalone planning must not omit `required`/);
 });
 
 test('normalization and decision validation precede approval, including successful agent returns', () => {
@@ -223,11 +222,12 @@ test('structured metadata expansion and deterministic revision precede generic r
   assert.match(canonical, /If it is empty, do not issue another network request/);
   for (const owner of [
     section(setup, '#### Path B', '#### Path C'),
+    section(edit, 'For the Data Model handoff', 'For Native Capabilities (no separate agent)'),
     section(dataverse, '### Step 2.6', '### Step 2.7'),
   ]) assert.match(owner, /(?:shared planning recovery before|recovery before generic retry limits|shared structured-signal recovery before generic retries)/);
 });
 
-test('accepted data scopes bind evidence and exact hashes without create-only artifact flags', () => {
+test('accepted setup/edit scopes bind evidence and exact hashes without create-only artifact flags', () => {
   const accepted = planning.slice(planning.indexOf('## 5.'));
   inOrder(accepted, 'existing gate approves implementation', 'save only the accepted plan', '`contract_sha256`', '`plan_sha256`', 'Before execution');
   assert.match(accepted, /exact accepted operations\/dependencies/);
@@ -235,16 +235,18 @@ test('accepted data scopes bind evidence and exact hashes without create-only ar
   assert.match(accepted, /never recalculate these approval hashes after discovering a mismatch/);
   assert.match(accepted, /not a new\nreceipt format/);
   assert.match(accepted, /receipt requires `workflow: create-mobile-app`\nand four approvals/);
-  assert.match(accepted, /Do not fabricate those approvals[\s\S]*weaken\nreceipt validation, or pass a partially populated fast-path argument set/);
-  const handoff = section(setup, 'Invoke skill: /add-dataverse', '\n```');
-  assert.match(handoff, /orchestrator: setup-datamodel/);
-  assert.match(handoff, /phase: implementation/);
-  assert.match(handoff, /planning_snapshot: <SNAPSHOT_PATH>/);
-  assert.match(handoff, /architect_evidence: <ARCHITECT_EVIDENCE_PATH>/);
-  assert.match(handoff, /schema_contract: <working_dir>\/\.tmp\/dataverse-schema-contract\.json/);
-  assert.match(handoff, /approved_scope: <[^\n]*delta[^\n]*contract_sha256, plan_sha256>/);
-  assert.match(handoff, /--skip-planning/);
-  assert.doesNotMatch(handoff, /--(?:schema-contract|approval-receipt|execution-reconciliation|operation-manifest|publish-checkpoint)\b/);
+  assert.match(accepted, /Do not fabricate those approvals for setup\/edit, weaken\nreceipt validation, or pass a partially populated fast-path argument set/);
+  for (const [owner, content] of [['setup-datamodel', setup], ['edit-app', edit]]) {
+    const handoff = section(content, 'Invoke skill: /add-dataverse', '\n```');
+    assert.match(handoff, new RegExp(`orchestrator: ${owner}`));
+    assert.match(handoff, /phase: implementation/);
+    assert.match(handoff, /planning_snapshot: <SNAPSHOT_PATH>/);
+    assert.match(handoff, /architect_evidence: <ARCHITECT_EVIDENCE_PATH>/);
+    assert.match(handoff, /schema_contract: <working_dir>\/\.tmp\/dataverse-schema-contract\.json/);
+    assert.match(handoff, /approved_scope: <[^\n]*delta[^\n]*contract_sha256, plan_sha256>/);
+    assert.match(handoff, /--skip-planning/);
+    assert.doesNotMatch(handoff, /--(?:schema-contract|approval-receipt|execution-reconciliation|operation-manifest|publish-checkpoint)\b/);
+  }
 });
 
 test('Step 2b verifies approval before fresh bounded reconciliation, not whole-plan replay', () => {
@@ -253,7 +255,6 @@ test('Step 2b verifies approval before fresh bounded reconciliation, not whole-p
   assert.match(entry, /normalized contract's non-deferred\n`serviceRequired` declarations/);
   assert.match(entry, /broader existing-app service\ninventory as retained context, not a registration or mutation work list/);
   const binding = section(dataverse, '#### Step 2b', '### Step 2.5');
-  assert.match(binding, /Enter only for a shared compact-planning handoff, not an approved legacy child/);
   inOrder(binding, 'Require all fields and real implementation approval', 'Before Step 3', 'compare SHA-256', 'verify the selected target identity', 'decision validators', 'After success', 'proceed to\nStep 3');
   assert.match(binding, /partial, missing, changed, or mismatched context returns `NEEDS_CONTEXT`/);
   assert.match(binding, /never a fallback to whole-plan replay or fresh approval inference/);
@@ -271,21 +272,6 @@ test('Step 2b verifies approval before fresh bounded reconciliation, not whole-p
   assert.match(planning, /missing\/out-of-scope binding returns\nto the owner/);
 });
 
-test('legacy child handoffs require current approval and cannot bypass invalid compact artifacts', () => {
-  const legacy = section(dataverse, 'Older callers,', 'For the shared scoped path');
-  assert.match(legacy, /Do not assume compact evidence or complete approval from the caller's\nname/);
-  assert.match(legacy, /Without a complete approved handoff, resolve the current requested delta\nand use this leaf's normal proposal and Step 2\.7 approval path before execution/);
-  assert.match(legacy, /missing or conflicting child root\nstill returns `NEEDS_CONTEXT` before project access/);
-  assert.match(legacy, /Never silently replay the\nsaved plan or treat `--skip-planning` as consent/);
-  assert.match(legacy, /An approved legacy child without compact-planning artifacts keeps the supported\nMarkdown\/live-reconciliation path/);
-  assert.match(legacy, /current request, absolute\nroot, implementation phase, and exact approved delta are all established/);
-  assert.match(legacy, /Never use this legacy path to bypass a partial or invalid compact-planning\nhandoff, or to skip setup\/standalone proposal validation/);
-  assert.match(legacy, /Only the current approved\ndelta and its necessary dependencies enter live schema reconciliation/);
-  assert.match(legacy, /complete approved legacy handoff, proceed to Step 3 after this initialization/);
-  assert.match(legacy, /do not repeat proposal Steps 2\.5–2\.7 or require new compact artifacts/);
-  assert.match(legacy, /A planning-phase caller still returns without implementation/);
-});
-
 test('creation retains its complete receipt-owned fast path and fails closed on partial artifacts', () => {
   const flags = ['schema-contract', 'approval-receipt', 'execution-reconciliation', 'operation-manifest', 'publish-checkpoint'];
   const handoff = section(create, 'Invoke skill: /add-dataverse', '\n```');
@@ -300,8 +286,6 @@ test('creation retains its complete receipt-owned fast path and fails closed on 
   assert.match(fast, /partially supplied handoff[\s\S]*must fail closed/);
   assert.match(fast, /Never jump to\nStep 4 without Step 2 initialization/);
   assert.match(fast, /Do not reconstruct tables[\s\S]*from Markdown on this path/);
-  assert.match(fast, /Supplied execution\nartifacts never override `--plan-only` or a planning-phase caller/);
-  assert.match(fast, /return the proposal without entering Step 3/);
   assert.match(section(create, '### Step 8 — Apply', 'Invoke skill: /add-dataverse'), /Step 8 cannot create or refresh this receipt/);
 });
 

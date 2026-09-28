@@ -36,12 +36,16 @@ Application Insights is **off by default**. Invoking this skill (or approving it
 **Telemetry checkpoint: `resolve_app_insights_mode`**
 
 ```
-1. Check env var CODE_APPS_NATIVE_ORCHESTRATING=1
+1. Check MOBILE_APP_ORCHESTRATING=1 AND explicit edit-app caller context
    → Mode A (invoked by /edit-app). Use the passed --working-dir. Return a status block.
 
 2. Else resolve working_dir from cwd (must contain app.json with an expo object)
    → Mode B (standalone). Return a human summary.
 ```
+
+Use the invocation-scoped context from
+[app-edit-routing.md](../../shared/references/app-edit-routing.md), not a stale
+shell value. Configuration approval remains owned by Step 3 in either mode.
 
 ## Step 2 — Inspect and determine the action
 
