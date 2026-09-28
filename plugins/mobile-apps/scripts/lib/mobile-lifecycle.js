@@ -1,5 +1,7 @@
 'use strict';
 
+// Lifecycle persistence is Mobile Apps-specific so other telemetry adopters
+// can evolve independently without taking this workflow contract.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');

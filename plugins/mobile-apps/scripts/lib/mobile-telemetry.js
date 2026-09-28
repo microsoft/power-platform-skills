@@ -10,7 +10,7 @@ const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 
 const agentInfo = require('./telemetry/lib/agent-info');
 const events = require('./telemetry/lib/events');
-const { createLifecycle } = require('./telemetry/lib/lifecycle');
+const { createLifecycle } = require('./mobile-lifecycle');
 const { fireAndForget, sanitizeData } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');

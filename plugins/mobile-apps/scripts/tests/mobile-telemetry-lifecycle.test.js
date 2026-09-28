@@ -456,7 +456,7 @@ test('mobile telemetry reuses canonical helpers without parallel modules', () =>
     false,
   );
   assert.equal(
-    fs.existsSync(path.join(lib, 'telemetry', 'lib', 'lifecycle.js')),
+    fs.existsSync(path.join(lib, 'mobile-lifecycle.js')),
     true,
   );
 });
