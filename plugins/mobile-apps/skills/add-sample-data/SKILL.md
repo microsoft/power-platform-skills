@@ -127,6 +127,14 @@ owner context. Incomplete or conflicting identity returns `NEEDS_CONTEXT` after
 bounded read-only recovery. Do not remove the safety flags, select another
 environment, or persist resolver output to recover.
 
+Bind every subsequent Dataverse read, batch, PATCH, media upload, token refresh,
+and retry to that exact environment URL and tenant ID. For each
+`dataverse-request.js` invocation, pass
+`--tenant-id '<tenantId-from-resolve-environment>'` explicitly; substitute the
+validated Step 1 value again in every fresh shell call. Do not depend on a
+previous shell export, challenge discovery, or the active Azure CLI tenant.
+Missing or conflicting tenant context returns `NEEDS_CONTEXT` before the call.
+
 Verify Azure CLI auth (the script needs an Azure CLI token):
 
 ```bash
@@ -169,7 +177,8 @@ request without a table list, to propose candidates for approval:
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
+  "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 For each candidate that the project uses (or each explicitly scoped table),
@@ -178,7 +187,8 @@ fetch its custom columns:
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
+  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Build the same `{ logicalName, displayName, columns: [...] }` shape the manifest provides.
@@ -200,7 +210,8 @@ Never derive it by appending `s` to a logical name.
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>"
+  "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Count the rows returned in the `value` array.
@@ -327,7 +338,8 @@ For every choice column in the selected tables, query its option set before gene
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
+  "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Use the actual `Value` integers from the response. Don't hardcode `100000000`-style values — they vary per environment.
@@ -382,7 +394,8 @@ For each table, get its `EntitySetName` (the URL-path name, usually plural — e
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
+  "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Cache the result.
@@ -420,7 +433,8 @@ an out-of-scope operation is a scope error, not a record failure to continue pas
      "Tier <N>" \
      --operations '<json-from-step-1>' \
      --concurrency 5 \
-     --solution '<solution-uniquename-from-memory-bank>'
+     --solution '<solution-uniquename-from-memory-bank>' \
+     --tenant-id '<tenantId-from-resolve-environment>'
    ```
 
    Output is `{ "status": 200, "data": [{ "index": 0, "status": 204, "recordId": "<guid>" }, ...] }`. Results are ordered by input index (stable across parallel execution).
@@ -459,7 +473,8 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
   "Tier 1" \
   --operations '<json-with-bound-lookups>' \
   --concurrency 5 \
-  --solution '<solution-uniquename-from-memory-bank>'
+  --solution '<solution-uniquename-from-memory-bank>' \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 > **⚠️ Lookup write syntax (HARD — wrong shape silently saves null OR loudly 404s):** 
@@ -495,6 +510,13 @@ Build a `mediaJobs` sidecar while generating rows:
 
 After each tier's `BATCH-RECORDS` response, fill `recordId` from the in-memory `{ index → recordId }` map, then upload media by column type:
 
+- Pass the Step 1 environment URL and tenant ID explicitly to every media
+  helper, including its authentication and token-refresh path. Image PATCH
+  calls through `dataverse-request.js` require the same `--tenant-id` argument.
+  If a File upload helper cannot enforce that tenant binding, do not invoke it
+  or fall back to ambient credentials: leave bytes unset, report
+  `sample media skipped — tenant-bound upload helper missing`, and return a
+  media concern with the preserved metadata rows.
 - **Image columns:** if the base64 value was already included in the create body, mark the media job complete. If not, PATCH the record with the base64 string using the entity set + record GUID. Keep images small and app-facing; never upload original multi-megabyte photos for seed data.
 - **File columns:** call a supported upload helper after the row exists. In app code, the generated service shape is `Service.upload(recordId, columnName, file, fileDisplayName?)`; for CLI seeding, use a dedicated helper that performs the same Dataverse file upload flow. The JSON-only `dataverse-request.js BATCH-RECORDS` mode is not a binary upload mechanism.
 
@@ -541,7 +563,8 @@ removed from the current scope; never retry a retiring table.
    ```bash
    cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-     "<parentEntitySet>?\$select=<parentIdColumn>,<naturalKey>&\$filter=startswith(<naturalKey>,'<seed prefix>')&\$top=50"
+     "<parentEntitySet>?\$select=<parentIdColumn>,<naturalKey>&\$filter=startswith(<naturalKey>,'<seed prefix>')&\$top=50" \
+     --tenant-id '<tenantId-from-resolve-environment>'
    ```
 
    Build a fresh `{ naturalKey → guid }` map from the response.
@@ -552,7 +575,7 @@ removed from the current scope; never retry a retiring table.
 
    > `⛔ Resume aborted: expected <N> parent rows in <table>, found <K>. Re-run /add-sample-data from Tier 0 (don't trust the prior session's GUIDs).`
 
-4. **Re-issue the failed tier as a normal Step 5b/5c BATCH-RECORDS call** with the freshly-queried GUIDs and EntitySetNames substituted into the operations array. Same `--solution` flag, same concurrency rules.
+4. **Re-issue the failed tier as a normal Step 5b/5c BATCH-RECORDS call** with the freshly-queried GUIDs and EntitySetNames substituted into the operations array. Same `--solution` flag, explicit `--tenant-id` from the validated Step 1 identity, and concurrency rules; never switch tenants to recover.
 
 5. **Continue forward** through subsequent tiers using the new in-memory `{ index → recordId }` map seeded from this resume's response.
 
