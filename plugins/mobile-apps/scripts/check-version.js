@@ -2,22 +2,19 @@
 'use strict';
 
 /**
- * Compare the installed plugin version with origin/main and return an update
- * notice when the marketplace contains a newer version.
+ * Compare the installed plugin version with the public marketplace manifest and
+ * return an update notice when a newer version is available.
  *
  * The command-line entry point is intentionally best-effort: update discovery
  * must never block the skill the user actually invoked.
  */
 
-const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const MARKETPLACE_PATHS = [
-  'marketplace.json',
-  '.plugin/marketplace.json',
-  '.claude-plugin/marketplace.json',
-];
+const DEFAULT_MARKETPLACE_NAME = 'power-platform-skills';
+const REMOTE_PLUGIN_MANIFEST_URL =
+  'https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/.plugin/plugin.json';
 const PLUGIN_MANIFEST_PATHS = [
   '.plugin/plugin.json',
   '.claude-plugin/plugin.json',
@@ -33,8 +30,23 @@ function compareSemver(localVersion, remoteVersion) {
   return 0;
 }
 
+function isTruthyEnv(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized !== '' && normalized !== '0' && normalized !== 'false';
+}
+
 function detectHost(env = process.env) {
-  return env.COPILOT_CLI === '1' ? 'copilot' : 'claude';
+  if (isTruthyEnv(env.COPILOT_CLI)) return 'copilot';
+  if (isTruthyEnv(env.CLAUDECODE) || isTruthyEnv(env.CLAUDE_CODE_EXECPATH)) return 'claude';
+  if (
+    isTruthyEnv(env.VSCODE_PID) ||
+    isTruthyEnv(env.VSCODE_CWD) ||
+    String(env.TERM_PROGRAM || '').toLowerCase() === 'vscode'
+  ) {
+    return 'vscode';
+  }
+  return 'ui';
 }
 
 function formatUpdateMessage(
@@ -44,8 +56,23 @@ function formatUpdateMessage(
   marketplaceName,
   host = detectHost()
 ) {
-  const qualifiedName = marketplaceName ? `${pluginName}@${marketplaceName}` : pluginName;
   let message = `\nPlugin update available: ${pluginName} ${localVersion} -> ${remoteVersion}.\n`;
+
+  if (host === 'vscode') {
+    return (
+      message +
+      `Update ${pluginName} in the Agent Plugins/Extensions view, reload VS Code, and rerun this skill.`
+    );
+  }
+
+  if (host !== 'copilot' && host !== 'claude') {
+    return (
+      message +
+      `Update ${pluginName} from your host's plugin or extensions UI, restart or reload the host, and rerun this skill.`
+    );
+  }
+
+  const qualifiedName = marketplaceName ? `${pluginName}@${marketplaceName}` : pluginName;
   if (marketplaceName) {
     message += `Run:\n  ${host} plugin marketplace update ${marketplaceName}\n  ${host} plugin update ${qualifiedName}`;
   } else {
@@ -62,42 +89,39 @@ function firstExistingPath(root, relativePaths) {
   return null;
 }
 
-function readFirstJson(root, relativePaths) {
-  const filePath = firstExistingPath(root, relativePaths);
-  if (!filePath) return null;
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-}
+async function fetchRemotePluginManifest({
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 5000,
+} = {}) {
+  if (typeof fetchImpl !== 'function') return null;
 
-function readMarketplaceName(gitRoot) {
-  const marketplace = readFirstJson(gitRoot, MARKETPLACE_PATHS);
-  return marketplace?.name || null;
-}
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    // The response is treated only as data. Use the fixed first-party endpoint
+    // shared with /check-updates and consume only its semantic version field.
+    const response = await fetchImpl(REMOTE_PLUGIN_MANIFEST_URL, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
 
-function runGit(gitRoot, args, timeout) {
-  return execFileSync('git', ['-C', gitRoot, ...args], {
-    encoding: 'utf8',
-    timeout,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-}
-
-function readJsonFromGit(gitRoot, ref, relativePaths) {
-  for (const relativePath of relativePaths) {
-    try {
-      return JSON.parse(runGit(gitRoot, ['show', `${ref}:${relativePath}`], 5000));
-    } catch {
-      // Open Plugins and legacy installs use different manifest paths.
-    }
+    const manifest = await response.json();
+    return manifest && typeof manifest.version === 'string' ? manifest : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
-  return null;
 }
 
-function checkForUpdate({
+async function checkForUpdate({
   pluginRoot = path.resolve(__dirname, '..'),
   env = process.env,
+  fetchRemotePlugin = fetchRemotePluginManifest,
+  marketplaceName = DEFAULT_MARKETPLACE_NAME,
 } = {}) {
-  // Git canonicalizes symlinked paths (for example macOS /var -> /private/var).
-  // Resolve the filesystem path before reading the installed manifest.
   const resolvedPluginRoot = fs.realpathSync(pluginRoot);
   const pluginJsonPath = firstExistingPath(resolvedPluginRoot, PLUGIN_MANIFEST_PATHS);
   if (!pluginJsonPath) return null;
@@ -105,25 +129,9 @@ function checkForUpdate({
   const localPlugin = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
   if (!localPlugin.version) return null;
 
-  // Skills run from the user's app directory, so resolve Git from the installed
-  // plugin instead of accidentally inspecting the user's unrelated repository.
-  const gitRoot = runGit(resolvedPluginRoot, ['rev-parse', '--show-toplevel'], 5000).trim();
-  // Ask Git for the repository-relative prefix instead of comparing absolute
-  // paths whose drive-letter casing or separators can differ on Windows.
-  const pluginPrefix = runGit(resolvedPluginRoot, ['rev-parse', '--show-prefix'], 5000)
-    .trim()
-    .replace(/\\/g, '/');
-  const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) =>
-    path.posix.join(pluginPrefix, manifestPath)
-  );
-
-  try {
-    runGit(gitRoot, ['fetch', 'origin', 'main', '--quiet'], 10000);
-  } catch {
-    // Offline use can still compare against a previously fetched origin/main.
-  }
-
-  const remotePlugin = readJsonFromGit(gitRoot, 'origin/main', remoteManifestPaths);
+  // Marketplace installs contain only the plugin directory, so remote manifest
+  // discovery must not depend on a parent Git checkout or an origin/main ref.
+  const remotePlugin = await fetchRemotePlugin();
   if (!remotePlugin?.version) return null;
   if (compareSemver(localPlugin.version, remotePlugin.version) <= 0) return null;
 
@@ -131,7 +139,7 @@ function checkForUpdate({
     localPlugin.name || 'mobile-app',
     localPlugin.version,
     remotePlugin.version,
-    readMarketplaceName(gitRoot),
+    marketplaceName,
     detectHost(env)
   );
 }
@@ -140,15 +148,16 @@ module.exports = {
   checkForUpdate,
   compareSemver,
   detectHost,
+  fetchRemotePluginManifest,
   formatUpdateMessage,
-  readMarketplaceName,
 };
 
 if (require.main === module) {
-  try {
-    const message = checkForUpdate();
-    if (message) console.log(message);
-  } catch {
-    // Version checks must never block skill execution.
-  }
+  checkForUpdate()
+    .then((message) => {
+      if (message) console.log(message);
+    })
+    .catch(() => {
+      // Version checks must never block skill execution.
+    });
 }

@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -11,43 +10,20 @@ const {
   checkForUpdate,
   compareSemver,
   detectHost,
+  fetchRemotePluginManifest,
   formatUpdateMessage,
-  readMarketplaceName,
 } = require('../check-version');
 
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const pluginCheckInstruction =
   '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
 
-function runGit(root, args) {
-  return execFileSync('git', ['-C', root, ...args], {
-    encoding: 'utf8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-}
-
-function createVersionedPlugin(t, localVersion, remoteVersion) {
+function createInstalledPlugin(t, localVersion) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-app-version-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  const installedPluginRoot = path.join(root, 'plugins', 'mobile-apps');
+  const installedPluginRoot = path.join(root, 'mobile-app');
   fs.mkdirSync(path.join(installedPluginRoot, '.plugin'), { recursive: true });
-  fs.writeFileSync(
-    path.join(root, 'marketplace.json'),
-    JSON.stringify({ name: 'power-platform-skills' })
-  );
-  fs.writeFileSync(
-    path.join(installedPluginRoot, '.plugin', 'plugin.json'),
-    JSON.stringify({ name: 'mobile-app', version: remoteVersion })
-  );
-
-  runGit(root, ['init', '--quiet']);
-  runGit(root, ['config', 'user.email', 'tests@example.com']);
-  runGit(root, ['config', 'user.name', 'Version Check Tests']);
-  runGit(root, ['add', '.']);
-  runGit(root, ['commit', '--quiet', '-m', 'remote marketplace state']);
-  runGit(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
-
   fs.writeFileSync(
     path.join(installedPluginRoot, '.plugin', 'plugin.json'),
     JSON.stringify({ name: 'mobile-app', version: localVersion })
@@ -90,9 +66,14 @@ test('compareSemver compares major, minor, and patch versions', () => {
   assert.equal(compareSemver('2.0.0', '1.9.9'), -1);
 });
 
-test('detectHost recognizes GitHub Copilot CLI', () => {
+test('detectHost distinguishes CLI, VS Code, and unknown hosts', () => {
   assert.equal(detectHost({ COPILOT_CLI: '1' }), 'copilot');
-  assert.equal(detectHost({}), 'claude');
+  assert.equal(detectHost({ COPILOT_CLI: 'true', VSCODE_PID: '123' }), 'copilot');
+  assert.equal(detectHost({ CLAUDECODE: '1' }), 'claude');
+  assert.equal(detectHost({ CLAUDE_CODE_EXECPATH: '/opt/claude' }), 'claude');
+  assert.equal(detectHost({ VSCODE_PID: '123' }), 'vscode');
+  assert.equal(detectHost({ TERM_PROGRAM: 'vscode' }), 'vscode');
+  assert.equal(detectHost({}), 'ui');
 });
 
 test('formatUpdateMessage emits marketplace and qualified plugin commands', () => {
@@ -118,38 +99,96 @@ test('formatUpdateMessage uses the plain plugin name without a marketplace', () 
   assert.doesNotMatch(message, /@/);
 });
 
-test('readMarketplaceName reads Open Plugins and legacy marketplace manifests', (t) => {
-  const openRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-app-open-marketplace-'));
-  const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-app-legacy-marketplace-'));
-  t.after(() => fs.rmSync(openRoot, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(legacyRoot, { recursive: true, force: true }));
-
-  fs.writeFileSync(path.join(openRoot, 'marketplace.json'), JSON.stringify({ name: 'open' }));
-  fs.mkdirSync(path.join(legacyRoot, '.claude-plugin'));
-  fs.writeFileSync(
-    path.join(legacyRoot, '.claude-plugin', 'marketplace.json'),
-    JSON.stringify({ name: 'legacy' })
+test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () => {
+  const message = formatUpdateMessage(
+    'mobile-app',
+    '0.3.0',
+    '0.4.0',
+    'power-platform-skills',
+    'vscode'
   );
 
-  assert.equal(readMarketplaceName(openRoot), 'open');
-  assert.equal(readMarketplaceName(legacyRoot), 'legacy');
-  assert.equal(readMarketplaceName(path.join(openRoot, 'missing')), null);
+  assert.match(message, /Agent Plugins\/Extensions view/);
+  assert.match(message, /reload VS Code/);
+  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
-test('checkForUpdate reads origin/main from the plugin repository regardless of cwd', (t) => {
-  const installedPluginRoot = createVersionedPlugin(t, '0.3.0', '0.4.0');
-  const message = checkForUpdate({
+test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
+  const message = formatUpdateMessage(
+    'mobile-app',
+    '0.3.0',
+    '0.4.0',
+    'power-platform-skills',
+    'ui'
+  );
+
+  assert.match(message, /host's plugin or extensions UI/);
+  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+});
+
+test('fetchRemotePluginManifest reads only a valid manifest response', async () => {
+  const requests = [];
+  const manifest = await fetchRemotePluginManifest({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ name: 'mobile-app', version: '0.4.0' }),
+      };
+    },
+  });
+
+  assert.deepEqual(manifest, { name: 'mobile-app', version: '0.4.0' });
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /^https:\/\/raw\.githubusercontent\.com\//);
+  assert.equal(requests[0].options.redirect, 'error');
+});
+
+test('fetchRemotePluginManifest fails closed for unavailable or malformed responses', async () => {
+  assert.equal(
+    await fetchRemotePluginManifest({
+      fetchImpl: async () => ({ ok: false }),
+    }),
+    null
+  );
+  assert.equal(
+    await fetchRemotePluginManifest({
+      fetchImpl: async () => ({ ok: true, json: async () => ({ name: 'mobile-app' }) }),
+    }),
+    null
+  );
+  assert.equal(
+    await fetchRemotePluginManifest({
+      fetchImpl: async () => {
+        throw new Error('offline');
+      },
+    }),
+    null
+  );
+});
+
+test('checkForUpdate works for a standalone installed plugin without Git metadata', async (t) => {
+  const installedPluginRoot = createInstalledPlugin(t, '0.3.0');
+  const message = await checkForUpdate({
     pluginRoot: installedPluginRoot,
-    env: { COPILOT_CLI: '1' },
+    env: { VSCODE_PID: '123' },
+    fetchRemotePlugin: async () => ({ version: '0.4.0' }),
   });
 
   assert.match(message, /Plugin update available: mobile-app 0\.3\.0 -> 0\.4\.0/);
-  assert.match(message, /copilot plugin update mobile-app@power-platform-skills/);
+  assert.match(message, /Agent Plugins\/Extensions view/);
+  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
-test('checkForUpdate returns null when the installed version is current', (t) => {
-  const installedPluginRoot = createVersionedPlugin(t, '0.4.0', '0.4.0');
-  assert.equal(checkForUpdate({ pluginRoot: installedPluginRoot }), null);
+test('checkForUpdate returns null when the installed version is current', async (t) => {
+  const installedPluginRoot = createInstalledPlugin(t, '0.4.0');
+  assert.equal(
+    await checkForUpdate({
+      pluginRoot: installedPluginRoot,
+      fetchRemotePlugin: async () => ({ version: '0.4.0' }),
+    }),
+    null
+  );
 });
 
 test('every public skill runs or owns the plugin check before its workflow', () => {
