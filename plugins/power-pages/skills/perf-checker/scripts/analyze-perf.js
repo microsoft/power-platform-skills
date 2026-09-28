@@ -72,7 +72,7 @@ const SHORT_POLL_INTERVAL_MS = 10000;
 
 // Directories we never descend into for ANY scan.
 const ALWAYS_SKIP_DIRS = new Set([
-  'node_modules', '.git', '.github', '.vs', '.vscode', 'coverage', '.idea',
+  'node_modules', '.git', '.github', '.vs', '.vscode', 'coverage', '.idea', 'docs',
 ]);
 // Additional directories skipped for SOURCE-content scans (FetchXML / Web API):
 // these hold compiled/minified output — the actionable location is the source,
