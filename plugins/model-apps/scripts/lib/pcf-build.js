@@ -51,7 +51,19 @@ function buildControl({ projectDir, mode = 'production', clean = true } = {}, de
   const run = deps.runNodeScript || runNodeScript;
   const resolveBin = deps.resolvePackageBin || resolvePackageBin;
   const resolvedProjectDir = pathDep.resolve(String(projectDir || process.cwd()));
-  const outRoot = resolveOutRoot(resolvedProjectDir, { fs: fsDep, path: pathDep });
+  let outRoot;
+  try {
+    outRoot = resolveOutRoot(resolvedProjectDir, { fs: fsDep, path: pathDep });
+  } catch (err) {
+    return {
+      ok: false,
+      mode,
+      controls: [],
+      stdout: '',
+      stderr: '',
+      error: String(err && err.message ? err.message : err),
+    };
+  }
   const scriptPath = resolveBin(resolvedProjectDir, 'pcf-scripts', 'pcf-scripts');
 
   if (!scriptPath) {
@@ -136,18 +148,47 @@ function bundleFindings(result, matrix = loadMatrix()) {
 function resolveOutRoot(projectDir, deps = {}) {
   const fsDep = deps.fs || fs;
   const pathDep = deps.path || path;
+  const resolvedProjectDir = pathDep.resolve(projectDir);
   const configFile = pathDep.join(projectDir, 'pcfconfig.json');
+  let rawOutDir = DEFAULT_OUT_DIR;
   if (fileExists(fsDep, configFile)) {
     try {
       const parsed = JSON.parse(fsDep.readFileSync(configFile, 'utf8'));
       if (parsed && typeof parsed.outDir === 'string' && parsed.outDir.trim()) {
-        return pathDep.resolve(projectDir, parsed.outDir);
+        rawOutDir = parsed.outDir;
       }
     } catch {
-      return pathDep.resolve(projectDir, DEFAULT_OUT_DIR);
+      rawOutDir = DEFAULT_OUT_DIR;
     }
   }
-  return pathDep.resolve(projectDir, DEFAULT_OUT_DIR);
+  const resolvedOutRoot = pathDep.resolve(resolvedProjectDir, rawOutDir);
+  assertInsideProject(resolvedProjectDir, resolvedOutRoot, rawOutDir, pathDep);
+  return resolvedOutRoot;
+}
+
+function assertInsideProject(projectDir, targetDir, rawOutDir, pathDep = path) {
+  // `pcfconfig.json` is user-controlled and has the raw shape `{ "outDir": "../somewhere" }`.
+  // Clean builds delete the resolved outDir before invoking pcf-scripts, so require a STRICT child
+  // of the project (not the project itself and not an ancestor/sibling) before any caller can read
+  // or remove it. Windows file systems are usually case-insensitive, so compare canonical strings
+  // case-insensitively when using win32-style paths.
+  const project = comparablePath(pathDep.resolve(projectDir), pathDep);
+  const target = comparablePath(pathDep.resolve(targetDir), pathDep);
+  const relative = pathDep.relative(project, target);
+  const comparableRelative = comparablePath(relative, pathDep);
+  if (
+    !relative
+    || comparableRelative === '..'
+    || comparableRelative.startsWith(`..${pathDep.sep}`)
+    || pathDep.isAbsolute(relative)
+  ) {
+    throw new Error(`pcfconfig.json outDir '${rawOutDir}' must resolve inside the PCF project as a strict child folder. Set outDir to a child folder such as '${DEFAULT_OUT_DIR}' before running build clean or output classification.`);
+  }
+}
+
+function comparablePath(value, pathDep) {
+  const text = String(value || '');
+  return pathDep.sep === '\\' ? text.toLowerCase() : text;
 }
 
 function readBuiltControls(outRoot, deps = {}) {

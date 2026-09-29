@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { loadCli } = require('./helpers/cli-harness.js');
 
 const {
   findControlProject,
@@ -12,6 +13,8 @@ const {
   bundleFindings,
   classifyOutputFiles,
 } = require('../lib/pcf-build.js');
+
+const cliPath = path.join(__dirname, '..', 'pcf-build.js');
 
 function tempProject() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-build-test-'));
@@ -119,6 +122,45 @@ test('buildControl cleans old output and classifies unexplained files without re
   }
 });
 
+test('buildControl refuses absolute, parent, and project-root outDir values without deleting sentinels', () => {
+  for (const item of ['absolute outDir', 'parent sibling outDir', 'project root outDir']) {
+    const { dir, bin } = tempProject();
+    const parentSibling = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    const absoluteOut = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-build-absolute-out-'));
+    const outDir = item === 'absolute outDir' ? absoluteOut : item === 'parent sibling outDir' ? '../x' : '.';
+    const resolvedTarget = item === 'absolute outDir'
+      ? absoluteOut
+      : item === 'parent sibling outDir'
+        ? path.resolve(dir, '..', 'x')
+        : dir;
+    fs.mkdirSync(item === 'parent sibling outDir' ? resolvedTarget : path.dirname(resolvedTarget), { recursive: true });
+    const sentinel = path.join(resolvedTarget, 'sentinel.txt');
+    fs.writeFileSync(sentinel, item);
+    fs.writeFileSync(path.join(dir, 'pcfconfig.json'), JSON.stringify({ outDir }));
+
+    try {
+      const result = buildControl({ projectDir: dir, clean: true }, {
+        fs,
+        resolvePackageBin: () => bin,
+        runNodeScript: () => {
+          throw new Error('build must not run for unsafe outDir');
+        },
+      });
+
+      assert.equal(result.ok, false, item);
+      assert.match(result.error, /pcfconfig\.json outDir/i);
+      assert.match(result.error, /inside the PCF project/i);
+      assert.match(result.error, new RegExp(escapeRegExp(String(outDir))));
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), item);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(absoluteOut, { recursive: true, force: true });
+      fs.rmSync(parentSibling, { recursive: true, force: true });
+      fs.rmSync(path.resolve(dir, '..', 'x'), { recursive: true, force: true });
+    }
+  }
+});
+
 test('classifyOutputFiles is reusable without reading a project build directory', () => {
   const resources = {
     code: [{ path: 'bundle.js' }],
@@ -142,6 +184,34 @@ test('classifyOutputFiles is reusable without reading a project build directory'
     ['bundle.js.LICENSE.txt', 'legalSidecar'],
     ['diagnostics.json', 'unexplained'],
   ]);
+});
+
+test('pcf-build emits JSON on stdout when a non-usage runtime failure is thrown', async () => {
+  const cli = loadCli(cliPath, {
+    argv: ['--project', 'D:\\tmp\\pcf-project'],
+    requires: {
+      './lib/pcf-build': {
+        findControlProject: () => ({ projectDir: 'D:\\tmp\\pcf-project', pcfproj: 'Control.pcfproj', manifests: ['ControlManifest.Input.xml'], packageJson: 'package.json' }),
+        buildControl: () => { throw new Error('boom from build'); },
+        bundleFindings: () => [],
+      },
+      './lib/pcf-matrix': {
+        loadMatrix: () => ({ bundle: { webpackDefaultMaxBytes: 5 * 1024 * 1024, warnAtFraction: 0.8 } }),
+      },
+    },
+  });
+
+  try {
+    await cli.main();
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /boom from build/);
+  assert.match(cli.stderrText(), /boom from build/);
 });
 
 test('bundleFindings reports over-limit and near-limit bundles with both upload limits named', () => {
@@ -171,3 +241,7 @@ test('findControlProject walks up from a nested folder to the nearest pcfproj ro
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

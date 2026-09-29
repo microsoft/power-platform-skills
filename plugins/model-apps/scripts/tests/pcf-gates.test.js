@@ -82,3 +82,17 @@ test('pcf-gates rejects usage errors before running gates', async () => {
   assert.match(cli.stderrText(), /--project requires a value/);
   assert.equal(cli.stdoutText(), '');
 });
+
+test('pcf-gates emits JSON on stdout when a non-usage runtime failure is thrown', async () => {
+  const cli = await run(['--project', 'D:\\tmp\\pcf-project'], {
+    './lib/pcf-build': {
+      findControlProject: () => { throw new Error('boom from gates'); },
+    },
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /boom from gates/);
+  assert.match(cli.stderrText(), /boom from gates/);
+});
