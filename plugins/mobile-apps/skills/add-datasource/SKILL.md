@@ -42,8 +42,8 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 **Important routing rules:**
 - When the user wants to **perform actions** (send an email, post a Teams message, create a file), route to `/add-connector` with the connector name as the argument (e.g., `/add-connector office365`, `/add-connector teams`).
-- When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `npx power-apps list-flows --json` followed by `npx power-apps add-flow --flow-id <flow-guid> --non-interactive` from the app root.
-- When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `npx power-apps find-dataverse-api --search '<operation-name>' --json`; then stop and explain that this plugin only adds Dataverse table CRUD.
+- When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `npx --no-install power-apps list-flows --json` followed by `npx --no-install power-apps add-flow --flow-id <flow-guid> --non-interactive` from the app root.
+- When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json`; then stop and explain that this plugin only adds Dataverse table CRUD.
 - When the user wants to **store or query structured business data** with custom schema, route to `/add-dataverse`.
 
 4. If the user wants multiple capabilities, invoke each skill in sequence.

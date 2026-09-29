@@ -101,7 +101,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 Get the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 ```bash
-npx power-apps create-connection --api-id shared_sharepointonline --json
+npx --no-install power-apps create-connection --api-id shared_sharepointonline --json
 ```
 
 Use **`shared_sharepointonline`** as the `apiId` and capture **`connectionId`** from the output. Use these exact values in the commands below.
@@ -116,7 +116,7 @@ If `create-connection` cannot complete because browser-based connection creation
 > "→ Discovering SharePoint sites accessible to this connection…"
 
 ```bash
-npx power-apps list-datasets --api-id <apiId-from-list> --connection-id <connection-id> --json
+npx --no-install power-apps list-datasets --api-id <apiId-from-list> --connection-id <connection-id> --json
 ```
 
 Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
@@ -133,7 +133,7 @@ Present the sites to the user and ask which one(s) they want to connect to. If t
 For each selected site:
 
 ```bash
-npx power-apps list-tables --api-id <apiId-from-list> --connection-id <connection-id> --dataset '<site-url>' --json
+npx --no-install power-apps list-tables --api-id <apiId-from-list> --connection-id <connection-id> --dataset '<site-url>' --json
 ```
 
 Present the tables to the user and ask which ones they want to add. Suggest tables that look relevant to their use case. If lists were created in Step 5, they should appear here.
@@ -148,7 +148,7 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 SharePoint is a tabular datasource — requires `--connection-id`, `--dataset`, and `--resource-name`:
 
 ```bash
-npx power-apps add-data-source --api-id <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --resource-name '<table-name>'
+npx --no-install power-apps add-data-source --api-id <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --resource-name '<table-name>'
 ```
 
 Run once per list or document library.
@@ -194,13 +194,13 @@ await SharePointOnlineService.PatchItem({
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify SharePoint services compile (~15–30 seconds)."
 
-> **Native diff:** `npx tsc --noEmit` instead of `npm run build`. Do NOT run platform-specific native build commands here.
+> **Native diff:** `npx --no-install tsc --noEmit` instead of `npm run build`. Do NOT run platform-specific native build commands here.
 
 `npx power-apps add-data-source` wrote new files into `.power/schemas/sharepointonline/`. Regenerate `connectorSchemas.ts` before type-checking so the new list is wired into the runtime schema map:
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Fix TypeScript errors before proceeding.

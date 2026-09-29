@@ -37,8 +37,8 @@ If `/add-native` adds `expo-camera`, the only changes that get committed are: `p
 |---|---|---|---|
 | Node.js | `22.0.0` | `node --version` | Expo SDK 55 + React Native 0.83 require Node 22+ |
 | npm | `10.0.0` | `npm --version` | Expo install / lockfile v3 |
-| Expo CLI (via npx) | `0.21.0` | `npx expo --version` | SDK 55 prebuild support |
-| TypeScript (project-local) | `5.4.0` | `npx tsc --version` | Required by generated service types |
+| Expo CLI (via npx) | `0.21.0` | `npx --no-install expo --version` | SDK 55 prebuild support |
+| TypeScript (project-local) | `5.4.0` | `npx --no-install tsc --version` | Required by generated service types |
 | POSIX shell (Windows only) | bash 4+ / zsh 5+ | `echo $BASH_VERSION || echo $ZSH_VERSION` | Skills use `cp -R`, `rm -rf`, `mkdir -p`, `grep`, `sed`, `find`. Native PowerShell / cmd.exe lack these. Use **Git Bash** or **WSL** on Windows. See [shared-instructions.md → Shell Requirement](./shared-instructions.md#shell-requirement-windows-users). |
 
 ## Required only when the relevant skill runs

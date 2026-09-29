@@ -919,7 +919,7 @@ export default function <ScreenName>Screen() {
   - **Fallback — const missing or model file absent:** emit a plain `<Input>` storing the raw int as a string, with a TODO comment:
     ```tsx
     {/* TODO(choice-missing): No option const found for cr123_status in Cr123_ProjectModel.ts.
-      Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
+      Re-run `npx --no-install power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
       onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}

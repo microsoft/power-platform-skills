@@ -293,7 +293,7 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Fix any wrapper-side errors. Do NOT run platform-specific native build commands here — and you should not need to, because no native config changed.

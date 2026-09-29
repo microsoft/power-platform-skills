@@ -196,7 +196,7 @@ await startTracking('my-wrap-app', target);
 ## 5. Type-check and summary
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Only after table + columns are verified and TypeScript passes, report:

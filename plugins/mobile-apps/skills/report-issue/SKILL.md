@@ -53,7 +53,7 @@ node --version
 npm --version
 node scripts/resolve-environment.js "$(node -e \"console.log(require('./power.config.json').environmentId)\")" 2>/dev/null || true
 az --version 2>/dev/null | head -1
-npx expo --version 2>/dev/null
+npx --no-install expo --version 2>/dev/null
 uname -srm
 ```
 
@@ -98,13 +98,13 @@ echo "ANDROID_HOME=$ANDROID_HOME"
 
 **Telemetry checkpoint: `collect_issue_diagnostics`**
 
-Run `npx expo doctor` and capture the text output verbatim.
+Run `npx --no-install expo doctor` and capture the text output verbatim.
 
 If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
 
 - Last 50 lines of any Metro / Gradle / Xcode log if user mentions a build failure
 - `git status --short` if in a git repo (to show modified files — sanitize for secrets first)
-- Output of `npx tsc --noEmit` if relevant
+- Output of `npx --no-install tsc --noEmit` if relevant
 
 **Do NOT capture:**
 - Contents of `src/playerConfig.ts` (contains tenantId / clientId — sensitive)

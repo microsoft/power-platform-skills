@@ -29,13 +29,13 @@ If the caller already provided a connection ID, validate the connector/API ID fr
 If the caller provided a connector API ID and needs a new connection, create it from the app root:
 
 ```bash
-npx power-apps create-connection --api-id <api-id> --json
+npx --no-install power-apps create-connection --api-id <api-id> --json
 ```
 
 Use the returned `connectionId` for `--connection-id <connectionId>`. Optional display names are supported:
 
 ```bash
-npx power-apps create-connection --api-id <api-id> --display-name '<display-name>' --json
+npx --no-install power-apps create-connection --api-id <api-id> --display-name '<display-name>' --json
 ```
 
 Browser-based connection creation is disabled by default. If the connector is not SSO-eligible and the command reports that browser creation is disabled, tell the user to either set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` and rerun the command, or create the connection in the maker portal.
@@ -45,7 +45,7 @@ Browser-based connection creation is disabled by default. If the connector is no
 If the caller provided a solution ID and needs a connection reference name, list connection references from the app root:
 
 ```bash
-npx power-apps list-connection-references --solution-id <solution-id> --json
+npx --no-install power-apps list-connection-references --solution-id <solution-id> --json
 ```
 
 If a matching connection reference exists, return its reference name for `--connection-ref <connection-ref>`.

@@ -139,7 +139,7 @@ Capture target Power Platform environment for the remaining flow.
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `npx --no-install power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -234,7 +234,7 @@ downstream planning must retain platform-specific behavior for each.
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
 ```bash
-npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
+npx --no-install power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
   echo "COLLISION" || echo "OK"
 ```
 
@@ -1367,7 +1367,7 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ```bash
 cd <working_dir>
-npx power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
+npx --no-install power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
 ```
 
 Substitute the approved Step 2 display name and Step 4 environment ID using
@@ -1411,7 +1411,7 @@ it reports an unsupported layout.
 With `node_modules/` populated, run the scaffold TypeScript gate. Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 `tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 (Fixes 1–7) is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes against the current working dir contents and reapply any missed edit.
@@ -1758,7 +1758,7 @@ After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
@@ -1884,12 +1884,12 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 | `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, export the resolved app light/dark themes, then wire matching `ThemeTokens` into `app/_layout.tsx`. |
 | `## Design` says `required` | Apply the same reference using the approved `## Design` section. Builds custom token system + aliases. |
 | `## Design` says `add-aliases` | Verify `tamagui.config.ts` uses `createPowerAppsTamaguiConfig`; the host already provides the semantic aliases. |
-| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
+| Custom font only | `npx --no-install expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
 
 **No unchecked path.** Screen-builders require `$surface0`–`$surface3` and
 `$accent*` aliases. On the default path, verify the host factory rather than
 rewriting the config. Pass the complete `## Design` section verbatim — not a
-summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+summary. Re-run `npx --no-install tsc --noEmit` after Tamagui config changes.
 
 **Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
 exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
@@ -2089,7 +2089,7 @@ return (
 );
 ```
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `npx --no-install tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 **How to build the `<Drawer>` block (Drawer pattern only):**
 
@@ -2130,7 +2130,7 @@ return (
 - `drawerType: 'front'` — standard mobile pattern (drawer slides over content)
 - Icon prop is `drawerIcon` (not `tabBarIcon`)
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `npx --no-install tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 ### Step 10.7 — Snapshot generated services into the plan
 
@@ -2403,7 +2403,7 @@ This sub-step previously appended `### Standard Imports` + per-screen `#### Reso
 After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/skeletons are all written, run the **Navigation/skeleton gate**:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.
@@ -2477,7 +2477,7 @@ After the wave's TypeScript gate passes, and only then, print the next wave star
 After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
@@ -2490,7 +2490,7 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
-**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+**After all waves return and the last wave gate is clean**, run one final `npx --no-install tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
 
 Then run the canonical route-contract gate from the app root:
 
@@ -2548,7 +2548,7 @@ These validators are invoked explicitly by this mobile workflow. They are not re
 After all validators report no auto-fixable issues, run:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If `tsc` fails, use the existing TypeScript batch-repair policy. If stylistic issues remain after 2 retries or are judgement calls, do not keep looping. Record them in `memory-bank.md` and surface them as:

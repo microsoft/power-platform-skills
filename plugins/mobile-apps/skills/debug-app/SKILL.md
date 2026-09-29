@@ -841,7 +841,7 @@ Read the relevant source file(s). Identify:
    ```bash
    node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "<environmentId-or-url>"
    ```
-   If resolution fails, run `npx power-apps auth-status --json`. Never switch accounts, log out, or open login from `/debug-app` without user confirmation.
+   If resolution fails, run `npx --no-install power-apps auth-status --json`. Never switch accounts, log out, or open login from `/debug-app` without user confirmation.
 4. When environment resolution succeeds and live evidence is required, use only read-only `GET` requests through:
    ```bash
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET <apiPath> \

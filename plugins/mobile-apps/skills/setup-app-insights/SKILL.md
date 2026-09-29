@@ -228,7 +228,7 @@ import appConfig from '../app.json';
 <PowerAppsProvider appConfig={appConfig}>
 ```
 
-If either part is missing, patch only the import and the `appConfig` prop; preserve all other provider props and layout behavior. Run `npx tsc --noEmit` only when `app/_layout.tsx` changed.
+If either part is missing, patch only the import and the `appConfig` prop; preserve all other provider props and layout behavior. Run `npx --no-install tsc --noEmit` only when `app/_layout.tsx` changed.
 
 Parse `app.json` with Node after the mutation and assert:
 

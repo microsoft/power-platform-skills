@@ -78,7 +78,7 @@ npm run build
 If `package.json` has no `build` script, fall back to:
 
 ```bash
-npx expo export --platform web
+npx --no-install expo export --platform web
 ```
 
 (The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
@@ -90,7 +90,7 @@ npx expo export --platform web
 ```bash
 mkdir -p .tmp
 rm -f .tmp/expo-web-export.log
-npx expo export --platform web > .tmp/expo-web-export.log 2>&1 &
+npx --no-install expo export --platform web > .tmp/expo-web-export.log 2>&1 &
 EXPORT_PID=$!
 for _ in $(seq 1 90); do
   grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null && break
@@ -226,7 +226,7 @@ Confirm with the user using the **resolved env URL, not just the friendly name**
 Wait for the exact phrase `yes deploy to <env-name>` (case-insensitive, env-name matching). A bare `y` / `yes` is not enough — too easy to fire on autopilot when the wrong env is active. Then:
 
 ```bash
-npx power-apps push --non-interactive
+npx --no-install power-apps push --non-interactive
 ```
 
 Capture the app URL from the output if printed.
@@ -247,7 +247,7 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 | Error | Fix |
 |---|---|
 | `npx power-apps push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
-| Environment mismatch | Re-run `npx power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
+| Environment mismatch | Re-run `npx --no-install power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
 | `npx power-apps push` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
 
 ### Step 4 — Update memory bank

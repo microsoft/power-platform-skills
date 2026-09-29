@@ -1052,7 +1052,7 @@ sequential outside BATCH-METADATA.
 For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
+npx --no-install power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
@@ -1257,10 +1257,10 @@ if (!upload.success) {
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
-Fix any errors. Common: missing peer dependencies — `npx expo install <package>`.
+Fix any errors. Common: missing peer dependencies — `npx --no-install expo install <package>`.
 
 ### Step 8.5 — Offline profile reconciliation
 

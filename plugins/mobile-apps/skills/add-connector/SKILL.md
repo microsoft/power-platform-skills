@@ -66,14 +66,14 @@ Common connector API names:
 **Cloud flows are supported by the Power Apps CLI, but they are not connector data sources.** If the user wants to invoke an existing Power Automate cloud flow from the app, use the flow-specific commands instead of `add-data-source`:
 
 ```bash
-npx power-apps list-flows --search '<flow-name-or-keyword>' --json
-npx power-apps add-flow --flow-id <flow-guid> --non-interactive
+npx --no-install power-apps list-flows --search '<flow-name-or-keyword>' --json
+npx --no-install power-apps add-flow --flow-id <flow-guid> --non-interactive
 ```
 
 To remove a flow later:
 
 ```bash
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
+npx --no-install power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
@@ -91,9 +91,9 @@ Run the `/list-connections` skill with the connector API ID (for example `shared
 
 | Connector shape | Examples | Required discovery | Add command |
 | --- | --- | --- | --- |
-| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>` |
-| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `list-datasets`, then `list-tables` | `npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'` |
-| SQL stored procedure | SQL Server | `list-datasets`, then `list-sqlStoredProcedures` if needed | `npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'` |
+| Action-style connector | Teams, Office 365 Users, Outlook, Azure DevOps | None after connection lookup | `npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>` |
+| Table-based connector | Excel Online, OneDrive for Business, Azure Blob, SQL, SharePoint if not delegated | `list-datasets`, then `list-tables` | `npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'` |
+| SQL stored procedure | SQL Server | `list-datasets`, then `list-sqlStoredProcedures` if needed | `npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'` |
 
 **For action-style connectors, print before starting:**
 > "→ Running `npx power-apps add-data-source` for <connector>. ~10–30 seconds (writes generated services + connector schemas)."
@@ -101,33 +101,33 @@ Run the `/list-connections` skill with the connector API ID (for example `shared
 Then run:
 
 ```bash
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
 ```
 
 **For table-based connectors, discover datasets and tables first:**
 
 ```bash
-npx power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json
-npx power-apps list-tables --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
+npx --no-install power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json
+npx --no-install power-apps list-tables --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
 ```
 
 Present the datasets/tables to the user if they did not specify them. Add one data source per selected table:
 
 ```bash
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
 ```
 
 **For SQL stored procedures, discover procedures only when the user asks to invoke a stored procedure rather than a table:**
 
 ```bash
-npx power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
-npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
+npx --no-install power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
+npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
 
 **For Dataverse actions/functions rather than tables, discovery is available but this plugin only adds Dataverse table CRUD:**
 
 ```bash
-npx power-apps find-dataverse-api --search '<operation-name>' --json
+npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
 ```
 
 Surface the matching operation metadata and STOP with a clear note that this plugin can add Dataverse table CRUD through `/add-dataverse`, but does not add Dataverse actions/functions.
@@ -178,10 +178,10 @@ Help the user write code using the generated service methods.
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
-Fix TypeScript errors before proceeding. Common gotcha: the new generated service may import a peer dependency you don't have installed yet — if so, `npx expo install <missing-package>` (NOT plain `npm install`, so versions stay Expo-compatible).
+Fix TypeScript errors before proceeding. Common gotcha: the new generated service may import a peer dependency you don't have installed yet — if so, `npx --no-install expo install <missing-package>` (NOT plain `npm install`, so versions stay Expo-compatible).
 
 Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
 
@@ -194,12 +194,12 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
 
 ```bash
-npx power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --non-interactive
-npx power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
+npx --no-install power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --non-interactive
+npx --no-install power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --non-interactive
+npx --no-install power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
-Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting success.
+Then run `npm run generate-schemas` and `npx --no-install tsc --noEmit` before reporting success.
 
 ## Runtime connector handling
 
