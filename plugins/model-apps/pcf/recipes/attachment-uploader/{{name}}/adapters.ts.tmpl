@@ -1,0 +1,79 @@
+export interface SelectedAttachmentFile {
+    name: string;
+    type: string;
+    size: number;
+    contentBase64: string;
+}
+
+export interface AnnotationPayload extends ComponentFramework.WebApi.Entity {
+    filename: string;
+    mimetype: string;
+    documentbody: string;
+    isdocument: true;
+    subject: string;
+}
+
+export interface AttachmentAdapters {
+    pickFile: (accept: string) => Promise<SelectedAttachmentFile | null>;
+    createAnnotation: (payload: AnnotationPayload) => Promise<ComponentFramework.LookupValue>;
+}
+
+export function createDataverseNoteClient(webAPI: ComponentFramework.WebApi): Pick<AttachmentAdapters, "createAnnotation"> {
+    return {
+        createAnnotation(payload) {
+            if (typeof webAPI?.createRecord !== "function") {
+                return Promise.reject(new Error("WebAPI createRecord is not available."));
+            }
+            return webAPI.createRecord("annotation", payload);
+        },
+    };
+}
+
+export function createBrowserFilePicker(ownerDocument: Document): Pick<AttachmentAdapters, "pickFile"> {
+    return {
+        pickFile(accept) {
+            return new Promise((resolve, reject) => {
+                const input = ownerDocument.createElement("input");
+                input.type = "file";
+                input.accept = accept;
+                input.style.display = "none";
+                input.addEventListener("change", () => {
+                    void (async () => {
+                        const file = input.files?.[0] ?? null;
+                        input.remove();
+                        if (!file) {
+                            resolve(null);
+                            return;
+                        }
+                        try {
+                            const contentBase64 = await readFileAsBase64(file);
+                            resolve({
+                                name: file.name,
+                                type: file.type,
+                                size: file.size,
+                                contentBase64,
+                            });
+                        } catch (error) {
+                            reject(error);
+                        }
+                    })();
+                }, { once: true });
+                ownerDocument.body.append(input);
+                input.click();
+            });
+        },
+    };
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => {
+            const result = typeof reader.result === "string" ? reader.result : "";
+            const comma = result.indexOf(",");
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        }, { once: true });
+        reader.addEventListener("error", () => reject(reader.error ?? new Error("File read failed.")), { once: true });
+        reader.readAsDataURL(file);
+    });
+}

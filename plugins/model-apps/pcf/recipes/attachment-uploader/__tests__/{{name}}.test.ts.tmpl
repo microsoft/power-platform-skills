@@ -1,0 +1,177 @@
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockProperty, mockWebApi } from "../test/pcf-context";
+
+type AdapterFile = {
+    name: string;
+    type: string;
+    size: number;
+    contentBase64: string;
+};
+
+type Mounted = {
+    control: {{name}};
+    notify: jest.Mock;
+    container: HTMLDivElement;
+    context: ComponentFramework.Context<IInputs>;
+    pickFile: jest.Mock<Promise<AdapterFile | null>, [string]>;
+};
+
+function withStrings(context: ComponentFramework.Context<IInputs>): ComponentFramework.Context<IInputs> {
+    (context as ComponentFramework.Context<IInputs> & { resources: ComponentFramework.Resources }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => ({
+            AttachmentUploader_Label: "Upload attachment",
+            AttachmentUploader_Button: "Choose file",
+            AttachmentUploader_Unsaved: "Save this record before uploading attachments.",
+            AttachmentUploader_PermissionDenied: "You do not have permission to use attachments here.",
+            AttachmentUploader_ConfigMissing: "Attachment uploader is not fully configured.",
+            AttachmentUploader_FileTooLarge: "The selected file is larger than {0} KB.",
+            AttachmentUploader_TypeNotAllowed: "This file type is not allowed.",
+            AttachmentUploader_Uploading: "Uploading attachment...",
+            AttachmentUploader_Success: "Attachment uploaded.",
+            AttachmentUploader_Error: "Attachment upload failed: {0}",
+        }[key] ?? key),
+    } as ComponentFramework.Resources;
+    return context;
+}
+
+function parameters(overrides: Partial<IInputs> = {}): Partial<IInputs> {
+    return {
+        value: mockProperty<string>(null) as IInputs["value"],
+        entityId: mockProperty("{00000000-0000-0000-0000-000000000001}") as IInputs["entityId"],
+        entityName: mockProperty("account") as IInputs["entityName"],
+        parentEntitySetName: mockProperty("accounts") as IInputs["parentEntitySetName"],
+        parentNavigationProperty: mockProperty("objectid_account") as IInputs["parentNavigationProperty"],
+        maxFileSizeKb: mockProperty(1) as IInputs["maxFileSizeKb"],
+        acceptedMimeTypes: mockProperty("text/plain,application/pdf") as IInputs["acceptedMimeTypes"],
+        ...overrides,
+    };
+}
+
+function mount(overrides: Partial<IInputs> = {}, options: { disabled?: boolean; editable?: boolean; readable?: boolean; createRecord?: jest.Mock; useDefaults?: boolean } = {}): Mounted {
+    const createRecord = options.createRecord ?? jest.fn().mockResolvedValue({ id: "note-id", entityType: "annotation" });
+    const contextParameters = options.useDefaults === false ? overrides : parameters({
+        value: mockProperty<string>(null, undefined, { editable: options.editable, readable: options.readable }) as IInputs["value"],
+        ...overrides,
+    });
+    const context = withStrings(mockContext<IInputs>(contextParameters, {
+        disabled: options.disabled,
+        webAPI: mockWebApi({ createRecord }),
+    }));
+    const pickFile = jest.fn<Promise<AdapterFile | null>, [string]>();
+    const control = new {{name}}({ pickFile });
+    const notify = jest.fn();
+    const container = document.createElement("div");
+
+    control.init(context, notify, {}, container);
+
+    return { control, notify, container, context, pickFile };
+}
+
+function button(container: HTMLElement): HTMLButtonElement {
+    return container.querySelector("button") as HTMLButtonElement;
+}
+
+test("missing parameter objects and unsaved parents render a disabled saved-record message", () => {
+    const missing = mount({}, { useDefaults: false });
+    expect(button(missing.container).disabled).toBe(true);
+    expect(missing.container.textContent).toContain("Save this record");
+
+    const unsaved = mount({ entityId: mockProperty("") as IInputs["entityId"] });
+
+    expect(button(unsaved.container).disabled).toBe(true);
+    expect(unsaved.container.textContent).toContain("Save this record");
+});
+
+test("security readable or editable false prevents uploads without leaking configuration", async () => {
+    const unreadable = mount({}, { readable: false });
+    const readOnly = mount({}, { editable: false });
+
+    button(unreadable.container).click();
+    button(readOnly.container).click();
+
+    await Promise.resolve();
+    expect(unreadable.pickFile).not.toHaveBeenCalled();
+    expect(readOnly.pickFile).not.toHaveBeenCalled();
+    expect(unreadable.container.textContent).toContain("permission");
+    expect(readOnly.container.textContent).toContain("permission");
+});
+
+test("uploads a selected small file as an annotation bound with configured navigation property", async () => {
+    const createRecord = jest.fn().mockResolvedValue({ id: "note-id", entityType: "annotation" });
+    const { container, pickFile } = mount({}, { createRecord });
+    pickFile.mockResolvedValue({ name: "readme.txt", type: "text/plain", size: 12, contentBase64: "SGVsbG8=" });
+
+    button(container).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createRecord).toHaveBeenCalledWith("annotation", {
+        filename: "readme.txt",
+        mimetype: "text/plain",
+        documentbody: "SGVsbG8=",
+        isdocument: true,
+        subject: "readme.txt",
+        "objectid_account@odata.bind": "/accounts(00000000-0000-0000-0000-000000000001)",
+    });
+    expect(container.textContent).toContain("Attachment uploaded");
+});
+
+test("rejects files over the explicit max size before calling WebAPI", async () => {
+    const createRecord = jest.fn().mockResolvedValue({ id: "note-id", entityType: "annotation" });
+    const { container, pickFile } = mount({}, { createRecord });
+    pickFile.mockResolvedValue({ name: "big.txt", type: "text/plain", size: 2048, contentBase64: "AA==" });
+
+    button(container).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createRecord).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("larger than 1 KB");
+});
+
+test("prevents duplicate submit while status is indeterminate", async () => {
+    let finish!: () => void;
+    const createRecord = jest.fn(() => new Promise((resolve) => { finish = () => resolve({ id: "note-id", entityType: "annotation" }); }));
+    const { container, pickFile } = mount({}, { createRecord });
+    pickFile.mockResolvedValue({ name: "readme.txt", type: "text/plain", size: 12, contentBase64: "SGVsbG8=" });
+
+    button(container).click();
+    button(container).click();
+    await Promise.resolve();
+
+    expect(button(container).getAttribute("aria-busy")).toBe("true");
+    expect(container.textContent).toContain("Uploading attachment...");
+    expect(pickFile).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.resolve();
+});
+
+test("surfaces WebAPI permission failures", async () => {
+    const createRecord = jest.fn().mockRejectedValue(new Error("Create privilege is missing"));
+    const { container, pickFile } = mount({}, { createRecord });
+    pickFile.mockResolvedValue({ name: "readme.txt", type: "text/plain", size: 12, contentBase64: "SGVsbG8=" });
+
+    button(container).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Create privilege is missing");
+});
+
+test("two instances keep independent adapters and status", async () => {
+    const first = mount();
+    const second = mount();
+    first.pickFile.mockResolvedValue({ name: "one.txt", type: "text/plain", size: 12, contentBase64: "MQ==" });
+    second.pickFile.mockResolvedValue({ name: "two.txt", type: "text/plain", size: 12, contentBase64: "Mg==" });
+
+    button(first.container).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(first.container.textContent).toContain("Attachment uploaded");
+    expect(second.container.textContent).not.toContain("Attachment uploaded");
+    expect(first.container.querySelector(".{{cssClass}}")) .not.toBe(second.container.querySelector(".{{cssClass}}"));
+});
+

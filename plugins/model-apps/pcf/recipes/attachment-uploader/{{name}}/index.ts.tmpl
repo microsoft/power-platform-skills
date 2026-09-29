@@ -1,0 +1,287 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import {
+    AttachmentAdapters,
+    AnnotationPayload,
+    createBrowserFilePicker,
+    createDataverseNoteClient,
+    SelectedAttachmentFile,
+} from "./adapters";
+import "./css/{{name}}.css";
+
+const DEFAULT_MAX_KB = 1024;
+const MIN_MAX_KB = 1;
+const MAX_MAX_KB = 5120;
+const STRINGS = {
+    label: "AttachmentUploader_Label",
+    button: "AttachmentUploader_Button",
+    unsaved: "AttachmentUploader_Unsaved",
+    permissionDenied: "AttachmentUploader_PermissionDenied",
+    configMissing: "AttachmentUploader_ConfigMissing",
+    fileTooLarge: "AttachmentUploader_FileTooLarge",
+    typeNotAllowed: "AttachmentUploader_TypeNotAllowed",
+    uploading: "AttachmentUploader_Uploading",
+    success: "AttachmentUploader_Success",
+    error: "AttachmentUploader_Error",
+} as const;
+
+type ResourceContext = ComponentFramework.Context<IInputs> & {
+    resources?: {
+        getString: (key: string) => string;
+    };
+};
+
+type RenderState = "ready" | "blocked" | "uploading" | "success" | "error";
+
+interface Configuration {
+    recordId: string | null;
+    entityName: string;
+    entitySetName: string;
+    navigationProperty: string;
+    maxBytes: number;
+    maxKb: number;
+    acceptedMimeTypes: string[];
+}
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private container: HTMLDivElement | null = null;
+    private root: HTMLDivElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private readonly adapters: Partial<AttachmentAdapters>;
+    private value: string | null = null;
+    private readable = true;
+    private editable = true;
+    private disabled = false;
+    private uploading = false;
+    private state: RenderState = "ready";
+    private messageKey: string | null = null;
+    private messageValue: string | null = null;
+
+    public constructor(adapters: Partial<AttachmentAdapters> = {}) {
+        this.adapters = adapters;
+    }
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        _notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.container = container;
+        this.context = context;
+
+        // The upload affordance is content-sized, but resize tracking lets hosts reflow status text
+        // predictably when form columns collapse.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
+        context.mode.trackContainerResize(true);
+
+        this.root = container.ownerDocument.createElement("div");
+        this.root.className = "{{cssClass}}";
+        container.append(this.root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
+        const valueParameter = context.parameters.value;
+        this.value = typeof valueParameter?.raw === "string" ? valueParameter.raw : null;
+        this.readable = valueParameter?.security?.readable ?? true;
+        this.editable = valueParameter?.security?.editable ?? true;
+        this.disabled = context.mode.isControlDisabled;
+        if (!this.uploading) {
+            const nextState = this.evaluateState(this.readConfiguration());
+            this.state = nextState.state;
+            this.messageKey = nextState.messageKey;
+            this.messageValue = null;
+        }
+        this.render();
+    }
+
+    public getOutputs(): IOutputs {
+        return {
+            value: this.value ?? undefined,
+        };
+    }
+
+    public destroy(): void {
+        this.container?.replaceChildren();
+        this.root = null;
+        this.container = null;
+        this.context = null;
+    }
+
+    private render(): void {
+        if (!this.root || !this.context) return;
+        this.root.replaceChildren();
+
+        const label = this.root.ownerDocument.createElement("div");
+        label.className = "{{cssInputClass}}-label";
+        label.textContent = this.getString(STRINGS.label);
+
+        const button = this.root.ownerDocument.createElement("button");
+        button.className = "{{cssInputClass}}-button";
+        button.type = "button";
+        button.textContent = this.getString(STRINGS.button);
+        button.disabled = !this.canUpload();
+        button.setAttribute("aria-busy", this.uploading ? "true" : "false");
+        button.addEventListener("click", () => {
+            void this.uploadSelectedFile();
+        });
+
+        const status = this.root.ownerDocument.createElement("div");
+        status.className = this.state === "error" ? "{{cssMessageClass}} {{cssMessageClass}}-error" : "{{cssMessageClass}}";
+        status.setAttribute("role", this.state === "error" ? "alert" : "status");
+        status.setAttribute("aria-live", "polite");
+        status.textContent = this.messageValue ?? (this.messageKey ? this.getString(this.messageKey) : "");
+
+        this.root.append(label, button, status);
+    }
+
+    private async uploadSelectedFile(): Promise<void> {
+        if (this.uploading || !this.context) return;
+        const config = this.readConfiguration();
+        const state = this.evaluateState(config);
+        if (state.state !== "ready") {
+            this.state = state.state;
+            this.messageKey = state.messageKey;
+            this.messageValue = null;
+            this.render();
+            return;
+        }
+
+        this.uploading = true;
+        this.state = "uploading";
+        this.messageKey = STRINGS.uploading;
+        this.messageValue = null;
+        this.render();
+
+        try {
+            const file = await this.pickFile(config.acceptedMimeTypes.join(","));
+            if (!file) {
+                this.uploading = false;
+                this.state = "ready";
+                this.messageKey = null;
+                this.render();
+                return;
+            }
+            const validation = this.validateFile(file, config);
+            if (validation) {
+                this.uploading = false;
+                this.state = "error";
+                this.messageValue = validation;
+                this.render();
+                return;
+            }
+
+            await this.createAnnotation(this.toAnnotationPayload(file, config));
+            this.uploading = false;
+            this.state = "success";
+            this.messageKey = STRINGS.success;
+            this.messageValue = null;
+            this.render();
+        } catch (error) {
+            this.uploading = false;
+            this.state = "error";
+            this.messageValue = this.format(STRINGS.error, error instanceof Error ? error.message : String(error));
+            this.render();
+        }
+    }
+
+    private canUpload(): boolean {
+        return !this.disabled && !this.uploading && this.evaluateState(this.readConfiguration()).state === "ready";
+    }
+
+    private evaluateState(config: Configuration): { state: RenderState; messageKey: string | null } {
+        if (!this.readable || !this.editable) return { state: "blocked", messageKey: STRINGS.permissionDenied };
+        if (!config.recordId) return { state: "blocked", messageKey: STRINGS.unsaved };
+        if (!config.entityName || !config.entitySetName || !config.navigationProperty || !this.hasCreateRecord()) {
+            return { state: "blocked", messageKey: STRINGS.configMissing };
+        }
+        return { state: "ready", messageKey: null };
+    }
+
+    private readConfiguration(): Configuration {
+        const maxKb = this.readWholeNumber("maxFileSizeKb", DEFAULT_MAX_KB, MIN_MAX_KB, MAX_MAX_KB);
+        return {
+            recordId: this.normalizeGuid(this.readString("entityId")),
+            entityName: this.readString("entityName"),
+            entitySetName: this.readString("parentEntitySetName"),
+            navigationProperty: this.readString("parentNavigationProperty"),
+            maxKb,
+            maxBytes: maxKb * 1024,
+            acceptedMimeTypes: this.readString("acceptedMimeTypes")
+                .split(",")
+                .map((item) => item.trim().toLowerCase())
+                .filter(Boolean),
+        };
+    }
+
+    private readString(name: keyof IInputs): string {
+        const parameter = this.context?.parameters[name];
+        if (parameter?.security?.readable === false) return "";
+        const raw = parameter?.raw;
+        return typeof raw === "string" ? raw.trim() : "";
+    }
+
+    private readWholeNumber(name: keyof IInputs, fallback: number, min: number, max: number): number {
+        const parameter = this.context?.parameters[name];
+        const raw = parameter?.security?.readable === false ? null : parameter?.raw;
+        const numeric = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : fallback;
+        return Math.min(max, Math.max(min, numeric));
+    }
+
+    private normalizeGuid(raw: string): string | null {
+        const trimmed = raw.replace(/[{}]/g, "").toLowerCase();
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(trimmed) ? trimmed : null;
+    }
+
+    private validateFile(file: SelectedAttachmentFile, config: Configuration): string | null {
+        if (file.size > config.maxBytes) return this.format(STRINGS.fileTooLarge, String(config.maxKb));
+        const fileType = file.type.toLowerCase();
+        if (config.acceptedMimeTypes.length > 0 && !config.acceptedMimeTypes.includes(fileType)) {
+            return this.getString(STRINGS.typeNotAllowed);
+        }
+        return null;
+    }
+
+    private toAnnotationPayload(file: SelectedAttachmentFile, config: Configuration): AnnotationPayload {
+        // Dataverse creates file notes by POSTing an annotation row with documentbody, filename,
+        // mimetype and an @odata.bind relationship. The navigation property is maker-configured
+        // because the objectid_* name varies by parent table and must not be guessed.
+        // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/annotation
+        // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-entity-web-api#associate-table-rows-on-create
+        return {
+            filename: file.name,
+            mimetype: file.type || "application/octet-stream",
+            documentbody: file.contentBase64,
+            isdocument: true,
+            subject: file.name,
+            [`${config.navigationProperty}@odata.bind`]: `/${config.entitySetName}(${config.recordId})`,
+        };
+    }
+
+    private pickFile(accept: string): Promise<SelectedAttachmentFile | null> {
+        if (this.adapters.pickFile) return this.adapters.pickFile(accept);
+        if (!this.container) return Promise.resolve(null);
+        return createBrowserFilePicker(this.container.ownerDocument).pickFile(accept);
+    }
+
+    private createAnnotation(payload: AnnotationPayload): Promise<ComponentFramework.LookupValue> {
+        if (this.adapters.createAnnotation) return this.adapters.createAnnotation(payload);
+        if (!this.context) return Promise.reject(new Error(this.getString(STRINGS.configMissing)));
+        return createDataverseNoteClient(this.context.webAPI).createAnnotation(payload);
+    }
+
+    private hasCreateRecord(): boolean {
+        return Boolean(this.adapters.createAnnotation || typeof this.context?.webAPI?.createRecord === "function");
+    }
+
+    private format(key: string, value: string): string {
+        return this.getString(key).replace("{0}", value);
+    }
+
+    private getString(key: string): string {
+        const context = this.context as ResourceContext | null;
+        return context?.resources?.getString(key) || key;
+    }
+}
+
