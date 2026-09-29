@@ -8,6 +8,9 @@ on:
         - cron: '17 6 * * 1'
     workflow_dispatch:
 
+permissions:
+    contents: read
+
 jobs:
     check-pcf-matrix-drift:
         runs-on: ubuntu-latest

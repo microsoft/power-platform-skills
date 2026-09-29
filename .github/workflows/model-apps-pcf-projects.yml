@@ -15,6 +15,9 @@ on:
             - "plugins/model-apps/scripts/lib/node-tool.js"
             - ".github/workflows/model-apps-pcf-projects.yml"
 
+permissions:
+    contents: read
+
 jobs:
     test-model-apps-pcf-projects:
         name: test-model-apps-pcf-projects (${{ matrix.os }})

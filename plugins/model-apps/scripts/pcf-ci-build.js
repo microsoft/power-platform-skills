@@ -12,6 +12,8 @@ const { listTemplates, listRecipes, planScaffold, writeScaffold } = require('./l
 const { loadMatrix, dependencySet } = require('./lib/pcf-matrix.js');
 const { buildControl } = require('./lib/pcf-build.js');
 const { runNodeScript, runNpm } = require('./lib/node-tool.js');
+const { runPac } = require('./lib/pac-exec.js');
+const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-names.js');
 
 const USAGE = `Usage:
   node scripts/pcf-ci-build.js [--all | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]`;
@@ -21,6 +23,10 @@ const NEED_VALUE = ['template', 'recipe', 'npm-cli'];
 const SCRIPT_DIR = __dirname;
 const DEFAULT_ROOT = path.join(SCRIPT_DIR, '..');
 const PACKAGE_VERSION = '1.0.0';
+const PACKAGE_PUBLISHER_NAME = 'Contoso';
+const PACKAGE_PUBLISHER_PREFIX = 'contoso';
+const PAC_TIMEOUT_MS = 120000;
+const ZIP64_UNSUPPORTED = 'ZIP64 solution packages are not supported by this smoke reader.';
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -151,7 +157,11 @@ function runTarget(target, projectDir, options, deps) {
 
   let latest = [];
   if (options.latest) {
-    latest = probeLatestDependencies(target, projectDir, options, deps);
+    try {
+      latest = probeLatestDependencies(target, projectDir, options, deps);
+    } catch (err) {
+      return failure(`npm install latest failed for ${target.id}: ${toolDetail(err)}`, { gates: [], latest });
+    }
   }
 
   if (options.package) {
@@ -172,7 +182,7 @@ function probeLatestDependencies(target, projectDir, options, deps) {
   const specs = names.map((name) => `${name}@latest`);
   if (specs.length) {
     const installed = (deps.runNpm || runNpm)(['install', ...specs], { cwd: projectDir, npmCli: options.npmCli });
-    if (!succeeded(installed)) throw new Error(`npm install latest failed: ${toolDetail(installed)}`);
+    if (!succeeded(installed)) throw new Error(toolDetail(installed));
   }
   return names.map((name) => ({
     name,
@@ -199,9 +209,11 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   const fsDep = deps.fs || fs;
   const pathDep = deps.path || path;
   const runNode = deps.runNodeScript || runNodeScript;
+  const pac = deps.runPac || runPac;
   const runCommand = deps.spawnSync || spawnSync;
   const solutionDir = pathDep.join(projectDir, '_solution');
   const checks = [];
+  validatePackagePublisher();
   setManifestVersion(projectDir, PACKAGE_VERSION, deps);
 
   const devBuild = runPcfBuild(projectDir, 'development', { ...deps, runNodeScript: runNode });
@@ -209,20 +221,16 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   const prodBuild = runPcfBuild(projectDir, 'production', { ...deps, runNodeScript: runNode });
   if (!prodBuild.ok) return { ok: false, error: `production build failed: ${prodBuild.error || toolDetail(prodBuild)}`, checks };
 
-  const pacInit = runCommand('pac', ['solution', 'init', '--publisher-name', 'Contoso', '--publisher-prefix', 'contoso'], {
+  const pacInit = pac(['solution', 'init', '--publisher-name', PACKAGE_PUBLISHER_NAME, '--publisher-prefix', PACKAGE_PUBLISHER_PREFIX], {
     cwd: ensureDir(solutionDir, fsDep),
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    windowsHide: true,
+    timeoutMs: PAC_TIMEOUT_MS,
   });
   if (!succeeded(pacInit)) return { ok: false, error: `pac solution init failed: ${toolDetail(pacInit)}`, checks };
   setSolutionVersion(solutionDir, PACKAGE_VERSION, deps);
 
-  const pacAdd = runCommand('pac', ['solution', 'add-reference', '--path', projectDir], {
+  const pacAdd = pac(['solution', 'add-reference', '--path', projectDir], {
     cwd: solutionDir,
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    windowsHide: true,
+    timeoutMs: PAC_TIMEOUT_MS,
   });
   if (!succeeded(pacAdd)) return { ok: false, error: `pac solution add-reference failed: ${toolDetail(pacAdd)}`, checks };
 
@@ -241,6 +249,13 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
     developmentBytes: bundleBytes(devBuild),
   }, deps);
   return { ok: inspected.ok, zip, checks: inspected.checks };
+}
+
+function validatePackagePublisher() {
+  const nameError = validateControlName(PACKAGE_PUBLISHER_NAME, '');
+  if (nameError) throw new Error(`Invalid package-smoke publisher name: ${nameError}`);
+  const prefixError = validatePublisherPrefix(PACKAGE_PUBLISHER_PREFIX);
+  if (prefixError) throw new Error(`Invalid package-smoke publisher prefix: ${prefixError}`);
 }
 
 function runPcfBuild(projectDir, mode, deps) {
@@ -268,7 +283,11 @@ function readZipEntries(zipPath, deps = {}) {
   const buffer = fsDep.readFileSync(zipPath);
   const eocd = findEocd(buffer);
   const count = buffer.readUInt16LE(eocd + 10);
+  const centralSize = buffer.readUInt32LE(eocd + 12);
   let offset = buffer.readUInt32LE(eocd + 16);
+  if (count === 0xffff || centralSize === 0xffffffff || offset === 0xffffffff) {
+    throw new Error(ZIP64_UNSUPPORTED);
+  }
   const entries = new Map();
   for (let i = 0; i < count; i += 1) {
     if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error('Invalid ZIP central directory header.');
@@ -279,6 +298,9 @@ function readZipEntries(zipPath, deps = {}) {
     const extraLength = buffer.readUInt16LE(offset + 30);
     const commentLength = buffer.readUInt16LE(offset + 32);
     const localOffset = buffer.readUInt32LE(offset + 42);
+    if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
+      throw new Error(ZIP64_UNSUPPORTED);
+    }
     const name = buffer.slice(offset + 46, offset + 46 + nameLength).toString('utf8');
     const localNameLength = buffer.readUInt16LE(localOffset + 26);
     const localExtraLength = buffer.readUInt16LE(localOffset + 28);
@@ -413,6 +435,7 @@ function parseJsonLine(text) {
 }
 
 function toolDetail(result) {
+  if (result instanceof Error) return result.message;
   if (result && result.error) return String(result.error.message || result.error);
   return [result && result.stderr, result && result.stdout].filter(Boolean).join('\n').trim() || 'tool exited with a non-zero status';
 }
@@ -461,6 +484,7 @@ module.exports = {
   runCiBuild,
   selectTargets,
   packageSmokeTargets,
+  runPackageSmoke,
   inspectSolutionZip,
   readZipEntries,
 };
