@@ -1016,6 +1016,11 @@ custom control), but the spec validator emits a warning.
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **Areas and groups take `label`; subareas take `title`.** Each level accepts only the keys the build
+  reads — area: `label`, `icon`, `vectorIcon`, `iconDescription`, `groups`; group: `label`,
+  `iconDescription`, `subAreas`; subarea: `title`, one target, `icon`, `vectorIcon`, `iconDescription` —
+  and anything else is a validation error, so a `title` on an area says "did you mean `label`?" rather
+  than deploying an untitled area.
 - **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
   the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
   `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon
@@ -1117,9 +1122,10 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 ## ai (optional — AI feature flags and row-summary configuration)
 
 Controls AI-powered features that the platform activates at the app/table level. The block is
-entirely optional; omitting it writes no AI setting at all, so every feature keeps the environment's
-value. Any `ai` block writes every feature below as an app-scope value, which overrides the
-environment's.
+entirely optional; omitting it writes no AI setting, so the app's existing AI settings are left as
+they are — a feature follows the environment's value only where the app has no value of its own
+(removing an app-scope value is not something the build does). Any `ai` block writes every feature
+below as an app-scope value, which overrides the environment's.
 
 > **Admin-gated.** AI features turn on only where the environment administrator has enabled them
 > in Power Platform Admin Center (Environments → Settings → Product → Features). The `ai-features`

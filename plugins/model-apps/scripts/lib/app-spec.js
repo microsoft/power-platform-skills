@@ -666,6 +666,52 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
 
+// The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
+// ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
+// subareas take `title` — and a key with no reader was accepted and dropped: an area written with
+// `title` deployed untitled while lint, the build and `--verify` all passed (#631). Adding a key here
+// without a reader would re-open that hole. `iconDescription` is read by the icon-authoring step,
+// not the build, and is validated where it is used.
+const APP_SHELL_KEYS = {
+  area: new Set(['label', 'icon', 'vectorIcon', 'iconDescription', 'groups']),
+  group: new Set(['label', 'iconDescription', 'subAreas']),
+  subArea: new Set(['title', 'entity', 'dashboard', 'url', 'page', 'icon', 'vectorIcon', 'iconDescription']),
+};
+// The mix-ups an author is most likely to make, with the fix. Prototype-less for the reason given
+// on ENTITY_KEY_HINTS: the lookup key comes from the spec.
+const LABEL_NOT_TITLE = ' — did you mean `label`? Areas and groups take `label`; only subAreas take `title`';
+const APP_SHELL_KEY_HINTS = {
+  area: Object.assign(Object.create(null), { title: LABEL_NOT_TITLE, subAreas: ' — subAreas belong to a group: areas[].groups[].subAreas' }),
+  group: Object.assign(Object.create(null), {
+    title: LABEL_NOT_TITLE,
+    icon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    vectorIcon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    groups: ' — groups belong to an area: areas[].groups',
+  }),
+  subArea: Object.assign(Object.create(null), {
+    label: ' — did you mean `title`? SubAreas take `title`; areas and groups take `label`',
+    table: ' — did you mean `entity`?',
+  }),
+};
+
+// Report every key on one `appShell` node that the build does not read. Guarded like the entity
+// check: a non-object node is reported by the shape checks, and enumerating a caller's object can
+// throw (a Proxy), which must become an error rather than escape the validator.
+function reportUnknownAppShellKeys(node, level, where, errors) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+  let keys;
+  try {
+    keys = Object.keys(node);
+  } catch {
+    errors.push(`${where} could not be inspected: enumerating its keys threw`);
+    return;
+  }
+  for (const k of keys) {
+    if (APP_SHELL_KEYS[level].has(k)) continue;
+    errors.push(`${where}: unknown key '${k}'${APP_SHELL_KEY_HINTS[level][k] || ''} (allowed: ${[...APP_SHELL_KEYS[level]].join(', ')})`);
+  }
+}
+
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
 // column on the referencing table, just declared elsewhere in the spec).
@@ -2816,6 +2862,20 @@ function validateAppSpec(spec, opts = {}) {
       warnings.push(`${label}: icon reference '${val}' points at a custom web resource ('${wrName}') that is NOT declared in webResources[] — it will render only on an environment that already has it (a rebuild into a fresh env shows a broken icon). Declare that web resource so the build recreates it; a downloaded spec does this automatically.`);
     }
   };
+  (spec.appShell && spec.appShell.areas || []).forEach((a, ai) => {
+    // Named by whatever the author wrote, so a mistaken `title` still identifies the node it is on.
+    const nodeName = (n, i) => {
+      const v = n && typeof n === 'object' ? (n.label || n.title) : '';
+      return typeof v === 'string' && v.trim() ? `"${v}"` : `#${i + 1}`;
+    };
+    reportUnknownAppShellKeys(a, 'area', `sitemap area ${nodeName(a, ai)}`, errors);
+    ((a && a.groups) || []).forEach((g, gi) => {
+      reportUnknownAppShellKeys(g, 'group', `sitemap group ${nodeName(g, gi)} in area ${nodeName(a, ai)}`, errors);
+      ((g && g.subAreas) || []).forEach((sa, si) => {
+        reportUnknownAppShellKeys(sa, 'subArea', `sitemap subArea ${nodeName(sa, si)} in group ${nodeName(g, gi)}`, errors);
+      });
+    });
+  });
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     checkPortableIconRef(a.icon, `sitemap area "${a.label || ''}"`);

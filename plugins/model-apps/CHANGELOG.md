@@ -17,11 +17,15 @@ AI features are written with each setting's own values.
   NL grid search back on. `false` writes that setting's *Off*: `1`, or `0` for NL charts.
 - **`ai-preflight`** no longer shows ✓ for an app with M365 Copilot off, and reports NL charts' *Auto*
   as the platform default rather than on.
+- **`appShell` keys the build does not read are errors** ([#631]). A `title` on an area or group (they
+  take `label`) used to deploy an untitled one while lint, the build and `--verify` passed.
 
 ### Changed
 
 - **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
   default (`0`). A spec that omits `m365` still leaves it at `0`.
+
+[#631]: https://github.com/microsoft/power-platform-skills/issues/631
 
 ## [2.10.0]
 

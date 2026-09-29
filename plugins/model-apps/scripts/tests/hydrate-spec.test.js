@@ -313,7 +313,7 @@ test('an UNDECLARED web-resource subarea still validates — it is a live/OOB re
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     app: { name: 'A' },
     entities: [{ schemaName: 'new_o', displayName: 'O', primaryAttribute: { schemaName: 'new_name', displayName: 'N' }, columns: [] }],
-    appShell: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
   };
   const v = validateAppSpec(spec, { profile: 'plan' });
   assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
