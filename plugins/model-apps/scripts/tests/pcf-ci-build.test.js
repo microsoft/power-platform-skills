@@ -178,6 +178,7 @@ test('--package uses the package smoke target set and verifies package contents'
   const d = deps({
     runPackageSmoke: (target, projectDir) => {
       d.calls.push(['package', target.id, path.basename(projectDir)]);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8')).scripts, undefined);
       return { ok: true, zip: path.join(projectDir, 'bin', 'Release', `${target.id}.zip`), checks: [{ id: 'managed', ok: true }] };
     },
   });

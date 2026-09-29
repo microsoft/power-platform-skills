@@ -165,7 +165,6 @@ function runTarget(target, projectDir, options, deps) {
   }
 
   if (options.package) {
-    ensurePackageBuildScript(projectDir, deps);
     const packaged = (deps.runPackageSmoke || runPackageSmoke)(target, projectDir, { ...options, latest }, deps);
     return { ok: Boolean(packaged.ok), gates: [], extra: { latest, package: packaged } };
   }
@@ -338,19 +337,6 @@ function setManifestVersion(projectDir, version, deps = {}) {
   if (!manifest) throw new Error('Cannot set package-smoke manifest version because ControlManifest.Input.xml was not found.');
   const text = fsDep.readFileSync(manifest, 'utf8');
   fsDep.writeFileSync(manifest, text.replace(/(<control\b[^>]*\bversion=)(["']).*?\2/i, `$1$2${version}$2`));
-}
-
-function ensurePackageBuildScript(projectDir, deps = {}) {
-  const fsDep = deps.fs || fs;
-  const file = path.join(projectDir, 'package.json');
-  const pkg = JSON.parse(fsDep.readFileSync(file, 'utf8'));
-  pkg.scripts = { ...(pkg.scripts || {}) };
-  // The Microsoft.PowerApps.MSBuild.Pcf target invokes `npm run build -- ...` internally when a
-  // PCF project is referenced by a solution project. This script is created only in the throwaway
-  // CI scaffold so MSBuild can call its documented target; this tool still invokes npm packages
-  // directly through `process.execPath <bin.js>` for every command it owns.
-  pkg.scripts.build = 'node node_modules/pcf-scripts/bin/pcf-scripts.js build';
-  fsDep.writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
 function setSolutionVersion(solutionDir, version, deps = {}) {
