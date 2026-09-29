@@ -849,6 +849,45 @@ test('artifactCachePath rejects paths that escape the sha cache directory', () =
   );
 });
 
+test('repository directory checkout roots are deterministic, distinct, and bounded', () => {
+  const cacheRoot = path.join('cache', 'root');
+  const firstPath = 'templates/spa/company/variants/react';
+  const secondPath = 'templates/spa/company/solutions';
+  const deepPath = Array.from({ length: 60 }, (_, index) => `segment-${index}`).join('/');
+
+  const firstRoot = repositoryDirectoryCheckoutRoot({
+    cacheRoot,
+    sha: SHA,
+    directoryPath: firstPath,
+  });
+  const repeatedRoot = repositoryDirectoryCheckoutRoot({
+    cacheRoot,
+    sha: SHA,
+    directoryPath: firstPath,
+  });
+  const secondRoot = repositoryDirectoryCheckoutRoot({
+    cacheRoot,
+    sha: SHA,
+    directoryPath: secondPath,
+  });
+  const deepRoot = repositoryDirectoryCheckoutRoot({
+    cacheRoot,
+    sha: SHA,
+    directoryPath: deepPath,
+  });
+
+  assert.equal(firstRoot, repeatedRoot);
+  assert.notEqual(firstRoot, secondRoot);
+  assert.match(path.basename(path.dirname(firstRoot)), /^[a-f0-9]{64}$/);
+  assert.equal(firstRoot.includes(path.join(...firstPath.split('/'))), false);
+  assert.equal(deepRoot.includes(path.join(...deepPath.split('/'))), false);
+  assert.equal(
+    path.relative(cacheDirForSha(cacheRoot, SHA), deepRoot).length,
+    path.relative(cacheDirForSha(cacheRoot, SHA), firstRoot).length
+  );
+  assert.ok(path.relative(cacheDirForSha(cacheRoot, SHA), deepRoot).length < 128);
+});
+
 test('downloadTemplateVariant combines variant website code with family solutions in stable order', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -866,9 +905,9 @@ test('downloadTemplateVariant combines variant website code with family solution
     variant: 'react',
     cacheRoot: dir,
   }, {
-    execFileSync(command, args) {
-      calls.push([command, args]);
-      if (args[0] === 'init') partialRoot = args[2];
+    execFileSync(command, args, options) {
+      calls.push([command, args, options]);
+      if (args.includes('init')) partialRoot = args[args.indexOf('init') + 2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
         const localSolutions = path.join(partialRoot, ...solutionsPath.split('/'));
@@ -923,9 +962,76 @@ test('downloadTemplateVariant combines variant website code with family solution
     },
   ]);
   assert.deepEqual(cached, { ...result, cached: true });
+  assert.ok(calls.every(([command, args, options]) => (
+    command === 'git' &&
+    args[0] === '-c' &&
+    args[1] === 'core.longpaths=true' &&
+    options.shell === undefined
+  )));
   assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 2);
+  assert.equal(
+    calls.some(([, args]) => {
+      const separator = args.indexOf('--');
+      return separator !== -1 &&
+        args[separator + 1] === variantPath &&
+        args.length === separator + 2;
+    }),
+    true
+  );
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${solutionsPath}`)), true);
+});
+
+test('downloadTemplateVariant completes a Windows-simulated long-path checkout', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalogDirectory = Array.from({ length: 28 }, (_, index) => `catalog-segment-${index}`).join('/');
+  const catalogPath = `${catalogDirectory}/manifest.json`;
+  const variantPath = `${catalogDirectory}/spa/company/variants/react`;
+  const solutionsPath = `${catalogDirectory}/spa/company/solutions`;
+  const legacyPartialRoot = `${path.join(
+    cacheDirForSha(dir, SHA),
+    '.directory-checkouts',
+    ...variantPath.split('/'),
+    '.checkout'
+  )}.partial-${process.pid}-${Date.now()}`;
+  assert.ok(legacyPartialRoot.length > 260);
+
+  let partialRoot;
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    catalogPath,
+    kind: 'spa',
+    templateId: 'company',
+    variant: 'react',
+    cacheRoot: dir,
+  }, {
+    execFileSync(command, args) {
+      assert.equal(command, 'git');
+      assert.deepEqual(args.slice(0, 2), ['-c', 'core.longpaths=true']);
+      if (args.includes('init')) {
+        partialRoot = args[args.indexOf('init') + 2];
+        assert.ok(partialRoot.length < legacyPartialRoot.length);
+      }
+      if (args.includes('checkout')) {
+        const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localSolutions = path.join(partialRoot, ...solutionsPath.split('/'));
+        const localWebsiteCode = path.join(localVariant, 'website-code');
+        fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
+        fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
+        writeUnpackedSolution(path.join(localSolutions, 'CompanyPortal'), 'CompanyPortal');
+      }
+      return '';
+    },
+  });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.cached, false);
 });
 
 test('downloadTemplateVariant replaces a symlinked checkout root instead of trusting its contents', (t) => {
@@ -966,7 +1072,7 @@ test('downloadTemplateVariant replaces a symlinked checkout root instead of trus
   }, {
     execFileSync(command, args) {
       gitCalls++;
-      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('init')) partialRoot = args[args.indexOf('init') + 2];
       if (args.includes('checkout')) {
         const localWebsiteCode = path.join(partialRoot, ...variantPath.split('/'), 'website-code');
         fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
@@ -995,7 +1101,7 @@ test('downloadTemplateVariant rejects a symlinked checkout parent directory', (t
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   ensurePrivateCacheRoot(dir);
   const outsideDir = path.join(dir, 'outside-checkouts');
-  const symlinkedParent = path.join(dir, SHA, '.directory-checkouts', 'templates', 'spa');
+  const symlinkedParent = path.join(dir, SHA, '.directory-checkouts');
   fs.mkdirSync(path.dirname(symlinkedParent), { recursive: true });
   fs.mkdirSync(outsideDir);
   try {
@@ -1046,7 +1152,7 @@ test('downloadTemplateVariant accepts traditional website source with family sol
     cacheRoot: dir,
   }, {
     execFileSync(command, args) {
-      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('init')) partialRoot = args[args.indexOf('init') + 2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
         const localSolutions = path.join(partialRoot, ...solutionsPath.split('/'));
@@ -1116,7 +1222,7 @@ test('downloadTemplateVariant rejects variant-local solutions when family soluti
     cacheRoot: dir,
   }, {
     execFileSync(command, args) {
-      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('init')) partialRoot = args[args.indexOf('init') + 2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
         const localWebsiteCode = path.join(localVariant, 'website-code');
