@@ -72,10 +72,10 @@ $PA app list-flows --search '<flow-name-or-keyword>' --json
 $PA app add flow --flow-id <flow-guid> --non-interactive
 ```
 
-To remove a flow later:
+To remove a flow later (only when the user asks; `pa` needs `--force` for a non-interactive removal):
 
 ```bash
-$PA app remove flow --flow-id <flow-guid> --non-interactive
+$PA app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 After `pa app add flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
@@ -193,12 +193,12 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 
 ## Remove a data source or flow
 
-If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
+If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments. The user's request is the confirmation: `pa` refuses a non-interactive removal without `--force` (drop `--force` on `power-apps`-only projects — see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)):
 
 ```bash
-$PA app remove data-source --connector <apiId> --name '<data-source-or-table-name>' --non-interactive
-$PA app remove data-source --connector shared_sql --name '<procedure>' --procedure '<procedure>' --non-interactive
-$PA app remove flow --flow-id <flow-guid> --non-interactive
+$PA app remove data-source --connector <apiId> --name '<data-source-or-table-name>' --force --non-interactive
+$PA app remove data-source --connector shared_sql --name '<procedure>' --procedure '<procedure>' --force --non-interactive
+$PA app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 Then run `npm run generate-schemas` and `npx --no-install tsc --noEmit` before reporting success.

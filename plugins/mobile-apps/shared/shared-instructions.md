@@ -185,6 +185,7 @@ The CLI ships two binaries — grouped `pa` (preferred) and flat `power-apps` (f
 **Key Points:**
 - Probe `node_modules/.bin/pa` from the project root: if present use `pa` (grouped), else fall back to `power-apps` (flat). Cache the result in the memory bank.
 - **Always** invoke via `npx --no-install <pa|power-apps>` (written `$PA` in skills) — `--no-install` prevents npx from fetching an unrelated remote package. Never run a bare `pa`, `power-apps`, or `npx pa`.
+- **Same rule for every agent-run `npx`** (`tsc`, `expo`, `qrcode`, …): use `npx --no-install` against a package the project already installed. Never `npx --yes` or a bare `npx <pkg>` — if the tool is missing, stop or skip; do not download it.
 - Author commands in the grouped form using the renamed `pa` flags (`pa app add data-source --connector <api> --table <table>`); if the project only has `power-apps`, translate **both the verb path and the renamed flags** to their flat equivalents (`--connector`→`--api-id`/`-a`, `--table`→`--resource-name`/`-t`) using the mapping tables in `cli-binary.md` before running. Most flags (`-c`, `-d`, `-e`) are unchanged.
 
 ## CLI Invocation (OS-aware)
@@ -205,7 +206,7 @@ node scripts/resolve-environment.js [environment-id-or-url]
 
 - `app init` and pre-project discovery commands can use `--environment-id` because there is no `power.config.json` yet.
 - After `power.config.json` exists, do **not** pass `--environment-id` to app-root verbs (`app add data-source`, `app push`, `connection list-datasets`, `connection list-tables`, `connection list-references`, `app add flow`, `app remove flow`, etc.). The CLI reads the environment and region from `power.config.json`; extra unregistered flags can fail command parsing.
-- Use `--non-interactive` only on commands whose required values are completely supplied and whose implementation supports non-interactive execution (`app init`, `app push`, `app add flow --flow-id`, `app remove flow --flow-id`, `connection create --connector` for SSO-eligible connectors, `app remove data-source --connector --name`). For `app add data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
+- Use `--non-interactive` only on commands whose required values are completely supplied and whose implementation supports non-interactive execution (`app init`, `app push`, `app add flow --flow-id`, `app remove flow --flow-id --force`, `connection create --connector` for SSO-eligible connectors, `app remove data-source --connector --name --force`). Grouped `pa` refuses a non-interactive removal without `--force`, so pass it only when the user asked for the removal. For `app add data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
 - Prefer `--json` on list/discovery commands so downstream parsing is stable.
 - For Dataverse table generation, pass `--connector dataverse`, `--table <table-logical-name>`, and `--org-url <environment-url>`.
 - For non-Dataverse connectors, pass `--connector`, plus either `--connection-id` from `connection create` or `--connection-ref` from `connection list-references`; table-based connectors also need `--dataset` and `--table`.

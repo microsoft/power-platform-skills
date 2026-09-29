@@ -1,6 +1,6 @@
 # CLI Binary Resolution (`pa` preferred, `power-apps` fallback)
 
-<!-- Mirrors plugins/code-apps/shared/cli-binary.md — keep both in sync. Mobile deltas: `connection list-*` rows, flag "Used by" cells, `--app-type`/`-t` on `init`, and rule 4 (the user runs `npm install`). -->
+<!-- Mirrors plugins/code-apps/shared/cli-binary.md — keep both in sync. Mobile deltas: `connection list-*` rows, flag "Used by" cells, the `--force` row, `--app-type`/`-t` on `init`, and rule 4 (the user runs `npm install`). -->
 
 **This file is the single source of truth for which CLI binary to run and how to translate commands.** Every skill that runs a Power Apps CLI command MUST resolve the binary using the algorithm below **before** running any command, and MUST author commands in the canonical grouped **`pa`** form (see the mapping table).
 
@@ -115,6 +115,7 @@ The grouped `pa` surface renames these customer-facing selector flags and **drop
 | Data source name        | `--name`             | `--data-source-name` (alias `-n`)  | `remove data-source`, `refresh data-source`         |
 | SQL stored procedure     | `--procedure`        | `--sql-stored-procedure` (alias `-sp`) | `add`/`remove data-source`                       |
 | Connection reference    | `--connection-ref`   | `--connection-ref` (alias `-cr`)   | `add data-source` — **alias `-cr` dropped on `pa`, long flag unchanged** |
+| Destructive confirmation | `--force` (required with `--non-interactive`) | omit — flat proceeds without confirming, and older flat `remove-flow` has no `--force` | `remove data-source`, `remove flow` |
 
 **Unchanged on both binaries** (do NOT rewrite these): `--connection-id`/`-c`, `--dataset`/`-d`, `--environment-id`/`-e`, `--display-name`/`-n` (on `init` and `connection create`), `--app-type`/`-t` (on `init`), `--org-url`, `--flow-id`, `--account`, `--solution-id`, `--search`, `--cloud`.
 

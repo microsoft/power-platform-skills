@@ -98,7 +98,7 @@ Cloud flows are added with `pa app add flow`, not `pa app add data-source`:
 
 ```bash
 $PA app add flow --flow-id <flow-guid> --non-interactive
-$PA app remove flow --flow-id <flow-guid> --non-interactive
+$PA app remove flow --flow-id <flow-guid> --force --non-interactive
 ```
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
