@@ -89,4 +89,8 @@ jobs:
             # directory has to be added here or it silently never runs.
             - name: run-model-apps-eval-tests
               shell: bash
-              run: node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js evals/model-apps/genpage/tests/*.test.js
+              run: node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js evals/model-apps/genpage/tests/*.test.js evals/model-apps/pcf/tests/*.test.js
+
+            - name: run-model-apps-pcf-evals
+              shell: bash
+              run: node evals/model-apps/pcf/run-pcf.js --tier full
