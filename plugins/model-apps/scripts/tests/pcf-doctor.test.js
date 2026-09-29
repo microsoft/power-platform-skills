@@ -13,6 +13,7 @@ const {
   checkToolchain,
   checkProject,
   collectProject,
+  dependencyFamily,
   pcfprojBuildMode,
   parsePacHelpVersion,
 } = require('../lib/pcf-doctor.js');
@@ -365,6 +366,13 @@ test('checkProject chooses the virtual dependency family and reports platform-li
   assert.ok(byId(findings, 'PROJ_PLATFORM_LIB'));
   assert.equal(byId(findings, 'PROJ_HOST_CONFLICT').severity, 'error');
   assert.match(byId(findings, 'PROJ_PLATFORM_LIB').fix, /PLATFORM_LIB_VERSION|Remove platform-library/);
+});
+
+test('dependencyFamily derives the PCF dependency set from manifest control types', () => {
+  assert.equal(dependencyFamily([manifestModel('standard')]), 'standard');
+  assert.equal(dependencyFamily([manifestModel('standard'), manifestModel('virtual')]), 'virtual');
+  assert.equal(dependencyFamily([]), 'standard');
+  assert.equal(dependencyFamily(null), 'standard');
 });
 
 test('checkProject is clean for a matrix-aligned scaffold state', () => {

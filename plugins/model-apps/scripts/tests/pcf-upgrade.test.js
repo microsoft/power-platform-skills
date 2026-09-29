@@ -59,6 +59,10 @@ function packageText(kind = 'standard') {
   }, null, 2)}\n`;
 }
 
+function withCrLf(text) {
+  return text.replace(/\n/g, '\r\n');
+}
+
 function state(overrides = {}) {
   const packageJsonText = overrides.packageJsonText || packageText('standard');
   const manifestText = overrides.manifestText || renderedManifest().replace('control-type="virtual"', 'control-type="standard"')
@@ -128,6 +132,17 @@ test('DEPS_TO_MATRIX pins only existing matrix packages in place and preserves u
   assert.equal(JSON.parse(after).devDependencies['custom-tool'], '4.5.6');
 });
 
+test('DEPS_TO_MATRIX preserves UTF-8 BOM and dominant CRLF newlines', () => {
+  const { rewritePackageJson } = require('../lib/pcf-upgrade.js');
+  const before = `\uFEFF${withCrLf(packageText('standard'))}`;
+  const after = rewritePackageJson(before, dependencySet(MATRIX, 'standard'));
+
+  assert.equal(after.charCodeAt(0), 0xFEFF);
+  assert.match(after, /\r\n/);
+  assert.doesNotMatch(after.replace(/\r\n/g, ''), /\n/);
+  assert.equal(JSON.parse(after.slice(1)).devDependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
+});
+
 test('BUILDMODE_PRODUCTION moves an ineffective property below Microsoft.Common.props', () => {
   const { planUpgrade } = require('../lib/pcf-upgrade.js');
   const before = renderedPcfproj()
@@ -146,6 +161,37 @@ test('BUILDMODE_PRODUCTION moves an ineffective property below Microsoft.Common.
   assert.match(after, /<Name>StarRating<\/Name>\r?\n    <PcfBuildMode>production<\/PcfBuildMode>\r?\n    <ProjectGuid>/);
 });
 
+test('BUILDMODE_PRODUCTION removes conditioned overrides and leaves commented examples untouched', () => {
+  const { rewritePcfBuildMode } = require('../lib/pcf-upgrade.js');
+  const before = renderedPcfproj()
+    .replace(/\s*    <!-- pac pcf push otherwise builds[\s\S]*?<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /(\s*<Import Project="\$\(MSBuildExtensionsPath\)\\\$\(MSBuildToolsVersion\)\\Microsoft\.Common\.props" \/>)/,
+      '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n$1',
+    )
+    .replace(
+      /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
+      '</PropertyGroup>\n  <!-- <PcfBuildMode>development</PcfBuildMode> -->\n  <PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <PcfBuildMode>development</PcfBuildMode>\n  </PropertyGroup>\n  <PropertyGroup Condition=\'"$(Configuration)" == "Release"\'>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n\n  <PropertyGroup>\n    <TargetFrameworkVersion>',
+    );
+
+  const after = rewritePcfBuildMode(before);
+
+  assert.equal(pcfprojBuildMode(after).status, 'production');
+  assert.equal((after.match(/<PcfBuildMode>production<\/PcfBuildMode>/g) || []).length, 1);
+  assert.match(after, /<!-- <PcfBuildMode>development<\/PcfBuildMode> -->/);
+  assert.doesNotMatch(after, /<PropertyGroup\b[^>]*Condition=[\s\S]*?<PcfBuildMode>/);
+});
+
+test('BUILDMODE_PRODUCTION preserves CRLF newlines', () => {
+  const { rewritePcfBuildMode } = require('../lib/pcf-upgrade.js');
+  const before = withCrLf(renderedPcfproj().replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>'));
+  const after = rewritePcfBuildMode(before);
+
+  assert.match(after, /\r\n/);
+  assert.doesNotMatch(after.replace(/\r\n/g, ''), /\n/);
+  assert.equal(pcfprojBuildMode(after).status, 'production');
+});
+
 test('PLATFORM_LIB_VERSION changes only React and Fluent version attributes', () => {
   const { planUpgrade } = require('../lib/pcf-upgrade.js');
   const before = renderedManifest()
@@ -158,6 +204,20 @@ test('PLATFORM_LIB_VERSION changes only React and Fluent version attributes', ()
     .replace('name="React" version="18.2.0"', 'name="React" version="16.14.0"')
     .replace('name="Fluent" version="9.68.0"', 'name="Fluent" version="9.46.2"');
   assert.equal(after, expected);
+});
+
+test('PLATFORM_LIB_VERSION supports single-quoted versions and preserves CRLF newlines', () => {
+  const { rewritePlatformLibraries } = require('../lib/pcf-upgrade.js');
+  const before = withCrLf(renderedManifest()
+    .replace('name="React" version="16.14.0"', 'name="React" version=\'18.2.0\'')
+    .replace('name="Fluent" version="9.46.2"', 'name="Fluent" version=\'9.68.0\''));
+
+  const after = rewritePlatformLibraries(before, MATRIX);
+
+  assert.match(after, /name="React" version='16\.14\.0'/);
+  assert.match(after, /name="Fluent" version='9\.46\.2'/);
+  assert.match(after, /\r\n/);
+  assert.doesNotMatch(after.replace(/\r\n/g, ''), /\n/);
 });
 
 test('planUpgrade prints legacy ESLint and feature declarations as manual steps only', () => {
@@ -222,6 +282,99 @@ test('runUpgrade refuses a dirty git tree before applying changes', () => {
     assert.equal(result.ok, false);
     assert.match(result.error, /uncommitted changes/);
     assert.deepEqual(result.applied, []);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade refuses apply outside a git work tree unless allowDirty is passed', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-outside-git-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+    fs.mkdirSync(path.join(projectDir, 'node_modules'), { recursive: true });
+
+    const refused = runUpgrade({ project: projectDir, apply: true }, { runNpm: () => ({ status: 0, stdout: '', stderr: '' }) });
+    const allowed = runUpgrade({ project: projectDir, apply: true, allowDirty: true }, { runNpm: () => ({ status: 0, stdout: '', stderr: '' }) });
+
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /not inside a readable git work tree/);
+    assert.equal(allowed.ok, true);
+    assert.ok(allowed.applied.includes('DEPS_TO_MATRIX'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade reports a failing transform without writing earlier computed files', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-transform-fail-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    const pkg = path.join(projectDir, 'package.json');
+    const proj = path.join(projectDir, 'StarRating.pcfproj');
+    fs.writeFileSync(pkg, packageText('standard'));
+    fs.writeFileSync(proj, '<Project></Project>\n');
+    const beforePackage = fs.readFileSync(pkg, 'utf8');
+
+    const result = runUpgrade({ project: projectDir, apply: true, allowDirty: true }, {
+      runNpm: () => { throw new Error('npm install should not run after a transform failure'); },
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /PcfBuildMode transform/);
+    assert.deepEqual(result.changedFiles, []);
+    assert.equal(result.after, null);
+    assert.equal(fs.readFileSync(pkg, 'utf8'), beforePackage);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyUpgrade computes all transforms before writing any file', () => {
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-atomic-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const pkg = path.join(projectDir, 'package.json');
+    const proj = path.join(projectDir, 'StarRating.pcfproj');
+    fs.writeFileSync(pkg, '{"name":"before"}\n');
+    fs.writeFileSync(proj, '<Project />\n');
+
+    assert.throws(() => applyUpgrade({
+      steps: [
+        { id: 'DEPS_TO_MATRIX', file: pkg, apply: () => '{"name":"after"}\n' },
+        { id: 'BUILDMODE_PRODUCTION', file: proj, apply: () => { throw new Error('boom'); } },
+      ],
+    }, projectDir), /boom/);
+
+    assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
+    assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade reports changedFiles when reinstall fails after safe writes', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-install-fail-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+
+    const result = runUpgrade({ project: projectDir, apply: true, allowDirty: true }, {
+      runNpm: () => ({ status: 1, stdout: 'nope', stderr: 'install failed' }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /npm install failed/);
+    assert.deepEqual(result.changedFiles.map((file) => path.basename(file)), ['package.json']);
+    assert.equal(result.after, null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

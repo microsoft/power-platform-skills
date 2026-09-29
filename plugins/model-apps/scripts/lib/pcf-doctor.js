@@ -138,7 +138,7 @@ function checkProject(state, matrix = loadMatrix(), options = {}) {
   const needs = new Set(options.needs || ['build']);
   const platform = options.platform || state.platform || process.platform;
   const findings = [];
-  const family = projectFamily(state);
+  const family = dependencyFamily(state.manifestModels);
 
   if (!state.hasLockfile) {
     findings.push(finding(
@@ -168,8 +168,8 @@ function checkProject(state, matrix = loadMatrix(), options = {}) {
   return findings;
 }
 
-function projectFamily(state) {
-  return (state.manifestModels || []).some((model) => model && model.control && model.control.controlType === 'virtual')
+function dependencyFamily(manifestModels) {
+  return (manifestModels || []).some((model) => model && model.control && model.control.controlType === 'virtual')
     ? 'virtual'
     : 'standard';
 }
@@ -459,7 +459,7 @@ function platformFix(item) {
 }
 
 function hostFindings(state, hosts) {
-  if (!hosts.includes('pages') || projectFamily(state) !== 'virtual') return [];
+  if (!hosts.includes('pages') || dependencyFamily(state.manifestModels) !== 'virtual') return [];
   // Power Pages PCF support is documented for standard controls and does not support the
   // model-driven platform-library path required by virtual React controls.
   // See: https://learn.microsoft.com/power-pages/configure/component-framework
@@ -620,6 +620,7 @@ module.exports = {
   checkProject,
   collectProject,
   collectToolchain,
+  dependencyFamily,
   pcfprojBuildMode,
   parsePacHelpVersion,
   hasErrors,
