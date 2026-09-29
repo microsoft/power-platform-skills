@@ -14,6 +14,10 @@ const PCF_REFERENCE_FILES = [
   'references/pcf-power-pages.md',
   'references/pcf-testing.md',
 ];
+const ALLOWED_PLATFORM_ERROR_MESSAGES = [
+  // Observed in probe P11 on 2026-09-29 when the stock React template declared the excluded Fluent version.
+  'platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.',
+];
 
 function readPluginFile(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -37,26 +41,23 @@ function assertA30Entry(entry) {
 }
 
 function versionSelectorsFromMatrix(matrix) {
+  const versionPattern = /\b\d+(?:\.(?:\d+|x+)){1,3}(?:-[0-9A-Za-z.-]+)?\b/g;
   const versions = new Set();
-  const add = (value) => {
-    if (value && typeof value.version === 'string') versions.add(value.version);
-    if (value && typeof value.min === 'string') versions.add(value.min);
-    if (value && typeof value.max === 'string') versions.add(value.max);
+  const visit = (value) => {
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(versionPattern)) versions.add(match[0]);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const item of Object.values(value)) visit(item);
+    }
   };
 
-  for (const library of Object.values(matrix.platformLibraries)) {
-    add(library.recommendedBaseline);
-    for (const section of ['documentedDeclarations', 'toolingAccepted']) {
-      for (const item of library[section] || []) add(item);
-    }
-  }
-  for (const exclusion of matrix.baselineExclusions || []) versions.add(exclusion.version);
-  for (const tool of Object.values(matrix.toolchain)) {
-    add(tool.historicalMinimum);
-    add(tool.tested);
-    add(tool.recommended);
-    add(tool);
-  }
+  visit(matrix);
   return Array.from(versions).filter(Boolean).sort((a, b) => b.length - a.length);
 }
 
@@ -70,12 +71,19 @@ function matrixOwnedVersionLeaks(text, versions) {
   const body = stripRenderedBlocks(text);
   const leaks = [];
   for (const version of versions) {
-    const pattern = new RegExp(`(^|[^\\d.])${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\d.]|$)`, 'g');
+    const pattern = new RegExp(`(^|[^\\d.])${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^\\d.]|\\.(?!\\d|x))`, 'g');
     for (const match of body.matchAll(pattern)) {
       const lineStart = body.lastIndexOf('\n', match.index) + 1;
       const lineEnd = body.indexOf('\n', match.index);
       const line = body.slice(lineStart, lineEnd === -1 ? body.length : lineEnd);
-      if (/^\*\*Symptom\*\*:/.test(line) && line.includes('platform library fluent_')) continue;
+      const versionStartInLine = match.index + match[1].length - lineStart;
+      const versionEndInLine = versionStartInLine + version.length;
+      const isAllowlistedPlatformError = /^\*\*Symptom\*\*:/.test(line)
+        && ALLOWED_PLATFORM_ERROR_MESSAGES.some((message) => {
+          const messageStart = line.indexOf(message);
+          return messageStart !== -1 && versionStartInLine >= messageStart && versionEndInLine <= messageStart + message.length;
+        });
+      if (isAllowlistedPlatformError) continue;
       leaks.push({ version, line: line.trim() });
     }
   }
@@ -163,11 +171,33 @@ test('troubleshooting covers the required PCF failure modes', () => {
   }
 });
 
+test('allowed platform error messages appear verbatim in troubleshooting', () => {
+  const text = readPluginFile('references/pcf-troubleshooting.md');
+  for (const message of ALLOWED_PLATFORM_ERROR_MESSAGES) {
+    assert.ok(text.includes(message), `missing allowlisted platform error message: ${message}`);
+  }
+});
+
 test('matrix-owned versions are detected when planted outside rendered blocks', () => {
   const [version] = versionSelectorsFromMatrix(loadMatrix());
   const leaks = matrixOwnedVersionLeaks(`This paragraph hard-codes ${version} outside the matrix.\n`, [version]);
 
   assert.deepEqual(leaks, [{ version, line: `This paragraph hard-codes ${version} outside the matrix.` }]);
+});
+
+test('matrix-owned Pages requirement versions are detected when planted outside rendered blocks', () => {
+  const versions = versionSelectorsFromMatrix(loadMatrix());
+  const leaks = matrixOwnedVersionLeaks('This paragraph hard-codes 9.3.3.x outside the matrix.\n', versions);
+
+  assert.deepEqual(leaks, [{ version: '9.3.3.x', line: 'This paragraph hard-codes 9.3.3.x outside the matrix.' }]);
+});
+
+test('platform-library symptom exemptions do not hide extra matrix-owned versions', () => {
+  const versions = versionSelectorsFromMatrix(loadMatrix());
+  const text = '**Symptom**: Import fails with `platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.` Extra 9.3.3.x.\n';
+  const leaks = matrixOwnedVersionLeaks(text, versions);
+
+  assert.deepEqual(leaks, [{ version: '9.3.3.x', line: text.trim() }]);
 });
 
 test('PCF reference prose does not hand-copy matrix-owned versions outside rendered blocks', () => {
