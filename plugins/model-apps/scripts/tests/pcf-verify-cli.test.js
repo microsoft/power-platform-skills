@@ -101,6 +101,29 @@ test('verify-pcf usage errors print usage and do not create an SDK', async () =>
   assert.equal(cli.stdoutText(), '');
 });
 
+test('verify-pcf rejects unknown --clients values before creating an SDK', async () => {
+  let madeSdk = false;
+  const cli = await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--table', 'new_review',
+    '--form', 'Main',
+    '--column', 'new_rating',
+    '--clients', 'web,console',
+  ], {
+    './lib/pcf-dataverse': {
+      makePcfSdk: async () => { madeSdk = true; },
+    },
+    './lib/pcf-binding-verify': { verifyBinding: () => ({ ok: true, status: 'bound', issues: [], cells: [] }) },
+  });
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText(), /--clients contains unknown value 'console'/);
+  assert.match(cli.stderrText(), /web,phone,tablet/);
+  assert.equal(madeSdk, false);
+  assert.equal(cli.stdoutText(), '');
+});
+
 test('verify-pcf validates every repeated --param before creating an SDK', async () => {
   let madeSdk = false;
   const cli = await run([

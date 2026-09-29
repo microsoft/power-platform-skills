@@ -24,6 +24,13 @@ function issueCodes(result) {
   return result.issues.map((issue) => issue.code);
 }
 
+function assertIssue(result, code, level) {
+  const issue = result.issues.find((item) => item.code === code);
+  assert.ok(issue, `${code} missing from ${issueCodes(result).join(', ')}`);
+  assert.equal(issue.level, level);
+  return issue;
+}
+
 test('exports the single custom-control class id and semantic FormXML client factors', () => {
   assert.equal(CUSTOM_CONTROL_CLASSID, '{F9A8A302-114E-466A-B582-6771B2AE0D92}');
   assert.deepEqual(FORMXML_CLIENT_FACTORS, Object.freeze({ phone: '0', tablet: '1', web: '2' }));
@@ -128,6 +135,41 @@ test('verifyBinding distinguishes missing descriptions, non-custom cells, and du
   });
   assert.equal(duplicate.status, 'ambiguous');
   assert.deepEqual(issueCodes(duplicate), ['PCF_BIND_MULTIPLE_CELLS']);
+});
+
+test('verifyBinding reports no-cell evidence from a roundtrip-derived fixture when the column is absent', () => {
+  const result = verifyBinding(xml('no-requested-column-roundtrip-derived.xml'), {
+    controlName: 'new_ContosoProbe.ContosoProbeA',
+    column: 'new_missingrating',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'not-bound');
+  assertIssue(result, 'PCF_BIND_NO_CELL', 'error');
+});
+
+test('verifyBinding reports requested client missing when phone uses a different control', () => {
+  const result = verifyBinding(xml('phone-other-control-roundtrip-derived.xml'), {
+    controlName: 'new_ContosoProbe.ContosoProbeA',
+    column: 'new_contosoprobetext',
+    clients: ['web', 'phone'],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'error');
+  assertIssue(result, 'PCF_BIND_CLIENT_MISSING', 'error');
+});
+
+test('verifyBinding reports missing fallback from a roundtrip-derived fixture', () => {
+  const result = verifyBinding(xml('no-fallback-roundtrip-derived.xml'), {
+    controlName: 'new_ContosoProbe.ContosoProbeA',
+    column: 'new_contosoprobetext',
+    clients: ['web', 'phone', 'tablet'],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'bound');
+  assertIssue(result, 'PCF_BIND_NO_FALLBACK', 'warning');
 });
 
 test('verifyBinding reports parameter mismatches and static parameters without type as errors', () => {

@@ -36,6 +36,8 @@ const KNOWN = [
   'workspace',
 ];
 const NEED_VALUE = ['env', 'control', 'version', 'table', 'form', 'column', 'control-id', 'clients', 'param', 'intent', 'workspace'];
+const ALLOWED_CLIENTS = Object.freeze(new Set(['web', 'phone', 'tablet']));
+const CLIENTS_HINT = 'allowed values: web,phone,tablet';
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -171,6 +173,9 @@ function normalizeBinding(binding) {
 function parseClients(value) {
   if (!value) return undefined;
   const clients = String(value).split(',').map((client) => client.trim()).filter(Boolean);
+  for (const client of clients) {
+    if (!ALLOWED_CLIENTS.has(client)) usageError(`--clients contains unknown value '${client}' - ${CLIENTS_HINT}`);
+  }
   return clients.length ? clients : undefined;
 }
 
