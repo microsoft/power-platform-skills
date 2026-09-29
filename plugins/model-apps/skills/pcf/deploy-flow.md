@@ -45,8 +45,8 @@ Component plus bindings: add forms/views/apps that carry the bindings to the sam
 
 The full example pipelines live in:
 
-- `pcf/pipelines/github-actions.yml`
-- `pcf/pipelines/azure-devops.yml`
+- [`../../pcf/pipelines/github-actions.yml`](../../pcf/pipelines/github-actions.yml)
+- [`../../pcf/pipelines/azure-devops.yml`](../../pcf/pipelines/azure-devops.yml)
 
 Do not duplicate those files in this flow. Use them as adaptable examples with these stages:
 

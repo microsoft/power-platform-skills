@@ -248,12 +248,12 @@ test('PCF reference docs do not link to GitHub issue trackers', () => {
 
 test('every pcf-upgrade manual note has a guide heading', () => {
   const source = readPluginFile('scripts/lib/pcf-upgrade.js');
-  const manualNoteIds = Array.from(source.matchAll(/\bid:\s*'([A-Z0-9_]+)'/g), (match) => match[1])
-    .filter((id) => ['STANDARD_TO_VIRTUAL', 'FLUENT_8_TO_9', 'PAGES_VIRTUAL_TO_STANDARD', 'ESLINT_FLAT_CONFIG', 'DECLARE_FEATURES'].includes(id))
+  const manualNoteIds = Array.from(source.matchAll(/manual\.push\(\s*\{[\s\S]*?\bid:\s*'([A-Z0-9_]+)'/g), (match) => match[1])
     .sort();
   const uniqueManualNoteIds = Array.from(new Set(manualNoteIds));
   const upgradeFlow = readPluginFile('skills/pcf/upgrade-flow.md');
 
+  assert.ok(uniqueManualNoteIds.length >= 3, `expected at least 3 manual note ids, found ${uniqueManualNoteIds.length}`);
   for (const id of uniqueManualNoteIds) {
     assert.match(upgradeFlow, new RegExp(`^#{2,4}\\s+${id}\\b`, 'm'), `upgrade-flow.md needs a heading for ${id}`);
   }
