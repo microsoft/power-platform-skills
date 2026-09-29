@@ -11,6 +11,7 @@ const { loadMatrix, dependencySet } = require('../lib/pcf-matrix.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MATRIX = loadMatrix();
+const RECIPE_FIXTURES = path.join(__dirname, 'fixtures', 'pcf-recipes');
 
 function loadScaffold() {
   delete require.cache[require.resolve('../lib/pcf-scaffold.js')];
@@ -77,12 +78,277 @@ test('listRecipes and renderRecipesTable handle an empty recipe catalog', () => 
   assert.deepEqual(listRecipes(), []);
   assert.equal(renderRecipesTable(), [
     '<!-- pcf-recipes:begin -->',
-    '| Recipe | Template | Hosts |',
-    '| --- | --- | --- |',
-    '| _No recipes yet._ |  |  |',
+    '| Recipe | Template | Designed for (hosts) | Certified | Status |',
+    '| --- | --- | --- | --- | --- |',
+    '| _No recipes yet._ |  |  |  |  |',
     '<!-- pcf-recipes:end -->',
     '',
   ].join('\n'));
+});
+
+
+test('listRecipes and renderRecipesTable expose recipe status and certification', () => {
+  const { listRecipes, renderRecipesTable } = loadScaffold();
+
+  assert.deepEqual(listRecipes({ recipesRoot: RECIPE_FIXTURES }), [
+    {
+      id: 'dataset-overlay',
+      title: 'Dataset overlay',
+      template: 'dataset-standard',
+      hosts: ['model'],
+      status: 'available',
+      certified: { model: { dataset: '2026-09-29' }, pages: {} },
+    },
+    {
+      id: 'field-overlay',
+      title: 'Field overlay',
+      template: 'field-standard',
+      hosts: ['model', 'pages'],
+      status: 'available',
+      certified: { model: { field: '2026-09-29' }, pages: {} },
+    },
+    {
+      id: 'planned-only',
+      title: 'Planned only',
+      template: 'field-standard',
+      hosts: ['model'],
+      status: 'planned',
+      certified: { model: {}, pages: {} },
+    },
+    {
+      id: 'unsafe-overlay',
+      title: 'Unsafe overlay',
+      template: 'field-standard',
+      hosts: ['model'],
+      status: 'available',
+      certified: { model: {}, pages: {} },
+    },
+  ]);
+  assert.equal(renderRecipesTable({ recipesRoot: RECIPE_FIXTURES }), [
+    '<!-- pcf-recipes:begin -->',
+    '| Recipe | Template | Designed for (hosts) | Certified | Status |',
+    '| --- | --- | --- | --- | --- |',
+    '| Dataset overlay (`dataset-overlay`) | `dataset-standard` | model | model dataset: 2026-09-29 | available |',
+    '| Field overlay (`field-overlay`) | `field-standard` | model, pages | model field: 2026-09-29; pages: not certified in this release | available |',
+    '| Planned only (`planned-only`) | `field-standard` | model | model: not certified in this release | planned |',
+    '| Unsafe overlay (`unsafe-overlay`) | `field-standard` | model | model: not certified in this release | available |',
+    '<!-- pcf-recipes:end -->',
+    '',
+  ].join('\n'));
+});
+
+test('applyRecipeManifest replaces field properties, feature usage, and escapes attributes exactly', () => {
+  const { applyRecipeManifest } = loadScaffold();
+  const xml = [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <external-service-usage enabled="false" />',
+    '    <property name="old" display-name-key="Old" description-key="Old_Desc" of-type="SingleLine.Text" usage="bound" required="true" />',
+    '    <resources />',
+    '    <!-- marker -->',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  const patched = applyRecipeManifest(xml, {
+    properties: [{
+      name: 'rating&score',
+      displayNameKey: 'Rating "Display"',
+      descriptionKey: "Rating's <Description>",
+      ofType: 'Whole.None',
+      usage: 'bound',
+      required: true,
+    }, {
+      name: 'max',
+      displayNameKey: 'Max_Display',
+      descriptionKey: 'Max_Desc',
+      ofType: 'Whole.None',
+      usage: 'input',
+      required: false,
+      defaultValue: '5 & more',
+    }],
+    features: [{ name: 'WebAPI', required: false }],
+  });
+
+  assert.equal(patched, [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <external-service-usage enabled="false" />',
+    '    <property name="rating&amp;score" display-name-key="Rating &quot;Display&quot;" description-key="Rating&apos;s &lt;Description&gt;" of-type="Whole.None" usage="bound" required="true" />',
+    '    <property name="max" display-name-key="Max_Display" description-key="Max_Desc" of-type="Whole.None" usage="input" required="false" default-value="5 &amp; more" />',
+    '    <resources />',
+    '    <!-- marker -->',
+    '    <feature-usage>',
+    '      <uses-feature name="WebAPI" required="false" />',
+    '    </feature-usage>',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n'));
+});
+
+test('applyRecipeManifest replaces dataset property-sets and existing feature usage exactly', () => {
+  const { applyRecipeManifest } = loadScaffold();
+  const xml = [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <data-set name="sampleDataSet" display-name-key="Dataset_Display_Key">',
+    '      <property-set name="old" display-name-key="Old" description-key="Old_Desc" of-type="SingleLine.Text" usage="bound" required="false" />',
+    '    </data-set>',
+    '    <resources />',
+    '    <feature-usage>',
+    '      <uses-feature name="OldFeature" required="true" />',
+    '    </feature-usage>',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  const patched = applyRecipeManifest(xml, {
+    propertySets: [{
+      dataSet: 'sampleDataSet',
+      name: 'parent',
+      displayNameKey: 'Parent_Display',
+      descriptionKey: 'Parent_Desc',
+      ofType: 'Lookup.Simple',
+      usage: 'bound',
+      required: false,
+    }],
+    features: [{ name: 'Utility', required: true }],
+  });
+
+  assert.equal(patched, [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <data-set name="sampleDataSet" display-name-key="Dataset_Display_Key">',
+    '      <property-set name="parent" display-name-key="Parent_Display" description-key="Parent_Desc" of-type="Lookup.Simple" usage="bound" required="false" />',
+    '    </data-set>',
+    '    <resources />',
+    '    <feature-usage>',
+    '      <uses-feature name="Utility" required="true" />',
+    '    </feature-usage>',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n'));
+});
+
+test('applyRecipeManifest leaves feature usage absent when the recipe has no features', () => {
+  const { applyRecipeManifest } = loadScaffold();
+  const xml = '<manifest>\n  <control namespace="N" constructor="C">\n    <resources />\n  </control>\n</manifest>\n';
+
+  assert.equal(applyRecipeManifest(xml, {}), xml);
+});
+
+test('recipe overlay replaces and adds rendered files before patching a lint-clean manifest', () => {
+  const plan = renderFieldPlan({ recipe: 'field-overlay', recipesRoot: RECIPE_FIXTURES, hosts: ['model', 'pages'] });
+
+  assert.equal(findFile(plan, path.join('StarRating', 'index.ts')).trim(), 'export const recipeName = "StarRating";');
+  assert.equal(findFile(plan, path.join('StarRating', 'css', 'recipe.css')).trim(), '.StarRating-recipe { color: red; }');
+  const manifestXml = findFile(plan, path.join('StarRating', 'ControlManifest.Input.xml'));
+  const parsed = parseManifest(manifestXml);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.model.properties.map((prop) => prop.name), ['rating', 'max']);
+  assert.deepEqual(parsed.model.features, [{ name: 'WebAPI', required: false }]);
+  assert.deepEqual(lintManifest(parsed.model, { hosts: ['model', 'pages'], matrix: MATRIX }), { ok: true, errors: [], warnings: [] });
+});
+
+test('recipe overlay patches dataset property-sets in the named data-set', () => {
+  const plan = renderTemplatePlan('dataset-standard', { recipe: 'dataset-overlay', recipesRoot: RECIPE_FIXTURES });
+  const manifestXml = findFile(plan, path.join('StarRating', 'ControlManifest.Input.xml'));
+  const parsed = parseManifest(manifestXml);
+
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.model.dataSets[0].propertySets, [{
+    name: 'parent',
+    usage: 'bound',
+    ofType: 'Lookup.Simple',
+    ofTypeGroup: undefined,
+    required: false,
+  }]);
+  assert.deepEqual(lintManifest(parsed.model, { hosts: ['model'], matrix: MATRIX }), { ok: true, errors: [], warnings: [] });
+});
+
+test('unsafe recipe overlay paths are rejected before rendering', () => {
+  const { planScaffold } = loadScaffold();
+
+  assert.throws(
+    () => planScaffold({ template: 'field-standard', recipe: 'unsafe-overlay', namespace: 'Contoso.Controls', name: 'StarRating', displayName: '..\\escape', recipesRoot: RECIPE_FIXTURES }),
+    /unsafe scaffold path.*\.\.\\escape\.txt/,
+  );
+});
+
+test('planned recipes cannot be scaffolded', () => {
+  const { planScaffold } = loadScaffold();
+
+  assert.throws(
+    () => planScaffold({ template: 'field-standard', recipe: 'planned-only', namespace: 'Contoso.Controls', name: 'StarRating', displayName: '..\\escape', recipesRoot: RECIPE_FIXTURES }),
+    /planned, not available in this release/,
+  );
+});
+
+test('listRecipes rejects malformed recipe metadata with clear validation errors', () => {
+  const { listRecipes } = loadScaffold();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-recipe-meta-'));
+  try {
+    const dir = path.join(root, 'broken');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'recipe.json'), JSON.stringify({
+      id: 'wrong',
+      title: '',
+      summary: '',
+      template: 'missing-template',
+      hosts: ['bad'],
+      status: 'available',
+      certified: { model: { field: '09-29-2026' }, pages: [] },
+      properties: [{ name: '', usage: 'weird', required: 'yes' }],
+    }));
+
+    assert.throws(() => listRecipes({ recipesRoot: root }), /recipe\.json: id must equal directory name 'broken'; title must be a non-empty string; summary must be a non-empty string; template must be an existing template id; hosts must be a non-empty array containing only template hosts; whyWanted must be a non-empty string; certified\.model\.field must be YYYY-MM-DD; certified\.pages must be an object; configuration must be a non-empty string; properties\[0\]\.name must be a non-empty string; properties\[0\]\.displayNameKey must be a non-empty string; properties\[0\]\.descriptionKey must be a non-empty string; properties\[0\]\.ofType must be a non-empty string; properties\[0\]\.usage must be bound, input, or output; properties\[0\]\.required must be boolean/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI --list shows recipe status and --recipe output names the recipe', () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const cli = path.join(ROOT, 'scripts', 'pcf-scaffold.js');
+  const realAuth = require('../lib/dataverse-auth.js');
+  const emitted = [];
+  const dataverseAuth = { ...realAuth, emitResult: (ok, payload) => { emitted.push({ ok, payload }); } };
+  const calls = [];
+  const harness = loadCli(cli, {
+    requires: {
+      './lib/pcf-scaffold': {
+        listTemplates: () => [{ id: 'field-standard' }],
+        listRecipes: () => [{ id: 'field-overlay', title: 'Field overlay', template: 'field-standard', hosts: ['model'], status: 'available', certified: { model: {}, pages: {} } }],
+        planScaffold: (request) => { calls.push(request); return { files: [], warnings: [], recipe: { id: 'field-overlay', title: 'Field overlay', status: 'available' } }; },
+        writeScaffold: () => ({ written: ['project-file'] }),
+      },
+      './lib/dataverse-auth': dataverseAuth,
+      './lib/node-tool': { runNpm: () => ({ status: 0, stdout: '', stderr: '' }) },
+    },
+  });
+
+  harness.main(['--list']);
+  assert.equal(emitted.at(-1).payload.recipes[0].status, 'available');
+
+  const createHarness = loadCli(cli, {
+    requires: {
+      './lib/pcf-scaffold': {
+        listTemplates: () => [],
+        listRecipes: () => [],
+        planScaffold: (request) => { calls.push(request); return { files: [], warnings: [], recipe: { id: 'field-overlay', title: 'Field overlay', status: 'available' } }; },
+        writeScaffold: () => ({ written: ['project-file'] }),
+      },
+      './lib/dataverse-auth': dataverseAuth,
+      './lib/node-tool': { runNpm: () => ({ status: 0, stdout: '', stderr: '' }) },
+    },
+  });
+  createHarness.main(['--template', 'field-standard', '--namespace', 'Contoso.Controls', '--name', 'StarRating', '--out', 'project', '--recipe', 'field-overlay']);
+  const parsed = emitted.at(-1).payload;
+  assert.equal(parsed.recipe, 'field-overlay');
+  assert.equal(parsed.recipeTitle, 'Field overlay');
+  assert.equal(calls.at(-1).recipe, 'field-overlay');
 });
 
 test('listTemplates rejects malformed template metadata before exposing the catalog', () => {

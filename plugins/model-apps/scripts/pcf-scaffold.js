@@ -50,7 +50,7 @@ function main(argv) {
 
   const { flags } = parsed;
   if (flags.list) {
-    emitResult(true, { ok: true, templates: listTemplates(), recipes: listRecipes() });
+    return emitResult(true, { ok: true, templates: listTemplates(), recipes: listRecipes() });
   }
 
   for (const required of ['template', 'namespace', 'name', 'out']) {
@@ -83,6 +83,7 @@ function main(argv) {
     outDir,
     template: String(flags.template),
     recipe: recipe || null,
+    recipeTitle: plan.recipe ? plan.recipe.title : recipe || null,
     files: written.written,
     next: [
       'node node_modules/pcf-scripts/bin/pcf-scripts.js build --buildMode production',
