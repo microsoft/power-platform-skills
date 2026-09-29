@@ -323,6 +323,39 @@ function renderRequirement(requirement) {
   return parts.join(', ');
 }
 
+function renderVersionSelector(selector) {
+  if (!selector) return '—';
+  if (selector.version) return selector.version;
+  if (selector.min && selector.max) return `${selector.min}-${selector.max}`;
+  if (selector.min) return `>=${selector.min}`;
+  if (selector.max) return `<=${selector.max}`;
+  return '—';
+}
+
+function renderSelectorList(selectors) {
+  return selectors && selectors.length ? selectors.map(renderVersionSelector).join('<br>') : '—';
+}
+
+function renderPlatformLibrariesTable(matrix) {
+  const exclusionsByLibrary = new Map();
+  for (const exclusion of matrix.baselineExclusions || []) {
+    if (!exclusionsByLibrary.has(exclusion.library)) exclusionsByLibrary.set(exclusion.library, []);
+    exclusionsByLibrary.get(exclusion.library).push(`${exclusion.version} (${exclusion.scope})`);
+  }
+
+  return [
+    '<!-- pcf-platform-libraries:begin -->',
+    '| Library | Recommended baseline | Documented declarations | Tooling accepted | Baseline exclusions |',
+    '| --- | --- | --- | --- | --- |',
+    ...Object.entries(matrix.platformLibraries).map(([name, library]) => {
+      const exclusions = exclusionsByLibrary.get(name) || [];
+      return `| ${name} | ${renderVersionSelector(library.recommendedBaseline)} | ${renderSelectorList(library.documentedDeclarations)} | ${renderSelectorList(library.toolingAccepted)} | ${exclusions.length ? exclusions.join('<br>') : '—'} |`;
+    }),
+    '<!-- pcf-platform-libraries:end -->',
+    '',
+  ].join('\n');
+}
+
 function renderHostsTable(matrix) {
   const pages = matrix.hosts.pages;
   const requirements = Object.entries(pages.requirements)
@@ -349,4 +382,5 @@ module.exports = {
   hostPolicy,
   platformLibraryFindings,
   renderHostsTable,
+  renderPlatformLibrariesTable,
 };

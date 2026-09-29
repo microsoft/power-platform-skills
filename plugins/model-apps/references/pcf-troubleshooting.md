@@ -70,7 +70,7 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Symptom**: The gate reports `PROJ_BUILDMODE_NOT_PRODUCTION` or says `PcfBuildMode` is set but ineffective — move it below the `Microsoft.Common.props` import.
 
-**Candidate causes**: With `Microsoft.PowerApps.MSBuild.Pcf` 1.52.1, Debug builds set `PcfBuildMode=development` after the first project property group. `pac pcf push` builds Debug, so an early property can be overwritten. Observed behavior on 2026-09-29: first property group still produced a development bundle, while a property group after the import produced a production bundle.
+**Candidate causes**: With the matrix's current `Microsoft.PowerApps.MSBuild.Pcf` package, Debug builds set `PcfBuildMode=development` after the first project property group. `pac pcf push` builds Debug, so an early property can be overwritten. Observed behavior on 2026-09-29: first property group still produced a development bundle, while a property group after the import produced a production bundle.
 
 **Discriminating checks**: Inspect the `.pcfproj`. The effective `<PcfBuildMode>production</PcfBuildMode>` must appear after the `Microsoft.Common.props` import.
 
@@ -116,11 +116,11 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 ## Deploy and import
 
-### Fluent 9.68.0 platform library rejection
+### Fluent platform library rejection
 
 **Symptom**: Import fails with `platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.`
 
-**Candidate causes**: A recent React template or dependency update declared Fluent `9.68.0`. Microsoft Learn documents Fluent 9 declarations through `9.46.2`, and the 2026-09-29 probe observed `9.68.0` rejected while `9.46.2` imported.
+**Candidate causes**: A recent React template or dependency update declared a Fluent version that the platform rejects. The rendered platform-library table in `pcf-hosts.md` owns the current documented declarations, tooling-accepted ranges and observed exclusions.
 
 **Discriminating checks**: Inspect `<platform-library name="Fluent" version="..." />` in the manifest. Run the manifest gate and look for `PCF_PLATFORM_LIB_KNOWN_BAD`.
 
@@ -196,11 +196,19 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Symptom**: The app shows `Error loading control`.
 
-**Candidate causes**: The control threw during `init` or `updateView`; the record is new/unsaved and required id inputs are missing; a bound value is temporarily null; a BigInt-like column value is mishandled; a required feature is unavailable; the user lacks field read permission; the bundle is stale or imported with an unsupported platform library.
+**Candidate causes**: The control threw during `init` or `updateView`; the record is new/unsaved and required id inputs are missing; a bound value is temporarily null; a BigInt-like column value is mishandled; a required feature is unavailable; the user lacks field read permission; the bundle is stale; or import used an unsupported manifest/platform-library combination.
 
-**Discriminating checks**: Open browser developer tools, inspect the console and network, and compare the running bundle with the registered version. Check whether the failing record has an id and whether the parameter object exists. The Learn debugging article explains browser and deployed debugging: [debugging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/debugging-custom-controls).
+**Discriminating checks**: Open browser developer tools, inspect the console and network, and compare the running bundle with the registered version. The Learn debugging article explains browser and deployed debugging: [debugging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/debugging-custom-controls).
 
-**Fix**: Add null-first rendering, unsaved-record disabled states, permission-aware UI, type-safe parsing and method-level feature guards. For current-record needs, pass `entityId` and `entityName` as configured inputs instead of using internal context.
+| Observation | Cause | Fix |
+| --- | --- | --- |
+| Console stack or `TypeError` in `init` / `updateView` | Code crash, including unsafe parsing of a BigInt-like column | Reproduce with the same parameter value in a unit test, add null/type guards, and render a recoverable error state. |
+| No record id / configured `entityId` is empty | New unsaved record | Render a disabled unsaved-record state. Do not read internal context for a record id. |
+| Parameter object is missing, `raw` is null, or `security.readable` / `security.editable` is false | Null-first or field-security path | Render empty/loading/permission states and avoid leaking the raw value. |
+| Registration/import log shows a manifest or platform-library rejection | Unsupported manifest or platform-library version | Use the manifest/platform-library troubleshooting entry and the `pcf-hosts.md` tables. |
+| Network tab loads an older bundle than the registered version | Cache or old-version path | Use the "Import succeeded but the old version runs" entry. |
+
+**Fix**: Apply the concrete fix from the table for the discriminating observation. For current-record needs, pass `entityId` and `entityName` as configured inputs instead of using internal context.
 
 **Verify**: Load an existing record, a new unsaved record, a user without field read permission, and two instances on one page. The control should not crash.
 

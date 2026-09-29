@@ -17,7 +17,7 @@ Use this reference when designing or reviewing Power Apps component framework (P
 
 - The manifest is the contract that filters where the component can be configured and how properties are exposed. Keep namespace, constructor and property names stable after first deployment; the skill gates removals and required-property additions because existing bindings can break.
 - Use exact toolchain and package versions from `pcf/compatibility-matrix.json` and the committed lockfiles. Do not copy versions from a fresh `pac pcf init` without checking the matrix.
-- Virtual controls use platform libraries in model-driven apps only. The current matrix baseline is React `16.14.0` and Fluent `9.46.2`; Fluent `9.68.0` is an observed Dataverse import rejection for this release, even though recent tooling can generate it.
+- Virtual controls use platform libraries in model-driven apps only. Use the rendered host and platform-library tables in `pcf-hosts.md` for the current baselines, documented declaration ranges, tooling-accepted ranges and observed exclusions.
 - Power Pages targets must use standard controls and no platform-library declarations. Learn says React controls and platform libraries are not supported in Power Pages: [React controls FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq).
 - Run `node "${PLUGIN_ROOT}/scripts/pcf-gates.js"` before deploy. Do not weaken gates to pass; fix the manifest, source, tests or version matrix.
 

@@ -31,16 +31,19 @@ Power Pages support is narrower than model-driven apps.
 
 ## Platform libraries
 
-| Library | Matrix baseline | Learn declarations | Notes |
-| --- | --- | --- | --- |
-| React | `16.14.0` | `16.14.0` | Model-driven runtime may load a higher compatible React version; declare the matrix baseline. |
-| Fluent | `9.46.2` | Fluent 8 `8.29.0`, Fluent 8 `8.121.1`, Fluent 9 `>=9.4.0 <=9.46.2` | Observed 2026-09-29: Fluent `9.68.0` was rejected at import; `9.46.2` was accepted. |
+<!-- Maintainers: regenerate this block with renderPlatformLibrariesTable(loadMatrix()) from scripts/lib/pcf-matrix.js. -->
+<!-- pcf-platform-libraries:begin -->
+| Library | Recommended baseline | Documented declarations | Tooling accepted | Baseline exclusions |
+| --- | --- | --- | --- | --- |
+| React | 16.14.0 | 16.14.0 | 16.8.0-16.14.0<br>18.0.0-18.3.1 | — |
+| Fluent | 9.46.2 | 8.29.0<br>8.121.1<br>9.4.0-9.46.2 | 8.0.0-8.29.0<br>8.29.1-8.121.1<br>9.0.0-9.68.0 | 9.68.0 (observed-rejection) |
+<!-- pcf-platform-libraries:end -->
 
 Do not hard-code versions in docs or scripts outside the matrix and lockfiles. The matrix owns current baselines, documented declarations, tooling-accepted ranges and observed exclusions.
 
 ## Unsupported property types for Pages
 
-The matrix treats these manifest property types as unsupported for Power Pages field bindings: `File`, `Lookup.Customer`, `Lookup.Owner`, `Lookup.PartyList`, `Lookup.Regarding`, `Status`, `Status Reason`, `Whole.Duration`, `Whole.Language`, `Whole.TimeZone`.
+The rendered host matrix above lists the manifest property types that are unsupported for Power Pages field bindings.
 
 `File` is listed because an annotation upload is not a PCF File binding. Use a model-driven-only upload recipe or a Pages design with table permissions and portal Web API support.
 

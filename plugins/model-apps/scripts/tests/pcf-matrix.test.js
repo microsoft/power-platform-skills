@@ -186,6 +186,36 @@ test('renderHostsTable emits the sync block and pages prerequisites', () => {
   assert.match(table, /<!-- pcf-matrix:end -->/);
 });
 
+test('renderPlatformLibrariesTable emits exact matrix-derived library rows', () => {
+  const mx = clone(m.loadMatrix());
+  mx.platformLibraries = {
+    React: {
+      recommendedBaseline: { version: '1.2.3' },
+      documentedDeclarations: [{ version: '1.2.3' }],
+      toolingAccepted: [{ min: '1.0.0', max: '1.2.3' }],
+    },
+    Fluent: {
+      recommendedBaseline: { version: '4.5.6' },
+      documentedDeclarations: [{ min: '4.0.0', max: '4.5.6' }],
+      toolingAccepted: [],
+    },
+  };
+  mx.baselineExclusions = [{ library: 'Fluent', version: '4.7.0', scope: 'observed-rejection' }];
+
+  assert.equal(
+    m.renderPlatformLibrariesTable(mx),
+    [
+      '<!-- pcf-platform-libraries:begin -->',
+      '| Library | Recommended baseline | Documented declarations | Tooling accepted | Baseline exclusions |',
+      '| --- | --- | --- | --- | --- |',
+      '| React | 1.2.3 | 1.2.3 | 1.0.0-1.2.3 | — |',
+      '| Fluent | 4.5.6 | 4.0.0-4.5.6 | — | 4.7.0 (observed-rejection) |',
+      '<!-- pcf-platform-libraries:end -->',
+      '',
+    ].join('\n'),
+  );
+});
+
 test('lock package.json files pin exact versions only', () => {
   for (const set of ['standard', 'virtual']) {
     const pj = JSON.parse(fs.readFileSync(path.join(ROOT, 'pcf', 'lock', set, 'package.json'), 'utf8'));
