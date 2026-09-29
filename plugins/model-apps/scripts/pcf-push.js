@@ -156,15 +156,25 @@ async function main(argv = process.argv.slice(2)) {
   const controlName = knownPrefix
     ? orgControlName(knownPrefix, manifest.model.control.namespace, manifest.model.control.constructor)
     : `${manifest.model.control.namespace}.${manifest.model.control.constructor}`;
-  const receipt = writeReceipt(projectDir, {
-    envOrigin,
-    control: controlName,
-    version: expectedVersion,
-    solution: flags.solution ? String(flags.solution) : undefined,
-    publisherPrefix: flags['publisher-prefix'] ? String(flags['publisher-prefix']) : undefined,
-    incremental: !!flags.incremental,
-    registered,
-  });
+  let receipt;
+  try {
+    receipt = writeReceipt(projectDir, {
+      envOrigin,
+      control: controlName,
+      version: expectedVersion,
+      solution: flags.solution ? String(flags.solution) : undefined,
+      publisherPrefix: flags['publisher-prefix'] ? String(flags['publisher-prefix']) : undefined,
+      incremental: !!flags.incremental,
+      registered,
+    });
+  } catch (err) {
+    return emitResult(false, {
+      ok: false,
+      stage: 'receipt',
+      reason: errorReason(err),
+      registered: stripPrivateRegistration(registered),
+    });
+  }
 
   const ok = !!registered.ok || !!flags['no-verify'];
   return emitResult(ok, {
@@ -254,10 +264,33 @@ function scrubbedTail(text, maxLines) {
 }
 
 function scrubSecrets(line) {
+  const key = '(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|code|authorization)';
+  const keyValue = new RegExp(`(\\b${key}\\b\\s*=\\s*)[^\\s&;,]+`, 'gi');
+  const keyColon = new RegExp('(\\b(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|code)\\b\\s*:\\s*)[^\\s,;]+', 'gi');
+  const quotedJson = new RegExp(`(["'])(${key})(\\1\\s*:\\s*)(["'])[^"']*\\4`, 'gi');
+  const authValue = /\bauthorization\b(\s*[:=]\s*)(?!Bearer\b)[^\s&;,]+/gi;
   return String(line || '')
-    .replace(/\bBearer\s+[^\s]+/gi, 'Bearer <redacted>')
-    .replace(/\b(?:access_token|client_secret|password)=([^\s&]+)/gi, (match) => `${match.split('=')[0]}=<redacted>`)
-    .replace(/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>');
+    .replace(/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>')
+    .replace(/\bhttps?:\/\/[^\s"'<>),;]+/gi, redactUrl)
+    .replace(/\b(Authorization\s*:\s*Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
+    .replace(/\b(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
+    .replace(quotedJson, '$1$2$3$4<redacted>$4')
+    .replace(keyValue, '$1<redacted>')
+    .replace(keyColon, '$1<redacted>')
+    .replace(authValue, 'authorization$1<redacted>');
+}
+
+function redactUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return `https://${url.host}/…`;
+  } catch {
+    return 'https://<redacted>/…';
+  }
+}
+
+function errorReason(err) {
+  return err && err.message ? String(err.message) : String(err);
 }
 
 async function readRegistration({ envOrigin, projectDir, solution, publisherPrefix, manifest }) {

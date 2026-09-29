@@ -353,7 +353,41 @@ test('push failure emits scrubbed bounded stdout and stderr tails', async () => 
   assert.doesNotMatch(JSON.stringify(payload), /secret-token|eyJhbGci|abc123|p@ss/);
 });
 
-test('failed receipt write leaves no partial receipt behind', async () => {
+test('push failure scrubs common secret shapes while preserving surrounding text', async () => {
+  const projectDir = makeProject('secret-shapes');
+  const rows = [
+    ['query access token', 'prefix https://contoso.crm.dynamics.com/path?access_token=abc123&x=1 suffix', /abc123|\/path|\?access_token/, /prefix https:\/\/contoso\.crm\.dynamics\.com\/… suffix/],
+    ['refresh token equals', 'prefix refresh_token=refresh-secret suffix', /refresh-secret/, /prefix refresh_token=<redacted> suffix/],
+    ['id token colon', 'prefix id_token: id-secret suffix', /id-secret/, /prefix id_token: <redacted> suffix/],
+    ['clientSecret json', 'prefix "clientSecret": "client-secret" suffix', /client-secret/, /prefix "clientSecret": "<redacted>" suffix/],
+    ['pwd query', 'prefix https://example.test/callback?pwd=pwd-secret suffix', /pwd-secret|\/callback|\?pwd/, /prefix https:\/\/example\.test\/… suffix/],
+    ['sig query', 'prefix https://storage.test/file.zip?sig=sig-secret suffix', /sig-secret|file\.zip|\?sig/, /prefix https:\/\/storage\.test\/… suffix/],
+    ['code equals', 'prefix code=auth-code suffix', /auth-code/, /prefix code=<redacted> suffix/],
+    ['authorization bearer', 'prefix Authorization: Bearer bearer-secret, suffix', /bearer-secret/, /prefix Authorization: Bearer <redacted>, suffix/],
+    ['bare bearer', 'prefix Bearer bare-secret; suffix', /bare-secret/, /prefix Bearer <redacted>; suffix/],
+    ['jwt', 'prefix eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature suffix', /eyJhbGci|eyJzdWIi|signature/, /prefix <redacted-jwt> suffix/],
+    ['password json', 'prefix "password":"json-secret" suffix', /json-secret/, /prefix "password":"<redacted>" suffix/],
+  ];
+
+  const stdout = rows.map(([, line]) => line).join('\n');
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: () => ({ status: 1, stdout, stderr: '' }),
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  for (const [name, , secretPattern, surroundingPattern] of rows) {
+    const line = payload.stdout.find((item) => surroundingPattern.test(item));
+    assert.ok(line, `missing preserved surrounding text for ${name}: ${JSON.stringify(payload.stdout)}`);
+    assert.doesNotMatch(line, secretPattern, name);
+  }
+});
+
+test('failed receipt write emits receipt-stage JSON and leaves no partial receipt behind', async () => {
   const projectDir = makeProject('receipt-write-failure');
   const realFs = require('node:fs');
   const fsStub = {
@@ -364,15 +398,18 @@ test('failed receipt write leaves no partial receipt behind', async () => {
     },
   };
 
-  await assert.rejects(
-    run([
-      '--project', projectDir,
-      '--env', 'https://contoso.crm.dynamics.com',
-      '--publisher-prefix', 'abc',
-      '--no-verify',
-    ], { requires: { 'node:fs': fsStub } }),
-    /rename failed/,
-  );
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], { requires: { 'node:fs': fsStub } });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.equal(payload.stage, 'receipt');
+  assert.match(payload.reason, /rename failed/);
+  assert.deepEqual(payload.registered, { ok: true, version: '1.2.3', expected: '1.2.3' });
   assert.equal(realFs.existsSync(path.join(projectDir, 'pcf-receipt.json')), false);
   assert.deepEqual(realFs.readdirSync(projectDir).filter((entry) => entry.startsWith('.pcf-receipt-')), []);
 });
