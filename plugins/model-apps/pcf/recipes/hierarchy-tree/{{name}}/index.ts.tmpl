@@ -29,6 +29,14 @@ interface TreeModel {
     truncated: boolean;
 }
 
+interface VisibleTreeItem {
+    key: string;
+    parentKey: string | null;
+    node: TreeNode | null;
+    hasChildren: boolean;
+    expanded: boolean;
+}
+
 export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private root: HTMLDivElement | null = null;
     private message: HTMLDivElement | null = null;
@@ -40,6 +48,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private pagingRequest: Promise<void> | null = null;
     private expanded = new Set<string>();
     private initializedExpansion = new Set<string>();
+    private visibleItems: VisibleTreeItem[] = [];
+    private focusedItemKey: string | null = null;
+    private focusAfterRender = false;
 
     public init(
         context: ComponentFramework.Context<IInputs>,
@@ -129,6 +140,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private render(): void {
         if (!this.treeHost || !this.message || !this.previousButton || !this.nextButton) return;
+        const restoreFocus = this.focusAfterRender || this.treeHost.contains(document.activeElement);
+        this.focusAfterRender = false;
+        this.visibleItems = [];
         this.treeHost.replaceChildren();
         const dataSet = this.dataSet;
 
@@ -164,9 +178,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         tree.className = "{{nameLower}}-tree";
         tree.setAttribute("role", "tree");
         tree.setAttribute("aria-label", this.stringResource("Tree_Label_Key", "Hierarchy tree"));
-        for (const node of model.roots) tree.append(this.renderNode(node, 1));
+        for (const node of model.roots) tree.append(this.renderNode(node, 1, null));
         if (model.orphaned.length) tree.append(this.renderParentNotLoadedGroup(model.orphaned));
         this.treeHost.append(tree);
+        this.ensureFocusedItem();
+        this.applyRovingTabIndex(restoreFocus);
         this.updatePaging(dataSet);
     }
 
@@ -240,12 +256,15 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     private renderParentNotLoadedGroup(children: TreeNode[]): HTMLLIElement {
+        const key = "synthetic:parent-not-loaded";
         const item = document.createElement("li");
         item.className = "{{nameLower}}-tree-item {{nameLower}}-parent-not-loaded";
         item.setAttribute("role", "treeitem");
         item.setAttribute("aria-level", "1");
         item.setAttribute("aria-expanded", "true");
-        item.tabIndex = 0;
+        item.dataset.treeKey = key;
+        this.visibleItems.push({ key, parentKey: null, node: null, hasChildren: children.length > 0, expanded: true });
+        item.addEventListener("keydown", (event) => this.onTreeItemKeyDown(event, key));
         const row = document.createElement("div");
         row.className = "{{nameLower}}-node-row";
         const label = document.createElement("span");
@@ -254,22 +273,27 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         row.append(label);
         const group = document.createElement("ul");
         group.setAttribute("role", "group");
-        for (const child of children) group.append(this.renderNode(child, 2));
+        for (const child of children) group.append(this.renderNode(child, 2, key));
         item.append(row, group);
         return item;
     }
 
-    private renderNode(node: TreeNode, level: number): HTMLLIElement {
+    private renderNode(node: TreeNode, level: number, parentKey: string | null): HTMLLIElement {
         this.ensureExpansion(node);
         const hasChildren = node.children.length > 0;
         const expanded = hasChildren && this.expanded.has(node.normalizedId);
+        const key = this.recordKey(node);
         const item = document.createElement("li");
         item.className = "{{nameLower}}-tree-item";
         item.setAttribute("role", "treeitem");
         item.setAttribute("aria-level", String(level));
         if (hasChildren) item.setAttribute("aria-expanded", String(expanded));
-        item.tabIndex = 0;
-        item.addEventListener("keydown", (event) => this.onTreeItemKeyDown(event, node, hasChildren));
+        item.dataset.treeKey = key;
+        // Roving tabindex follows the WAI-ARIA tree pattern: only one visible treeitem is in the
+        // tab order, while arrow keys move focus within the tree.
+        // See: https://www.w3.org/WAI/ARIA/apg/patterns/treeview/
+        this.visibleItems.push({ key, parentKey, node, hasChildren, expanded });
+        item.addEventListener("keydown", (event) => this.onTreeItemKeyDown(event, key));
 
         const row = document.createElement("div");
         row.className = "{{nameLower}}-node-row";
@@ -277,6 +301,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             const toggle = document.createElement("button");
             toggle.type = "button";
             toggle.className = "{{nameLower}}-toggle";
+            toggle.tabIndex = -1;
             toggle.setAttribute("aria-label", expanded
                 ? this.format(this.stringResource("Collapse_Label_Key", "Collapse {0}"), node.label)
                 : this.format(this.stringResource("Expand_Label_Key", "Expand {0}"), node.label));
@@ -296,6 +321,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         const open = document.createElement("button");
         open.type = "button";
         open.className = "{{nameLower}}-open";
+        open.tabIndex = -1;
         open.textContent = this.stringResource("Open_Button_Key", "Open");
         open.setAttribute("aria-label", this.format(this.stringResource("Open_Record_Label_Key", "Open {0}"), node.label));
         open.addEventListener("click", () => openRecord(this.dataSet, node.record));
@@ -305,41 +331,110 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         if (hasChildren && expanded) {
             const group = document.createElement("ul");
             group.setAttribute("role", "group");
-            for (const child of node.children) group.append(this.renderNode(child, level + 1));
+            for (const child of node.children) group.append(this.renderNode(child, level + 1, key));
             item.append(group);
         }
         return item;
     }
 
-    private onTreeItemKeyDown(event: KeyboardEvent, node: TreeNode, hasChildren: boolean): void {
-        if (!hasChildren) {
-            if (event.key === "Enter") openRecord(this.dataSet, node.record);
+    private onTreeItemKeyDown(event: KeyboardEvent, key: string): void {
+        const item = this.visibleItems.find((candidate) => candidate.key === key);
+        if (!item) return;
+        const index = this.visibleItems.findIndex((candidate) => candidate.key === key);
+
+        if (event.key === "ArrowDown") {
+            this.focusVisibleItem(Math.min(index + 1, this.visibleItems.length - 1));
+            event.preventDefault();
+        } else if (event.key === "ArrowUp") {
+            this.focusVisibleItem(Math.max(index - 1, 0));
+            event.preventDefault();
+        } else if (event.key === "Home") {
+            this.focusVisibleItem(0);
+            event.preventDefault();
+        } else if (event.key === "End") {
+            this.focusVisibleItem(this.visibleItems.length - 1);
+            event.preventDefault();
+        } else if (event.key === "ArrowRight") {
+            this.moveRight(item, index);
+            event.preventDefault();
+        } else if (event.key === "ArrowLeft") {
+            this.moveLeft(item);
+            event.preventDefault();
+        } else if (event.key === "Enter" && item.node) {
+            openRecord(this.dataSet, item.node.record);
+            event.preventDefault();
+        }
+    }
+
+    private moveRight(item: VisibleTreeItem, index: number): void {
+        if (!item.hasChildren) return;
+        if (!item.expanded && item.node) {
+            this.expanded.add(item.node.normalizedId);
+            this.focusedItemKey = item.key;
+            this.focusAfterRender = true;
+            this.render();
             return;
         }
-        if (event.key === "ArrowLeft") {
-            this.expanded.delete(node.normalizedId);
-            event.preventDefault();
+        const next = this.visibleItems[index + 1];
+        if (next && next.parentKey === item.key) this.focusItem(next.key);
+    }
+
+    private moveLeft(item: VisibleTreeItem): void {
+        if (item.hasChildren && item.expanded && item.node) {
+            this.expanded.delete(item.node.normalizedId);
+            this.focusedItemKey = item.key;
+            this.focusAfterRender = true;
             this.render();
-        } else if (event.key === "ArrowRight") {
-            this.expanded.add(node.normalizedId);
-            event.preventDefault();
-            this.render();
-        } else if (event.key === "Enter") {
-            openRecord(this.dataSet, node.record);
-            event.preventDefault();
+        } else if (item.parentKey) {
+            this.focusItem(item.parentKey);
         }
     }
 
     private toggle(node: TreeNode): void {
         if (this.expanded.has(node.normalizedId)) this.expanded.delete(node.normalizedId);
         else this.expanded.add(node.normalizedId);
+        this.focusedItemKey = this.recordKey(node);
+        this.focusAfterRender = true;
         this.render();
+    }
+
+    private focusVisibleItem(index: number): void {
+        const item = this.visibleItems[index];
+        if (item) this.focusItem(item.key);
+    }
+
+    private focusItem(key: string): void {
+        this.focusedItemKey = key;
+        this.applyRovingTabIndex(true);
+    }
+
+    private ensureFocusedItem(): void {
+        if (!this.visibleItems.length) {
+            this.focusedItemKey = null;
+            return;
+        }
+        if (!this.focusedItemKey || !this.visibleItems.some((item) => item.key === this.focusedItemKey)) {
+            this.focusedItemKey = this.visibleItems[0].key;
+        }
+    }
+
+    private applyRovingTabIndex(focusCurrent: boolean): void {
+        if (!this.treeHost || !this.focusedItemKey) return;
+        const items = Array.from(this.treeHost.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        for (const item of items) item.tabIndex = item.dataset.treeKey === this.focusedItemKey ? 0 : -1;
+        if (focusCurrent) {
+            items.find((item) => item.dataset.treeKey === this.focusedItemKey)?.focus();
+        }
     }
 
     private ensureExpansion(node: TreeNode): void {
         if (this.initializedExpansion.has(node.normalizedId)) return;
         this.initializedExpansion.add(node.normalizedId);
         this.expanded.add(node.normalizedId);
+    }
+
+    private recordKey(node: TreeNode): string {
+        return `record:${node.normalizedId}`;
     }
 
     private parentReference(record: DataSetRecord): { id: string | null; name: string } {
