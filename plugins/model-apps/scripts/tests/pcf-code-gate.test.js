@@ -155,9 +155,11 @@ export class Control {
 });
 
 test('scanSource reports direct API URLs in strings and templates but not JSX text', () => {
-  assertCode(scan("fetch('/api/data/v9.2/accounts');"), 'PCF_CODE_DIRECT_API', 'warning');
+  assertCode(scan('fetch("/api/data/v9.2/accounts");'), 'PCF_CODE_DIRECT_API', 'warning');
+  assertCode(scan("const u = '/api/data/v9.2/accounts';"), 'PCF_CODE_DIRECT_API', 'warning');
   assertCode(scan('const url = `${context.client.getClientUrl()}/api/data/v9.2/accounts`;'), 'PCF_CODE_DIRECT_API', 'warning');
   assert.deepEqual(scanFile('src/index.tsx', 'export const Help = () => <span>/api/data/ docs</span>;'), []);
+  assert.deepEqual(scanFile('src/index.tsx', 'export const Help = () => <span>"/api/data/" docs</span>;'), []);
 });
 
 test('scanSource turns lexer failures into unparseable warnings', () => {
@@ -179,6 +181,16 @@ test('featureCoherence reports undeclared WebAPI use and passes when declared', 
 test('featureCoherence treats optional-chained WebAPI use as feature use', () => {
   assertCode(featureCoherence(manifest(), [{ file: FILE, text: 'context.webAPI?.retrieveMultipleRecords("account");' }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('WebAPI')), [{ file: FILE, text: 'context.webAPI?.retrieveMultipleRecords("account");' }], ['model']), []);
+});
+
+test('featureCoherence turns lexer failures into unparseable warnings', () => {
+  const findings = featureCoherence(manifest(), [{ file: 'src/broken.ts', text: 'context.webAPI.retrieveRecord("account", id);' }], ['model'], {
+    lex: () => {
+      throw new Error('simulated lexer failure');
+    },
+  });
+
+  assertCode(findings, 'PCF_CODE_UNPARSEABLE', 'warning', 'src/broken.ts');
 });
 
 test('featureCoherence ignores WebAPI words that appear only in comments or strings', () => {
@@ -230,6 +242,12 @@ test('featureCoherence reports Pages device calls without method-level guards an
 test('featureCoherence rejects unsafe dotted method guards and accepts namespace plus method guards', () => {
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+});
+
+test('featureCoherence accepts parenthesized and composed method guards', () => {
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if ((typeof context.device?.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), []);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready && typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready && context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
 });
 
 test('featureCoherence does not treat a string-only method guard as a Pages guard', () => {

@@ -1,6 +1,6 @@
 'use strict';
 
-const { blankLiterals } = require('./source-literals.js');
+const { blankLiterals, expressionPosition } = require('./source-literals.js');
 
 const BEST_PRACTICES = 'https://learn.microsoft.com/power-apps/developer/component-framework/code-components-best-practices';
 const FEATURE_USAGE = 'https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/feature-usage';
@@ -100,8 +100,8 @@ function addRegexFindings(findings, rule, file, src, mask) {
   }
 }
 
-function addDirectApiFindings(findings, file, src) {
-  const ranges = stringLikeRanges(src);
+function addDirectApiFindings(findings, file, src, mask) {
+  const ranges = stringLikeRanges(src, mask);
   const re = /\/api\/data\//g;
   let match;
   while ((match = re.exec(src)) !== null) {
@@ -138,7 +138,7 @@ function addRefreshInUpdateViewFindings(findings, file, src, mask) {
   }
 }
 
-function featureCoherence(manifestModel, sources, hosts = []) {
+function featureCoherence(manifestModel, sources, hosts = [], { lex = blankLiterals } = {}) {
   const declared = new Set((manifestModel.features || []).map((feature) => feature.name).filter(Boolean));
   const used = new Set();
   const findings = [];
@@ -147,7 +147,7 @@ function featureCoherence(manifestModel, sources, hosts = []) {
   for (const source of sources || []) {
     const file = source.file || '<source>';
     const text = String(source.text || '');
-    const lexed = lexSource(file, text, blankLiterals);
+    const lexed = lexSource(file, text, lex);
     if (lexed.finding) {
       findings.push(lexed.finding);
       continue;
@@ -282,7 +282,7 @@ function lexSource(file, text, lex, opts) {
   }
 }
 
-function stringLikeRanges(src) {
+function stringLikeRanges(src, mask) {
   const ranges = [];
   let i = 0;
   while (i < src.length) {
@@ -298,7 +298,7 @@ function stringLikeRanges(src) {
       i = end === -1 ? src.length : end + 2;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') {
+    if ((c === '"' || c === "'" || c === '`') && expressionPosition(mask, i)) {
       const quote = c;
       const start = i;
       i += 1;
@@ -335,24 +335,50 @@ function hasGridCustomizerMarker(file, text) {
 
 function hasMethodGuard(text, mask, namespace, method, callIndex) {
   const start = Math.max(0, callIndex - 500);
-  const prefix = text.slice(start, callIndex);
   const escapedNamespace = escapeRegExp(namespace);
   const escapedMethod = escapeRegExp(method);
-  const optionalMethodGuard = `typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`;
-  const dottedMethodGuard = `typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`;
-  const namespaceCheck = `(?:context\\.${escapedNamespace}\\s*&&|&&\\s*context\\.${escapedNamespace}\\b)`;
-  const guards = [
-    new RegExp(`if\\s*\\([^)]*${optionalMethodGuard}[^)]*\\)\\s*\\{`, 'g'),
-    new RegExp(`if\\s*\\((?=[^)]*${namespaceCheck})(?=[^)]*${dottedMethodGuard})[^)]*\\)\\s*\\{`, 'g'),
-  ];
-  for (const guard of guards) {
-    let match;
-    while ((match = guard.exec(prefix)) !== null) {
-      const guardStart = start + match.index;
-      if (mask[guardStart] === ' ') continue;
-      const open = guardStart + match[0].lastIndexOf('{');
-      if (!mask.slice(open + 1, callIndex).includes('}')) return true;
+  const ifHead = /\bif\s*\(/g;
+  ifHead.lastIndex = start;
+  let match;
+  while ((match = ifHead.exec(mask)) !== null && match.index < callIndex) {
+    const openParen = mask.indexOf('(', match.index);
+    const closeParen = findMatchingParen(mask, openParen);
+    if (closeParen === -1 || closeParen >= callIndex) continue;
+    let openBrace = closeParen + 1;
+    while (openBrace < mask.length && /\s/.test(mask[openBrace])) openBrace += 1;
+    if (mask[openBrace] !== '{' || openBrace >= callIndex) continue;
+    if (mask.slice(openBrace + 1, callIndex).includes('}')) continue;
+
+    const rawCondition = text.slice(openParen + 1, closeParen);
+    const maskCondition = mask.slice(openParen + 1, closeParen);
+    const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
+    if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) return true;
+
+    const namespaceCheck = new RegExp(`\\bcontext\\.${escapedNamespace}\\b(?![?.])`, 'g');
+    const dottedMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
+    if (hasCodeMatch(namespaceCheck, rawCondition, maskCondition) && hasCodeMatch(dottedMethodGuard, rawCondition, maskCondition)) return true;
+  }
+  return false;
+}
+
+function findMatchingParen(mask, open) {
+  if (open < 0) return -1;
+  let depth = 0;
+  for (let i = open; i < mask.length; i += 1) {
+    if (mask[i] === '(') depth += 1;
+    else if (mask[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
     }
+  }
+  return -1;
+}
+
+function hasCodeMatch(re, raw, mask) {
+  re.lastIndex = 0;
+  let match;
+  while ((match = re.exec(raw)) !== null) {
+    if (mask[match.index] !== ' ') return true;
   }
   return false;
 }
