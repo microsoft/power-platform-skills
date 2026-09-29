@@ -45,9 +45,26 @@ test('rejects duplicate attributes and text after the root', () => {
   assert.throws(() => parseXml('<a/>trailing'), /after the root/i);
 });
 
-test('findAll returns every descendant in document order', () => {
+test('rejects raw less-than signs inside attribute values with XmlError location', () => {
+  assert.throws(
+    () => parseXml('<a x="bad<value"/>'),
+    (e) => e.name === 'XmlError' && e.line === 1 && e.column === 10 && /attribute value/i.test(e.message)
+  );
+});
+
+test('rejects invalid numeric character references with XmlError location', () => {
+  for (const value of ['&#x110000;', '&#xD800;', '&#;', '&#xZZ;']) {
+    assert.throws(
+      () => parseXml(`<a>\n  ${value}\n</a>`),
+      (e) => e.name === 'XmlError' && e.line === 2 && e.column === 3 && /entity|character reference/i.test(e.message),
+      value
+    );
+  }
+});
+
+test('findAll includes the root when it matches and returns document order', () => {
   const root = parseXml('<f><c id="1"/><x><c id="2"/></x><c id="3"/></f>');
-  assert.deepEqual(findAll(root, (e) => e.name === 'c').map((e) => attr(e, 'id')), ['1', '2', '3']);
+  assert.deepEqual(findAll(root, (e) => e.name === 'f' || e.name === 'c').map((e) => e.name === 'f' ? 'root' : attr(e, 'id')), ['root', '1', '2', '3']);
 });
 
 test('parses a large form document', () => {

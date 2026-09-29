@@ -234,8 +234,8 @@ function childElements(el, name) {
 function findAll(el, pred) {
   const out = [];
   const visit = (node) => {
+    if (pred(node)) out.push(node);
     for (const child of childElements(node)) {
-      if (pred(child)) out.push(child);
       visit(child);
     }
   };
@@ -292,9 +292,22 @@ function decodeEntities(value, baseOffset, fail) {
 
 function decodeOneEntity(body, offset, fail) {
   if (Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, body)) return NAMED_ENTITIES[body];
-  if (/^#[0-9]+$/.test(body)) return String.fromCodePoint(parseInt(body.slice(1), 10));
-  if (/^#x[0-9a-fA-F]+$/.test(body)) return String.fromCodePoint(parseInt(body.slice(2), 16));
+  if (body.startsWith('#')) {
+    let codePoint = null;
+    if (/^#[0-9]+$/.test(body)) codePoint = parseInt(body.slice(1), 10);
+    else if (/^#x[0-9a-fA-F]+$/.test(body)) codePoint = parseInt(body.slice(2), 16);
+    if (!isXmlCodePoint(codePoint)) fail(`Invalid numeric character reference &${body};`, offset);
+    return String.fromCodePoint(codePoint);
+  }
   fail(`Unknown entity reference &${body};`, offset);
+}
+
+function isXmlCodePoint(codePoint) {
+  return Number.isInteger(codePoint) &&
+    (codePoint === 0x9 || codePoint === 0xA || codePoint === 0xD ||
+      (codePoint >= 0x20 && codePoint <= 0xD7FF) ||
+      (codePoint >= 0xE000 && codePoint <= 0xFFFD) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10FFFF));
 }
 
 function isNameTerminator(ch) {
