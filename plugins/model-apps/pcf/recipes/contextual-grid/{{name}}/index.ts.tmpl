@@ -277,7 +277,7 @@ function formatCell(row: GridRow, key: string): string {
 
     const value = row[key];
     if (value == null) return "";
-    if (isLookupResultKey(key) && isGuidLike(value)) return "";
+    if (isGuidLike(value) && (isLookupResultKey(key) || isAliasedResultKey(key))) return "";
     if (value instanceof Date) return value.toLocaleString();
     return String(value);
 }
@@ -292,6 +292,16 @@ function displayColumnName(key: string): string {
 
 function isLookupResultKey(key: string): boolean {
     return key.startsWith("_") && key.endsWith("_value");
+}
+
+function isAliasedResultKey(key: string): boolean {
+    // Learn documents FetchXML link-entity results as alias-qualified keys such as
+    // `contact.fullname`, and Web API alias examples show lookup alias keys such as `whocreated`
+    // carrying formatted-value and lookup-logical-name annotations when annotations are included.
+    // Without those annotations the only safe display for a GUID-shaped alias value is blank: showing
+    // the GUID would expose an implementation id instead of the intended lookup name.
+    // See: https://learn.microsoft.com/power-apps/developer/data-platform/fetchxml/select-columns#column-aliases
+    return key.includes(".");
 }
 
 function isGuidLike(value: unknown): boolean {

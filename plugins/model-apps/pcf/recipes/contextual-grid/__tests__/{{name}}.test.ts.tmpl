@@ -210,6 +210,41 @@ test("does not render raw lookup GUIDs when formatted lookup annotations are abs
     expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
 });
 
+
+test("renders aliased lookup formatted names and hides unformatted aliased GUIDs", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "primary.ownerid": "33333333-3333-4333-8333-333333333333",
+                "primary.ownerid@OData.Community.Display.V1.FormattedValue": "MOD Administrator",
+                "alias.parentcustomerid": "22222222-2222-4222-8222-222222222222",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toEqual(expect.arrayContaining(["primary.ownerid", "alias.parentcustomerid"]));
+    expect(mounted.container.textContent).toContain("MOD Administrator");
+    expect(mounted.container.textContent).not.toContain("33333333-3333-4333-8333-333333333333");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
+test("renders aliased non-lookup text values", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "contact.fullname": "Adele Vance",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("contact.fullname");
+    expect(mounted.container.textContent).toContain("Adele Vance");
+});
+
 test("load more follows documented nextLink paging", async () => {
     const retrieveMultipleRecords = jest.fn()
         .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
