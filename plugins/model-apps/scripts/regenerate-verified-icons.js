@@ -14,7 +14,8 @@
  *   - npm (for the one-time install in a temp dir)
  *   - Network access to npm registry
  */
-const { execFileSync } = require('child_process');
+// npm is a batch shim on Windows; the runner starts it without a shell (see lib/process-runner.js).
+const { runSync } = require('./lib/process-runner');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -28,12 +29,11 @@ const OUTPUT = path.join(__dirname, '..', 'references', 'verified-icons.txt');
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-icons-'));
 console.log(`Installing ${ICON_PKG} into ${tmpDir}...`);
 
-// On Windows, npm is a shim invoked through cmd. execFile needs shell:true there.
-const npmShellOpts = { cwd: tmpDir, stdio: 'inherit', shell: process.platform === 'win32' };
+const npmOpts = { cwd: tmpDir, stdio: 'inherit' };
 
 try {
-  execFileSync('npm', ['init', '-y'], { ...npmShellOpts, stdio: 'ignore' });
-  execFileSync('npm', ['install', ICON_PKG, '--no-save', '--silent'], npmShellOpts);
+  runSync('npm', ['init', '-y'], { ...npmOpts, stdio: 'ignore' });
+  runSync('npm', ['install', ICON_PKG, '--no-save', '--silent'], npmOpts);
 
   // Load the module from the temp dir and enumerate exports.
   const iconsPath = path.join(tmpDir, 'node_modules', '@fluentui', 'react-icons');

@@ -11,6 +11,7 @@
 //   NODE20_BIN=C:/path/to/node20/dir node scripts/run-tests.js --with-sdk <ppux>
 
 const { spawnSync } = require('node:child_process');
+const { spawnResultSync, withPathFirst } = require('./lib/process-runner.js');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -83,8 +84,11 @@ function main(argv) {
       results.push({ name: 'cds-maker-sdk Jest', ok: true, skipped: 'no Node 20 (set NODE20_BIN)' });
     } else {
       process.stdout.write('\n=== cds-maker-sdk Jest (Node 20) ===\n');
-      const env = { ...process.env, PATH: `${spec.node20Bin}${path.delimiter}${process.env.PATH}` };
-      const sdk = spawnSync('npm', ['test'], { cwd: spec.pkgDir, stdio: 'inherit', env, shell: true });
+      // Node 20 first on the path. On Windows, where names are case-insensitive, an added `PATH` beside the
+      // inherited `Path` would leave two values, of which Node passes the child only one.
+      const env = withPathFirst(process.env, spec.node20Bin);
+      // npm is resolved from the Node 20 PATH above, and started without a shell.
+      const sdk = spawnResultSync('npm', ['test'], { cwd: spec.pkgDir, stdio: 'inherit', env }, { env });
       results.push({ name: 'cds-maker-sdk Jest', ok: sdk.status === 0 });
     }
   }

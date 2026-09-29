@@ -2,60 +2,26 @@
 // Injectable wrapper around `pac model genpage upload/list` — the seam the build's pages phase uses
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
-const { spawn } = require('node:child_process');
+const { invocation, spawnProcess } = require('./process-runner.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
-// Windows, which requires shell:true — and shell:true does not quote an args array). Embedded
-// newlines terminate the Windows command line (pac then sees a truncated command and dumps its
-// help), so collapse them to spaces first. This is now purely a DEFENSIVE net for whatever args
-// still flow inline — e.g. a page --name; it is NOT how multi-line prompts survive. upload() passes
-// the prompt and agent-message to pac BY FILE (--prompt-file/--agent-message-file) precisely because
-// collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
-function quoteArg(a) {
-  const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  const q = s.replace(/(\\*)(["%])/g, (_m, slashes, ch) => {
-    const escaped = ch === '"' ? '""' : '"^%"';
-    return slashes + slashes + escaped;
-  });
-  // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
-  // each percent so prompts/names containing environment-variable syntax round-trip literally.
-  if (!/[\s"'&|<>^()%]/.test(s)) return s;
-  // The C runtime treats a backslash run before ANY quote specially, not only the closing quote:
-  // 2n backslashes before `"` become n literal backslashes plus a quote delimiter. That includes
-  // quotes we synthesize while escaping `%` for cmd.exe (`"^%"`). Real cmd.exe parse before this guard:
-  //   value: qa slash\"quote, next arg: after  -> ["qa slash\"quote after"]
-  //   value: a\%b, next arg: after             -> ["a\"%b after"]
-  // Double the run before each quote source, then emit `""` for caller quotes or `"^%"` for percents.
-  // The final quote has the same rule, so a trailing separator is still doubled:
-  //   --output-directory "C:\Users\Power User\download\"
-  // would otherwise absorb the following flags into the path. Interior backslashes that are NOT
-  // immediately before a quote remain literal, preserving ordinary Windows paths.
-  // See: https://learn.microsoft.com/cpp/cpp/main-function-command-line-args#parsing-c-command-line-arguments
-  const trailingSlashesDoubled = q.replace(/(\\+)$/, (m) => m + m);
-  return `"${trailingSlashesDoubled}"`;
+// Build the spawn call for a `pac` call. `pac` is resolved to an absolute path on PATH, never from
+// the project directory, and started without a shell: `pac.exe` (a dotnet-tool install) directly,
+// with every argument passed as-is, and a `pac.cmd` shim through cmd.exe with each argument checked
+// or refused (lib/process-runner.js explains the rules). Embedded newlines are collapsed to spaces on
+// every arg — a DEFENSIVE net for any arg that still flows inline (e.g. a page --name), since a
+// newline would end a batch shim's command line. It is not relied on for prompts: upload() passes
+// prompt/agent-message via file precisely because collapsing THEIR newlines was lossy for multi-line
+// transcripts.
+// @returns {{file: string, args: string[], options: object}}
+// @throws when pac is not on PATH, or an argument cannot reach a pac.cmd shim unchanged
+const cleanPacArgs = (args) => args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
+function buildPacInvocation(args, deps = {}) {
+  return invocation('pac', cleanPacArgs(args), deps);
 }
-
-// Build the spawn invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
-// which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
-// line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
-// embedded quotes and other shell metacharacters round-trip verbatim instead of being mangled by
-// cmd-style quoting. Embedded newlines are still collapsed to spaces on every arg — a DEFENSIVE net
-// for any arg that still flows inline (e.g. a page --name), since a newline truncates the Windows
-// command line. It is no longer relied on for prompts: upload() passes prompt/agent-message via file
-// precisely because collapsing THEIR newlines was lossy for multi-line transcripts.
-function buildPacInvocation(args, platform = process.platform) {
-  const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
-  if (platform === 'win32') {
-    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { shell: true } };
-  }
-  return { command: 'pac', args: clean, options: {} };
-}
-
 function runPac(args) {
-  const inv = buildPacInvocation(args);
   // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
   // length of every pac call — about five seconds for one `pac model genpage list` — so two
   // independent listings could not overlap even when a caller awaited them together (an update in
@@ -67,7 +33,6 @@ function runPac(args) {
   // prints page names, which are user text; spawnSync's `encoding: 'utf8'` decoded the whole buffer,
   // so this keeps that behaviour. It also drops spawnSync's 1 MiB maxBuffer, past which the child
   // was killed and its output truncated.
-  const options = { ...inv.options, stdio: ['ignore', 'pipe', 'pipe'] };
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -86,7 +51,8 @@ function runPac(args) {
     };
     let child;
     try {
-      child = inv.args ? spawn(inv.command, inv.args, options) : spawn(inv.command, options);
+      // Resolution and argument checks throw here too, and resolve as a failed result like a launch error.
+      child = spawnProcess('pac', cleanPacArgs(args), { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       finish(1, e);
       return;
@@ -400,8 +366,8 @@ function makeGenpageCli(env, deps = {}) {
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
       // a multi-line conversation transcript ("Conversation with N prompts:\r\n1. …\r\n2. …"); passed
-      // inline it hits the newline-collapsing in quoteArg/buildPacInvocation (a defensive guard so a
-      // stray newline can't truncate the Windows command line) and silently loses every line break on
+      // inline it hits the newline-collapsing in buildPacInvocation (a defensive guard so a stray
+      // newline can't truncate a Windows batch shim's command line) and silently loses every line break on
       // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
       const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
       // The default applies only when NO agent message was supplied. An explicitly EMPTY one (a
@@ -581,4 +547,4 @@ function makeGenpageCli(env, deps = {}) {
 function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
-module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
+module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, buildPacInvocation, runPac };

@@ -88,6 +88,11 @@ test('readMarketplaceName returns null when no marketplace exists', () => {
 // End-to-end: the skills run `node "${PLUGIN_ROOT}/scripts/check-version.js"` from the USER's project
 // directory, so every git call must be anchored to the plugin, never to process.cwd().
 const SCRIPT = path.join(__dirname, '..', 'check-version.js');
+// check-version.js starts git through the plugin's process runner, so a copied plugin needs it too.
+const copyRunner = (pluginDir) => {
+  fs.mkdirSync(path.join(pluginDir, 'scripts', 'lib'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'lib', 'process-runner.js'), path.join(pluginDir, 'scripts', 'lib', 'process-runner.js'));
+};
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=test', ...args], {
@@ -148,6 +153,7 @@ test('check-version compares against the PLUGIN clone, not the git repo it is ru
     writePluginManifest(seedPlugin, '1.0.0');
     fs.mkdirSync(path.join(seedPlugin, 'scripts'), { recursive: true });
     fs.copyFileSync(SCRIPT, path.join(seedPlugin, 'scripts', 'check-version.js'));
+    copyRunner(seedPlugin);
     git(seed, 'add', '-A');
     git(seed, 'commit', '-q', '-m', 'v1.0.0');
     git(seed, 'remote', 'add', 'origin', path.join(tmp, 'origin.git'));
@@ -176,6 +182,7 @@ test('check-version exits silently, touching no repository, when the plugin is n
     writePluginManifest(plugin, '1.0.0');
     fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
     fs.copyFileSync(SCRIPT, path.join(plugin, 'scripts', 'check-version.js'));
+    copyRunner(plugin);
     const project = makeUserProject(tmp);
 
     const out = runScript(path.join(plugin, 'scripts', 'check-version.js'), project);

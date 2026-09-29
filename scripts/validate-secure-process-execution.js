@@ -3,7 +3,7 @@
 'use strict';
 
 /**
- * Deterministic child_process policy for production Power Pages JavaScript.
+ * Deterministic child_process policy for production Power Pages and Model Apps JavaScript.
  *
  * This repository intentionally has no root npm dependency graph, so CI cannot
  * assume an installed parser. The analyzer below uses a conservative JavaScript
@@ -31,6 +31,7 @@ const path = require('path');
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..');
 const POWER_PAGES_ROOT = 'plugins/power-pages';
+const MODEL_APPS_ROOT = 'plugins/model-apps';
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 const PROCESS_METHODS = new Set([
   'exec',
@@ -51,6 +52,8 @@ const SCAN_ROOTS = Object.freeze([
   `${POWER_PAGES_ROOT}/hooks`,
   `${POWER_PAGES_ROOT}/scripts`,
   `${POWER_PAGES_ROOT}/skills`,
+  `${MODEL_APPS_ROOT}/hooks`,
+  `${MODEL_APPS_ROOT}/scripts`,
 ]);
 const EXCLUDED_DIRECTORY_NAMES = new Set([
   'test',
@@ -63,9 +66,29 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
   'node_modules',
 ]);
 
-// Exceptions must remain rare, exact, and removable. The current production
-// tree needs none; drift behavior stays covered by synthetic tests below.
-const AUDITED_EXCEPTIONS = Object.freeze([]);
+// Exceptions must remain rare, exact, and removable. Drift behavior stays covered
+// by synthetic tests.
+//
+// model-apps starts every external CLI through one module, scripts/lib/process-runner.js,
+// which resolves the executable to an absolute path at run time and merges the
+// caller's options under its own shell:false (and, for a Windows batch shim, a
+// checked cmd.exe command line). Neither can be proven statically, so its four
+// child_process calls are the audited exceptions: each one, and nothing else.
+const RUNNER_PATH = `${MODEL_APPS_ROOT}/scripts/lib/process-runner.js`;
+const RUNNER_REASON = 'model-apps process runner: absolute executable resolved at run time; '
+  + 'options merged under shell:false, batch-shim arguments checked before spawning.';
+const AUDITED_EXCEPTIONS = Object.freeze([
+  ['execFileSync', 'childProcess . execFileSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
+  ['spawnSync', 'childProcess . spawnSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
+  ['execFile', 'childProcess . execFile ( inv . file , inv . args , withOptions ( inv , options ) , callback )'],
+  ['spawn', 'childProcess . spawn ( inv . file , inv . args , withOptions ( inv , options ) )'],
+].flatMap(([callee, call]) => ['nonconstant-executable', 'ambiguous-shell-option'].map((rule) => Object.freeze({
+  path: RUNNER_PATH,
+  rule,
+  callee,
+  call,
+  reason: RUNNER_REASON,
+}))));
 
 function decodeStringLiteral(raw) {
   if (typeof raw !== 'string' || raw.length < 2) return null;
@@ -1028,6 +1051,8 @@ function shouldScan(relativePath) {
   if (segments.some((segment) => EXCLUDED_DIRECTORY_NAMES.has(segment))) return false;
   if (normalized.startsWith(`${POWER_PAGES_ROOT}/hooks/`)) return true;
   if (normalized.startsWith(`${POWER_PAGES_ROOT}/scripts/`)) return true;
+  if (normalized.startsWith(`${MODEL_APPS_ROOT}/hooks/`)) return true;
+  if (normalized.startsWith(`${MODEL_APPS_ROOT}/scripts/`)) return true;
   return normalized.startsWith(`${POWER_PAGES_ROOT}/skills/`) &&
     normalized.includes('/scripts/');
 }
@@ -1144,7 +1169,7 @@ function runCli(argv = process.argv.slice(2)) {
   if (options.help) {
     process.stdout.write(
       'Usage: node scripts/validate-secure-process-execution.js [--root <repository>]\n' +
-      'Audits production Power Pages hooks, shared scripts, and skill scripts.\n'
+      'Audits production Power Pages hooks, shared scripts, and skill scripts, and Model Apps hooks and scripts.\n'
     );
     return 0;
   }

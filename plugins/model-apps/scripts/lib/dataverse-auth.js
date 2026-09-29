@@ -4,37 +4,66 @@
 // Uses Azure CLI (`az account get-access-token`) for auth — same MSAL cache that pac CLI uses.
 // All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
-const { execFileSync, execFile } = require('child_process');
 // Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
 const { nearestName } = require('./nearest-name.js');
+const { execFileAsync, runSync } = require('./process-runner.js');
+
+// Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
+// scripts/lib/validation-helpers.js, plus the non-numbered `crm<ring>` labels such as crmtest):
+//   Commercial/GCC: <org>[.api].crm<region>.dynamics.com   e.g. contoso.crm.dynamics.com, contoso.crm4.dynamics.com
+//   GCC High:       <org>[.api].crm.microsoftdynamics.us
+//   DoD:            <org>[.api].crm.appsplatform.us
+//   China:          <org>[.api].crm.dynamics.cn
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/discovery-service#global-discovery-service
+const DATAVERSE_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?(?:crm[a-z0-9]*\.dynamics\.com|crm\.microsoftdynamics\.us|crm\.appsplatform\.us|crm\.dynamics\.cn)$/;
+
+/**
+ * The canonical origin of a Dataverse environment URL, or null when the value is anything else.
+ *
+ * Every Dataverse call starts here: the result is the `--resource` a token is requested for, the base
+ * every request URL is built on, and the only origin a token is ever sent to. So the RAW text is
+ * checked, not a parsed-and-reserialised URL: it must be literally `https://` + a host of letters,
+ * digits, dots and hyphens, optionally followed by slashes. Parsing first would not do: the URL
+ * parser accepts characters in a path, and in some hosts, that must never reach a command line.
+ * @returns {string|null} e.g. "https://contoso.crm.dynamics.com"
+ */
+function dataverseOrigin(value) {
+  if (typeof value !== 'string') return null;
+  const m = /^https:\/\/([A-Za-z0-9.-]+)\/*$/i.exec(value.trim());
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  return DATAVERSE_HOST.test(host) ? `https://${host}` : null;
+}
+
+function requireDataverseOrigin(value) {
+  const origin = dataverseOrigin(value);
+  if (!origin) {
+    throw new Error(
+      `'${value}' is not a Dataverse environment URL. Pass the environment's https origin only, `
+        + 'for example https://contoso.crm.dynamics.com (no path, query, port or credentials).'
+    );
+  }
+  return origin;
+}
 
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
- * Returns null if `az` is missing, the user isn't logged in, or the resource is unreachable.
+ * Returns null if `az` is missing, the user isn't logged in, the resource is unreachable, or the
+ * value is not a Dataverse environment origin (then no process is started at all).
  * @param {string} envUrl - e.g. "https://contoso.crm.dynamics.com"
  * @param {object} [opts]
  * @param {boolean} [opts.fresh=false] bypass the process memo and replace it with a new token
- * @param {Function} [opts.exec=execFileSync] test seam for the Azure CLI subprocess
+ * @param {Function} [opts.exec=runSync] test seam for the Azure CLI subprocess
  * @returns {string|null}
  */
 const authTokenMemo = new Map();
 
-function normalizeTokenResource(envUrl) {
-  const raw = String(envUrl == null ? '' : envUrl).trim().replace(/\/+$/, '');
-  try {
-    const u = new URL(raw);
-    u.hostname = u.hostname.toLowerCase();
-    return u.toString().replace(/\/+$/, '');
-  } catch {
-    return raw;
-  }
-}
-
 function getAuthToken(envUrl, opts = {}) {
-  const resource = normalizeTokenResource(envUrl);
-  const exec = opts.exec || execFileSync;
+  const resource = dataverseOrigin(envUrl);
+  if (!resource) return null;
+  const exec = opts.exec || runSync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return authTokenMemo.get(resource);
   }
@@ -42,7 +71,7 @@ function getAuthToken(envUrl, opts = {}) {
     const out = exec(
       'az',
       ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
-      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' }
+      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
     );
     const token = out.trim() || null;
     // `az account get-access-token` is expensive on a cold Windows process, but an immediate
@@ -59,8 +88,9 @@ function getAuthToken(envUrl, opts = {}) {
 }
 
 function getAuthTokenAsync(envUrl, opts = {}) {
-  const resource = normalizeTokenResource(envUrl);
-  const exec = opts.execFile || execFile;
+  const resource = dataverseOrigin(envUrl);
+  if (!resource) return Promise.resolve(null);
+  const exec = opts.execFile || execFileAsync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));
   }
@@ -69,7 +99,7 @@ function getAuthTokenAsync(envUrl, opts = {}) {
       exec(
         'az',
         ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
-        { encoding: 'utf8', timeout: 30000, windowsHide: true, shell: process.platform === 'win32' },
+        { encoding: 'utf8', timeout: 30000, windowsHide: true },
         (error, stdout) => {
           if (error) {
             if (opts.fresh) authTokenMemo.delete(resource);
@@ -97,12 +127,12 @@ function getAuthTokenAsync(envUrl, opts = {}) {
  * it exists to make a failure explicable, so it must not become a failure of its own.
  * @returns {{user: string, tenantId: string}|null}
  */
-function azIdentity() {
+function azIdentity(deps = {}) {
   try {
-    const out = execFileSync(
+    const out = (deps.exec || runSync)(
       'az',
       ['account', 'show', '--query', '{user:user.name,tenantId:tenantId}', '-o', 'json'],
-      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' }
+      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
     );
     const parsed = JSON.parse(out);
     return parsed && parsed.user ? { user: parsed.user, tenantId: parsed.tenantId || '(unknown)' } : null;
@@ -131,38 +161,6 @@ function azIdentity() {
  * and never throws — it is a diagnostic.
  * WhoAmI: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
  */
-/**
- * Reject anything that is not an absolute HTTPS origin BEFORE a token is acquired or sent.
- *
- * This is STRICTER than `createAzHttpClient`, deliberately, and the difference matters. That client
- * requires an absolute `https:` org URL and refuses to send its token to a different ORIGIN — but it
- * compares origins, so a path-bearing `--env` passes construction untouched. This gate additionally
- * rejects a path, query or fragment, because the preflight runs earlier and goes through
- * `dataverseRequest`, whose transport picks plain `http` for any non-HTTPS scheme
- * (`u.protocol === 'https:' ? https : http`). Without it a malformed `--env` could put a bearer token
- * on the wire in clear text before the client's fail-closed validation ever ran — the preflight would
- * have become a hole in the credential boundary it sits in front of.
- * @returns {string|null} the normalized origin, or null when the value is unusable
- */
-function httpsOriginOrNull(envUrl) {
-  try {
-    const raw = String(envUrl == null ? '' : envUrl).trim();
-    if (!raw) return null;
-    const u = new URL(raw);
-    if (u.protocol !== 'https:') return null;
-    // An ORIGIN, strictly. A value carrying a path, query or fragment is REJECTED rather than
-    // silently trimmed to its origin: `dataverseRequest` appends `/api/data/...` to whatever it is
-    // given, so `https://org.crm.dynamics.com/some/path` would produce `.../some/path/api/data/...`
-    // and the preflight would report a misleading result about a URL nobody asked for. Rejecting is
-    // also the tighter credential boundary — this function's whole job is to decide where a bearer
-    // token may be sent, so "close enough" is the wrong disposition.
-    if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return null;
-    return u.origin;
-  } catch {
-    return null;
-  }
-}
-
 async function preflightAuth(envUrl, deps = {}) {
   const getToken = deps.getToken || getAuthToken;
   const request = deps.request || dataverseRequest;
@@ -183,11 +181,11 @@ async function preflightAuth(envUrl, deps = {}) {
 
   // Normalize to the validated ORIGIN and use it from here on. Validating one string and then
   // requesting with another is how a check becomes decorative.
-  const origin = httpsOriginOrNull(envUrl);
+  const origin = dataverseOrigin(envUrl);
   if (!origin) {
     return {
       ok: false,
-      error: `refusing to authenticate against '${envUrl}': the environment must be an absolute https:// ORIGIN `
+      error: `refusing to authenticate against '${envUrl}': the environment must be a Dataverse https:// ORIGIN `
         + '(scheme + host only, no path, query or fragment). A bearer token is attached to this request, so a '
         + 'non-HTTPS, path-bearing or malformed target is rejected before any token is acquired.',
     };
@@ -327,7 +325,8 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
  * @returns {Promise<{status: number, data: any, headers?: object}>}
  */
 async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {}) {
-  const cleanUrl = envUrl.replace(/\/+$/, '');
+  // The validated origin, never the caller's text, is what the token is requested for and sent to.
+  const cleanUrl = requireDataverseOrigin(envUrl);
   const url = `${cleanUrl}/api/data/v9.2/${apiPath}`;
   const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
   const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
@@ -717,6 +716,8 @@ function emitResult(ok, payload) {
 }
 
 module.exports = {
+  dataverseOrigin,
+  requireDataverseOrigin,
   preflightAuth,
   azIdentity,
   getAuthToken,

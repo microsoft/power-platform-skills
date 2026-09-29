@@ -10,7 +10,7 @@
 // (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
 // after exhausting retries, or at once for a write that must not be re-sent (see `call`). We never
 // throw purely on a non-2xx HTTP status.
-const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
+const { dataverseOrigin, getAuthToken, makeRequest } = require('./dataverse-auth.js');
 
 /**
  * Build an HttpClient bound to one Dataverse org.
@@ -19,19 +19,16 @@ const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
  * @returns {{get,post,patch,delete,put,postRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
-  const clean = String(orgUrl).replace(/\/+$/, '');
-  // Same-origin guard (security): this client obtains and attaches an Azure bearer token scoped to
-  // `clean` (the user-supplied --env org URL), and the SDK always calls back with a FULL URL under that
-  // same origin (instanceUrl + /api/data/v9.x/...). To keep the credential boundary FAIL-CLOSED we (1)
-  // require the org URL itself to be a valid absolute https:// URL — rejecting construction otherwise, so
-  // a malformed/hostile --env can never silently disable the guard — and (2) refuse any request whose
-  // absolute URL resolves to a different origin, so the Dataverse token can never leak to another host.
-  let orgUrlParsed;
-  try { orgUrlParsed = new URL(clean); } catch { orgUrlParsed = null; }
-  if (!orgUrlParsed || orgUrlParsed.protocol !== 'https:') {
-    throw new Error(`Invalid Dataverse org URL "${orgUrl}": expected an absolute https:// URL (e.g. https://contoso.crm.dynamics.com).`);
+  // Same-origin guard: this client attaches an Azure bearer token for the org, and the SDK always
+  // calls back with a FULL URL under that org (instanceUrl + /api/data/v9.x/...). To keep the
+  // credential boundary fail-closed, construction requires a Dataverse environment ORIGIN (the same
+  // check every token request makes, see `dataverseOrigin`), the token is requested for that
+  // validated origin rather than the caller's text, and any request to a different origin is refused.
+  const expectedOrigin = dataverseOrigin(String(orgUrl));
+  if (!expectedOrigin) {
+    throw new Error(`Invalid Dataverse org URL "${orgUrl}": expected the environment's https:// origin only (e.g. https://contoso.crm.dynamics.com).`);
   }
-  const expectedOrigin = orgUrlParsed.origin;
+  const clean = expectedOrigin;
   function assertSameOrigin(url) {
     let target;
     try { target = new URL(url); } catch { throw new Error(`Refusing to send the Dataverse token to a non-absolute URL: ${url}`); }

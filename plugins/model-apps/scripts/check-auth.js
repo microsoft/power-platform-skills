@@ -32,7 +32,7 @@
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
-const { execFile } = require('child_process');
+const { execFileAsync } = require('./lib/process-runner.js');
 const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags } = require('./lib/dataverse-auth');
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
@@ -62,11 +62,10 @@ function runQuietAsync(cmd, args) {
   let settled = false;
   const promise = new Promise((resolve) => {
     try {
-      child = execFile(cmd, args, {
+      child = execFileAsync(cmd, args, {
         encoding: 'utf8',
         timeout: 15000,
         windowsHide: true,
-        shell: process.platform === 'win32',
       }, (error, stdout) => {
         settled = true;
         resolve(error ? null : String(stdout || '').trim());

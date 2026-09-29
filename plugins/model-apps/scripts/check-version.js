@@ -9,7 +9,8 @@
  * Functions are also exported for testing.
  */
 
-const { execFileSync } = require('child_process');
+// git is resolved to an absolute path on PATH: this runs from the user's project directory.
+const { runSync } = require('./lib/process-runner.js');
 const path = require('path');
 const fs = require('fs');
 
@@ -76,7 +77,7 @@ function readMarketplaceName(gitRoot) {
 function readJsonFromGit(ref, relativePaths, cwd) {
   for (const relativePath of relativePaths) {
     try {
-      const content = execFileSync('git', ['show', `${ref}:${relativePath}`], {
+      const content = runSync('git', ['show', `${ref}:${relativePath}`], {
         cwd,
         encoding: 'utf8',
         timeout: 5000,
@@ -108,7 +109,7 @@ if (require.main === module) {
     // prompt) and then compared against a manifest path that does not exist there, so the notice
     // could never fire. A marketplace install is a plain copy, not a clone, so `rev-parse` fails
     // there and the script exits silently, as it does on any other error.
-    const gitRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    const gitRoot = runSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: pluginRoot,
       encoding: 'utf8',
       timeout: 5000,
@@ -120,7 +121,7 @@ if (require.main === module) {
     // differently: git reports the long Windows name (C:/Users/runneradmin/...) while __dirname can carry
     // the 8.3 short name (C:\Users\RUNNER~1\...), so the relative path pointed outside the repository
     // and the check silently found nothing.
-    const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], {
+    const prefix = runSync('git', ['rev-parse', '--show-prefix'], {
       cwd: pluginRoot,
       encoding: 'utf8',
       timeout: 5000,
@@ -129,7 +130,7 @@ if (require.main === module) {
     const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) => `${prefix}${manifestPath}`);
 
     try {
-      execFileSync('git', ['fetch', 'origin', 'main', '--quiet'], {
+      runSync('git', ['fetch', 'origin', 'main', '--quiet'], {
         cwd: pluginRoot,
         encoding: 'utf8',
         timeout: 10000,

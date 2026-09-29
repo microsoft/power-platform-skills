@@ -74,8 +74,8 @@ const { sanitizeSubject } = require('./sanitize-subject.js');
 function sdkProvenance(root) {
   const git = (args) => {
     try {
-      return require('node:child_process')
-        .execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      return require('../lib/process-runner.js')
+        .runSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
         .trim();
     } catch {
       return null;

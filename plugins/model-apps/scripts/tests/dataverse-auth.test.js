@@ -613,3 +613,125 @@ test('AB#6686424: a bodyless error does not print "null" as the server message',
     );
   }
 });
+
+// --- environment URLs: only a Dataverse https origin is ever used -------------------------------
+// The origin is the `--resource` a token is requested for, the base of every request URL, and the
+// only place a token is sent. Anything else is refused before a process starts or a request is sent.
+test('dataverseOrigin accepts a Dataverse origin in any cloud and returns it canonically', () => {
+  const { dataverseOrigin } = require('../lib/dataverse-auth.js');
+  for (const [input, expected] of [
+    ['https://contoso.crm.dynamics.com', 'https://contoso.crm.dynamics.com'],
+    ['https://Contoso.CRM.Dynamics.com/', 'https://contoso.crm.dynamics.com'],
+    ['  https://contoso.crm4.dynamics.com//  ', 'https://contoso.crm4.dynamics.com'],
+    ['HTTPS://contoso.api.crm.dynamics.com', 'https://contoso.api.crm.dynamics.com'],
+    ['https://contoso.crmtest.dynamics.com', 'https://contoso.crmtest.dynamics.com'],
+    ['https://contoso.crm.microsoftdynamics.us', 'https://contoso.crm.microsoftdynamics.us'],
+    ['https://contoso.crm.appsplatform.us', 'https://contoso.crm.appsplatform.us'],
+    ['https://contoso.crm.dynamics.cn', 'https://contoso.crm.dynamics.cn'],
+  ]) {
+    assert.equal(dataverseOrigin(input), expected, input);
+  }
+});
+
+test('dataverseOrigin refuses anything that is not exactly an https Dataverse origin', () => {
+  const { dataverseOrigin } = require('../lib/dataverse-auth.js');
+  for (const input of [
+    'http://contoso.crm.dynamics.com',
+    'https://contoso.crm.dynamics.com/main.aspx',
+    'https://contoso.crm.dynamics.com/?x=1',
+    'https://contoso.crm.dynamics.com/#x',
+    'https://contoso.crm.dynamics.com:443',
+    'https://user@contoso.crm.dynamics.com',
+    'https://contoso.crm.dynamics.com/&whoami',
+    'https://contoso.crm.dynamics.com&whoami',
+    'https://contoso.crm.dynamics.com\\x',
+    'https://contoso.crm.dynamics.com%20',
+    'https://contoso.crm.dynamics.com\nx',
+    'https://contoso.example.com',
+    'https://crm.dynamics.com',
+    'https://contoso.crm.dynamics.com.example.com',
+    '',
+    null,
+    undefined,
+  ]) {
+    assert.equal(dataverseOrigin(input), null, JSON.stringify(input));
+  }
+});
+
+test('a non-origin environment URL starts no Azure CLI process and sends no request', async () => {
+  const { getAuthToken, getAuthTokenAsync, dataverseRequest } = require('../lib/dataverse-auth.js');
+  let started = 0;
+  const exec = () => { started += 1; return 'TOK\n'; };
+  const execFile = (_f, _a, _o, cb) => { started += 1; cb(null, 'TOK\n'); };
+  const bad = 'https://contoso.crm.dynamics.com/&whoami';
+  assert.equal(getAuthToken(bad, { exec, fresh: true }), null);
+  assert.equal(await getAuthTokenAsync(bad, { execFile, fresh: true }), null);
+  let sent = 0;
+  await assert.rejects(
+    dataverseRequest(bad, 'GET', 'WhoAmI', null, { getToken: exec, request: async () => { sent += 1; return { statusCode: 200, body: '{}' }; } }),
+    /is not a Dataverse environment URL/
+  );
+  assert.equal(started, 0);
+  assert.equal(sent, 0);
+});
+
+test('dataverseRequest builds the request on the validated origin and requests the token for it', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  let resource;
+  let url;
+  await dataverseRequest('https://Contoso.crm.dynamics.com/', 'GET', 'WhoAmI', null, {
+    getToken: (r) => { resource = r; return 'TOK'; },
+    request: async (o) => { url = o.url; return { statusCode: 200, body: '{}' }; },
+  });
+  assert.equal(resource, 'https://contoso.crm.dynamics.com');
+  assert.equal(url, 'https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
+});
+
+test('createAzHttpClient requests its token for the validated origin, never the text it was given', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  assert.throws(() => createAzHttpClient('https://contoso.crm.dynamics.com/&whoami', { getToken: () => 'TOK' }), /Invalid Dataverse org URL/);
+  let resource;
+  const http = createAzHttpClient('https://CONTOSO.crm.dynamics.com/', {
+    getToken: (r) => { resource = r; return 'TOK'; },
+    request: async () => ({ statusCode: 200, body: '{}' }),
+  });
+  await http.get('https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
+  assert.equal(resource, 'https://contoso.crm.dynamics.com');
+});
+
+test('azIdentity reads the identity through the process runner seam', () => {
+  const { azIdentity } = require('../lib/dataverse-auth.js');
+  const seen = [];
+  const id = azIdentity({ exec: (cmd, args) => { seen.push([cmd, ...args].join(' ')); return '{"user":"maker@contoso.com","tenantId":"t"}'; } });
+  assert.deepEqual(id, { user: 'maker@contoso.com', tenantId: 't' });
+  assert.deepEqual(seen, ['az account show --query {user:user.name,tenantId:tenantId} -o json']);
+});
+
+// End to end on Windows, where the Azure CLI is a batch shim: the entry-point CLIs refuse an
+// environment URL that is not an origin, and nothing but the (fake) Azure CLI ever runs.
+test('the Dataverse entry points refuse a non-origin URL before anything runs (real CLI, Windows)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const scripts = path.join(__dirname, '..');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dv-origin-e2e-'));
+  try {
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    const azLog = path.join(work, 'az-calls.txt');
+    fs.writeFileSync(path.join(bin, 'az.cmd'), `@echo %*>>"${azLog}"\r\n@exit /b 1\r\n`, 'utf8');
+    const env = { ...process.env, Path: `${bin};${process.env.SystemRoot}\\System32`, PATH: `${bin};${process.env.SystemRoot}\\System32` };
+    const url = 'https://contoso.crm.dynamics.com/&md,MARKER';
+    const runs = [
+      spawnSync(process.execPath, [path.join(scripts, 'dataverse-request.js'), url, 'GET', 'WhoAmI'], { cwd: work, env, encoding: 'utf8', timeout: 60000 }),
+      spawnSync(process.execPath, [path.join(scripts, 'check-auth.js'), '--env', url], { cwd: work, env, encoding: 'utf8', timeout: 60000 }),
+    ];
+    assert.equal(fs.existsSync(path.join(work, 'MARKER')), false, 'no second command ran');
+    assert.match(runs[0].stderr, /is not a Dataverse environment URL/);
+    const logged = fs.existsSync(azLog) ? fs.readFileSync(azLog, 'utf8') : '';
+    assert.doesNotMatch(logged, /MARKER/, `the URL never reached the Azure CLI: ${logged}`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});

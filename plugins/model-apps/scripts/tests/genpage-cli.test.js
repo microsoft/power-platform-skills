@@ -5,7 +5,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
+const { makeGenpageCli, parsePageId, parseList, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 // Scratch goes in the OS temp dir, never beside this file. Tests that walk scripts/ (the await scan in
@@ -49,81 +49,44 @@ function envList(rows) {
   return `Connected as user@contoso.com\nRetrieving generated pages...\nFound ${count} generated page(s):\n\n${header}\n${body}\n`;
 }
 
-test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
-  assert.strictEqual(quoteArg('Overview'), 'Overview');
-  assert.strictEqual(quoteArg('A responsive cards overview'), '"A responsive cards overview"');
-  assert.strictEqual(quoteArg('has"quote'), '"has""quote"');
-  assert.strictEqual(quoteArg('https://x'), 'https://x');
+// A Windows machine where pac is either the dotnet-tool pac.exe or an MSI-style pac.cmd shim.
+// The fake pac.cmd forwards %* like an MSI install's shim, without turning delayed expansion on.
+const winPac = (file) => ({ platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n' });
+const PAC_EXE = winPac('C:\\pac\\pac.exe');
+const PAC_CMD = winPac('C:\\pac\\pac.cmd');
+
+test('buildPacInvocation starts pac.exe directly with every argument unchanged, and no shell', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!'], PAC_EXE);
+  assert.strictEqual(inv.file, 'C:\\pac\\pac.exe');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!']);
+  assert.strictEqual(inv.options.shell, false);
 });
 
-test('quoteArg collapses newlines to spaces (a multi-line prompt must not break the command line)', () => {
-  assert.strictEqual(quoteArg('Conversation with 2 prompts:\r\n1. A\r\n2. B'), '"Conversation with 2 prompts: 1. A 2. B"');
-  assert.strictEqual(quoteArg('line1\nline2'), '"line1 line2"');
-  assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
-});
-
-test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quoted arg (Windows)', () => {
-  // cmd.exe expands %VAR% even inside double quotes; breaking out of the quotes and caret-escaping each
-  // % (verified to round-trip literally through cmd.exe) keeps prompts/names with env-var syntax intact.
-  assert.strictEqual(quoteArg('plain%PATH%end'), '"plain"^%"PATH"^%"end"');
-  assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
-});
-
-test('quoteArg doubles a backslash run before a percent escape quote', () => {
-  assert.strictEqual(quoteArg('a\\%b'), '"' + 'a' + '\\\\' + '"^%"' + 'b' + '"');
-  assert.strictEqual(quoteArg('D:\\data\\%PATH%\\x'), '"' + 'D:\\data' + '\\\\' + '"^%"' + 'PATH' + '"^%"' + '\\x' + '"');
-});
-
-test('quoteArg doubles a backslash run before an interior quote', () => {
-  assert.strictEqual(quoteArg('qa slash\\"quote'), '"' + 'qa slash' + '\\\\' + '""' + 'quote' + '"');
-  assert.strictEqual(quoteArg(String.raw`a\\\\"b`), '"' + 'a' + '\\\\'.repeat(4) + '""' + 'b' + '"');
-});
-
-test('quoteArg round-trips through a real Windows shell parse', { skip: process.platform !== 'win32' }, () => {
-  const dir = scratch('genpage-cli-roundtrip-');
-  const script = path.join(dir, 'argv.js');
-  fs.writeFileSync(script, 'console.log(JSON.stringify(process.argv.slice(2)));\n', 'utf8');
-  for (const value of [
-    'qa slash\\"quote',
-    'qa "Quoted" 東京 %PATH%',
-    'D:\\space path\\\\',
-    String.raw`a\\\\"b`,
-    'a\\%b',
-    'D:\\data\\%PATH%\\x',
-    '50\\%',
-    '\\\\%',
-    'a\\\"%b',
-    'Overview',
-  ]) {
-    const command = 'node ' + quoteArg(script) + ' ' + quoteArg(value) + ' after';
-    const r = spawnSync(command, { shell: true, encoding: 'utf8' });
-    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
-    assert.deepStrictEqual(JSON.parse(r.stdout), [value, 'after'], `round-trip failed for ${JSON.stringify(value)} via ${command}`);
+test('buildPacInvocation runs a pac.cmd shim through cmd.exe and refuses what cmd.exe would reinterpret', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'list', '--name', 'Order Detail'], PAC_CMD);
+  assert.strictEqual(inv.file, 'C:\\Windows\\System32\\cmd.exe');
+  assert.strictEqual(inv.args[4], '""C:\\pac\\pac.cmd" model genpage list --name "Order Detail""');
+  assert.strictEqual(inv.options.windowsVerbatimArguments, true);
+  for (const name of ['50% off', 'a "quote"']) {
+    assert.throws(() => buildPacInvocation(['--name', name], PAC_CMD), (e) => e.code === 'EARGUMENT', name);
   }
-});
-
-test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote"'], 'win32');
-  assert.strictEqual(inv.options.shell, true);
-  assert.strictEqual(inv.args, undefined);
-  assert.ok(inv.command.startsWith('pac '));
-  assert.ok(inv.command.includes('"a ""quote"""'), 'embedded quotes are cmd-escaped by doubling');
+  assert.ok(buildPacInvocation(['--name', 'Hello!'], PAC_CMD).args[4].endsWith('--name "Hello!""'), '! is literal with delayed expansion off');
 });
 
 test('buildPacInvocation (posix) spawns pac directly with an args array and no shell', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], 'linux');
-  assert.strictEqual(inv.command, 'pac');
-  assert.strictEqual(inv.options.shell, undefined, 'no shell on POSIX so metacharacters round-trip verbatim');
+  const posix = { platform: 'linux', env: { PATH: '/usr/bin' }, exists: (p) => p === '/usr/bin/pac' };
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], posix);
+  assert.strictEqual(inv.file, '/usr/bin/pac');
+  assert.strictEqual(inv.options.shell, false, 'no shell on POSIX so metacharacters round-trip verbatim');
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--prompt', 'a "quote" & more']);
 });
 
-test('buildPacInvocation collapses embedded newlines in args (both platforms)', () => {
-  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], 'linux');
+test('buildPacInvocation collapses embedded newlines in args (every platform and pac form)', () => {
+  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(posix.args, ['--prompt', 'l1 l2 l3'], 'multi-line prompt collapsed to spaces');
-  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], 'win32');
-  assert.ok(!win.command.includes('\n'), 'no raw newline survives into the Windows command line');
+  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], PAC_CMD);
+  assert.ok(!win.args[4].includes('\n'), 'no raw newline survives into a batch shim command line');
 });
-
 // Put a directory first on PATH for the duration of `fn`, so `pac` resolves to whatever it holds.
 async function withPathFirst(dir, fn, { only = false } = {}) {
   const saved = process.env.PATH;
@@ -945,25 +908,24 @@ test('a trailing backslash is doubled so it cannot escape the closing quote', ()
   // `String.raw` cannot be used here: a template literal may not END with a backslash, because it
   // escapes the closing backtick. Ordinary escapes it is.
   const dir = 'C:\\Users\\Power User\\download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], 'win32');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], PAC_CMD);
   // The run before the closing quote is doubled; the following flag stays a separate argument.
-  assert.match(inv.command, /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after$/,
-    `the trailing separator must be escaped; got ${inv.command}`);
+  assert.match(inv.args[4], /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after"$/,
+    `the trailing separator must be escaped; got ${inv.args[4]}`);
 });
 
 test('interior backslashes are left alone (every Windows path has them)', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], 'win32');
-  assert.match(inv.command, /"C:\\Users\\Power User\\download"/,
-    `an ordinary path must round-trip unchanged; got ${inv.command}`);
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], PAC_CMD);
+  assert.match(inv.args[4], /"C:\\Users\\Power User\\download"/,
+    `an ordinary path must round-trip unchanged; got ${inv.args[4]}`);
 });
 
 test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
   const dir = '/home/user/download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], 'linux');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
     'the POSIX path spawns pac directly, so nothing may be rewritten');
 });
-
 // --- review follow-up: a TRANSIENT message must NOT be mistaken for a deterministic one --------
 // The first version matched the bare phrases "does not exist" and "could not be found", so a
 // service message like "The resource does not exist yet; please retry." aborted the retry loop —

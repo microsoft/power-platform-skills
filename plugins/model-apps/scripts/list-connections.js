@@ -11,7 +11,7 @@
 // Output:
 //   { "ok": true, "connections": [...], "connectionReferences": [...] }
 
-const { spawnSync } = require('node:child_process');
+const { spawnResultSync } = require('./lib/process-runner.js');
 const {
   dataverseRequest,
   ensureOk,
@@ -233,10 +233,9 @@ async function main() {
   const [envUrl] = positional;
 
   try {
-    const pac = spawnSync('pac', ['connection', 'list'], {
+    const pac = spawnResultSync('pac', ['connection', 'list'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
     });
     if (pac.error || pac.status !== 0) {
       throw new Error(pacFailureMessage(pac));

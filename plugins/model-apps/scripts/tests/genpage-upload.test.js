@@ -399,7 +399,7 @@ test('WINDOWS: the prompt never appears on the command line pac is invoked with'
   // Fragments must be unique to the PROMPT: `--name` is legitimately passed inline (a short,
   // caller-controlled value), and the first version of this test matched the quoted name instead
   // of the prompt — a test that would have failed on correct code.
-  const win = buildPacInvocation(args, 'win32');
+  const win = { command: buildPacInvocation(args, { platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === 'C:\\pac\\pac.cmd' }).args[4] };
   for (const fragment of ['résumé', '$(whoami)', '<b>bold</b>', '%PATH%', "apostrophe's"]) {
     assert.ok(!win.command.includes(fragment),
       `prompt fragment ${JSON.stringify(fragment)} leaked onto the command line:\n${win.command}`);

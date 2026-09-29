@@ -221,7 +221,8 @@ async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
   const cli = loadCli(scriptPath, {
     argv,
     requires: {
-      'child_process': { execFileSync: makeExec(exec, calls), execFile: makeExecFile(exec, calls) },
+      // check-auth starts every CLI through the process runner; its execFileAsync keeps execFile's shape.
+      './lib/process-runner': { execFileAsync: makeExecFile(exec, calls), runSync: makeExec(exec, calls) },
       './lib/dataverse-auth': {
         parseArgs: require('../lib/dataverse-auth.js').parseArgs,
         validateFlags: require('../lib/dataverse-auth.js').validateFlags,
@@ -259,9 +260,9 @@ async function runWithAsyncChildren({ argv = [], exec = {}, token, whoAmI } = {}
   const cli = loadCli(scriptPath, {
     argv,
     requires: {
-      'child_process': {
-        execFileSync: () => { throw new Error('sync child_process must not be used by check-auth'); },
-        execFile: makeCancelableExecFile(exec, calls),
+      './lib/process-runner': {
+        runSync: () => { throw new Error('sync child processes must not be used by check-auth'); },
+        execFileAsync: makeCancelableExecFile(exec, calls),
       },
       './lib/dataverse-auth': {
         parseArgs: require('../lib/dataverse-auth.js').parseArgs,

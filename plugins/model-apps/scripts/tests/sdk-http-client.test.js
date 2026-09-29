@@ -38,16 +38,16 @@ test('POST stringifies the body and sets Content-Type', async () => {
 
 test('merges per-call headers (solution + If-Match) and keeps caller Content-Type', async () => {
   const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
-  await http.patch('https://org/x', { a: 1 }, { headers: { 'MSCRM.SolutionUniqueName': 'MyS', 'If-Match': 'W/"7"' } });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  await http.patch('https://org.crm.dynamics.com/x', { a: 1 }, { headers: { 'MSCRM.SolutionUniqueName': 'MyS', 'If-Match': 'W/"7"' } });
   assert.strictEqual(calls[0].headers['MSCRM.SolutionUniqueName'], 'MyS');
   assert.strictEqual(calls[0].headers['If-Match'], 'W/"7"');
 });
 
 test('does NOT throw on non-2xx — passes status/body through (412 version conflict)', async () => {
   const { request } = fakeTransport({ statusCode: 412, headers: {}, body: '{"error":{"message":"conflict"}}' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
-  const res = await http.put('https://org/x', { a: 1 });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const res = await http.put('https://org.crm.dynamics.com/x', { a: 1 });
   assert.strictEqual(res.status, 412);
   assert.strictEqual(res.body.error.message, 'conflict');
 });
@@ -59,8 +59,8 @@ test('refreshes token once on 401 then succeeds', async () => {
       ? { statusCode: 401, headers: {}, body: '' }
       : { statusCode: 200, headers: {}, body: '{"ok":true}' };
   });
-  const http = createAzHttpClient('https://org', { getToken: () => `T${++tokens}`, request });
-  const res = await http.get('https://org/x');
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => `T${++tokens}`, request });
+  const res = await http.get('https://org.crm.dynamics.com/x');
   assert.strictEqual(res.status, 200);
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(calls[0].headers.Authorization, 'Bearer T1');
@@ -92,16 +92,16 @@ test('retries a transient 500 (SQL deadlock) with backoff, then succeeds', async
   const { request, calls } = fakeTransport(() =>
     calls.length <= 2 ? { statusCode: 500, headers: {}, body: 'deadlock 1205' } : { statusCode: 200, headers: {}, body: '{"ok":true}' }
   );
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.post('https://org/x', { a: 1 });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.post('https://org.crm.dynamics.com/x', { a: 1 });
   assert.strictEqual(res.status, 200);
   assert.strictEqual(calls.length, 3); // 500, 500, 200
 });
 
 test('gives up after max attempts on a persistent 500 — surfaces it (no throw)', async () => {
   const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body: 'boom' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.get('https://org/x');
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.get('https://org.crm.dynamics.com/x');
   assert.strictEqual(res.status, 500); // the SDK decides what to do with it
   assert.strictEqual(calls.length, 6);
 });
@@ -112,8 +112,8 @@ test('retries a 429 EntityCustomization lock and eventually succeeds', async () 
       ? { statusCode: 429, headers: {}, body: 'Cannot start another [EntityCustomization]' }
       : { statusCode: 200, headers: {}, body: '{"ok":true}' }
   );
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.post('https://org/x', { a: 1 });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.post('https://org.crm.dynamics.com/x', { a: 1 });
   assert.strictEqual(res.status, 200);
   assert.strictEqual(calls.length, 5); // 429 x4, then 200 — needs the extra attempts (>4)
 });
@@ -122,19 +122,19 @@ test('applies jittered, capped backoff on transient retries (de-syncs lockstep c
   const slept = [];
   // random() = 0.5 -> +12.5% jitter; caps exponential at 8000ms.
   const { request } = fakeTransport({ statusCode: 503, headers: {}, body: '' });
-  const http = createAzHttpClient('https://org', {
+  const http = createAzHttpClient('https://org.crm.dynamics.com', {
     getToken: () => 'TOK', request, random: () => 0.5,
     sleep: async (ms) => { slept.push(ms); },
   });
-  await http.get('https://org/x');
+  await http.get('https://org.crm.dynamics.com/x');
   // 5 sleeps before the 6th (final) attempt: base 1s,2s,4s,8s,8s each + 12.5% jitter.
   assert.deepStrictEqual(slept, [1125, 2250, 4500, 9000, 9000]);
 });
 
 test('does NOT retry a RECORD delete on a transient status (avoids the async concurrent-delete wedge)', async () => {
   const { request, calls } = fakeTransport({ statusCode: 503, headers: {}, body: '' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.delete('https://org/api/data/v9.0/webresourceset(1)');
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.delete('https://org.crm.dynamics.com/api/data/v9.0/webresourceset(1)');
   assert.strictEqual(res.status, 503, 'the transient status surfaces instead of being retried');
   assert.strictEqual(calls.length, 1, 'exactly one record DELETE was sent (no retry)');
 });
@@ -142,8 +142,8 @@ test('does NOT retry a RECORD delete on a transient status (avoids the async con
 test('does NOT retry a RECORD delete on a network error either (single delete, no wedge)', async () => {
   let calls = 0;
   const request = async () => { calls += 1; return { error: 'ETIMEDOUT' }; };
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  await assert.rejects(() => http.delete('https://org/api/data/v9.0/webresourceset(1)'), /Request failed: ETIMEDOUT/);
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await assert.rejects(() => http.delete('https://org.crm.dynamics.com/api/data/v9.0/webresourceset(1)'), /Request failed: ETIMEDOUT/);
   assert.strictEqual(calls, 1, 'exactly one record DELETE was sent (no network-error retry)');
 });
 
@@ -151,8 +151,8 @@ test('DOES retry a METADATA delete (EntityDefinitions) on a network error — as
   const { request, calls } = fakeTransport(() =>
     calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 404, headers: {}, body: '' }
   );
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.delete("https://org/api/data/v9.0/EntityDefinitions(LogicalName='new_x')");
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.delete("https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_x')");
   assert.strictEqual(res.status, 404, 'a slow metadata delete is retried rather than surfacing a false timeout');
   assert.strictEqual(calls.length, 2);
 });
@@ -161,12 +161,12 @@ test('DOES retry a METADATA delete (EntityDefinitions) on a network error — as
 // reads. Measured live: a business process flow activation on a fresh table ran past the old 60 s.
 test('a WRITE waits far longer than a read before giving up', async () => {
   const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
-  await http.get('https://org/x');
-  await http.post('https://org/x', { a: 1 });
-  await http.patch('https://org/x', { a: 1 });
-  await http.put('https://org/x', { a: 1 });
-  await http.delete('https://org/x');
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  await http.get('https://org.crm.dynamics.com/x');
+  await http.post('https://org.crm.dynamics.com/x', { a: 1 });
+  await http.patch('https://org.crm.dynamics.com/x', { a: 1 });
+  await http.put('https://org.crm.dynamics.com/x', { a: 1 });
+  await http.delete('https://org.crm.dynamics.com/x');
   const [get, ...writes] = calls.map((c) => c.timeout);
   assert.strictEqual(get, 60000, 'a read keeps the short timeout — it is safe to abandon and re-issue');
   for (const t of writes) assert.ok(t >= 120000, `every write must wait well past 60 s; got ${t}`);
@@ -177,9 +177,9 @@ test('a WRITE waits far longer than a read before giving up', async () => {
 test('a CONDITIONAL write that got no answer is NOT re-sent (it may still commit)', async () => {
   for (const header of ['If-Match', 'if-match']) {
     const { request, calls } = fakeTransport({ error: 'Request timed out' });
-    const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
     await assert.rejects(
-      () => http.patch('https://org/api/data/v9.2/workflows(1)', { statecode: 1 }, { headers: { [header]: 'W/"5"' } }),
+      () => http.patch('https://org.crm.dynamics.com/api/data/v9.2/workflows(1)', { statecode: 1 }, { headers: { [header]: 'W/"5"' } }),
       /Request failed: Request timed out .*not re-sent/);
     assert.strictEqual(calls.length, 1, `exactly one conditional PATCH may be sent (header spelled ${header})`);
   }
@@ -187,24 +187,24 @@ test('a CONDITIONAL write that got no answer is NOT re-sent (it may still commit
 
 test('the no-re-send rule is scoped: an UNCONDITIONAL write that got no answer is still retried', async () => {
   const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 204, headers: {}, body: '' }));
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.patch('https://org/api/data/v9.2/workflows(1)', { statecode: 1 });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.patch('https://org.crm.dynamics.com/api/data/v9.2/workflows(1)', { statecode: 1 });
   assert.strictEqual(res.status, 204);
   assert.strictEqual(calls.length, 2);
 });
 
 test('a CONDITIONAL write that got an ANSWER keeps the status retry (429 means it was never processed)', async () => {
   const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 429, headers: {}, body: '' } : { statusCode: 204, headers: {}, body: '' }));
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.patch('https://org/x', { a: 1 }, { headers: { 'If-Match': 'W/"5"' } });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.patch('https://org.crm.dynamics.com/x', { a: 1 }, { headers: { 'If-Match': 'W/"5"' } });
   assert.strictEqual(res.status, 204, 'a throttled conditional write is retried');
   assert.strictEqual(calls.length, 2);
 });
 
 test('throws only when no token is available', async () => {
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
-  const http = createAzHttpClient('https://org', { getToken: () => null, request });
-  await assert.rejects(() => http.get('https://org/x'), /Failed to get Azure CLI token/);
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => null, request });
+  await assert.rejects(() => http.get('https://org.crm.dynamics.com/x'), /Failed to get Azure CLI token/);
 });
 
 test('refuses to send the Dataverse token to a different origin (same-origin guard)', async () => {
@@ -280,8 +280,8 @@ test('postRaw never JSON-parses a body that happens to be valid JSON', async () 
   // parseBody() would turn this into an object and the SDK would throw ConnectionError
   // ("body is not a string"). postRaw must bypass parsing unconditionally, not by accident.
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{"not":"multipart"}' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
-  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const res = await http.postRaw('https://org.crm.dynamics.com/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
   assert.strictEqual(typeof res.body, 'string');
   assert.strictEqual(res.body, '{"not":"multipart"}');
 });
@@ -291,17 +291,17 @@ test('postRaw does NOT retry a $batch on a transient status (the change set cont
   // detected" guard permanently wedges a row when a retry races the still-in-flight first delete.
   // A $batch carries DELETEs inside a POST, so the method-based noRetry rule must cover it too.
   const { request, calls } = fakeTransport({ statusCode: 503, headers: {}, body: 'busy' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
-  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.postRaw('https://org.crm.dynamics.com/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
   assert.strictEqual(calls.length, 1, 'a $batch is issued exactly once');
   assert.strictEqual(res.status, 503, 'the transient status is surfaced, not retried away');
 });
 
 test('postRaw does NOT retry a $batch on a network error either', async () => {
   const { request, calls } = fakeTransport({ error: 'ETIMEDOUT' });
-  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
   await assert.rejects(
-    () => http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } }),
+    () => http.postRaw('https://org.crm.dynamics.com/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } }),
     /Request failed/
   );
   assert.strictEqual(calls.length, 1, 'an ambiguous batch outcome is never re-issued blindly');
@@ -312,8 +312,8 @@ test('postRaw still refreshes the token once on 401 (rejected before processing,
     calls.length <= 1 ? { statusCode: 401, headers: {}, body: '' } : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }
   );
   let tokens = 0;
-  const http = createAzHttpClient('https://org', { getToken: () => `TOK${++tokens}`, request, sleep: async () => {} });
-  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => `TOK${++tokens}`, request, sleep: async () => {} });
+  const res = await http.postRaw('https://org.crm.dynamics.com/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(calls[1].headers.Authorization, 'Bearer TOK2', 'the retry carries a fresh token');
   assert.strictEqual(res.body, BATCH_RESPONSE);
