@@ -39,10 +39,22 @@ function staleManifestFailure(fileName = 'index.html') {
     status: 1,
     stdout: '',
     stderr: [
-      `Upload failed for ${fileName}.`,
+      `Error: Unable to upload webfile name '${fileName}' with record Id ${SOURCE_ID} due to below error(s).`,
+      'PortalFileContentUploadFailed',
       `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+    ].join('\n'),
+  };
+}
+
+function typedStaleManifestFailure(fileName = 'index.html') {
+  return {
+    status: 1,
+    stdout: '',
+    stderr: [
+      `Error: Unable to upload webfile name '${fileName}' with record Id ${SOURCE_ID} due to below error(s).`,
       'PortalFileContentUploadFailed',
     ].join('\n'),
+    diagnostics: { staleManifestUploadFailure: true },
   };
 }
 
@@ -78,7 +90,7 @@ function runUploadScenario(t, {
         createSource(clonedPath, { id: CLONED_ID, name: 'Supplier Portal' });
         fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
         if (manifestKind === 'file') {
-          fs.writeFileSync(manifestPath, 'stale clone state\n');
+          fs.writeFileSync(manifestPath, 'PAC-generated stale state\n');
         } else if (manifestKind === 'directory') {
           fs.mkdirSync(manifestPath);
         } else if (manifestKind === 'symlink') {
@@ -438,17 +450,31 @@ test('provisionTemplateSite reports upload failure without retrying', (t) => {
   assert.equal(calls, 2);
 });
 
-test('isStaleManifestUploadFailure requires both exact PAC signatures', () => {
+test('isStaleManifestUploadFailure prefers the typed full-log diagnostic', () => {
+  assert.equal(isStaleManifestUploadFailure(typedStaleManifestFailure()), true);
+  assert.equal(isStaleManifestUploadFailure({
+    ...typedStaleManifestFailure(),
+    diagnostics: { staleManifestUploadFailure: false },
+  }), false);
+});
+
+test('isStaleManifestUploadFailure accepts only the exact compatibility envelope', () => {
   assert.equal(isStaleManifestUploadFailure(staleManifestFailure('index.html')), true);
   assert.equal(isStaleManifestUploadFailure({
     status: 1,
-    stdout: 'portalfilecontentuploadfailed',
-    stderr: `ENTITY 'POWERPAGECOMPONENT' WITH ID = ${SOURCE_ID} DOES NOT EXIST`,
+    stdout: '',
+    stderr: [
+      `uNaBlE tO uPlOaD wEbFiLe NaMe 'assets/customer's site bundle.css' WiTh ReCoRd Id ${SOURCE_ID} dUe To BeLoW eRrOr(s).`,
+      'pOrTaLfIlEcOnTeNtUpLoAdFaIlEd',
+    ].join('\n'),
   }), true);
   assert.equal(isStaleManifestUploadFailure({
     status: 1,
     stdout: '',
-    stderr: `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+    stderr: [
+      `Unable to upload webfile name 'index.html' with record Id not-a-guid due to below error(s).`,
+      'PortalFileContentUploadFailed',
+    ].join('\n'),
   }), false);
   assert.equal(isStaleManifestUploadFailure({
     status: 1,
@@ -459,19 +485,32 @@ test('isStaleManifestUploadFailure requires both exact PAC signatures', () => {
     status: 1,
     stdout: '',
     stderr: [
-      `Entity 'adx_webfile' With Id = ${SOURCE_ID} Does Not Exist`,
-      'PortalFileContentUploadFailed',
-    ].join('\n'),
-  }), false);
-  assert.equal(isStaleManifestUploadFailure({
-    status: 1,
-    stdout: '',
-    stderr: [
       `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
       'PortalFileContentUploadFailed',
-      'Authentication failed. Run pac auth create.',
     ].join('\n'),
   }), false);
+});
+
+test('isStaleManifestUploadFailure excludes authentication and blocked attachments', () => {
+  assert.equal(isStaleManifestUploadFailure({
+    ...typedStaleManifestFailure(),
+    stderr: `${typedStaleManifestFailure().stderr}\nAuthentication failed. Run pac auth create.`,
+  }), false);
+  assert.equal(isStaleManifestUploadFailure({
+    ...staleManifestFailure(),
+    stderr: `${staleManifestFailure().stderr}\nJavaScript attachment is blocked.`,
+  }), false);
+});
+
+test('provisionTemplateSite retries from typed diagnostics when stderr has only the top-level error', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: typedStaleManifestFailure('assets/app.8c2f.js'),
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), true);
 });
 
 test('provisionTemplateSite deletes the generic manifest and retries once for index.html', (t) => {
@@ -518,17 +557,30 @@ test('provisionTemplateSite does not recover unrelated or partial upload failure
     {
       name: 'authentication failure',
       result: {
+        ...typedStaleManifestFailure(),
+        stderr: `${typedStaleManifestFailure().stderr}\nAuthentication failed. Run pac auth create.`,
+      },
+    },
+    {
+      name: 'blocked attachment',
+      result: {
+        ...typedStaleManifestFailure(),
+        stderr: `${typedStaleManifestFailure().stderr}\nBlocked file type: .js attachment`,
+      },
+    },
+    {
+      name: 'malformed GUID compatibility envelope',
+      result: {
         status: 1,
         stdout: '',
         stderr: [
-          `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+          "Unable to upload webfile name 'index.html' with record Id 11111111-1111-1111-1111-11111111111Z due to below error(s).",
           'PortalFileContentUploadFailed',
-          'Authentication failed. Run pac auth create.',
         ].join('\n'),
       },
     },
     {
-      name: 'different missing entity',
+      name: 'unrelated entity-not-found with generic upload failure',
       result: {
         status: 1,
         stdout: '',
@@ -546,7 +598,7 @@ test('provisionTemplateSite does not recover unrelated or partial upload failure
       assert.equal(scenario.result.ok, false);
       assert.equal(scenario.result.step, 'upload');
       assert.equal(scenario.uploadCalls.length, 1);
-      assert.equal(fs.readFileSync(scenario.manifestPath, 'utf8'), 'stale clone state\n');
+      assert.equal(fs.readFileSync(scenario.manifestPath, 'utf8'), 'PAC-generated stale state\n');
     });
   }
 });

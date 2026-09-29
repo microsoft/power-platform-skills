@@ -6,6 +6,20 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const PAC_LOG_TAIL_BYTES = 32 * 1024;
+const PAC_LOG_SCAN_CHUNK_BYTES = 16 * 1024;
+const PAC_LOG_SCAN_OVERLAP_CHARS = 512;
+const GUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
+const PORTAL_FILE_UPLOAD_FAILURE_PATTERN = /PortalFileContentUploadFailed/i;
+const MISSING_POWERPAGE_COMPONENT_PATTERN = new RegExp(
+  String.raw`Entity\s+'powerpagecomponent'\s+With\s+Id\s*=\s*\{?` +
+  GUID_PATTERN_SOURCE +
+  String.raw`\}?\s+Does\s+Not\s+Exist`,
+  'i'
+);
+const AUTHENTICATION_FAILURE_PATTERN =
+  /(?:Authentication failed|not authenticated|AADSTS\d+|401 Unauthorized|403 Forbidden|access token (?:has )?expired|run\s+pac\s+auth)/i;
+const BLOCKED_ATTACHMENT_FAILURE_PATTERN =
+  /(?:javascript[^\r\n]{0,256}attachment[^\r\n]{0,256}blocked|blocked file type[^\r\n]{0,256}\.js|blocked[^\r\n]{0,256}attachment[^\r\n]{0,256}\.js)/i;
 
 function readFileTail(filePath, maxBytes = PAC_LOG_TAIL_BYTES, fsImpl = fs) {
   const size = fsImpl.statSync(filePath).size;
@@ -21,6 +35,52 @@ function readFileTail(filePath, maxBytes = PAC_LOG_TAIL_BYTES, fsImpl = fs) {
   return buffer.toString('utf8');
 }
 
+function hasPacRecoveryExclusion(value) {
+  const text = String(value || '');
+  return AUTHENTICATION_FAILURE_PATTERN.test(text) ||
+    BLOCKED_ATTACHMENT_FAILURE_PATTERN.test(text);
+}
+
+function scanPacLogDiagnostics(filePath, fsImpl = fs) {
+  const flags = {
+    hasPortalFileUploadFailure: false,
+    hasMissingPowerpageComponent: false,
+    hasRecoveryExclusion: false,
+  };
+  const buffer = Buffer.alloc(PAC_LOG_SCAN_CHUNK_BYTES);
+  const fd = fsImpl.openSync(filePath, 'r');
+  let overlap = '';
+  let position = 0;
+
+  try {
+    while (true) {
+      const bytesRead = fsImpl.readSync(
+        fd,
+        buffer,
+        0,
+        PAC_LOG_SCAN_CHUNK_BYTES,
+        position
+      );
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      const window = overlap + buffer.toString('latin1', 0, bytesRead);
+      flags.hasPortalFileUploadFailure ||= PORTAL_FILE_UPLOAD_FAILURE_PATTERN.test(window);
+      flags.hasMissingPowerpageComponent ||= MISSING_POWERPAGE_COMPONENT_PATTERN.test(window);
+      flags.hasRecoveryExclusion ||= hasPacRecoveryExclusion(window);
+      overlap = window.slice(-PAC_LOG_SCAN_OVERLAP_CHARS);
+    }
+  } finally {
+    fsImpl.closeSync(fd);
+  }
+
+  return {
+    staleManifestUploadFailure:
+      flags.hasPortalFileUploadFailure &&
+      flags.hasMissingPowerpageComponent &&
+      !flags.hasRecoveryExclusion,
+  };
+}
+
 function runPac(args, deps = {}) {
   const fsImpl = deps.fs || fs;
   const tmpRoot = deps.tmpRoot || os.tmpdir();
@@ -31,6 +91,7 @@ function runPac(args, deps = {}) {
   let status = 0;
   let output = '';
   let commandOutput;
+  let diagnostics = { staleManifestUploadFailure: false };
 
   try {
     logDirectory = fsImpl.mkdtempSync(path.join(tmpRoot, 'powerpages-pac-'));
@@ -82,6 +143,17 @@ function runPac(args, deps = {}) {
   }
 
   try {
+    // PAC upload logs can contain:
+    //   Unable to upload webfile ... <GUID> ... PortalFileContentUploadFailed
+    //   ... Entity 'powerpagecomponent' With Id = <GUID> Does Not Exist
+    // Repeated upload details can push the root cause before the bounded tail. Logs may
+    // also contain upload tokens, so scan the full file in chunks and return only booleans.
+    diagnostics = scanPacLogDiagnostics(logPath, fsImpl);
+  } catch {
+    // Classification is advisory and must fail closed without replacing the PAC result.
+  }
+
+  try {
     output = readFileTail(logPath, PAC_LOG_TAIL_BYTES, fsImpl);
     if (!output && commandOutput !== undefined && commandOutput !== null) {
       output = String(commandOutput);
@@ -103,6 +175,7 @@ function runPac(args, deps = {}) {
     status,
     stdout: status === 0 ? output : '',
     stderr: status === 0 ? '' : output,
+    diagnostics,
     ...(error ? { error } : {}),
   };
 }
@@ -115,8 +188,11 @@ function commandError(step, result) {
 }
 
 module.exports = {
+  PAC_LOG_SCAN_CHUNK_BYTES,
   PAC_LOG_TAIL_BYTES,
   commandError,
+  hasPacRecoveryExclusion,
   readFileTail,
   runPac,
+  scanPacLogDiagnostics,
 };

@@ -4,10 +4,21 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { commandError, runPac } = require('./lib/pac-command');
+const {
+  commandError,
+  hasPacRecoveryExclusion,
+  runPac,
+} = require('./lib/pac-command');
 const { readWebsiteYml } = require('./lib/detect-project-context');
 
-const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const GUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
+const GUID_PATTERN = new RegExp(`^${GUID_PATTERN_SOURCE}$`, 'i');
+const COMPATIBILITY_STALE_MANIFEST_UPLOAD_PATTERN = new RegExp(
+  String.raw`Unable to upload webfile name '[^\r\n]+?' with record Id \{?` +
+  GUID_PATTERN_SOURCE +
+  String.raw`\}? due to below error\(s\)\.[ \t]*(?:\r?\n|\\n)[ \t]*PortalFileContentUploadFailed`,
+  'i'
+);
 const CLONED_IDENTITY_PATH = path.join('.powerpages-site', 'website.yml');
 const GENERIC_MANIFEST_PATH = path.join('.powerpages-site', '.portalconfig', 'manifest.yml');
 
@@ -263,16 +274,14 @@ function removeScriptCreatedOutputDirectory(outputDirectory, existedBeforeRun, f
 
 function isStaleManifestUploadFailure(result) {
   const output = `${String(result.stderr || '')}\n${String(result.stdout || '')}`;
-  const authenticationFailure = /(?:Authentication failed|not authenticated|AADSTS\d+|401 Unauthorized|403 Forbidden|access token (?:has )?expired|run\s+pac\s+auth)/i;
-  const missingComponent = new RegExp(
-    String.raw`Entity\s+'powerpagecomponent'\s+With\s+Id\s*=\s*\{?` +
-    String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` +
-    String.raw`\}?\s+Does\s+Not\s+Exist`,
-    'i'
-  );
-  return !authenticationFailure.test(output) &&
-    missingComponent.test(output) &&
-    /PortalFileContentUploadFailed/i.test(output);
+  if (hasPacRecoveryExclusion(output)) return false;
+
+  const typedDiagnostic = result &&
+    result.diagnostics &&
+    result.diagnostics.staleManifestUploadFailure;
+  if (typeof typedDiagnostic === 'boolean') return typedDiagnostic;
+
+  return COMPATIBILITY_STALE_MANIFEST_UPLOAD_PATTERN.test(output);
 }
 
 function removeGenericManifestForRetry(clonedPath, deps = {}) {
