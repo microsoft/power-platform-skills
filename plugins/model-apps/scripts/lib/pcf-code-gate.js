@@ -13,6 +13,7 @@ const WARNING_CODES = new Set([
   'PCF_CODE_STORAGE',
   'PCF_CODE_DIRECT_API',
   'PCF_CODE_REFRESH_IN_UPDATEVIEW',
+  'PCF_CODE_UNPARSEABLE',
   'PCF_FEATURE_UNUSED',
 ]);
 
@@ -61,13 +62,15 @@ const SOURCE_RULES = [
       }
       return `Heuristic diagnostic: current-record internals such as context.mode.contextInfo/context.page are unsupported; bind entityId/entityName input properties and handle a missing id as an unsaved record. See ${RECORD_ID_FAQ}`;
     },
-    allow: (text, match) => match.includes('factory.fireEvent') && hasGridCustomizerMarker(text),
+    allow: (file, text, match) => match.includes('factory.fireEvent') && hasGridCustomizerMarker(file, text),
   },
 ];
 
-function scanSource(file, text, { controlType } = {}) {
+function scanSource(file, text, { controlType, lex = blankLiterals } = {}) {
   const src = String(text || '');
-  const mask = blankLiterals(src);
+  const lexed = lexSource(file, src, lex);
+  if (lexed.finding) return [lexed.finding];
+  const mask = lexed.mask;
   const findings = [];
 
   for (const rule of SOURCE_RULES) {
@@ -91,20 +94,19 @@ function addRegexFindings(findings, rule, file, src, mask) {
   rule.re.lastIndex = 0;
   let match;
   while ((match = rule.re.exec(mask)) !== null) {
-    if (rule.allow && rule.allow(src, match[0], match.index)) continue;
+    if (rule.allow && rule.allow(file, src, match[0], match.index)) continue;
     findings.push(makeFinding(rule.code, rule.message(match[0]), file, lineOf(src, match.index)));
     if (match[0].length === 0) rule.re.lastIndex += 1;
   }
 }
 
-function addDirectApiFindings(findings, file, src, mask) {
-  const commentRanges = [];
-  blankLiterals(src, { onComment: (start, end) => commentRanges.push([start, end]) });
+function addDirectApiFindings(findings, file, src) {
+  const ranges = stringLikeRanges(src);
   const re = /\/api\/data\//g;
   let match;
   while ((match = re.exec(src)) !== null) {
     const index = match.index;
-    if (mask[index] !== ' ' || inRanges(index, commentRanges)) continue;
+    if (!inRanges(index, ranges)) continue;
     findings.push(makeFinding(
       'PCF_CODE_DIRECT_API',
       `Heuristic diagnostic: direct Dataverse /api/data/ URLs bypass PCF feature tracking; use context.webAPI and declare the WebAPI feature instead. See ${BEST_PRACTICES}`,
@@ -115,7 +117,7 @@ function addDirectApiFindings(findings, file, src, mask) {
 }
 
 function addRefreshInUpdateViewFindings(findings, file, src, mask) {
-  const updateView = /\bupdateView\s*\([^)]*\)\s*\{/g;
+  const updateView = /\bupdateView\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/g;
   let match;
   while ((match = updateView.exec(mask)) !== null) {
     const open = mask.indexOf('{', match.index);
@@ -145,7 +147,12 @@ function featureCoherence(manifestModel, sources, hosts = []) {
   for (const source of sources || []) {
     const file = source.file || '<source>';
     const text = String(source.text || '');
-    const mask = blankLiterals(text);
+    const lexed = lexSource(file, text, blankLiterals);
+    if (lexed.finding) {
+      findings.push(lexed.finding);
+      continue;
+    }
+    const mask = lexed.mask;
 
     collectNamespaceUse({ findings, declared, used, file, text, mask, namespace: 'webAPI', feature: 'WebAPI' });
     collectNamespaceUse({ findings, declared, used, file, text, mask, namespace: 'utils', feature: 'Utility' });
@@ -184,7 +191,7 @@ function collectNamespaceUse({ findings, declared, used, file, text, mask, names
 }
 
 function collectDeviceUse({ findings, declared, used, file, text, mask }) {
-  const re = /\bcontext\.device\.([A-Za-z_$][\w$]*)\b/g;
+  const re = /\bcontext\.device(?:\?\.|\.)([A-Za-z_$][\w$]*)\b/g;
   let match;
   while ((match = re.exec(mask)) !== null) {
     const feature = `Device.${match[1]}`;
@@ -201,7 +208,7 @@ function collectDeviceUse({ findings, declared, used, file, text, mask }) {
 }
 
 function addPagesApiFindings(findings, file, text, mask) {
-  const calls = /\bcontext\.(device|utils)\.([A-Za-z_$][\w$]*)\s*\(/g;
+  const calls = /\bcontext\.(device|utils)(?:\?\.|\.)([A-Za-z_$][\w$]*)(?:\?\.)?\s*\(/g;
   let match;
   while ((match = calls.exec(mask)) !== null) {
     const namespace = match[1];
@@ -259,7 +266,64 @@ function findMatchingBrace(mask, open) {
   return -1;
 }
 
-function hasGridCustomizerMarker(text) {
+function lexSource(file, text, lex, opts) {
+  try {
+    return { mask: lex(text, opts), finding: null };
+  } catch (err) {
+    return {
+      mask: '',
+      finding: makeFinding(
+        'PCF_CODE_UNPARSEABLE',
+        `Heuristic diagnostic: source could not be parsed by the PCF source gate, which is an unsupported source shape for this check; use valid TypeScript/TSX or simplify the syntax so the gate can scan it. See ${BEST_PRACTICES}`,
+        file,
+        1,
+      ),
+    };
+  }
+}
+
+function stringLikeRanges(src) {
+  const ranges = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {
+      const end = src.indexOf('\n', i + 2);
+      i = end === -1 ? src.length : end + 1;
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      const start = i;
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (src[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      ranges.push([start, i]);
+      continue;
+    }
+    i += 1;
+  }
+  return ranges;
+}
+
+function hasGridCustomizerMarker(file, text) {
+  const base = String(file || '').split(/[\\/]/).pop();
+  if (base !== 'customizerBridge.ts' && base !== 'customizerBridge.tsx') return false;
   const comments = [];
   const mask = blankLiterals(text, { onComment: (start, end) => comments.push([start, end]) });
   const firstCode = mask.search(/\S/);
@@ -274,13 +338,21 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
   const prefix = text.slice(start, callIndex);
   const escapedNamespace = escapeRegExp(namespace);
   const escapedMethod = escapeRegExp(method);
-  const guard = new RegExp(`typeof\\s+context\\.${escapedNamespace}(?:\\?\\.|\\.)${escapedMethod}\\s*={2,3}\\s*['"]function['"]\\s*\\)\\s*\\{`, 'g');
-  let match;
-  while ((match = guard.exec(prefix)) !== null) {
-    const guardStart = start + match.index;
-    if (mask[guardStart] === ' ') continue;
-    const open = guardStart + match[0].lastIndexOf('{');
-    if (!mask.slice(open + 1, callIndex).includes('}')) return true;
+  const optionalMethodGuard = `typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`;
+  const dottedMethodGuard = `typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`;
+  const namespaceCheck = `(?:context\\.${escapedNamespace}\\s*&&|&&\\s*context\\.${escapedNamespace}\\b)`;
+  const guards = [
+    new RegExp(`if\\s*\\([^)]*${optionalMethodGuard}[^)]*\\)\\s*\\{`, 'g'),
+    new RegExp(`if\\s*\\((?=[^)]*${namespaceCheck})(?=[^)]*${dottedMethodGuard})[^)]*\\)\\s*\\{`, 'g'),
+  ];
+  for (const guard of guards) {
+    let match;
+    while ((match = guard.exec(prefix)) !== null) {
+      const guardStart = start + match.index;
+      if (mask[guardStart] === ' ') continue;
+      const open = guardStart + match[0].lastIndexOf('{');
+      if (!mask.slice(open + 1, callIndex).includes('}')) return true;
+    }
   }
   return false;
 }

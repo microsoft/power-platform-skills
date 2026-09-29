@@ -15,6 +15,10 @@ function scan(text, options = {}) {
   return scanSource(FILE, text, { controlType: 'standard', ...options });
 }
 
+function scanFile(file, text, options = {}) {
+  return scanSource(file, text, { controlType: 'standard', ...options });
+}
+
 function assertCode(findings, code, severity, expectedFile = FILE) {
   const finding = findings.find((item) => item.code === code);
   assert.ok(finding, `${code} missing from ${codes(findings).join(', ')}`);
@@ -109,14 +113,72 @@ test('scanSource preserves source line numbers after masking comments and string
 });
 
 test('scanSource allows the documented grid customizer bridge marker to call factory.fireEvent', () => {
-  assertClean(`// pcf-extension-pattern: grid-customizer
+  assert.deepEqual(scanFile('src/customizerBridge.ts', `// pcf-extension-pattern: grid-customizer
 // Adapter for the documented grid customizer template.
-(context as any).factory.fireEvent(eventName, customizer);`);
+(context as any).factory.fireEvent(eventName, customizer);`), []);
+});
+
+test('scanSource does not allow the grid customizer marker outside customizerBridge files', () => {
+  assertCode(scan(`// pcf-extension-pattern: grid-customizer
+// Marker belongs in customizerBridge.ts only.
+(context as any).factory.fireEvent(eventName, customizer);`), 'PCF_CODE_INTERNAL_CONTEXT', 'error');
+});
+
+test('scanSource reports refresh inside TypeScript-annotated updateView methods', () => {
+  assertCode(scan(`
+export class Control {
+  public updateView(context: ComponentFramework.Context<IInputs>): void {
+    context.parameters.rows.refresh();
+  }
+}`), 'PCF_CODE_REFRESH_IN_UPDATEVIEW', 'warning');
+
+  assertCode(scanFile('src/index.tsx', `
+export class Control {
+  public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+    context.parameters.rows.refresh();
+    return <span />;
+  }
+}`), 'PCF_CODE_REFRESH_IN_UPDATEVIEW', 'warning', 'src/index.tsx');
+});
+
+test('scanSource does not report refresh in helpers outside updateView', () => {
+  assert.deepEqual(scan(`
+export class Control {
+  public updateView(context: ComponentFramework.Context<IInputs>): void {
+    this.refreshRows(context);
+  }
+
+  private refreshRows(context: ComponentFramework.Context<IInputs>): void {
+    context.parameters.rows.refresh();
+  }
+}`), []);
+});
+
+test('scanSource reports direct API URLs in strings and templates but not JSX text', () => {
+  assertCode(scan("fetch('/api/data/v9.2/accounts');"), 'PCF_CODE_DIRECT_API', 'warning');
+  assertCode(scan('const url = `${context.client.getClientUrl()}/api/data/v9.2/accounts`;'), 'PCF_CODE_DIRECT_API', 'warning');
+  assert.deepEqual(scanFile('src/index.tsx', 'export const Help = () => <span>/api/data/ docs</span>;'), []);
+});
+
+test('scanSource turns lexer failures into unparseable warnings', () => {
+  const findings = scanSource('src/broken.ts', 'const x = 1;', {
+    controlType: 'standard',
+    lex: () => {
+      throw new Error('simulated lexer failure');
+    },
+  });
+
+  assertCode(findings, 'PCF_CODE_UNPARSEABLE', 'warning', 'src/broken.ts');
 });
 
 test('featureCoherence reports undeclared WebAPI use and passes when declared', () => {
   assertCode(featureCoherence(manifest(), [{ file: FILE, text: 'context.webAPI.retrieveMultipleRecords("account");' }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('WebAPI')), [{ file: FILE, text: 'context.webAPI.retrieveMultipleRecords("account");' }], ['model']), []);
+});
+
+test('featureCoherence treats optional-chained WebAPI use as feature use', () => {
+  assertCode(featureCoherence(manifest(), [{ file: FILE, text: 'context.webAPI?.retrieveMultipleRecords("account");' }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
+  assert.deepEqual(featureCoherence(manifest(usesFeature('WebAPI')), [{ file: FILE, text: 'context.webAPI?.retrieveMultipleRecords("account");' }], ['model']), []);
 });
 
 test('featureCoherence ignores WebAPI words that appear only in comments or strings', () => {
@@ -128,6 +190,13 @@ test('featureCoherence reports undeclared Utility use and passes when declared',
   assert.deepEqual(featureCoherence(manifest(usesFeature('Utility')), [{ file: FILE, text: 'context.utils.lookupObjects({});' }], ['model']), []);
 });
 
+test('featureCoherence treats optional-chained Utility use as feature use and Pages API use', () => {
+  const text = 'context.utils?.getEntityMetadata("account");';
+
+  assertCode(featureCoherence(manifest(), [{ file: FILE, text }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
+  assertCode(featureCoherence(manifest(usesFeature('Utility')), [{ file: FILE, text }], ['pages']), 'PCF_PAGES_API', 'error');
+});
+
 test('featureCoherence ignores Utility words that appear only in comments or strings', () => {
   assert.deepEqual(featureCoherence(manifest(), [{ file: FILE, text: '// context.utils.lookupObjects\nconst s = "context.utils";' }], ['model']), []);
 });
@@ -135,6 +204,13 @@ test('featureCoherence ignores Utility words that appear only in comments or str
 test('featureCoherence reports undeclared Device method use and passes when declared', () => {
   assertCode(featureCoherence(manifest(), [{ file: FILE, text: 'context.device.captureImage();' }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'context.device.captureImage();' }], ['model']), []);
+});
+
+test('featureCoherence treats optional-chained Device method calls as feature and Pages API use', () => {
+  const text = 'context.device?.captureImage?.();';
+
+  assertCode(featureCoherence(manifest(), [{ file: FILE, text }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text }], ['pages']), 'PCF_PAGES_API', 'error');
 });
 
 test('featureCoherence ignores Device words that appear only in comments or strings', () => {
@@ -149,6 +225,11 @@ test('featureCoherence reports unused declared features and passes when each fea
 test('featureCoherence reports Pages device calls without method-level guards and passes with method-level guards', () => {
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+});
+
+test('featureCoherence rejects unsafe dotted method guards and accepts namespace plus method guards', () => {
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
 });
 
 test('featureCoherence does not treat a string-only method guard as a Pages guard', () => {
