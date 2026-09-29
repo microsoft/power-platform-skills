@@ -36,6 +36,29 @@ function fakeSdk({ rows = {}, gets = {} } = {}) {
   };
 }
 
+function walkProductionPcfModules(root) {
+  const files = [];
+  const visit = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'tests' || entry.name === 'vendor') continue;
+        visit(full);
+      } else if (entry.isFile() && /^pcf-|^verify-pcf$|^lint-pcf$|^write-pcf-plan$/.test(path.basename(entry.name, '.js')) && entry.name.endsWith('.js')) {
+        files.push(full);
+      }
+    }
+  };
+  visit(root);
+  return files;
+}
+
+function stripJsComments(text) {
+  return String(text || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 test('makePcfSdk initializes the vendored SDK with the provided workspace and client', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-sdk-'));
   try {
@@ -139,10 +162,19 @@ test('findForm resolves by table, form name, and types', async () => {
     table: 'systemform',
     options: {
       select: ['formid', 'name', 'type'],
-      filter: "objecttypecode eq 'account' and type in (2,7) and name eq 'Maker''s Main'",
+      filter: "objecttypecode eq 'account' and (type eq 2 or type eq 7) and name eq 'Maker''s Main'",
       paginate: true,
     },
   });
+});
+
+test('PCF production modules do not build OData filters with the unsupported in operator', () => {
+  const scriptsRoot = path.join(__dirname, '..');
+  const offenders = walkProductionPcfModules(scriptsRoot)
+    .filter((file) => /\bin\s*\(/.test(stripJsComments(fs.readFileSync(file, 'utf8'))))
+    .map((file) => path.relative(scriptsRoot, file));
+
+  assert.deepEqual(offenders, []);
 });
 
 test('findForm resolves by GUID and reports zero or several matches with candidates', async () => {

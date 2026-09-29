@@ -60,7 +60,7 @@ async function findForm(sdk, { table, form, types = [2, 7] }) {
   const typeList = (types || []).map((t) => Number(t)).filter((t) => Number.isFinite(t));
   const clauses = [
     `objecttypecode eq '${odataLit(table)}'`,
-    typeList.length ? `type in (${typeList.join(',')})` : null,
+    formTypePredicate(typeList),
     isGuid(form) ? `formid eq ${form}` : `name eq '${odataLit(form)}'`,
   ].filter(Boolean);
   const rows = await sdk.queryRecords('systemform', {
@@ -77,6 +77,17 @@ async function findForm(sdk, { table, form, types = [2, 7] }) {
   // { formid, name, type }.
   const row = rows[0];
   return { formid: row.formid, name: row.name, type: row.type };
+}
+
+function formTypePredicate(typeList) {
+  if (!typeList.length) return null;
+  // Live Dataverse rejected the plain OData operator here:
+  //   HTTP 501 ... $filter=... type in (2,7) ... The query node In is not supported
+  // Dataverse documents filtering but supports `Microsoft.Dynamics.CRM.In` as a function rather
+  // than the OData `in` operator in this endpoint, so keep the simple equality chain the Web API
+  // accepts for systemform type filters.
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/filter-rows
+  return `(${typeList.map((type) => `type eq ${type}`).join(' or ')})`;
 }
 
 async function readFormXml(sdk, formId, opts = {}) {
