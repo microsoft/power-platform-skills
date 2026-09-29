@@ -1,0 +1,46 @@
+.{{cssClass}} {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+.{{cssInputClass}} {
+  display: inline-flex;
+  gap: 0.125rem;
+  line-height: 1;
+}
+
+.{{cssInputClass}}-star {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  color: #8a6100;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 1.375rem;
+  height: 2rem;
+  justify-content: center;
+  min-width: 2rem;
+  user-select: none;
+}
+
+.{{cssInputClass}}-star[aria-disabled="true"] {
+  color: #605e5c;
+  cursor: default;
+}
+
+.{{cssInputClass}}-star:focus {
+  border-color: #323130;
+  outline: 2px solid #005a9e;
+  outline-offset: 1px;
+}
+
+.{{cssInputClass}}-star-selected {
+  color: #b7791f;
+}
+
+.{{cssMessageClass}} {
+  color: #605e5c;
+  font-size: 0.875rem;
+}

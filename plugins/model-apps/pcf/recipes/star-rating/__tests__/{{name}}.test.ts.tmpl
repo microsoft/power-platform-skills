@@ -1,0 +1,129 @@
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockProperty } from "../test/pcf-context";
+
+type Mounted = {
+    control: {{name}};
+    notify: jest.Mock;
+    container: HTMLDivElement;
+    context: ComponentFramework.Context<IInputs>;
+};
+
+function withStrings(context: ComponentFramework.Context<IInputs>): ComponentFramework.Context<IInputs> {
+    (context as ComponentFramework.Context<IInputs> & {
+        resources: ComponentFramework.Resources;
+    }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => ({
+            StarRating_Label: "Rating",
+            StarRating_PermissionDenied: "You do not have permission to read this rating.",
+            StarRating_StarLabel: "{0} of {1}",
+        }[key] ?? key),
+    } as ComponentFramework.Resources;
+    return context;
+}
+
+function mount(parameters: Partial<IInputs>, options: { disabled?: boolean } = {}): Mounted {
+    const control = new {{name}}();
+    const notify = jest.fn();
+    const container = document.createElement("div");
+    const context = withStrings(mockContext<IInputs>(parameters, { disabled: options.disabled }));
+
+    control.init(context, notify, {}, container);
+
+    return { control, notify, container, context };
+}
+
+function radios(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[role="radio"]'));
+}
+
+function clickRadio(container: HTMLElement, index: number): void {
+    radios(container)[index].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+}
+
+function pressRadio(container: HTMLElement, index: number, key: string): void {
+    radios(container)[index].dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+test("null raw value renders an unselected localized radiogroup", () => {
+    const { container, notify } = mount({ value: mockProperty<number>(null) as IInputs["value"] });
+    const group = container.querySelector('[role="radiogroup"]');
+    const items = radios(container);
+
+    expect(group?.getAttribute("aria-label")).toBe("Rating");
+    expect(items).toHaveLength(5);
+    expect(items.every((item) => item.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(items.map((item) => item.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    expect(notify).not.toHaveBeenCalled();
+});
+
+test("missing parameter objects use defaults and do not crash", () => {
+    const { control, container } = mount({});
+
+    expect(radios(container)).toHaveLength(5);
+    expect(control.getOutputs()).toEqual({ value: undefined });
+});
+
+test("max clamps to the documented 1 to 10 range", () => {
+    expect(radios(mount({ max: mockProperty(99) as IInputs["max"] }).container)).toHaveLength(10);
+    expect(radios(mount({ max: mockProperty(-3) as IInputs["max"] }).container)).toHaveLength(1);
+});
+
+test("clicking a different star notifies once and returns the chosen whole number", () => {
+    const { control, container, notify } = mount({ value: mockProperty(2) as IInputs["value"] });
+
+    clickRadio(container, 3);
+    clickRadio(container, 3);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(control.getOutputs()).toEqual({ value: 4 });
+    expect(radios(container).map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "false", "false", "true", "false"]);
+});
+
+test("arrow keys and Home End move the roving selected radio", () => {
+    const { control, container, notify } = mount({ value: mockProperty(3) as IInputs["value"] });
+
+    pressRadio(container, 2, "ArrowRight");
+    pressRadio(container, 3, "Home");
+    pressRadio(container, 0, "End");
+    pressRadio(container, 4, "ArrowLeft");
+
+    expect(notify).toHaveBeenCalledTimes(4);
+    expect(control.getOutputs()).toEqual({ value: 4 });
+    expect(radios(container).map((item) => item.tabIndex)).toEqual([-1, -1, -1, 0, -1]);
+});
+
+test("disabled and non-editable states prevent output changes", () => {
+    const disabled = mount({ value: mockProperty(1) as IInputs["value"] }, { disabled: true });
+    clickRadio(disabled.container, 2);
+
+    const readOnly = mount({ value: mockProperty(1, undefined, { editable: false }) as IInputs["value"] });
+    pressRadio(readOnly.container, 0, "End");
+
+    expect(disabled.notify).not.toHaveBeenCalled();
+    expect(disabled.control.getOutputs()).toEqual({ value: 1 });
+    expect(radios(disabled.container).every((item) => item.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(readOnly.notify).not.toHaveBeenCalled();
+    expect(readOnly.control.getOutputs()).toEqual({ value: 1 });
+});
+
+test("unreadable security shows a localized permission message without leaking the value", () => {
+    const { container, notify } = mount({ value: mockProperty(5, undefined, { readable: false }) as IInputs["value"] });
+
+    expect(radios(container)).toHaveLength(0);
+    expect(container.textContent).toContain("You do not have permission");
+    expect(container.textContent).not.toContain("5");
+    expect(notify).not.toHaveBeenCalled();
+});
+
+test("two instances keep independent state and DOM", () => {
+    const first = mount({ value: mockProperty(1) as IInputs["value"] });
+    const second = mount({ value: mockProperty(4) as IInputs["value"] });
+
+    clickRadio(first.container, 2);
+
+    expect(first.control.getOutputs()).toEqual({ value: 3 });
+    expect(second.control.getOutputs()).toEqual({ value: 4 });
+    expect(first.container.querySelector(".{{cssClass}}")).not.toBe(second.container.querySelector(".{{cssClass}}"));
+});

@@ -1,0 +1,188 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import "./css/{{name}}.css";
+
+const DEFAULT_MAX = 5;
+const MIN_MAX = 1;
+const MAX_MAX = 10;
+const STRINGS = {
+    label: "StarRating_Label",
+    permissionDenied: "StarRating_PermissionDenied",
+    starLabel: "StarRating_StarLabel",
+} as const;
+
+type ResourceContext = ComponentFramework.Context<IInputs> & {
+    resources?: {
+        getString: (key: string) => string;
+    };
+};
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private container: HTMLDivElement | null = null;
+    private root: HTMLDivElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private notifyOutputChanged: (() => void) | null = null;
+    private value: number | null = null;
+    private max = DEFAULT_MAX;
+    private readable = true;
+    private editable = true;
+    private disabled = false;
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.container = container;
+        this.context = context;
+        this.notifyOutputChanged = notifyOutputChanged;
+
+        // Field controls must opt in before hosts send allocated width and height changes.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
+        context.mode.trackContainerResize(true);
+
+        const doc = container.ownerDocument;
+        this.root = doc.createElement("div");
+        this.root.className = "{{cssClass}}";
+        container.append(this.root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
+        const valueParameter = context.parameters.value;
+        this.readable = valueParameter?.security?.readable ?? true;
+        this.editable = valueParameter?.security?.editable ?? true;
+        this.disabled = context.mode.isControlDisabled;
+        this.max = this.readConfiguredMax(context);
+        this.value = this.normalizeRating(valueParameter?.raw);
+        this.render();
+    }
+
+    public getOutputs(): IOutputs {
+        return {
+            value: this.value ?? undefined,
+        };
+    }
+
+    public destroy(): void {
+        this.container?.replaceChildren();
+        this.root = null;
+        this.container = null;
+        this.context = null;
+        this.notifyOutputChanged = null;
+    }
+
+    private readConfiguredMax(context: ComponentFramework.Context<IInputs>): number {
+        const raw = context.parameters.max?.security?.readable === false ? null : context.parameters.max?.raw;
+        const numeric = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_MAX;
+        // The manifest exposes max as a Whole.None input, so clamp defensively to keep the DOM small
+        // and predictable even when a maker enters an out-of-range value.
+        return Math.min(MAX_MAX, Math.max(MIN_MAX, numeric));
+    }
+
+    private normalizeRating(raw: number | null | undefined): number | null {
+        if (typeof raw !== "number" || !Number.isInteger(raw)) return null;
+        if (raw < 1 || raw > this.max) return null;
+        return raw;
+    }
+
+    private render(): void {
+        if (!this.root || !this.context) return;
+        this.root.replaceChildren();
+
+        if (!this.readable) {
+            const message = this.root.ownerDocument.createElement("div");
+            message.className = "{{cssMessageClass}}";
+            message.textContent = this.getString(STRINGS.permissionDenied);
+            this.root.append(message);
+            return;
+        }
+
+        const group = this.root.ownerDocument.createElement("div");
+        group.className = "{{cssInputClass}}";
+        group.setAttribute("role", "radiogroup");
+        group.setAttribute("aria-label", this.getString(STRINGS.label));
+
+        for (let rating = 1; rating <= this.max; rating += 1) {
+            group.append(this.createRadio(rating));
+        }
+
+        this.root.append(group);
+    }
+
+    private createRadio(rating: number): HTMLSpanElement {
+        const radio = this.root!.ownerDocument.createElement("span");
+        const selected = this.value === rating;
+        const interactive = this.isInteractive();
+        radio.className = selected ? "{{cssInputClass}}-star {{cssInputClass}}-star-selected" : "{{cssInputClass}}-star";
+        radio.setAttribute("role", "radio");
+        radio.setAttribute("aria-checked", selected ? "true" : "false");
+        radio.setAttribute("aria-label", this.formatStarLabel(rating));
+        radio.setAttribute("aria-disabled", interactive ? "false" : "true");
+        radio.tabIndex = interactive && this.rovingRating() === rating ? 0 : -1;
+        radio.textContent = selected || (this.value != null && rating <= this.value) ? "★" : "☆";
+        radio.addEventListener("click", () => this.selectRating(rating, false));
+        radio.addEventListener("keydown", (event) => this.onKeyDown(event, rating));
+        return radio;
+    }
+
+    private rovingRating(): number {
+        return this.value ?? 1;
+    }
+
+    private isInteractive(): boolean {
+        return this.readable && this.editable && !this.disabled;
+    }
+
+    private selectRating(rating: number, focus: boolean): void {
+        if (!this.isInteractive() || rating === this.value) return;
+        this.value = rating;
+        this.render();
+        if (focus) this.focusRating(rating);
+        this.notifyOutputChanged?.();
+    }
+
+    private onKeyDown(event: KeyboardEvent, rating: number): void {
+        if (!this.isInteractive()) return;
+        const next = this.nextRating(event.key, rating);
+        if (next == null) return;
+        event.preventDefault();
+        this.selectRating(next, true);
+    }
+
+    private nextRating(key: string, rating: number): number | null {
+        switch (key) {
+            case "ArrowRight":
+            case "ArrowDown":
+                return rating >= this.max ? 1 : rating + 1;
+            case "ArrowLeft":
+            case "ArrowUp":
+                return rating <= 1 ? this.max : rating - 1;
+            case "Home":
+                return 1;
+            case "End":
+                return this.max;
+            default:
+                return null;
+        }
+    }
+
+    private focusRating(rating: number): void {
+        const label = this.formatStarLabel(rating);
+        const target = Array.from(this.root?.querySelectorAll<HTMLElement>('[role="radio"]') ?? [])
+            .find((item) => item.getAttribute("aria-label") === label);
+        target?.focus();
+    }
+
+    private formatStarLabel(rating: number): string {
+        return this.getString(STRINGS.starLabel)
+            .replace("{0}", String(rating))
+            .replace("{1}", String(this.max));
+    }
+
+    private getString(key: string): string {
+        const context = this.context as ResourceContext | null;
+        return context?.resources?.getString(key) || key;
+    }
+}
