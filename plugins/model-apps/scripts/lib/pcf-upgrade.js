@@ -131,78 +131,32 @@ function buildModeStep(state) {
 
 function rewritePcfBuildMode(text) {
   const source = String(text || '');
-  const withoutMode = removeActivePcfBuildModes(source);
+  const mode = pcfprojBuildMode(source);
+  const ranges = mergeRanges((mode.occurrences || [])
+    .map((item) => lineRange(source, item.offset, item.endOffset)));
+  const withoutMode = ranges
+    .sort((a, b) => b[0] - a[0])
+    .reduce((out, [start, end]) => out.slice(0, start) + out.slice(end), source);
+  const adjustedImportEnd = adjustedOffset(mode.importEndOffset, ranges);
   const lineEnd = dominantNewline(source);
   const nameMatch = /(<Name>[^<]+<\/Name>)(\r?\n)([ \t]*)/.exec(withoutMode);
-  if (nameMatch && afterCommonProps(withoutMode, nameMatch.index)) {
+  if (nameMatch && (mode.importOffset === -1 || nameMatch.index > adjustedImportEnd)) {
     const insertion = `${nameMatch[1]}${nameMatch[2]}${nameMatch[3]}<PcfBuildMode>production</PcfBuildMode>${nameMatch[2]}${nameMatch[3]}`;
     const after = `${withoutMode.slice(0, nameMatch.index)}${insertion}${withoutMode.slice(nameMatch.index + nameMatch[0].length)}`;
     assertEffectiveBuildMode(after);
     return after;
   }
 
-  function removeActivePcfBuildModes(text) {
-    const withoutTemplateComment = String(text || '').replace(/\r?\n[ \t]*<!-- pac pcf push otherwise builds[\s\S]*?-->\r?\n[ \t]*<PcfBuildMode\b[^>]*>[\s\S]*?<\/PcfBuildMode>/i, '');
-    const commentRanges = xmlCommentRanges(withoutTemplateComment);
-    const ranges = [];
-    for (const match of withoutTemplateComment.matchAll(/<PcfBuildMode\b[^>]*>[\s\S]*?<\/PcfBuildMode>/gi)) {
-      if (commentRanges.some(([start, end]) => match.index >= start && match.index < end)) continue;
-      ranges.push(lineRange(withoutTemplateComment, match.index, match.index + match[0].length));
-    }
-    return mergeRanges(ranges)
-      .sort((a, b) => b[0] - a[0])
-      .reduce((out, [start, end]) => out.slice(0, start) + out.slice(end), withoutTemplateComment);
-  }
-
-  function xmlCommentRanges(text) {
-    const ranges = [];
-    for (const match of String(text || '').matchAll(/<!--[\s\S]*?-->/g)) {
-      ranges.push([match.index, match.index + match[0].length]);
-    }
-    return ranges;
-  }
-
-  function lineRange(text, start, end) {
-    let lineStart = text.lastIndexOf('\n', start) + 1;
-    let lineEnd = text.indexOf('\n', end);
-    if (lineEnd === -1) lineEnd = text.length;
-    else lineEnd += 1;
-    if (lineStart > 0 && /^[ \t]*$/.test(text.slice(lineStart, start)) && /^[ \t]*(?:\r)?$/.test(text.slice(end, lineEnd))) {
-      return [lineStart, lineEnd];
-    }
-    return [start, end];
-  }
-
-  function mergeRanges(ranges) {
-    const sorted = ranges.slice().sort((a, b) => a[0] - b[0]);
-    const merged = [];
-    for (const range of sorted) {
-      const last = merged[merged.length - 1];
-      if (last && range[0] <= last[1]) {
-        last[1] = Math.max(last[1], range[1]);
-      } else {
-        merged.push([...range]);
-      }
-    }
-    return merged;
-  }
-  const importMatch = /<Import\b[^>]*\bProject\s*=\s*["'][^"']*Microsoft\.Common\.props["'][^"']*\/?>/i.exec(withoutMode);
-  if (!importMatch) {
+  if (mode.importOffset === -1) {
     const after = withoutMode.replace(/(<PropertyGroup\b[^>]*>)(\r?\n)([ \t]*)/, `$1$2$3<PcfBuildMode>production</PcfBuildMode>$2$3`);
     assertEffectiveBuildMode(after);
     return after;
   }
-  const afterImport = importMatch.index + importMatch[0].length;
-  const indent = leadingIndent(withoutMode, importMatch.index);
+  const indent = leadingIndent(withoutMode, adjustedOffset(mode.importOffset, ranges));
   const insertion = `${lineEnd}${indent}<PropertyGroup>${lineEnd}${indent}  <PcfBuildMode>production</PcfBuildMode>${lineEnd}${indent}</PropertyGroup>`;
-  const after = `${withoutMode.slice(0, afterImport)}${insertion}${withoutMode.slice(afterImport)}`;
+  const after = `${withoutMode.slice(0, adjustedImportEnd)}${insertion}${withoutMode.slice(adjustedImportEnd)}`;
   assertEffectiveBuildMode(after);
   return after;
-}
-
-function afterCommonProps(text, offset) {
-  const mode = pcfprojBuildMode(`${text.slice(0, offset)}<PcfBuildMode>production</PcfBuildMode>${text.slice(offset)}`);
-  return mode.status === 'production';
 }
 
 function assertEffectiveBuildMode(text) {
@@ -222,6 +176,40 @@ function leadingIndent(text, offset) {
   const lineStart = text.lastIndexOf('\n', offset) + 1;
   const match = /^[ \t]*/.exec(text.slice(lineStart, offset));
   return match ? match[0] : '';
+}
+
+function adjustedOffset(offset, removedRanges) {
+  if (offset < 0) return offset;
+  let adjusted = offset;
+  for (const [start, end] of removedRanges) {
+    if (end <= offset) adjusted -= end - start;
+  }
+  return adjusted;
+}
+
+function lineRange(text, start, end) {
+  let lineStart = text.lastIndexOf('\n', start) + 1;
+  let lineEnd = text.indexOf('\n', end);
+  if (lineEnd === -1) lineEnd = text.length;
+  else lineEnd += 1;
+  if (lineStart > 0 && /^[ \t]*$/.test(text.slice(lineStart, start)) && /^[ \t]*(?:\r)?$/.test(text.slice(end, lineEnd))) {
+    return [lineStart, lineEnd];
+  }
+  return [start, end];
+}
+
+function mergeRanges(ranges) {
+  const sorted = ranges.slice().sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([...range]);
+    }
+  }
+  return merged;
 }
 
 function platformLibrarySteps(state, matrix) {

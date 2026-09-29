@@ -95,6 +95,9 @@ test('pcfprojBuildMode ignores comments and lets the last unconditioned post-imp
   const result = pcfprojBuildMode(pcfproj);
   assert.equal(result.status, 'development');
   assert.equal(result.value, 'development');
+  assert.ok(result.occurrences.every((item) => item.endOffset > item.offset));
+  assert.equal(result.occurrences.some((item) => item.value === 'production'), true);
+  assert.ok(result.importEndOffset > result.importOffset);
 });
 
 test('pcfprojBuildMode treats conditioned values as ineffective because pac pcf push builds Debug', () => {

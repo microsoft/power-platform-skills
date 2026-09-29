@@ -182,6 +182,23 @@ test('BUILDMODE_PRODUCTION removes conditioned overrides and leaves commented ex
   assert.doesNotMatch(after, /<PropertyGroup\b[^>]*Condition=[\s\S]*?<PcfBuildMode>/);
 });
 
+test('BUILDMODE_PRODUCTION uses doctor occurrences so comments between real values are untouched', () => {
+  const { rewritePcfBuildMode } = require('../lib/pcf-upgrade.js');
+  const before = renderedPcfproj()
+    .replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>')
+    .replace(
+      /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
+      '</PropertyGroup>\n  <!-- <PcfBuildMode>commented</PcfBuildMode> -->\n  <PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n\n  <PropertyGroup>\n    <TargetFrameworkVersion>',
+    );
+
+  const after = rewritePcfBuildMode(before);
+
+  assert.equal(pcfprojBuildMode(after).status, 'production');
+  assert.match(after, /<!-- <PcfBuildMode>commented<\/PcfBuildMode> -->/);
+  assert.equal((after.match(/<PcfBuildMode>/g) || []).length, 2);
+  assert.doesNotMatch(after, /<PcfBuildMode>development<\/PcfBuildMode>/);
+});
+
 test('BUILDMODE_PRODUCTION preserves CRLF newlines', () => {
   const { rewritePcfBuildMode } = require('../lib/pcf-upgrade.js');
   const before = withCrLf(renderedPcfproj().replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>'));

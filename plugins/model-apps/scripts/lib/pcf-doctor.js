@@ -301,10 +301,12 @@ function pcfprojBuildMode(pcfprojText) {
   const occurrences = pcfBuildModeOccurrences(text);
   const importMatch = /<Import\b[^>]*\bProject\s*=\s*["'][^"']*Microsoft\.Common\.props["'][^>]*>/i.exec(text);
   const importOffset = importMatch ? importMatch.index : -1;
+  const importEndOffset = importMatch ? importMatch.index + importMatch[0].length : -1;
   if (occurrences.length === 0) {
     return {
       status: 'missing',
       importOffset,
+      importEndOffset,
       modeOffset: -1,
       occurrences,
     };
@@ -323,13 +325,14 @@ function pcfprojBuildMode(pcfprojText) {
         effectiveValue: effective.value,
         modeOffset: lastConditioned.offset,
         importOffset,
+        importEndOffset,
         occurrences,
       };
     }
     if (/^production$/i.test(effective.value)) {
-      return { status: 'production', value: effective.value, modeOffset: effective.offset, importOffset, occurrences };
+      return { status: 'production', value: effective.value, modeOffset: effective.offset, importOffset, importEndOffset, occurrences };
     }
-    return { status: 'development', value: effective.value, modeOffset: effective.offset, importOffset, occurrences };
+    return { status: 'development', value: effective.value, modeOffset: effective.offset, importOffset, importEndOffset, occurrences };
   }
 
   const conditionedAfter = afterImport.filter((item) => item.conditioned);
@@ -341,6 +344,7 @@ function pcfprojBuildMode(pcfprojText) {
       value: lastConditioned.value,
       modeOffset: lastConditioned.offset,
       importOffset,
+      importEndOffset,
       occurrences,
     };
   }
@@ -353,10 +357,11 @@ function pcfprojBuildMode(pcfprojText) {
       value: lastBefore.value,
       modeOffset: lastBefore.offset,
       importOffset,
+      importEndOffset,
       occurrences,
     };
   }
-  return { status: 'missing', importOffset, modeOffset: -1, occurrences };
+  return { status: 'missing', importOffset, importEndOffset, modeOffset: -1, occurrences };
 }
 
 function pcfBuildModeOccurrences(text) {
@@ -368,6 +373,7 @@ function pcfBuildModeOccurrences(text) {
     occurrences.push({
       value: match[2].trim(),
       offset: match.index,
+      endOffset: match.index + match[0].length,
       conditioned: Object.hasOwn(tagAttrs, 'Condition') || Object.hasOwn(groupAttrs, 'Condition'),
     });
   }
