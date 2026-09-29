@@ -41,76 +41,35 @@ dotnet build -c Release -p:SolutionPackageType=Managed
 
 Component plus bindings: add forms/views/apps that carry the bindings to the same solution before export/import. A component-only solution registers the control but does not place it on forms or Pages.
 
-## GitHub Actions example to adapt
+## Pipeline examples
 
-Microsoft documents Power Platform GitHub Actions and available solution actions at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-actions and https://learn.microsoft.com/en-us/power-platform/alm/devops-github-available-actions. Store secrets in GitHub encrypted secrets, not in YAML.
+The full example pipelines live in:
+
+- `pcf/pipelines/github-actions.yml`
+- `pcf/pipelines/azure-devops.yml`
+
+Do not duplicate those files in this flow. Use them as adaptable examples with these stages:
+
+1. Install Power Platform tooling first (`microsoft/powerplatform-actions/actions-install@v1` in GitHub Actions or `PowerPlatformToolInstaller@2` in Azure DevOps).
+2. Build the PCF project.
+3. Run tests/gates.
+4. Pack the managed solution.
+5. Publish the solution artifact.
+6. Import the artifact into the target environment.
+
+Short excerpt only:
 
 ```yaml
-name: pcf-solution
-on: [workflow_dispatch]
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Power Platform tools
-        uses: microsoft/powerplatform-actions/actions-install@v1
-      - name: Build managed solution
-        shell: pwsh
-        run: |
-          pac solution init --publisher-name Contoso --publisher-prefix contoso
-          pac solution add-reference --path .\controls\StarRating
-          dotnet build -c Release -p:SolutionPackageType=Managed
-      - name: Import managed solution
-        uses: microsoft/powerplatform-actions/import-solution@v1
-        with:
-          environment-url: ${{ secrets.DATAVERSE_URL }}
-          app-id: ${{ secrets.POWERPLATFORM_APP_ID }}
-          client-secret: ${{ secrets.POWERPLATFORM_CLIENT_SECRET }}
-          tenant-id: ${{ secrets.POWERPLATFORM_TENANT_ID }}
-          solution-file: bin\Release\Contoso.zip
-      - name: Publish customizations
-        uses: microsoft/powerplatform-actions/publish-solution@v1
-        with:
-          environment-url: ${{ secrets.DATAVERSE_URL }}
-          app-id: ${{ secrets.POWERPLATFORM_APP_ID }}
-          client-secret: ${{ secrets.POWERPLATFORM_CLIENT_SECRET }}
-          tenant-id: ${{ secrets.POWERPLATFORM_TENANT_ID }}
+# GitHub Actions: install tools before build/test/pack/import.
+- uses: microsoft/powerplatform-actions/actions-install@v1
 ```
 
-## Azure DevOps example to adapt
-
-Microsoft documents Power Platform Build Tools and task names at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tools and https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tool-tasks. Store credentials in Azure DevOps service connections or secret variables.
-
 ```yaml
-trigger: none
-pool:
-  vmImage: windows-latest
-steps:
-- checkout: self
+# Azure DevOps: install tools before build/test/pack/import.
 - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.tool-installer.PowerPlatformToolInstaller@2
-  displayName: Power Platform Tool Installer
-  inputs:
-    AddToolsToPath: true
-- pwsh: |
-    pac solution init --publisher-name Contoso --publisher-prefix contoso
-    pac solution add-reference --path .\controls\StarRating
-    dotnet build -c Release -p:SolutionPackageType=Managed
-  displayName: Build managed solution
-- task: microsoft-IsvExpTools.PowerPlatform-BuildTools.import-solution.PowerPlatformImportSolution@2
-  displayName: Import managed solution
-  inputs:
-    authenticationType: PowerPlatformSPN
-    PowerPlatformSPN: Dataverse service connection
-    SolutionInputFile: $(Build.SourcesDirectory)\bin\Release\Contoso.zip
-    AsyncOperation: true
-    PublishWorkflows: false
-- task: microsoft-IsvExpTools.PowerPlatform-BuildTools.publish-customizations.PowerPlatformPublishCustomizations@2
-  displayName: Publish customizations
-  inputs:
-    authenticationType: PowerPlatformSPN
-    PowerPlatformSPN: Dataverse service connection
 ```
+
+Microsoft documents Power Platform GitHub Actions at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-actions and Power Platform Build Tools at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tools. The import stage needs the user's own service connection or credentials stored in the pipeline's secret store; never commit credentials or tenant-specific values in the pipeline YAML.
 
 ## After deploy
 

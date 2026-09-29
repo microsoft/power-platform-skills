@@ -42,67 +42,37 @@ dotnet build -c Release -p:SolutionPackageType=Managed
 
 For component-only packages, only the control travels. For component plus bindings, include the forms/views/apps that own the bindings in the solution. Microsoft Learn solution ALM guidance applies: https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm.
 
-## GitHub Actions example
+## Pipeline examples
 
-Power Platform GitHub Actions are documented at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-actions and the available actions at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-available-actions. Adapt this example and keep secrets in GitHub encrypted secrets.
+The full examples are committed as files and should be kept as the source of truth:
+
+- `plugins/model-apps/pcf/pipelines/github-actions.yml`
+- `plugins/model-apps/pcf/pipelines/azure-devops.yml`
+
+They are examples to adapt, not drop-in pipelines. Both follow the same stage shape:
+
+1. Install Power Platform tooling first.
+2. Build the PCF project.
+3. Run tests/gates.
+4. Pack the managed solution.
+5. Publish the solution artifact.
+6. Import the artifact into the target environment.
+
+Short excerpts:
 
 ```yaml
-name: deploy-pcf-solution
-on: [workflow_dispatch]
-jobs:
-  deploy:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/powerplatform-actions/actions-install@v1
-      - name: Build solution
-        shell: pwsh
-        run: |
-          pac solution init --publisher-name Contoso --publisher-prefix contoso
-          pac solution add-reference --path .\pcf\StarRating
-          dotnet build -c Release -p:SolutionPackageType=Managed
-      - uses: microsoft/powerplatform-actions/import-solution@v1
-        with:
-          environment-url: ${{ secrets.DATAVERSE_URL }}
-          app-id: ${{ secrets.POWERPLATFORM_APP_ID }}
-          client-secret: ${{ secrets.POWERPLATFORM_CLIENT_SECRET }}
-          tenant-id: ${{ secrets.POWERPLATFORM_TENANT_ID }}
-          solution-file: bin\Release\Contoso.zip
-      - uses: microsoft/powerplatform-actions/publish-solution@v1
-        with:
-          environment-url: ${{ secrets.DATAVERSE_URL }}
-          app-id: ${{ secrets.POWERPLATFORM_APP_ID }}
-          client-secret: ${{ secrets.POWERPLATFORM_CLIENT_SECRET }}
-          tenant-id: ${{ secrets.POWERPLATFORM_TENANT_ID }}
+# GitHub Actions
+- uses: microsoft/powerplatform-actions/actions-install@v1
 ```
 
-## Azure DevOps example
-
-Power Platform Build Tools are documented at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tools and task names at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tool-tasks. Adapt this example and keep credentials in service connections or secret variables.
-
 ```yaml
-pool:
-  vmImage: windows-latest
-steps:
-- checkout: self
+# Azure DevOps
 - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.tool-installer.PowerPlatformToolInstaller@2
-  inputs:
-    AddToolsToPath: true
-- pwsh: |
-    pac solution init --publisher-name Contoso --publisher-prefix contoso
-    pac solution add-reference --path .\pcf\StarRating
-    dotnet build -c Release -p:SolutionPackageType=Managed
-- task: microsoft-IsvExpTools.PowerPlatform-BuildTools.import-solution.PowerPlatformImportSolution@2
-  inputs:
-    authenticationType: PowerPlatformSPN
-    PowerPlatformSPN: Dataverse service connection
-    SolutionInputFile: $(Build.SourcesDirectory)\bin\Release\Contoso.zip
-    AsyncOperation: true
-- task: microsoft-IsvExpTools.PowerPlatform-BuildTools.publish-customizations.PowerPlatformPublishCustomizations@2
-  inputs:
-    authenticationType: PowerPlatformSPN
-    PowerPlatformSPN: Dataverse service connection
 ```
+
+Power Platform GitHub Actions are documented at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-actions and available actions at https://learn.microsoft.com/en-us/power-platform/alm/devops-github-available-actions. Power Platform Build Tools are documented at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tools and task names at https://learn.microsoft.com/en-us/power-platform/alm/devops-build-tool-tasks.
+
+The import step needs the user's own service connection or credentials stored in the pipeline's secret store. Do not commit credentials, tenant ids, environment-specific URLs, or organization-specific service connection names.
 
 ## Verification after release
 
