@@ -52,7 +52,7 @@
     <value>Maximum file size (KB)</value>
   </data>
   <data name="MaxFileSizeKb_Desc_Key" xml:space="preserve">
-    <value>Maximum upload size in KB. Defaults to 1024 and is clamped from 1 to 5120.</value>
+    <value>Maximum raw upload size in KB. Defaults to 1024 and is clamped from 1 to 3072.</value>
   </data>
   <data name="AcceptedMimeTypes_Display_Key" xml:space="preserve">
     <value>Accepted MIME types</value>
@@ -75,6 +75,9 @@
   <data name="AttachmentUploader_ConfigMissing" xml:space="preserve">
     <value>Attachment uploader is not fully configured.</value>
   </data>
+  <data name="AttachmentUploader_InvalidODataName" xml:space="preserve">
+    <value>Attachment uploader has an invalid Web API name configuration.</value>
+  </data>
   <data name="AttachmentUploader_FileTooLarge" xml:space="preserve">
     <value>The selected file is larger than {0} KB.</value>
   </data>
@@ -89,6 +92,9 @@
   </data>
   <data name="AttachmentUploader_Error" xml:space="preserve">
     <value>Attachment upload failed: {0}</value>
+  </data>
+  <data name="AttachmentUploader_ServerSizeLimit" xml:space="preserve">
+    <value>Attachment upload failed because the environment file-size limit rejected it: {0}</value>
   </data>
 </root>
 

@@ -28,7 +28,7 @@ The recipe patches these manifest properties:
 | `entityName` | `SingleLine.Text` | `input` | Yes | Static table logical name for maker clarity and diagnostics. |
 | `parentEntitySetName` | `SingleLine.Text` | `input` | Yes | The parent table Web API entity set name, for example `accounts`. Configure this; the control never guesses it. |
 | `parentNavigationProperty` | `SingleLine.Text` | `input` | Yes | The annotation-to-parent navigation property, for example `objectid_account`. Configure this; the control never guesses it. |
-| `maxFileSizeKb` | `Whole.None` | `input` | No | Defaults to `1024`; the control clamps maker input to `1..5120`. |
+| `maxFileSizeKb` | `Whole.None` | `input` | No | Defaults to `1024`; the control clamps maker input to `1..3072` raw KB for direct note create. |
 | `acceptedMimeTypes` | `SingleLine.Text` | `input` | No | Optional comma-separated MIME allowlist such as `text/plain,application/pdf`. |
 
 A maker can bind it in either designer path:
@@ -39,6 +39,7 @@ A maker can bind it in either designer path:
 ## Behavior
 
 - Refuses uploads until the current record has a valid `entityId`, so unsaved records never create orphan notes.
+- Validates the configured entity set and navigation property as conservative Web API identifiers before enabling upload.
 - Uses `context.webAPI.createRecord("annotation", data)` with `filename`, `mimetype`, base64 `documentbody`, `isdocument`, `subject`, and `${parentNavigationProperty}@odata.bind` pointing at `/${parentEntitySetName}(<entityId>)`.
 - Routes file picking and note creation through small adapters so tests can stub browser and Web API behavior.
 - Declares the `WebAPI` feature in the manifest.
@@ -49,7 +50,8 @@ A maker can bind it in either designer path:
 
 ## Limits
 
-- Small-file recipe only. It base64-encodes the selected file into `annotation.documentbody`; it does not use chunked file upload actions.
+- Small-file recipe only. It base64-encodes the selected file into `annotation.documentbody`; it does not use chunked file upload actions. Microsoft Learn says directly setting `annotation.documentbody` should be fine for files that are not too large, for example under 4 MB, and to use chunk messages for larger files. This recipe caps direct-create raw file bytes at 3 MB (3072 KB). The Base64 `documentbody` payload is about 4/3 the raw byte size before JSON overhead.
+- The environment `MaxUploadFileSize` setting still applies and can be lower than this recipe cap; if Dataverse rejects the create because of that server-side limit, the control surfaces the server message as a file-size-limit upload error.
 - One file per click. Multiple-file selection, drag/drop, deletion, download, timeline refresh, and virus scanning flows are outside this recipe.
 - Online model-driven apps only in this release. Offline behavior is not claimed.
 - The maker must configure the parent entity set name and annotation navigation property from the actual table metadata.
@@ -73,4 +75,5 @@ Power Pages support is planned, not shipped. A Pages implementation would need a
 - Feature declaration: [`uses-feature`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/uses-feature) documents declaring `WebAPI` through `<uses-feature name="WebAPI" required="true" />`.
 - Dataverse note table: [`annotation`](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/annotation) documents the Note table logical name, `annotations` entity set, Create message, and writable `DocumentBody`, `FileName`, `MimeType`, `IsDocument`, `Subject`, and `ObjectId` columns.
 - Dataverse Web API create: [Create a table row using the Web API](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api) documents `@odata.bind` for associating a new row with an existing row at create time and states that the entity set name must be known.
+- Attachment and note file data: [Use file data with Attachment and Note records](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/attachment-annotation-files) documents that notes store file bytes as Base64 in `Annotation.DocumentBody`, directly setting Base64 should be reserved for files that are not too large, for example under 4 MB, and larger files should use block upload messages.
 - Power Pages Web API setup: [Use the portal Web API](https://learn.microsoft.com/en-us/power-pages/configure/webapi-how-to) documents per-table site settings, exposed fields, table permissions, web roles, and CSRF token handling for portal Web API requests.

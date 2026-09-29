@@ -14,6 +14,7 @@ type Mounted = {
     notify: jest.Mock;
     container: HTMLDivElement;
     context: ComponentFramework.Context<IInputs>;
+    createRecord: jest.Mock;
     pickFile: jest.Mock<Promise<AdapterFile | null>, [string]>;
 };
 
@@ -26,6 +27,7 @@ function withStrings(context: ComponentFramework.Context<IInputs>): ComponentFra
             AttachmentUploader_Unsaved: "Save this record before uploading attachments.",
             AttachmentUploader_PermissionDenied: "You do not have permission to use attachments here.",
             AttachmentUploader_ConfigMissing: "Attachment uploader is not fully configured.",
+            AttachmentUploader_InvalidODataName: "Attachment uploader has an invalid Web API name configuration.",
             AttachmentUploader_FileTooLarge: "The selected file is larger than {0} KB.",
             AttachmentUploader_TypeNotAllowed: "This file type is not allowed.",
             AttachmentUploader_Uploading: "Uploading attachment...",
@@ -66,11 +68,26 @@ function mount(overrides: Partial<IInputs> = {}, options: { disabled?: boolean; 
 
     control.init(context, notify, {}, container);
 
-    return { control, notify, container, context, pickFile };
+    return { control, notify, container, context, createRecord, pickFile };
 }
 
 function button(container: HTMLElement): HTMLButtonElement {
     return container.querySelector("button") as HTMLButtonElement;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
+async function flushPromises(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
 }
 
 test("missing parameter objects and unsaved parents render a disabled saved-record message", () => {
@@ -175,3 +192,73 @@ test("two instances keep independent adapters and status", async () => {
     expect(first.container.querySelector(".{{cssClass}}")) .not.toBe(second.container.querySelector(".{{cssClass}}"));
 });
 
+
+
+test("invalid configured OData names disable upload with a localized configuration error", () => {
+    for (const invalid of ["bad/name", "bad(name", "bad@name", "bad'name", "bad name"]) {
+        const badSet = mount({ parentEntitySetName: mockProperty(invalid) as IInputs["parentEntitySetName"] });
+        expect(button(badSet.container).disabled).toBe(true);
+        expect(badSet.container.textContent).toContain("invalid Web API name");
+
+        const badNavigation = mount({ parentNavigationProperty: mockProperty(invalid) as IInputs["parentNavigationProperty"] });
+        expect(button(badNavigation.container).disabled).toBe(true);
+        expect(badNavigation.container.textContent).toContain("invalid Web API name");
+    }
+});
+
+test("destroy during file selection abandons upload without creating or mutating DOM", async () => {
+    const picked = deferred<AdapterFile | null>();
+    const { control, container, createRecord, pickFile } = mount();
+    pickFile.mockReturnValue(picked.promise);
+
+    button(container).click();
+    await Promise.resolve();
+    control.destroy();
+    picked.resolve({ name: "late.txt", type: "text/plain", size: 12, contentBase64: "bGF0ZQ==" });
+    await flushPromises();
+
+    expect(createRecord).not.toHaveBeenCalled();
+    expect(container.textContent).toBe("");
+});
+
+test("record change before create abandons the stale upload", async () => {
+    const picked = deferred<AdapterFile | null>();
+    const { control, container, context, createRecord, pickFile } = mount();
+    pickFile.mockReturnValue(picked.promise);
+
+    button(container).click();
+    await Promise.resolve();
+    const changed = parameters({ entityId: mockProperty("{00000000-0000-0000-0000-000000000002}") as IInputs["entityId"] });
+    control.updateView(withStrings({ ...context, parameters: changed } as ComponentFramework.Context<IInputs>));
+    picked.resolve({ name: "stale.txt", type: "text/plain", size: 12, contentBase64: "c3RhbGU=" });
+    await flushPromises();
+
+    expect(createRecord).not.toHaveBeenCalled();
+});
+
+test("raw file size is capped at the documented direct-create safety boundary", async () => {
+    const atCap = mount({ maxFileSizeKb: mockProperty(5120) as IInputs["maxFileSizeKb"] });
+    atCap.pickFile.mockResolvedValue({ name: "cap.txt", type: "text/plain", size: 3 * 1024 * 1024, contentBase64: "AA==" });
+
+    button(atCap.container).click();
+    await flushPromises();
+    expect(atCap.createRecord).toHaveBeenCalledTimes(1);
+
+    const overCap = mount({ maxFileSizeKb: mockProperty(5120) as IInputs["maxFileSizeKb"] });
+    overCap.pickFile.mockResolvedValue({ name: "over.txt", type: "text/plain", size: (3 * 1024 * 1024) + 1, contentBase64: "AA==" });
+
+    button(overCap.container).click();
+    await flushPromises();
+    expect(overCap.createRecord).not.toHaveBeenCalled();
+    expect(overCap.container.textContent).toContain("larger than 3072 KB");
+});
+
+test("button accessible name is associated with the visible label", () => {
+    const { container } = mount();
+    const uploadButton = button(container);
+    const labelId = uploadButton.getAttribute("aria-labelledby")?.split(" ")[0];
+    const label = labelId ? container.querySelector(`#${labelId}`) : null;
+
+    expect(label?.textContent).toBe("Upload attachment");
+    expect(uploadButton.getAttribute("aria-labelledby")).toContain(uploadButton.id);
+});

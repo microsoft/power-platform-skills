@@ -10,18 +10,21 @@ import "./css/{{name}}.css";
 
 const DEFAULT_MAX_KB = 1024;
 const MIN_MAX_KB = 1;
-const MAX_MAX_KB = 5120;
+const MAX_DIRECT_CREATE_KB = 3072;
+const ODATA_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const STRINGS = {
     label: "AttachmentUploader_Label",
     button: "AttachmentUploader_Button",
     unsaved: "AttachmentUploader_Unsaved",
     permissionDenied: "AttachmentUploader_PermissionDenied",
     configMissing: "AttachmentUploader_ConfigMissing",
+    invalidODataName: "AttachmentUploader_InvalidODataName",
     fileTooLarge: "AttachmentUploader_FileTooLarge",
     typeNotAllowed: "AttachmentUploader_TypeNotAllowed",
     uploading: "AttachmentUploader_Uploading",
     success: "AttachmentUploader_Success",
     error: "AttachmentUploader_Error",
+    serverSizeLimit: "AttachmentUploader_ServerSizeLimit",
 } as const;
 
 type ResourceContext = ComponentFramework.Context<IInputs> & {
@@ -42,6 +45,11 @@ interface Configuration {
     acceptedMimeTypes: string[];
 }
 
+interface OperationToken {
+    operationId: number;
+    signature: string;
+}
+
 export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private container: HTMLDivElement | null = null;
     private root: HTMLDivElement | null = null;
@@ -52,6 +60,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private editable = true;
     private disabled = false;
     private uploading = false;
+    private operationId = 0;
+    private destroyed = false;
+    private nextElementId = 0;
     private state: RenderState = "ready";
     private messageKey: string | null = null;
     private messageValue: string | null = null;
@@ -68,6 +79,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     ): void {
         this.container = container;
         this.context = context;
+        this.destroyed = false;
 
         // The upload affordance is content-sized, but resize tracking lets hosts reflow status text
         // predictably when form columns collapse.
@@ -103,6 +115,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     public destroy(): void {
+        this.operationId += 1;
+        this.uploading = false;
+        this.destroyed = true;
         this.container?.replaceChildren();
         this.root = null;
         this.container = null;
@@ -114,13 +129,18 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.root.replaceChildren();
 
         const label = this.root.ownerDocument.createElement("div");
+        const labelId = this.createElementId("label");
+        const buttonId = this.createElementId("button");
+        label.id = labelId;
         label.className = "{{cssInputClass}}-label";
         label.textContent = this.getString(STRINGS.label);
 
         const button = this.root.ownerDocument.createElement("button");
+        button.id = buttonId;
         button.className = "{{cssInputClass}}-button";
         button.type = "button";
         button.textContent = this.getString(STRINGS.button);
+        button.setAttribute("aria-labelledby", `${labelId} ${buttonId}`);
         button.disabled = !this.canUpload();
         button.setAttribute("aria-busy", this.uploading ? "true" : "false");
         button.addEventListener("click", () => {
@@ -149,6 +169,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         }
 
         this.uploading = true;
+        const token = this.beginOperation(config);
         this.state = "uploading";
         this.messageKey = STRINGS.uploading;
         this.messageValue = null;
@@ -156,33 +177,25 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
         try {
             const file = await this.pickFile(config.acceptedMimeTypes.join(","));
+            if (!this.isOperationCurrent(token)) return;
             if (!file) {
-                this.uploading = false;
-                this.state = "ready";
-                this.messageKey = null;
-                this.render();
+                this.finishOperation(token, "ready", null, null);
                 return;
             }
             const validation = this.validateFile(file, config);
             if (validation) {
-                this.uploading = false;
-                this.state = "error";
-                this.messageValue = validation;
-                this.render();
+                this.finishOperation(token, "error", null, validation);
                 return;
             }
 
+            if (!this.isOperationCurrent(token)) return;
             await this.createAnnotation(this.toAnnotationPayload(file, config));
-            this.uploading = false;
-            this.state = "success";
-            this.messageKey = STRINGS.success;
-            this.messageValue = null;
-            this.render();
+            if (!this.isOperationCurrent(token)) return;
+            this.finishOperation(token, "success", STRINGS.success, null);
         } catch (error) {
-            this.uploading = false;
-            this.state = "error";
-            this.messageValue = this.format(STRINGS.error, error instanceof Error ? error.message : String(error));
-            this.render();
+            if (!this.isOperationCurrent(token)) return;
+            const message = error instanceof Error ? error.message : String(error);
+            this.finishOperation(token, "error", null, this.format(this.isServerSizeLimit(message) ? STRINGS.serverSizeLimit : STRINGS.error, message));
         }
     }
 
@@ -196,11 +209,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         if (!config.entityName || !config.entitySetName || !config.navigationProperty || !this.hasCreateRecord()) {
             return { state: "blocked", messageKey: STRINGS.configMissing };
         }
+        if (!this.isWebApiIdentifier(config.entitySetName) || !this.isWebApiIdentifier(config.navigationProperty)) {
+            return { state: "blocked", messageKey: STRINGS.invalidODataName };
+        }
         return { state: "ready", messageKey: null };
     }
 
     private readConfiguration(): Configuration {
-        const maxKb = this.readWholeNumber("maxFileSizeKb", DEFAULT_MAX_KB, MIN_MAX_KB, MAX_MAX_KB);
+        const maxKb = this.readWholeNumber("maxFileSizeKb", DEFAULT_MAX_KB, MIN_MAX_KB, MAX_DIRECT_CREATE_KB);
         return {
             recordId: this.normalizeGuid(this.readString("entityId")),
             entityName: this.readString("entityName"),
@@ -227,6 +243,48 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         const raw = parameter?.security?.readable === false ? null : parameter?.raw;
         const numeric = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : fallback;
         return Math.min(max, Math.max(min, numeric));
+    }
+
+    private isWebApiIdentifier(value: string): boolean {
+        return ODATA_IDENTIFIER.test(value);
+    }
+
+    private configSignature(config: Configuration): string {
+        return [
+            config.recordId ?? "",
+            config.entityName,
+            config.entitySetName,
+            config.navigationProperty,
+            String(config.maxBytes),
+            config.acceptedMimeTypes.join(","),
+        ].join("|");
+    }
+
+    private beginOperation(config: Configuration): OperationToken {
+        this.operationId += 1;
+        return { operationId: this.operationId, signature: this.configSignature(config) };
+    }
+
+    private isOperationCurrent(token: OperationToken): boolean {
+        return !this.destroyed
+            && this.root != null
+            && this.context != null
+            && this.operationId === token.operationId
+            && this.configSignature(this.readConfiguration()) === token.signature;
+    }
+
+    private finishOperation(token: OperationToken, state: RenderState, messageKey: string | null, messageValue: string | null): void {
+        if (!this.isOperationCurrent(token)) return;
+        this.uploading = false;
+        this.state = state;
+        this.messageKey = messageKey;
+        this.messageValue = messageValue;
+        this.render();
+    }
+
+    private createElementId(kind: string): string {
+        this.nextElementId += 1;
+        return `{{name}}-${kind}-${this.nextElementId}`;
     }
 
     private normalizeGuid(raw: string): string | null {
@@ -273,6 +331,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private hasCreateRecord(): boolean {
         return Boolean(this.adapters.createAnnotation || typeof this.context?.webAPI?.createRecord === "function");
+    }
+
+    private isServerSizeLimit(message: string): boolean {
+        return /MaxUploadFileSize|maximum file size|exceed/i.test(message);
     }
 
     private format(key: string, value: string): string {
