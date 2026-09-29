@@ -1,0 +1,20 @@
+import * as React from "react";
+import { CellEditorOverrides } from "../types";
+
+export const cellEditorOverrides: CellEditorOverrides = {
+    Text: (defaultProps, rendererParams) => {
+        if (defaultProps.secured) return null;
+        const label = rendererParams.colDefs[rendererParams.columnIndex]?.displayName ?? defaultProps.columnDataType ?? "Text";
+
+        return React.createElement("input", {
+            "aria-label": label,
+            className: "{{nameLower}}-text-editor",
+            defaultValue: defaultProps.value == null ? "" : String(defaultProps.value),
+            dir: defaultProps.isRTLMode ? "rtl" : undefined,
+            required: defaultProps.isRequired,
+            type: "text",
+            onBlur: () => rendererParams.stopEditing(false),
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => defaultProps.onChange(event.currentTarget.value),
+        });
+    },
+};
