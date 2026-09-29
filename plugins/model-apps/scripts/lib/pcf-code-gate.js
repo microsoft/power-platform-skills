@@ -354,6 +354,12 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
     if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) return true;
 
+    // Dotted guards dereference the namespace before checking the method, so this heuristic accepts
+    // them only in pure-AND conditions. Any `||` in the balanced condition can make the namespace
+    // guard non-dominating; fail closed and point authors to the optional-chain form, which is always
+    // safe on an absent namespace and remains accepted above.
+    if (maskCondition.includes('||')) continue;
+
     const dottedMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
     let methodMatch;
     while ((methodMatch = dottedMethodGuard.exec(rawCondition)) !== null) {

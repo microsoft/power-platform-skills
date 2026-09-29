@@ -253,6 +253,13 @@ test('featureCoherence rejects negative, disjoined, and late namespace guards', 
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function" && context.device) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
 });
 
+test('featureCoherence rejects dotted guards in conditions containing OR while keeping optional guards safe', () => {
+  assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
+  assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || (context.device && typeof context.device.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
+  assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if ((context.device && typeof context.device.captureImage === "function") || fallback) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+});
+
 test('featureCoherence accepts parenthesized and composed method guards', () => {
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if ((typeof context.device?.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), []);
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready && typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
