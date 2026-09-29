@@ -44,6 +44,22 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function walkFiles(dir) {
+  const files = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else {
+        files.push(full);
+      }
+    }
+  };
+  walk(dir);
+  return files;
+}
+
 test('listTemplates exposes the data-only template catalog', () => {
   const { listTemplates } = loadScaffold();
 
@@ -143,6 +159,23 @@ test('virtual templates declare platform libraries from the compatibility matrix
       { name: 'Fluent', version: MATRIX.platformLibraries.Fluent.recommendedBaseline.version },
     ], id);
   }
+});
+
+test('template sources do not hard-code React or Fluent platform-library versions', () => {
+  const offenders = [];
+  for (const root of [path.join(ROOT, 'pcf', 'templates'), path.join(ROOT, 'pcf', 'shared')]) {
+    for (const file of walkFiles(root)) {
+      const text = fs.readFileSync(file, 'utf8');
+      if (/<platform-library\b[^>]*\bversion="\d+\.\d+\.\d+"/.test(text)) {
+        offenders.push(path.relative(ROOT, file));
+      }
+      if (/"(?:react|@fluentui\/react-components)"\s*:\s*"\d+\.\d+\.\d+"/.test(text)) {
+        offenders.push(path.relative(ROOT, file));
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, []);
 });
 
 test('dataset templates render sorted rows, page once at a time, and open records without refreshing in updateView', () => {

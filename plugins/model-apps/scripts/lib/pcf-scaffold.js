@@ -252,6 +252,8 @@ function planScaffold(request, deps = {}) {
     version: VERSION,
     projectGuid: (deps.projectGuid || crypto.randomUUID)(),
     msbuildPcfVersion: matrix.toolchain.msbuildPcf.version,
+    reactPlatformVersion: matrix.platformLibraries.React.recommendedBaseline.version,
+    fluentPlatformVersion: matrix.platformLibraries.Fluent.recommendedBaseline.version,
   };
 
   const sharedDir = pathDep.join(root, SHARED_ROOT);
