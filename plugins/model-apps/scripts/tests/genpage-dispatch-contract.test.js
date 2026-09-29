@@ -86,8 +86,14 @@ test('connector docs do not probe the retired feature flag', () => {
     assert.doesNotMatch(text, /GENPAGE_ENABLE_CONNECTORS/, `${rel(doc)} must not document the retired connectors env var`);
     // Prose that still describes a connectors "rollback gate" tells an agent to probe for it, and the
     // retired flag now always reports disabled, which would silently drop the page's connectors.
-    assert.doesNotMatch(text, /connectors`?\s+rollback\s+gate|connector\s+discovery\s+and\s+its\s+rollback\s+gate|probes\s+first,\s+writes\s+`No connector bindings/i,
+    // Matched in any word order: "the builder owns the rollback gate" slipped past a pattern that
+    // required "connectors" before it.
+    assert.doesNotMatch(text, /rollback\s+gate|connector\s+discovery\s+and\s+its\s+rollback\s+gate|probes\s+first,\s+writes\s+`No connector bindings/i,
       `${rel(doc)} must not describe a connectors rollback gate`);
+    // Nor may it describe a connectors-off mode, or a connector builder that gates on a flag.
+    assert.doesNotMatch(text, /connectors\s+(?:are|is)\s+(?:off|disabled)/i, `${rel(doc)} must not describe connectors being off`);
+    assert.doesNotMatch(text, /genpage-connector-builder`?[\s\S]{0,40}?gated\s+on\s+the\s+flag/i,
+      `${rel(doc)} must not say the connector builder gates on a flag`);
   }
 });
 test('connector metadata discovery uses the PAC connector name, not the full API resource path', () => {

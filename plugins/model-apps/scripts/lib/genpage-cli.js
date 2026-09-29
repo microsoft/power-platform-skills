@@ -93,8 +93,10 @@ function runPac(args) {
 // means the token continues. Returning null is the safe outcome: the caller treats a zero exit with
 // no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+// The end of a GUID token, for a RegExp built with the 'u' flag. Shared by both parsers below.
+const GUID_END = '(?![\\p{L}\\p{N}\\p{M}_-])';
 function parsePageId(out) {
-  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\p{L}\\p{N}\\p{M}_-])', 'u').exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')' + GUID_END, 'u').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -108,15 +110,17 @@ function parsePageId(out) {
 //   13ecbc57-a3a4-4132-b0a2-a6c6b12691e8 Overview -
 //
 // Column boundaries are derived from the header's "Name"/"Published" offsets so a Name containing spaces
-// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID.
+// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID that
+// ENDS there, by the same Unicode-aware rule as parsePageId: `<guid>東京` or `<guid>_x` is a longer token,
+// not a page id plus a name, so the row is skipped and the count check below fails the listing closed.
+// An ASCII `\b` accepted those, because JavaScript counts `東` as a non-word character.
 // Returns [{ pageId, name }]. NOTE (live-confirmed): pac lists only pages reachable from the app SITEMAP —
 // a headless nav-target page (declared in pages[] but not an appShell subarea) is NOT returned here.
 // With --app-id, `name` is the page's SITEMAP TITLE, not the page record's own name (measured: after an
 // update renamed the page with --name, the app-scoped listing still showed the subarea title), so a
 // listed name is never evidence of what the page itself is called.
 function parseList(out) {
-  const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-  const rowRe = new RegExp(`^\\s*(${GUID})\\b`);
+  const rowRe = new RegExp('^\\s*(' + GUID_RE.source + ')' + GUID_END, 'u');
   const lines = String(out || '').split('\n');
   // Locate the header row to find the Name (and Published) column offsets. pac auto-sizes columns to the
   // longest value, so the offsets must be read from THIS output, not hard-coded.

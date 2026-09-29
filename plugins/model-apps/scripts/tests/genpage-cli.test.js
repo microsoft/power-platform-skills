@@ -55,6 +55,21 @@ const winPac = (file) => ({ platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: 
 const PAC_EXE = winPac('C:\\pac\\pac.exe');
 const PAC_CMD = winPac('C:\\pac\\pac.cmd');
 
+// A listing row whose GUID runs straight into more identifier text is not a page id followed by a
+// name. The row parser used an ASCII `\b`, which JavaScript places before `東`, so `<guid>東京` was
+// read as a valid id and a count-matched listing was accepted as authoritative.
+test('parseList skips a row whose GUID runs into more identifier text, and the listing fails closed', () => {
+  for (const suffix of ['東京', 'é', '_x', '-x']) {
+    const out = listText([{ pageId: GUID + suffix, name: 'Overview' }]);
+    assert.deepStrictEqual(parseList(out), [], `a row starting ${JSON.stringify(GUID + suffix)} is not a page`);
+    assert.strictEqual(classifyListOutput(out).kind, 'unrecognized', `suffix ${JSON.stringify(suffix)} must fail closed`);
+  }
+  const mixed = listText([{ pageId: GUID, name: 'Overview' }, { pageId: GP_A + '東京', name: 'Detail' }]);
+  assert.strictEqual(classifyListOutput(mixed).kind, 'unrecognized', 'one bad row makes the whole listing untrustworthy');
+  // Control: the same listing with a clean id is authoritative, so the refusals above are about the suffix.
+  assert.deepStrictEqual(classifyListOutput(listText([{ pageId: GUID, name: 'Overview' }])),
+    { kind: 'pages', pages: [{ pageId: GUID, name: 'Overview' }] });
+});
 test('buildPacInvocation starts pac.exe directly with every argument unchanged, and no shell', () => {
   const inv = buildPacInvocation(['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!'], PAC_EXE);
   assert.strictEqual(inv.file, 'C:\\pac\\pac.exe');

@@ -132,8 +132,7 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 > - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
 >   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
 >   `envUrl` from Edit Phase 1, the existing bindings, and the edit intent. The
->   builder owns the rollback gate: when connectors are off it preserves existing
->   bindings and adds none; otherwise it discovers and returns the updated set. It
+>   builder discovers and returns the updated set. It
 >   writes `<working-dir>/connectors.json` (bare array) and
 >   `<working-dir>/connector-bindings.md`.
 > - **Remove one (or some) connectors:** invoke `genpage-connector-builder` the
@@ -351,7 +350,7 @@ It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
 
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
-  agent (Mode: `edit`) has already gated on the flag and written the full desired
+  agent (Mode: `edit`) has already written the full desired
   binding set to `<working-dir>/connectors.json` (a removal writes the remaining
   bindings). Pre-flight that `pac model genpage upload --help` contains `--connectors`
   and include `--connectors '<working-dir>/connectors.json'` in the upload — this is a

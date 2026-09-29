@@ -57,9 +57,10 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
 - **Non-ASCII text survives the wire.** A Dataverse response or a hook payload split mid-character
   across chunks turned Japanese, emoji and accented text into U+FFFD. Both are now decoded whole, and
   the hooks still honour `MODEL_APPS_DISABLE_HOOKS` before touching anything.
-- **pac on Windows**: a backslash before a quote, including the quotes `%` escaping adds, no longer
+- **pac on Windows**: a backslash before a quote, such as a folder path ending in `\`, no longer
   swallows the next argument. A listing that repeats a page id, a "no pages could be retrieved"
-  warning, and a page id followed by a Unicode letter are no longer taken as authoritative.
+  warning, and a page id followed by a Unicode letter, in an upload's output or a listing row, are no
+  longer taken as authoritative.
 - **Quoted navigation keys** (`{"pageType":"generative","pageId":"PAGEREF_x"}`) are resolved and
   counted like bare ones, and a string or name followed by `:` inside a value is no longer read as
   the key. A navigation call whose target a later spread or computed key could replace
