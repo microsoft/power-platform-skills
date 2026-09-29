@@ -3890,6 +3890,26 @@ test('ai-features phase: both writes hand the SDK each setting\u2019s value, nev
   assert.deepStrictEqual(find(calls2, 'setAppAiFeatures')[0].args[1], { formFill: '2', nlSearch: '2', nlChart: '1', m365: '2' });
 });
 
+test('ai-features phase: an OFF write that did not persist is NOT PERSISTED, not ADMIN GATE OFF', async () => {
+  // The SDK labels any non-zero request as enabling, so grid search Off ('1') with its org gate off
+  // came back `skipped`, and the build told the operator an admin must enable the feature — for a
+  // request to turn it off.
+  const sdkSkip = {
+    applied: [], skipped: ['nlSearch'], notPersisted: [], unverified: [], failed: [],
+    outcomes: [{ feature: 'nlSearch', setting: 'NLGridSearchSetting', requestedValue: '1', status: 'skipped', appOverrideExists: false,
+      reason: "the org readiness gate 'EnableNLGridSearch' reads 'false', so an environment admin must enable it before this app can turn the feature on" }],
+  };
+  const { sdk, calls } = withAiResults([sdkSkip, { applied: [], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] }]);
+  const events = [];
+  const r = await runSdkBuild(makeSpec({ ai: { appFeatures: { nlSearch: false }, summaries: { default: 'off' } } }), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'still re-issued after publish');
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+  assert.ok(warnings.some((l) => /NOT PERSISTED: nlSearch/.test(l)), JSON.stringify(warnings));
+  assert.ok(!warnings.some((l) => /ADMIN GATE OFF|must enable/.test(l)), JSON.stringify(warnings));
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual([af.skipped, af.notPersisted], [[], ['nlSearch']], 'the --json result agrees with the report');
+});
+
 test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {
   // Regression guard for a live false `notPersisted`: this phase runs moments after app-shell CREATED
   // the app module, and the SDK's default budget (4 attempts / 500ms linear ~= 3s) expired before the

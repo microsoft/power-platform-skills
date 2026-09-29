@@ -1117,7 +1117,9 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 ## ai (optional — AI feature flags and row-summary configuration)
 
 Controls AI-powered features that the platform activates at the app/table level. The block is
-entirely optional; omitting it leaves every AI feature at its platform default.
+entirely optional; omitting it writes no AI setting at all, so every feature keeps the environment's
+value. Any `ai` block writes every feature below as an app-scope value, which overrides the
+environment's.
 
 > **Admin-gated.** AI features turn on only where the environment administrator has enabled them
 > in Power Platform Admin Center (Environments → Settings → Product → Features). The `ai-features`
@@ -1136,7 +1138,8 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   //
   // `false` DOES NOT MEAN "leave alone". It writes an explicit app-scope override that BEATS the
   // org value, so setting it on a feature the org has enabled turns that feature OFF for this app.
-  // To defer a feature to the platform instead, give it that setting's platform-default value.
+  // To defer a feature to the platform instead, give it that setting's platform-default value — still
+  // an app-scope value, so the app gets the platform's default rather than the environment's setting.
   //
   // Every one of these settings is a tri-state, and the numbers differ by setting (taken from the
   // platform's own settings UI):

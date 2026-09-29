@@ -88,7 +88,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
@@ -4366,12 +4366,13 @@ async function runSdkBuild(spec, opts = {}) {
       // A modest retry budget still helps: on an established app the override row is queryable ~580ms
       // after the write (measured live), so the SDK's 4-attempt/500ms default is tight but the budget
       // is only ever spent when the row is genuinely absent.
-      const r = await provision.setAppAiFeatures(appUnique, encodeAiFlags(flags), {
+      const encodedFlags = encodeAiFlags(flags);
+      const r = rebucketNonEnablingSkips(await provision.setAppAiFeatures(appUnique, encodedFlags, {
         solutionUniqueName,
         appModuleId: result.created.app || undefined,
         verifyAttempts: 8,
         verifyDelayMs: 1000,
-      });
+      }), encodedFlags);
       result.created.ai.appFeatures = r;
       // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
       // override row is proven present holding the requested value. Every other bucket is a
@@ -4383,7 +4384,9 @@ async function runSdkBuild(spec, opts = {}) {
       //                  offered as the explanation. Since AB#6688904 the SDK ATTEMPTS every write
       //                  and reads the gate only afterwards, to explain a failure that happened —
       //                  it no longer pre-empts the write, so this bucket is now evidence, not a
-      //                  prediction.
+      //                  prediction. Only a request that turns the feature ON keeps this bucket:
+      //                  rebucketNonEnablingSkips moves any other to notPersisted (the SDK's own
+      //                  test for "turns on" is wrong for grid search and M365).
       //   unverified   — the write was issued but the proof could not be READ (no access to
       //                  appsettings/settingdefinitions/appmodules, or a transport error).
       //   failed       — the write threw. The SDK keeps going so the rest of the batch still

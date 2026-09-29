@@ -42,14 +42,13 @@ const AI_APP_SETTING = {
 
 // ON/OFF values are NOT uniform across these settings, and `1` is not universally "on".
 //
-// Each value is taken from the platform's own settings UI, which is the only first-party statement
-// of what the stored numbers mean (all three are option lists in power-platform-ux):
+// Each value is taken from the platform's own settings UI — the maker designer's tri-state dropdown
+// and the admin center's feature settings — which is the only first-party statement of what the
+// stored numbers mean:
 //   FormFillBarUXEnabled, NLGridSearchSetting, m365copilotmodelappenabled — and the rest of the
-//   form-fill family — use the shared tri-state dropdown: 0 = Default, 1 = Off, 2 = On
-//     (cds-common-ux ValueControl/CustomDropdownSettings.tsx; the admin center's NLGridSearchSetting
-//      picklist in ppac-env-admin-settings Features.tsx says the same).
-//   NLChartDataVisualizationSetting is ordered differently: 0 = Off, 1 = Auto, 2 = On
-//     (ppac-env-admin-settings Features.tsx), and its setting definition's default value is 1.
+//   form-fill family — use the shared tri-state dropdown: 0 = Default, 1 = Off, 2 = On.
+//   NLChartDataVisualizationSetting is ordered differently: 0 = Off, 1 = Auto, 2 = On, and its
+//   setting definition's default value is 1.
 // So the obvious `true -> '1'` writes Off for grid search and M365, and only Auto for charts —
 // which is what every build wrote until AB#6714731, while `--verify` agreed, because it expected
 // the same wrong values. `platformDefault` is the value that defers to the platform; it is neither
@@ -74,8 +73,9 @@ const AI_FEATURE_MAX_VALUE = 1000000;
 
 // What the build requests when a spec opts into `ai` without naming a feature. `m365` is not turned
 // on by default, because it surfaces the app inside M365 Copilot, which is a deliberate choice rather
-// than a sensible default. Nor is it forced off: `0` is its platform default, so an app follows the
-// environment, as every default build has done so far (an explicit `false` writes Off).
+// than a sensible default. Nor is it forced off: it gets `0` (Default), the app-scope value every
+// default build has written. That is still an override — the app gets the platform's default, not
+// the environment's value — and an explicit `false` writes Off instead.
 const DEFAULT_APP_FEATURES = { formFill: true, nlSearch: true, nlChart: true, m365: 0 };
 
 /**
@@ -144,6 +144,39 @@ function encodeAiFlags(flags) {
   const out = {};
   for (const [feature, requested] of Object.entries(flags)) out[feature] = featureWantValue(requested, feature);
   return out;
+}
+
+/**
+ * Move the SDK's `skipped` verdicts that are not ENABLES to `notPersisted`, rewriting their reasons.
+ *
+ * `skipped` means "no override appeared, and the feature's org gate reads off", and its reason tells
+ * an admin to enable the feature "before this app can turn the feature on". The vendored SDK only
+ * reaches for the gate when it thinks the request enables the feature — and it decides that with a
+ * codec that knows only the form-fill family, so any non-zero value counts. A correctly encoded Off
+ * for grid search or M365 (`'1'`) therefore came back telling the admin to switch the feature ON.
+ * A gate that governs turning a feature on cannot explain why a request that does not turn it on was
+ * not stored, so that request is simply not persisted.
+ *
+ * `encodedFlags` is what the build sent (see encodeAiFlags). Mutates and returns `result`.
+ */
+function rebucketNonEnablingSkips(result, encodedFlags) {
+  if (!result || !Array.isArray(result.skipped) || !result.skipped.length) return result;
+  const enables = (feature) => {
+    const codec = AI_SETTING_CODEC[feature];
+    // A feature this module has no codec for keeps the SDK's verdict: there is no table to say otherwise.
+    return !codec || String(encodedFlags && encodedFlags[feature]).trim() === codec.enabled;
+  };
+  const moved = result.skipped.filter((f) => !enables(f));
+  if (!moved.length) return result;
+  result.skipped = result.skipped.filter(enables);
+  result.notPersisted = [...(Array.isArray(result.notPersisted) ? result.notPersisted : []), ...moved];
+  for (const o of result.outcomes || []) {
+    if (!o || !moved.includes(o.feature)) continue;
+    const value = o.requestedValue !== undefined ? o.requestedValue : encodedFlags[o.feature];
+    o.status = 'notPersisted';
+    o.reason = `the write reported success but no app-scope override holding '${value}' was observed for '${o.setting || AI_APP_SETTING[o.feature]}' (Dataverse can accept an app-scope write without storing it); the feature's org gate reads off, but it governs turning the feature on, which this request does not`;
+  }
+  return result;
 }
 
 /**
@@ -348,6 +381,7 @@ module.exports = {
   resolveAiFlags,
   featureWantValue,
   encodeAiFlags,
+  rebucketNonEnablingSkips,
   sameSettingValue,
   resolveAppModuleId,
   proveAppOverride,

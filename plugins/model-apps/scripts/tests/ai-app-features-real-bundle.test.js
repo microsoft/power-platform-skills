@@ -311,6 +311,28 @@ test('REAL BUNDLE (known SDK gap): a raw boolean `true` still writes 1 for grid 
   }
 });
 
+test('REAL BUNDLE: an encoded OFF that did not persist is not blamed on an org gate that governs turning it ON', async () => {
+  // The same gap from the other side: the SDK reads any non-zero value as enabling, so an absent
+  // override for grid search Off ('1') with its gate off comes back `skipped`, telling an admin to
+  // enable the feature. The build re-buckets it before anything reads the result.
+  const { encodeAiFlags, rebucketNonEnablingSkips } = require('../lib/ai-app-settings.js');
+  const encoded = encodeAiFlags({ nlSearch: false });
+  const { sdk } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const r = await sdk.setAppAiFeatures(APP, encoded, FAST);
+  assert.deepStrictEqual(r.skipped, ['nlSearch'], 'the SDK still labels it skipped (if this fails, the SDK gap closed)');
+  rebucketNonEnablingSkips(r, encoded);
+  assert.deepStrictEqual([r.skipped, r.notPersisted], [[], ['nlSearch']]);
+  assert.strictEqual(r.outcomes[0].status, 'notPersisted');
+  assert.doesNotMatch(r.outcomes[0].reason, /must enable/);
+  assert.match(r.outcomes[0].reason, /holding '1'/);
+  // An enabling request keeps the SDK's verdict and its admin-action reason.
+  const on = encodeAiFlags({ nlSearch: true });
+  const { sdk: sdk2 } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const r2 = rebucketNonEnablingSkips(await sdk2.setAppAiFeatures(APP, on, FAST), on);
+  assert.deepStrictEqual(r2.skipped, ['nlSearch']);
+  assert.match(r2.outcomes[0].reason, /must enable/);
+});
+
 test('REAL BUNDLE: disabling is NOT gated — a false is written even when the org gate is off', async () => {
   // This asymmetry is why an incorrect `false` is the more damaging mistake: it always lands.
   const { sdk, calls } = await freshSdk({ gate: '0', effective: '0', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
