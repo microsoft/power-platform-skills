@@ -24,14 +24,25 @@ test('validateNamespace rejects namespace plus control names longer than the PAC
   const controlName = 'StarRatingControlNameThatExceedsLimit';
 
   assert.equal(namespace.length + controlName.length, 91);
-  assert.match(validateNamespace(namespace, controlName), /Namespace plus control name must be at most 75 characters.*Allowed: letters, digits, and '\.' with non-empty segments that do not start with a digit/i);
+  assert.match(validateNamespace(namespace, controlName), /Additional safeguard: pac pcf init rejects namespace plus control name values longer than 75 characters at run time.*Allowed: namespace plus control name must be at most 75 characters/i);
+});
+
+test('validateNamespace accepts exactly 75 characters and rejects 76 for namespace plus control name', () => {
+  const namespace = 'A'.repeat(65);
+  const exactName = 'B'.repeat(10);
+  const tooLongName = 'B'.repeat(11);
+
+  assert.equal(namespace.length + exactName.length, 75);
+  assert.equal(namespace.length + tooLongName.length, 76);
+  assert.equal(validateNamespace(namespace, exactName), null);
+  assert.match(validateNamespace(namespace, tooLongName), /Additional safeguard: pac pcf init rejects namespace plus control name values longer than 75 characters at run time.*Allowed: namespace plus control name must be at most 75 characters/i);
 });
 
 test('validateControlName accepts PAC constructors and rejects invalid or reserved names', () => {
   assert.equal(validateControlName('StarRating'), null);
 
   assert.match(validateControlName('1Star'), /must start with a letter.*Allowed: letters and digits, starting with a letter/i);
-  assert.match(validateControlName('class'), /JavaScript reserved word.*Allowed: letters and digits, starting with a letter, and not a JavaScript reserved word/i);
+  assert.match(validateControlName('class'), /Additional safeguard: pac pcf init rejects JavaScript reserved word control names at run time.*Allowed: letters and digits, starting with a letter, and not a JavaScript reserved word/i);
 });
 
 test('validatePublisherPrefix enforces publisher prefix shape and reserved mscrm prefix', () => {

@@ -1,5 +1,13 @@
 'use strict';
 
+// Rule sources are intentionally separated:
+// - The public PAC CLI reference documents the character rules for `pac pcf init`
+//   namespace/control-name/publisher-prefix inputs.
+//   See: https://learn.microsoft.com/power-platform/developer/cli/reference/pcf
+// - Additional safeguards: not on the Learn page; `pac pcf init` refuses these
+//   at run time, so we fail earlier with a clearer message. That includes the
+//   75-character namespace+control-name limit and JavaScript reserved-word
+//   constructor names.
 const MAX_NAMESPACE_AND_CONTROL_LENGTH = 75;
 
 const JS_RESERVED_WORDS = new Set([
@@ -51,8 +59,10 @@ const JS_RESERVED_WORDS = new Set([
   'yield',
 ]);
 
-const NAMESPACE_ALLOWED = "Allowed: letters, digits, and '.' with non-empty segments that do not start with a digit; namespace plus control name must be at most 75 characters.";
-const CONTROL_ALLOWED = 'Allowed: letters and digits, starting with a letter, and not a JavaScript reserved word.';
+const NAMESPACE_ALLOWED = "Allowed: letters, digits, and '.' with non-empty segments that do not start with a digit.";
+const NAMESPACE_LENGTH_ALLOWED = `Allowed: namespace plus control name must be at most ${MAX_NAMESPACE_AND_CONTROL_LENGTH} characters.`;
+const CONTROL_ALLOWED = 'Allowed: letters and digits, starting with a letter.';
+const CONTROL_RESERVED_ALLOWED = 'Allowed: letters and digits, starting with a letter, and not a JavaScript reserved word.';
 const PREFIX_ALLOWED = 'Allowed: letters and digits, starting with a letter, not starting with "mscrm", and 2 to 8 characters.';
 const VERSION_ALLOWED = 'Allowed: digits in x.y.z format.';
 
@@ -64,13 +74,8 @@ function validateNamespace(namespace, controlName = '') {
   const ns = asString(namespace);
   const name = asString(controlName);
 
-  // These PCF naming rules mirror the public `pac pcf init` / `pac pcf push`
-  // CLI contract. Keeping the combined namespace + control-name guard here means
-  // later scripts can validate values before they reach PAC, a manifest, or
-  // scaffolded project files.
-  // See: https://learn.microsoft.com/power-platform/developer/cli/reference/pcf
   if ((ns.length + name.length) > MAX_NAMESPACE_AND_CONTROL_LENGTH) {
-    return `Namespace plus control name must be at most ${MAX_NAMESPACE_AND_CONTROL_LENGTH} characters. ${NAMESPACE_ALLOWED}`;
+    return `Additional safeguard: pac pcf init rejects namespace plus control name values longer than ${MAX_NAMESPACE_AND_CONTROL_LENGTH} characters at run time. ${NAMESPACE_LENGTH_ALLOWED}`;
   }
 
   if (ns.length === 0) {
@@ -103,7 +108,7 @@ function validateControlName(name, namespace = '') {
   const ns = asString(namespace);
 
   if ((ns.length + controlName.length) > MAX_NAMESPACE_AND_CONTROL_LENGTH) {
-    return `Control name plus namespace must be at most ${MAX_NAMESPACE_AND_CONTROL_LENGTH} characters. ${CONTROL_ALLOWED}`;
+    return `Additional safeguard: pac pcf init rejects namespace plus control name values longer than ${MAX_NAMESPACE_AND_CONTROL_LENGTH} characters at run time. ${NAMESPACE_LENGTH_ALLOWED}`;
   }
 
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(controlName)) {
@@ -111,7 +116,7 @@ function validateControlName(name, namespace = '') {
   }
 
   if (JS_RESERVED_WORDS.has(controlName)) {
-    return `Control name "${controlName}" is a JavaScript reserved word. ${CONTROL_ALLOWED}`;
+    return `Additional safeguard: pac pcf init rejects JavaScript reserved word control names at run time; "${controlName}" is reserved. ${CONTROL_RESERVED_ALLOWED}`;
   }
 
   return null;
@@ -145,6 +150,12 @@ function orgControlName(prefix, namespace, constructor) {
   return `${prefix}_${namespace}.${constructor}`;
 }
 
+// Parse raw org control names shaped as:
+//   contoso_Contoso.Controls.StarRating
+//     -> { prefix: 'contoso', namespace: 'Contoso.Controls', constructor: 'StarRating' }
+// Split at the first underscore because publisher prefixes cannot contain `_`; split
+// at the last dot because namespaces can contain dots. Return null when there is no
+// `_`, no `.`, or any parsed part would be empty.
 function parseOrgControlName(value) {
   if (typeof value !== 'string') {
     return null;
