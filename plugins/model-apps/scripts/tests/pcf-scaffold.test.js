@@ -232,6 +232,77 @@ test('applyRecipeManifest replaces dataset property-sets and existing feature us
   ].join('\n'));
 });
 
+
+test('applyRecipeManifest patches one data-set property-set without changing a second data-set', () => {
+  const { applyRecipeManifest } = loadScaffold();
+  const untouched = [
+    '    <data-set name="secondaryDataSet" display-name-key="Secondary_Display">',
+    '      <property-set name="keep" display-name-key="Keep_Display" description-key="Keep_Desc" of-type="SingleLine.Text" usage="bound" required="false" />',
+    '    </data-set>',
+  ];
+  const xml = [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <data-set name="sampleDataSet" display-name-key="Dataset_Display_Key">',
+    '      <property-set name="old" display-name-key="Old" description-key="Old_Desc" of-type="SingleLine.Text" usage="bound" required="false" />',
+    '    </data-set>',
+    ...untouched,
+    '    <resources />',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  const patched = applyRecipeManifest(xml, {
+    propertySets: [{
+      dataSet: 'sampleDataSet',
+      name: 'parent',
+      displayNameKey: 'Parent_Display',
+      descriptionKey: 'Parent_Desc',
+      ofType: 'Lookup.Simple',
+      usage: 'bound',
+      required: false,
+    }],
+  });
+
+  assert.equal(patched, [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <data-set name="sampleDataSet" display-name-key="Dataset_Display_Key">',
+    '      <property-set name="parent" display-name-key="Parent_Display" description-key="Parent_Desc" of-type="Lookup.Simple" usage="bound" required="false" />',
+    '    </data-set>',
+    ...untouched,
+    '    <resources />',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n'));
+  assert.ok(patched.includes(untouched.join('\n')), 'secondary data-set bytes must stay unchanged');
+});
+
+test('applyRecipeManifest removes existing feature usage when recipe features are empty', () => {
+  const { applyRecipeManifest } = loadScaffold();
+  const xml = [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <resources />',
+    '    <feature-usage>',
+    '      <uses-feature name="OldFeature" required="true" />',
+    '    </feature-usage>',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n');
+
+  assert.equal(applyRecipeManifest(xml, { features: [] }), [
+    '<manifest>',
+    '  <control namespace="N" constructor="C">',
+    '    <resources />',
+    '  </control>',
+    '</manifest>',
+    '',
+  ].join('\n'));
+});
+
 test('applyRecipeManifest leaves feature usage absent when the recipe has no features', () => {
   const { applyRecipeManifest } = loadScaffold();
   const xml = '<manifest>\n  <control namespace="N" constructor="C">\n    <resources />\n  </control>\n</manifest>\n';
@@ -304,6 +375,32 @@ test('listRecipes rejects malformed recipe metadata with clear validation errors
     }));
 
     assert.throws(() => listRecipes({ recipesRoot: root }), /recipe\.json: id must equal directory name 'broken'; title must be a non-empty string; summary must be a non-empty string; template must be an existing template id; hosts must be a non-empty array containing only template hosts; whyWanted must be a non-empty string; certified\.model\.field must be YYYY-MM-DD; certified\.pages must be an object; configuration must be a non-empty string; properties\[0\]\.name must be a non-empty string; properties\[0\]\.displayNameKey must be a non-empty string; properties\[0\]\.descriptionKey must be a non-empty string; properties\[0\]\.ofType must be a non-empty string; properties\[0\]\.usage must be bound, input, or output; properties\[0\]\.required must be boolean/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('listRecipes rejects planned recipe metadata without explicit certification', () => {
+  const { listRecipes } = loadScaffold();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-planned-cert-'));
+  try {
+    const dir = path.join(root, 'planned-missing-cert');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'recipe.json'), JSON.stringify({
+      id: 'planned-missing-cert',
+      title: 'Planned missing certification',
+      summary: 'A planned recipe without certification metadata.',
+      template: 'field-standard',
+      hosts: ['model'],
+      whyWanted: 'Exercises explicit certification validation.',
+      status: 'planned',
+    }));
+
+    assert.throws(
+      () => listRecipes({ recipesRoot: root }),
+      /recipe\.json: certified must be \{ "model": \{\}, "pages": \{\} \} or host journey date maps/,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

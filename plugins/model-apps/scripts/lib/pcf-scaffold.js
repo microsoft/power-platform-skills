@@ -87,7 +87,7 @@ function validateRecipe(recipe, file, deps = {}) {
   }
   if (typeof recipe.whyWanted !== 'string' || !recipe.whyWanted) errors.push('whyWanted must be a non-empty string');
 
-  const certified = recipe.certified === undefined ? { model: {}, pages: {} } : recipe.certified;
+  const certified = recipe.certified;
   validateCertified(certified, errors);
 
   const overlayFiles = deps.recipeDir ? recipeOverlayFiles(deps.recipeDir, deps) : [];
@@ -119,7 +119,7 @@ function validateRecipe(recipe, file, deps = {}) {
 
 function validateCertified(certified, errors) {
   if (!certified || typeof certified !== 'object' || Array.isArray(certified)) {
-    errors.push('certified must be an object');
+    errors.push('certified must be { "model": {}, "pages": {} } or host journey date maps');
     return;
   }
   for (const host of ['model', 'pages']) {
