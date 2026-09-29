@@ -234,9 +234,7 @@ function pcfprojFindings(state, matrix) {
   if (!state.pcfprojText) return findings;
   const mode = pcfprojBuildMode(state.pcfprojText);
   if (mode.status !== 'production') {
-    const detail = mode.status === 'ineffective'
-      ? 'PcfBuildMode is set but ineffective — move it below the Microsoft.Common.props import.'
-      : `PcfBuildMode is ${mode.status === 'missing' ? 'missing' : `'${mode.value}'`}, so Debug builds can produce development bundles.`;
+    const detail = buildModeFindingMessage(mode);
     findings.push(finding(
       'PROJ_BUILDMODE_NOT_PRODUCTION',
       'warning',
@@ -264,63 +262,166 @@ function pcfprojFindings(state, matrix) {
   return findings;
 }
 
+function buildModeFindingMessage(mode) {
+  if (mode.status === 'ineffective' && mode.reason === 'conditioned') {
+    return 'PcfBuildMode is set but ineffective — make it unconditional because pac pcf push builds Debug and this doctor does not evaluate MSBuild Condition attributes.';
+  }
+  if (mode.status === 'ineffective') {
+    return 'PcfBuildMode is set but ineffective — move it below the Microsoft.Common.props import.';
+  }
+  return `PcfBuildMode is ${mode.status === 'missing' ? 'missing' : `'${mode.value}'`}, so Debug builds can produce development bundles.`;
+}
+
 /**
  * Detects whether `PcfBuildMode` is effective in a `.pcfproj`.
  *
- * Raw project shape emitted by `pcf/templates/field-standard/{{name}}.pcfproj.tmpl`:
+ * Raw project shapes this detector must distinguish:
  *   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
  *   <PropertyGroup>
  *     <Name>StarRating</Name>
  *     <PcfBuildMode>production</PcfBuildMode>
  *   </PropertyGroup>
+ *   <!-- <PcfBuildMode>production</PcfBuildMode> -->                 (ignored)
+ *   <PropertyGroup Condition="'$(Configuration)'=='Release'">        (conditioned)
+ *     <PcfBuildMode>production</PcfBuildMode>
+ *   </PropertyGroup>
+ *   <PcfBuildMode Condition="'$(Configuration)'=='Release'">production</PcfBuildMode>
  *
  * WHY the offset matters: Microsoft.PowerApps.MSBuild.Pcf 1.52.1 imports props through
  * Microsoft.Common.props and unconditionally sets Debug|AnyCPU to development. A local Debug build
  * measured the template as development when the property was in the first PropertyGroup, and as
  * production only when the property appeared after the Microsoft.Common.props import. `pac pcf push`
- * builds Debug, so "present" is not enough.
+ * builds Debug, so "present" is not enough. Conditioned values are also not trusted: evaluating
+ * arbitrary MSBuild Condition expressions would require running MSBuild, and a Release-only
+ * production setting does not help the Debug build used by `pac pcf push`.
  */
 function pcfprojBuildMode(pcfprojText) {
-  const text = String(pcfprojText || '');
-  const modeMatch = /<PcfBuildMode>\s*([^<]+?)\s*<\/PcfBuildMode>/i.exec(text);
+  const text = stripXmlCommentsPreserveOffsets(String(pcfprojText || ''));
+  const occurrences = pcfBuildModeOccurrences(text);
   const importMatch = /<Import\b[^>]*\bProject\s*=\s*["'][^"']*Microsoft\.Common\.props["'][^>]*>/i.exec(text);
-  if (!modeMatch) {
+  const importOffset = importMatch ? importMatch.index : -1;
+  if (occurrences.length === 0) {
     return {
       status: 'missing',
-      importOffset: importMatch ? importMatch.index : -1,
+      importOffset,
       modeOffset: -1,
+      occurrences,
     };
   }
-  const value = modeMatch[1].trim();
-  const modeOffset = modeMatch.index;
-  const importOffset = importMatch ? importMatch.index : -1;
-  if (/^production$/i.test(value) && (importOffset === -1 || modeOffset > importOffset)) {
-    return { status: 'production', value, modeOffset, importOffset };
+  const afterImport = occurrences.filter((item) => importOffset === -1 || item.offset > importOffset);
+  const unconditionedAfter = afterImport.filter((item) => !item.conditioned);
+  const effective = unconditionedAfter[unconditionedAfter.length - 1];
+  if (effective) {
+    const conditionedAfterEffective = afterImport.filter((item) => item.conditioned && item.offset > effective.offset);
+    if (conditionedAfterEffective.length > 0) {
+      const lastConditioned = conditionedAfterEffective[conditionedAfterEffective.length - 1];
+      return {
+        status: 'ineffective',
+        reason: 'conditioned',
+        value: lastConditioned.value,
+        effectiveValue: effective.value,
+        modeOffset: lastConditioned.offset,
+        importOffset,
+        occurrences,
+      };
+    }
+    if (/^production$/i.test(effective.value)) {
+      return { status: 'production', value: effective.value, modeOffset: effective.offset, importOffset, occurrences };
+    }
+    return { status: 'development', value: effective.value, modeOffset: effective.offset, importOffset, occurrences };
   }
-  if (/^production$/i.test(value) && importOffset !== -1 && modeOffset < importOffset) {
-    return { status: 'ineffective', value, modeOffset, importOffset };
+
+  const conditionedAfter = afterImport.filter((item) => item.conditioned);
+  if (conditionedAfter.length > 0) {
+    const lastConditioned = conditionedAfter[conditionedAfter.length - 1];
+    return {
+      status: 'ineffective',
+      reason: 'conditioned',
+      value: lastConditioned.value,
+      modeOffset: lastConditioned.offset,
+      importOffset,
+      occurrences,
+    };
   }
-  return { status: 'development', value, modeOffset, importOffset };
+
+  const lastBefore = occurrences[occurrences.length - 1];
+  if (lastBefore && importOffset !== -1 && lastBefore.offset < importOffset) {
+    return {
+      status: 'ineffective',
+      reason: 'before-import',
+      value: lastBefore.value,
+      modeOffset: lastBefore.offset,
+      importOffset,
+      occurrences,
+    };
+  }
+  return { status: 'missing', importOffset, modeOffset: -1, occurrences };
+}
+
+function pcfBuildModeOccurrences(text) {
+  const occurrences = [];
+  const modeRe = /<PcfBuildMode\b([^>]*)>([\s\S]*?)<\/PcfBuildMode>/gi;
+  for (const match of text.matchAll(modeRe)) {
+    const tagAttrs = xmlAttrs(match[1] || '');
+    const groupAttrs = enclosingPropertyGroupAttrs(text, match.index);
+    occurrences.push({
+      value: match[2].trim(),
+      offset: match.index,
+      conditioned: Object.hasOwn(tagAttrs, 'Condition') || Object.hasOwn(groupAttrs, 'Condition'),
+    });
+  }
+  return occurrences;
+}
+
+function enclosingPropertyGroupAttrs(text, offset) {
+  const before = text.slice(0, offset);
+  const open = before.lastIndexOf('<PropertyGroup');
+  const close = before.lastIndexOf('</PropertyGroup>');
+  if (open === -1 || close > open) return {};
+  const end = text.indexOf('>', open);
+  const groupClose = text.indexOf('</PropertyGroup>', end);
+  if (end === -1 || groupClose === -1 || groupClose < offset) return {};
+  return xmlAttrs(text.slice(open, end + 1));
 }
 
 function msbuildPcfReference(pcfprojText) {
+  const text = stripXmlCommentsPreserveOffsets(String(pcfprojText || ''));
   // The SDK-style project keeps NuGet references as self-closing XML tags, for example:
   //   <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf" Version="1.52.1" />
+  // or as a paired element with a child version:
+  //   <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf">
+  //     <Version>1.52.1</Version>
+  //   </PackageReference>
+  // XML comments are stripped before matching so disabled examples do not become findings.
   // Attribute order is not part of the XML contract, so read all attributes from each tag before
   // checking Include/Update and Version.
-  for (const tag of String(pcfprojText || '').match(/<PackageReference\b[^>]*>/gi) || []) {
-    const attrs = xmlAttrs(tag);
-    if (attrs.Include === MSBUILD_PCF || attrs.Update === MSBUILD_PCF) return { version: attrs.Version || '', tag };
+  const pairRe = /<PackageReference\b([^>]*)>([\s\S]*?)<\/PackageReference>/gi;
+  for (const match of text.matchAll(pairRe)) {
+    const attrs = xmlAttrs(match[1] || '');
+    if (attrs.Include === MSBUILD_PCF || attrs.Update === MSBUILD_PCF) {
+      const childVersion = /<Version\b[^>]*>\s*([^<]+?)\s*<\/Version>/i.exec(match[2]);
+      return { version: attrs.Version || (childVersion ? childVersion[1].trim() : ''), tag: match[0] };
+    }
+  }
+  for (const match of text.matchAll(/<PackageReference\b([^>]*)\/>/gi)) {
+    const attrs = xmlAttrs(match[1] || '');
+    if (attrs.Include === MSBUILD_PCF || attrs.Update === MSBUILD_PCF) {
+      return { version: attrs.Version || '', tag: match[0] };
+    }
   }
   return null;
 }
 
 function xmlAttrs(tag) {
   const attrs = {};
-  for (const match of tag.matchAll(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*"([^"]*)"/g)) {
+  for (const match of String(tag || '').matchAll(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*"([^"]*)"/g)) {
     attrs[match[1]] = match[2];
   }
   return attrs;
+}
+
+function stripXmlCommentsPreserveOffsets(text) {
+  return String(text || '').replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\r\n]/g, ' '));
 }
 
 function platformFindings(state, matrix, hosts) {
@@ -501,7 +602,7 @@ function parsePacHelpVersion(text) {
   //   Usage: pac [admin] [application] ...
   // Keep an optional prerelease suffix so local development builds such as `0.1.0-dev` can be
   // reported as TOOL_PAC_DEV_BUILD instead of compared to released CLI baselines.
-  const match = /^\s*Version:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/im.exec(String(text || ''));
+  const match = /^\s*Version:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/im.exec(String(text || ''));
   return match ? match[1] : null;
 }
 
