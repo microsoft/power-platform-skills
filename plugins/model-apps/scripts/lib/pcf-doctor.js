@@ -286,6 +286,7 @@ function buildModeFindingMessage(mode) {
  *     <PcfBuildMode>production</PcfBuildMode>
  *   </PropertyGroup>
  *   <PcfBuildMode Condition="'$(Configuration)'=='Release'">production</PcfBuildMode>
+ *   <PropertyGroup Condition='"$(Configuration)" == "Release"'>      (single-quoted attr)
  *
  * WHY the offset matters: Microsoft.PowerApps.MSBuild.Pcf 1.52.1 imports props through
  * Microsoft.Common.props and unconditionally sets Debug|AnyCPU to development. A local Debug build
@@ -388,6 +389,7 @@ function msbuildPcfReference(pcfprojText) {
   const text = stripXmlCommentsPreserveOffsets(String(pcfprojText || ''));
   // The SDK-style project keeps NuGet references as self-closing XML tags, for example:
   //   <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf" Version="1.52.1" />
+  //   <PackageReference Include='Microsoft.PowerApps.MSBuild.Pcf' Version='1.*' />
   // or as a paired element with a child version:
   //   <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf">
   //     <Version>1.52.1</Version>
@@ -414,8 +416,15 @@ function msbuildPcfReference(pcfprojText) {
 
 function xmlAttrs(tag) {
   const attrs = {};
-  for (const match of String(tag || '').matchAll(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*"([^"]*)"/g)) {
-    attrs[match[1]] = match[2];
+  // MSBuild project XML commonly uses both quote styles:
+  //   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+  //   <PropertyGroup Condition='"$(Configuration)" == "Release"'>
+  //   <PackageReference Include='Microsoft.PowerApps.MSBuild.Pcf' Version='1.*' />
+  // Match the opening quote and read until the same quote so the other quote character can appear
+  // inside the value. This is intentionally a tag-fragment parser; full XML parsing would lose the
+  // source offsets `pcfprojBuildMode` exports for Tasks 10 and 13.
+  for (const match of String(tag || '').matchAll(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+    attrs[match[1]] = match[3];
   }
   return attrs;
 }

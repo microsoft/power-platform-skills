@@ -116,6 +116,38 @@ test('pcfprojBuildMode treats conditioned values as ineffective because pac pcf 
   );
 });
 
+test('pcfprojBuildMode accepts single-quoted Condition attributes on groups and elements', () => {
+  const singleQuotedGroup = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition=\'"$(Configuration)" == "Release"\'>\n    <Name>',
+  );
+  const singleQuotedElement = renderedPcfproj().replace(
+    '<PcfBuildMode>production</PcfBuildMode>',
+    '<PcfBuildMode Condition=\'"$(Configuration)" == "Release"\'>production</PcfBuildMode>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(singleQuotedGroup)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(singleQuotedElement)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode accepts double-quoted Condition values containing single quotes', () => {
+  const doubleQuotedWithSingles = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)\' == \'Release\'">\n    <Name>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(doubleQuotedWithSingles)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
 test('pcfprojBuildMode reports conditioned overrides after unconditioned production as ineffective', () => {
   const conditionedAfterProduction = renderedPcfproj().replace(
     /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
@@ -293,6 +325,29 @@ test('checkProject distinguishes conditioned PcfBuildMode and reads MSBuild Pcf 
 
   assert.match(byId(findings, 'PROJ_BUILDMODE_NOT_PRODUCTION').message, /make it unconditional/i);
   assert.ok(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'));
+});
+
+test('checkProject reads single-quoted MSBuild Pcf PackageReference attributes', () => {
+  const pcfproj = renderedPcfproj().replace(
+    /<PackageReference Include="Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+" \/>/,
+    "<PackageReference Include='Microsoft.PowerApps.MSBuild.Pcf' Version='1.*' />",
+  );
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.ok(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'));
+});
+
+test('checkProject ignores commented-out MSBuild Pcf PackageReference examples', () => {
+  const pcfproj = renderedPcfproj().replace(
+    /<PackageReference Include="Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+" \/>/,
+    '<!-- <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf" Version="1.*" /> -->',
+  );
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.equal(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'), undefined);
+  assert.equal(byId(findings, 'PROJ_DEP_DRIFT'), undefined);
 });
 
 test('checkProject chooses the virtual dependency family and reports platform-library and Pages conflicts', () => {
