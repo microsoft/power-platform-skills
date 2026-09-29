@@ -3,8 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { computeFacts } = require('../lib/facts.js');
+const { assertInsideFixtures } = require('../capture-pcf-fixture.js');
 
 const ROOT = path.join(__dirname, '..');
 const fixture = (name) => path.join(ROOT, 'fixtures', name);
@@ -61,4 +63,45 @@ test('fixtures stay small and package-lock stubs do not feed dependency scanning
 
   assert.deepEqual(oversized, [], 'fixture files over 64 KB bloat the eval corpus');
   assert.deepEqual(badLocks, [], 'fixture package-lock.json files must use empty packages stubs');
+});
+
+test('capture containment refuses outside targets before creating their parents', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-capture-outside-'));
+  try {
+    const fixturesRoot = path.join(root, 'fixtures');
+    fs.mkdirSync(fixturesRoot);
+    const outsideParent = path.join(root, 'outside', 'parent');
+    const outsideTarget = path.join(outsideParent, 'fixture');
+
+    assert.throws(() => assertInsideFixtures(outsideTarget, { fixturesRoot }), /Refusing to write outside/);
+    assert.equal(fs.existsSync(outsideParent), false, 'outside parent must not be created before refusal');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('capture containment refuses parent traversal targets', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-capture-traversal-'));
+  try {
+    const fixturesRoot = path.join(root, 'fixtures');
+    fs.mkdirSync(fixturesRoot);
+
+    assert.throws(() => assertInsideFixtures(path.join(fixturesRoot, '..', 'escape'), { fixturesRoot }), /Refusing to write outside/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('capture containment allows fixture-internal targets', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-capture-inside-'));
+  try {
+    const fixturesRoot = path.join(root, 'fixtures');
+    fs.mkdirSync(fixturesRoot);
+    const target = path.join(fixturesRoot, '099-captured');
+
+    assert.doesNotThrow(() => assertInsideFixtures(target, { fixturesRoot }));
+    assert.equal(fs.existsSync(fixturesRoot), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -12,13 +12,42 @@ function usage() {
   return 'Usage: capture-pcf-fixture.js <projectDir> <fixtureDir>\nCopies a PCF project into evals/model-apps/pcf/fixtures, excluding node_modules/out/obj/bin/generated.';
 }
 
-function assertInsideFixtures(target) {
-  const realFixtures = fs.realpathSync(FIXTURES);
-  const resolvedParent = path.resolve(path.dirname(target));
-  fs.mkdirSync(resolvedParent, { recursive: true });
-  const rel = path.relative(realFixtures, path.resolve(target));
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error(`Refusing to write outside ${FIXTURES}: ${target}`);
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isStrictChild(root, target) {
+  const rel = path.relative(comparablePath(root), comparablePath(target));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function isInsideOrSame(root, target) {
+  const rel = path.relative(comparablePath(root), comparablePath(target));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function deepestExistingAncestor(target) {
+  let current = path.resolve(target);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+function assertInsideFixtures(target, options = {}) {
+  const fixturesRoot = options.fixturesRoot ? path.resolve(options.fixturesRoot) : FIXTURES;
+  const resolvedTarget = path.resolve(target);
+  if (!isStrictChild(fixturesRoot, resolvedTarget)) {
+    throw new Error(`Refusing to write outside ${fixturesRoot}: ${target}`);
+  }
+
+  const realFixtures = fs.realpathSync(fixturesRoot);
+  const realAncestor = fs.realpathSync(deepestExistingAncestor(resolvedTarget));
+  if (!isInsideOrSame(realFixtures, realAncestor)) {
+    throw new Error(`Refusing to write outside ${fixturesRoot}: ${target}`);
   }
 }
 
