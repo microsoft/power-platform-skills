@@ -32,6 +32,8 @@ async function flushPromises(): Promise<void> {
     await Promise.resolve();
 }
 
+const DATAVERSE_CRM_ANNOTATION = "Microsoft" + ".Dynamics.CRM";
+
 function mount(options: {
     entityId?: IInputs["entityId"];
     entityName?: IInputs["entityName"];
@@ -243,6 +245,31 @@ test("renders aliased non-lookup text values", async () => {
 
     expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("contact.fullname");
     expect(mounted.container.textContent).toContain("Adele Vance");
+});
+
+
+test("hides Dataverse annotation keys while keeping formatted lookup text", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "alias.lookup": "44444444-4444-4444-8444-444444444444",
+                "alias.lookup@OData.Community.Display.V1.FormattedValue": "Tailspin Toys",                [`alias.lookup@${DATAVERSE_CRM_ANNOTATION}.lookuplogicalname`]: "account",
+                _ownerid_value: "33333333-3333-4333-8333-333333333333",
+                "_ownerid_value@OData.Community.Display.V1.FormattedValue": "MOD Administrator",                [`_ownerid_value@${DATAVERSE_CRM_ANNOTATION}.associatednavigationproperty`]: "ownerid",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    const headers = Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["alias.lookup", "ownerid"]));
+    expect(headers).not.toContain(`alias.lookup@${DATAVERSE_CRM_ANNOTATION}.lookuplogicalname`);
+    expect(headers).not.toContain(`_ownerid_value@${DATAVERSE_CRM_ANNOTATION}.associatednavigationproperty`);
+    expect(mounted.container.textContent).toContain("Tailspin Toys");
+    expect(mounted.container.textContent).toContain("MOD Administrator");
+    expect(mounted.container.textContent).not.toContain("account");
+    expect(mounted.container.textContent).not.toContain("owneridownerid");
 });
 
 test("load more follows documented nextLink paging", async () => {

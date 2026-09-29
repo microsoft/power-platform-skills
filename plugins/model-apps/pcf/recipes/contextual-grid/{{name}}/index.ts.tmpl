@@ -283,7 +283,12 @@ function formatCell(row: GridRow, key: string): string {
 }
 
 function isAnnotationKey(key: string): boolean {
-    return key.startsWith("@") || key.includes("@OData") || key.includes("@odata");
+    // Dataverse Web API annotations are appended after `@`, for example
+    // a lookup-logical-name key in the Dataverse CRM annotation namespace; FetchXML attribute names come from
+    // Dataverse logical names and cannot contain `@`, so any key containing `@` is metadata rather
+    // than a display column. See:
+    // https://learn.microsoft.com/power-apps/developer/data-platform/fetchxml/select-columns#column-aliases
+    return key.includes("@");
 }
 
 function displayColumnName(key: string): string {
