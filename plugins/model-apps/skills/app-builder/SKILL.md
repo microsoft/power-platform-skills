@@ -509,7 +509,8 @@ Never fails.
 
 **App-level features** (`ai.appFeatures`) — `formFill` (Copilot-assisted form fill), `nlSearch`
 (natural-language grid/view search), `nlChart` (NL chart / AI data visualization), `m365` (M365
-Copilot). All default to `true` except `m365`; set any to `false` to opt out.
+Copilot). All default to on except `m365`, which is left at its platform default; `false` writes an
+explicit Off for this app (each setting's values: `references/app-spec-schema.md` → `ai`).
 
 **Per-table row summaries** (`ai.summaries`):
 - `default: "auto"` — the skill auto-selects good-candidate tables (skips lookup-only / config /

@@ -1136,15 +1136,19 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   //
   // `false` DOES NOT MEAN "leave alone". It writes an explicit app-scope override that BEATS the
   // org value, so setting it on a feature the org has enabled turns that feature OFF for this app.
-  // To leave a feature as the environment provides it, omit the whole `ai.appFeatures` block.
+  // To defer a feature to the platform instead, give it that setting's platform-default value.
   //
-  // The numeric value written is NOT a flat 1/0 — it differs by family (captured from the bundle):
-  //   formFill, formFillSuggestions, formFillSmartPaste, formFillFiles -> true writes 2, false writes 1
-  //   nlSearch, nlChart, m365                                          -> true writes 1, false writes 0
-  // For the form-fill family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so
-  // `false` there means "explicitly disabled", not "unset".
-  // An explicit integer (0-1000000) is also accepted for a platform-defined value; the bound mirrors
-  // the SDK's own, so an out-of-range value is rejected here rather than aborting the build half-applied.
+  // Every one of these settings is a tri-state, and the numbers differ by setting (taken from the
+  // platform's own settings UI):
+  //   formFill, formFillSuggestions, formFillSmartPaste, formFillFiles, nlSearch, m365
+  //                                   -> 0 = Default (defer to the platform), 1 = Off, 2 = On
+  //   nlChart                         -> 0 = Off, 1 = Auto (its platform default), 2 = On
+  // The build writes `true` as 2 for every feature and `false` as that setting's Off — 1, or 0 for
+  // nlChart. (Before AB#6714731 it wrote 1 for `true` outside the form-fill family, which is Off for
+  // nlSearch and m365 and only Auto for nlChart.)
+  // An explicit integer (0-1000000) is written verbatim, e.g. to choose the platform default; the
+  // bound mirrors the SDK's own, so an out-of-range value is rejected here rather than aborting the
+  // build half-applied.
   //
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
   // preflights. The gate is NOT a precondition: every write is attempted and then verified, and a
@@ -1155,10 +1159,10 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   // DISABLING is treated identically — a `false` is written whatever the gate says, which is why an
   // incorrect `false` is the more damaging mistake of the two.
   "appFeatures": {
-    "formFill":  true,   // Copilot-assisted form fill (data entry)
-    "nlSearch":  true,   // natural-language grid/view search (data exploration)
-    "nlChart":   2,      // natural-language chart / AI data visualization — on for everyone
-    "m365":      false   // M365 Copilot integration (opt-in; defaults false)
+    "formFill":  true,   // Copilot-assisted form fill (data entry) — writes 2 (On)
+    "nlSearch":  true,   // natural-language grid/view search (data exploration) — writes 2 (On)
+    "nlChart":   1,      // natural-language chart / AI data visualization — 1 = Auto, the platform decides
+    "m365":      false   // M365 Copilot integration — writes 1 (Off); by default it is left at 0 (Default)
   },
   // summaries: configure the row-summary (Copilot summary card) feature per table.
   "summaries": {
@@ -1205,9 +1209,9 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 > rule described below as enforced by the *lint* is one an unlinted spec will carry into a
 > build and fail at the platform. Where it matters, the rule names its gate.
 
-- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: the **form-fill family** (`formFill` and its siblings) writes `2` for `true` and **`1` for `false`**, where `1` means *disabled* and `0` means *platform default*; `nlSearch`/`nlChart`/`m365` write `1`/`0`. Use an explicit integer for a platform value like "on for everyone".
-- **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To inherit the environment's setting, omit `ai.appFeatures` entirely.
-- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
+- `ai.appFeatures` keys must be one of `formFill · formFillSuggestions · formFillSmartPaste · formFillFiles · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: `true` writes `2` (*On*) for every feature, and `false` writes that setting's *Off* — `1` for most, but **`0` for `nlChart`**, whose `1` means *Auto*. `0` means *Default* (defer to the platform) everywhere except `nlChart`. Use an explicit integer for any other state, such as the platform default.
+- **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To defer a feature to the platform, give it the setting's platform-default value instead (`0`, or `1` for `nlChart`).
+- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on (`2`) and `m365` left at its platform default (`0`), and `--verify` reconciles that whole resolved set.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).

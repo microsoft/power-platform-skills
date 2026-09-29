@@ -861,21 +861,23 @@ const aiRead = (overrides, effective, opts = {}) => {
   };
 };
 const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
-// The AI form-fill family does not use 1/0: 0 = platform default, 1 = DISABLED, 2 = ENABLED
-// (SDK SETTING_CODEC, mirroring the admin UI). An ENABLED override therefore holds '2'.
+// Every per-app AI setting is a tri-state, not 1/0, and On is '2' for all of them: most use
+// 0 = Default, 1 = Off, 2 = On, while NL charts use 0 = Off, 1 = Auto, 2 = On (the platform's own
+// settings UI; AB#6714731). An ENABLED override therefore holds '2'.
 const ALL_SETTINGS_ON = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
-  m365copilotmodelappenabled: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
+  m365copilotmodelappenabled: '2',
 };
 // The overrides a DEFAULT build writes: `resolveAiFlags` seeds formFill/nlSearch/nlChart on and
-// m365 off for any spec carrying `ai`, and verify reconciles that whole set — so a test focusing on
-// ONE feature must still satisfy the other three or it is asserting on unrelated misses.
+// leaves m365 at its platform default ('0') for any spec carrying `ai`, and verify reconciles that
+// whole set — so a test focusing on ONE feature must still satisfy the other three or it is
+// asserting on unrelated misses.
 const DEFAULT_SETTINGS = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
   m365copilotmodelappenabled: '0',
 };
 const aiMissing = (r, feature) => r.missing.find((m) => m.kind === 'ai-feature' && m.name === feature);
@@ -924,14 +926,33 @@ test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared
   assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
 });
 
-test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
+test('verifySpec: an explicit OFF request is verified against the setting\u2019s Off value, not treated as dont-care', async () => {
   const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
   assert.strictEqual(r.ok, false);
-  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
+  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold Off.
   // OFF for this family is '1' (DISABLED). '0' would be the platform default — deliberately NOT
-  // accepted as off, because it defers to flighting rather than turning the feature off.
+  // accepted as off, because it defers to the platform rather than turning the feature off.
   const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+test('verifySpec: Off is each setting\u2019s own value \u2014 1 for grid search and M365, 0 for charts (AB#6714731)', async () => {
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true, nlSearch: false, nlChart: false, m365: false } } };
+  const ok = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '1' }));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+  // What earlier builds wrote for `false` was '0' everywhere: Off for charts, but only Default for grid
+  // search and M365, which defers to the platform rather than turning the feature off.
+  const old = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '0', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '0' }));
+  assert.deepStrictEqual(old.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlSearch']);
+});
+
+test('verifySpec: the values earlier builds wrote for ON do not verify as on (AB#6714731)', async () => {
+  // `true` used to be written as '1' outside the form-fill family — Off for grid search and M365,
+  // Auto for charts — and verify expected the same '1', so the build and its check agreed on it.
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '1', m365copilotmodelappenabled: '1' }));
+  assert.deepStrictEqual(r.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlChart', 'nlSearch']);
+  assert.match(aiMissing(r, 'nlSearch').detail, /requested '2'/);
+  assert.match(aiMissing(r, 'nlChart').detail, /holds '1'/);
 });
 
 test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not present)', async () => {
@@ -969,8 +990,9 @@ test('verifySpec: an undeclared feature is still checked when the spec declares 
   // The partial-declaration half of the same hole: `{ appFeatures: { m365: true } }` still causes
   // the build to write formFill/nlSearch/nlChart.
   const spec = { ...AI_BASE, ai: { appFeatures: { m365: true } } };
-  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '1' }));
+  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '2' }));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 4);
+  assert.ok(!aiMissing(r, 'm365'), 'the declared feature itself is in place');
   assert.ok(aiMissing(r, 'formFill'), 'the undeclared formFill default is reconciled');
   assert.strictEqual(r.ok, false);
 });
@@ -1053,17 +1075,20 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // The normalization is deliberately UNCONDITIONAL: branching on a `dataType` read made the
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
-  // Requested on nlSearch, not formFill: this asserts that a Boolean SPELLING of the stored value is
-  // reconciled with the requested one, and that only makes sense for a setting whose on/off really
-  // is 1/0. The form-fill family is a 0/1/2 enum (0 = platform default, 1 = disabled, 2 = enabled)
-  // and never stores 'true'/'false', so pointing this at formFill would assert a shape the platform
-  // cannot produce — and, with the request and the stub naming different settings, it could pass or
-  // fail for reasons unrelated to the normalisation under test.
+  // No per-app AI setting is Boolean today — all of them store 0/1/2 — so this guards the
+  // normalisation itself: a Boolean spelling means the feature's OWN on/off value ('true' is '2'),
+  // never the generic '1', which for grid search is Off. Mapping it to '1' would let a stored
+  // 'true' satisfy an explicit OFF request.
   const spec = { ...AI_BASE, ai: { appFeatures: { nlSearch: true } } };
   return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
     const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
     assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
+    const wantOff = { ...AI_BASE, ai: { appFeatures: { nlSearch: false } } };
+    const inverted = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' }));
+    assert.ok(aiMissing(inverted, 'nlSearch'), "a stored 'true' must not satisfy an explicit OFF ('1') request");
+    const offOk = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
+    assert.ok(!aiMissing(offOk, 'nlSearch'), "a stored 'false' is this setting's Off");
   });
 });
 

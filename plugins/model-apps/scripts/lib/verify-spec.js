@@ -1105,8 +1105,8 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
-      // against the wrong spelling reports a correctly-applied feature as missing.
+      // Feature-aware: `true` is '2' for every AI setting, while `false` is '1' for most and '0' for
+      // nlChart. Comparing against the wrong spelling reports a correctly-applied feature as missing.
       const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
@@ -1126,7 +1126,7 @@ async function verifySpec(spec, read, opts = {}) {
 
       // Fail-closed: when the proof could not be run we could LOOK and looking failed, so we must not
       // claim PASS on the strength of a value that may simply be the environment default.
-      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want);
+      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want, feature);
       const inForce = effective === undefined ? '(unreadable)' : effective === '' ? '(unset)' : effective;
       add('ai-feature', feature, present, present ? '' :
         proof.error

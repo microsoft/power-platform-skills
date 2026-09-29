@@ -33,7 +33,7 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
-const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE } = require('./ai-app-settings.js');
+const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -3120,8 +3120,9 @@ function validateAppSpec(spec, opts = {}) {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
             if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: ${AI_FEATURE_KEYS_LIST})`);
             // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
-            // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
-            // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
+            // ergonomic spellings of each setting's On/Off value (see AI_SETTING_CODEC), but every one
+            // of them is a tri-state, and a boolean-only contract made the third state — notably `0`,
+            // the platform default for most — inexpressible (ADO 6560699).
             // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
             // would silently bypass the range check downstream).
             //
@@ -3131,7 +3132,10 @@ function validateAppSpec(spec, opts = {}) {
             // front, where the maker gets a message naming the field. `isSafeInteger` (not
             // `isInteger`) because beyond 2^53 an "integer" double no longer round-trips.
             if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= AI_FEATURE_MAX_VALUE)) {
-              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or 2 for "on for everyone")`);
+              // The example names THIS setting's platform default: it is 0 for most, but 1 (Auto) for
+              // nlChart, where 0 means Off.
+              const platformDefault = AI_SETTING_CODEC[k] ? AI_SETTING_CODEC[k].platformDefault : '0';
+              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or ${platformDefault} to leave it to the platform default)`);
             }
           }
         }

@@ -5,7 +5,25 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.10.0
+## [Unreleased] — 2.11.0
+
+AI features are written with each setting's own values.
+
+### Fixed
+
+- **AI feature values** (AB#6714731). `true` wrote `1` outside the form-fill family: *Off* for
+  natural-language grid search and M365 Copilot, *Auto* for NL charts, and `--verify` expected the
+  same. `true` now writes `2` (*On*) for every feature, so the next build of an AI-enabled app turns
+  NL grid search back on. `false` writes that setting's *Off*: `1`, or `0` for NL charts.
+- **`ai-preflight`** no longer shows ✓ for an app with M365 Copilot off, and reports NL charts' *Auto*
+  as the platform default rather than on.
+
+### Changed
+
+- **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
+  default (`0`). A spec that omits `m365` still leaves it at `0`.
+
+## [2.10.0]
 
 Connector authoring loses its feature flag, `--allow-destructive` removes only what a maker was
 shown, and the vendored SDK is refreshed.

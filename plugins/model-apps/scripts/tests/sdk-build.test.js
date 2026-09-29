@@ -386,7 +386,9 @@ function mockSdk(opts = {}) {
     },
     setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
-    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
+    // The real SDK writes every requested value (Off included) and lists each one it proves; the
+    // build encodes flags to setting values first, so no feature arrives here as a falsy boolean.
+    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push({ name: 'configureRowSummary', args: [promptSpec, opts] }); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
     // Security authoring. createPersonaRole echoes a RoleResult; opts.roleConflict simulates the SEC-1
     // fail-closed (a hand-built same-name role) so the security phase's BuildHalt is testable. opts.rolesExist
@@ -3552,7 +3554,9 @@ test('ai-features phase enables app features and configures summaries for candid
   assert.ok(find(calls, 'configureRowSummary').length >= 1, 'configureRowSummary called for candidate table(s)');
   const featureCall = find(calls, 'setAppAiFeatures')[0];
   assert.ok(featureCall.args[0].includes('support'), 'app unique name derived from spec (contains app name slug)');
-  assert.strictEqual(featureCall.args[1].formFill, true, 'formFill flag merged from spec.ai.appFeatures');
+  // Encoded by the build, not left to the SDK's boolean mapping (AB#6714731): On is '2' for every
+  // feature, and m365 stays at its platform default '0' unless the spec asks.
+  assert.deepStrictEqual(featureCall.args[1], { formFill: '2', nlSearch: '2', nlChart: '2', m365: '0' }, 'formFill flag merged from spec.ai.appFeatures, all encoded');
   assert.ok(result.created.ai && result.created.ai.appFeatures, 'appFeatures populated on result');
   assert.ok(result.created.ai.summaries && Object.keys(result.created.ai.summaries).length >= 1, 'summaries populated on result');
 });
@@ -3863,6 +3867,27 @@ test('ai-features phase: a `skipped` feature the re-issue cannot recover is repo
   assert.ok(warnings.some((e) => /EnableNLGridSearch/.test(e.label)),
     'the SDK reason names the gate, which is the actionable part');
   assert.ok(!r.created.ai.appFeatures.applied.includes('nlSearch'), 'and it is NOT claimed as applied');
+});
+
+test('ai-features phase: both writes hand the SDK each setting\u2019s value, never a boolean (AB#6714731)', async () => {
+  // The vendored SDK maps a boolean through a codec that knows only the form-fill family, so `true`
+  // reached NL grid search and M365 as '1' (Off) and NL charts as '1' (Auto). The build encodes
+  // every flag itself, and the SDK writes an explicit value verbatim — including on the
+  // post-publish re-issue, which is the write that actually lands on a new app.
+  const { sdk, calls } = withAiResults([
+    { applied: ['formFill'], skipped: [], notPersisted: ['nlSearch', 'nlChart', 'm365'], unverified: [], failed: [], outcomes: [] },
+    { applied: ['nlSearch', 'nlChart', 'm365'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] },
+  ]);
+  const spec = makeSpec({ ai: { appFeatures: { nlSearch: true, nlChart: false, m365: false }, summaries: { default: 'off' } } });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const writes = find(calls, 'setAppAiFeatures');
+  assert.strictEqual(writes.length, 2);
+  assert.deepStrictEqual(writes[0].args[1], { formFill: '2', nlSearch: '2', nlChart: '0', m365: '1' });
+  assert.deepStrictEqual(writes[1].args[1], { nlSearch: '2', nlChart: '0', m365: '1' }, 'the re-issue is encoded too');
+  // An explicit integer is the caller's own setting value and passes through untouched.
+  const { sdk: sdk2, calls: calls2 } = withAiResults([{ applied: ['formFill', 'nlSearch', 'nlChart', 'm365'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] }]);
+  await runSdkBuild(makeSpec({ ai: { appFeatures: { nlChart: 1, m365: 2 }, summaries: { default: 'off' } } }), { sdk: sdk2, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.deepStrictEqual(find(calls2, 'setAppAiFeatures')[0].args[1], { formFill: '2', nlSearch: '2', nlChart: '1', m365: '2' });
 });
 
 test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {

@@ -88,7 +88,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
@@ -4366,7 +4366,7 @@ async function runSdkBuild(spec, opts = {}) {
       // A modest retry budget still helps: on an established app the override row is queryable ~580ms
       // after the write (measured live), so the SDK's 4-attempt/500ms default is tight but the budget
       // is only ever spent when the row is genuinely absent.
-      const r = await provision.setAppAiFeatures(appUnique, flags, {
+      const r = await provision.setAppAiFeatures(appUnique, encodeAiFlags(flags), {
         solutionUniqueName,
         appModuleId: result.created.app || undefined,
         verifyAttempts: 8,
@@ -4881,7 +4881,7 @@ async function runSdkBuild(spec, opts = {}) {
         try {
           await provision.fetchArtifact('app', result.created.app);
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
-          const retry = await provision.setAppAiFeatures(appUnique, retryFlags, {
+          const retry = await provision.setAppAiFeatures(appUnique, encodeAiFlags(retryFlags), {
             solutionUniqueName: spec.solution && spec.solution.uniqueName,
             appModuleId: result.created.app,
             verifyAttempts: 6,
@@ -4907,7 +4907,7 @@ async function runSdkBuild(spec, opts = {}) {
       const setting = AI_APP_SETTING[p.feature];
       let proof = { error: app.error };
       if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
-      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature], p.feature))) {
+      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature], p.feature), p.feature)) {
         reproven.push(p.feature);
         reprovenBy.set(p.feature, 'confirmed present after publish by the build\u2019s own override-row proof');
         continue;

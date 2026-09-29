@@ -62,7 +62,9 @@ function makeSimpleMockSdk() {
     addSolutionComponent: async () => undefined,
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
     getAiReadiness: async (opts) => { calls.push(['getAiReadiness', opts]); return { enabled: true }; },
-    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push(['setAppAiFeatures', appUnique, flags, opts]); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
+    // The real SDK writes every requested value (Off included) and lists each one it proves; the
+    // build encodes flags to setting values first, so no feature arrives here as a falsy boolean.
+    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push(['setAppAiFeatures', appUnique, flags, opts]); return { applied: Object.keys(flags), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push(['configureRowSummary', promptSpec, opts]); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
     // Task 15: teardown SDK methods
     resolveArtifact: async (kind, identity) => { calls.push(['resolveArtifact', kind, identity]); return []; },

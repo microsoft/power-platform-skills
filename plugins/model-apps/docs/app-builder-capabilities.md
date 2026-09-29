@@ -159,11 +159,19 @@ apart deliberately.
   actual setting are *different rows*, and a gate can read off while the feature is switched on at
   environment scope — so it runs in every app on that org. Live-measured: gate `EnableNLGridSearch`
   = `false` while `NLGridSearchSetting` = `2` at environment scope (NL search on), and
-  `NLChartDataVisualizationSetting` = `1` by default (NL charts on). Preflight resolves the
+  `NLChartDataVisualizationSetting` = `1` by default — *Auto*, its platform default. Preflight resolves the
   effective value per feature — app-scope override → environment → default — reports those as
   *in effect via the environment/default setting*, and **suppresses the admin action**, so nobody is
   sent to the admin centre to switch on something already running. A value it cannot read never
-  counts as in effect, so a genuine action is never hidden.
+  counts as in effect, so a genuine action is never hidden. A platform-default value (*Default*, or
+  *Auto* for charts) is reported as the platform's decision, neither on nor off.
+- **Every per-app AI setting is a tri-state, and `1` is not "on"** (AB#6714731). Per the platform's
+  own settings UI, form fill (all four settings), NL grid search and M365 store 0 = *Default*,
+  1 = *Off*, 2 = *On*, and NL charts store 0 = *Off*, 1 = *Auto*, 2 = *On*. Builds used to write `1`
+  for `true` outside the form-fill family — turning NL grid search and M365 **off** and leaving
+  charts on *Auto* — and `--verify` expected the same `1`. The plugin now encodes every flag itself
+  (`true` → `2`; `false` → that setting's *Off*) and verifies against the same table, so the next
+  build of an affected app writes `2`.
 - **Form fill is a real "off", not a naming mix-up** (measured 2026-08-28). Unlike NL search, the
   gate and the per-app setting share one name — `FormFillBarUXEnabled` — confirmed against the
   SDK's own `AI_GATE`/per-app maps, so there is no second setting hiding a different answer. It

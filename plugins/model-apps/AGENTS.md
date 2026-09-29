@@ -534,8 +534,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
-  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
-  1/0) or an explicit integer such as `2` ("on for everyone"), bounded to `0..1000000` — the same range
+  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` — encoded by the
+  plugin to each setting's own On/Off value (On is `2` everywhere; Off is `1`, but `0` for `nlChart`;
+  `AI_SETTING_CODEC` in `lib/ai-app-settings.js`, AB#6714731) before the SDK sees them — or an explicit
+  integer written verbatim, bounded to `0..1000000` — the same range
   the SDK enforces, so validation rejects an out-of-range value up front instead of aborting the build
   half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
   (an immediate read can still return the environment fallback, which previously produced a false
