@@ -28,6 +28,8 @@ hooks.json                     ← Copilot-format hooks: userPromptTransformed
 hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
+scripts/
+  check-version.cs             ← .NET 10 file-based plugin update check
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions
@@ -115,3 +117,14 @@ source, which also disables MCP.
 Before the MCP server will start, you need:
 
 **.NET 10 SDK** — [Download from Microsoft](https://dotnet.microsoft.com/download/dotnet/10.0)
+
+## Plugin Version Check
+
+`configure-canvas-mcp` runs the .NET 10 file-based app at
+`scripts/check-version.cs` before starting its workflow. The checker compares
+the bundled `.plugin/plugin.json` version with the canonical manifest on
+`main`, prints update commands only when a newer version exists, and exits
+silently for current versions or expected network, filesystem, and manifest
+errors so update discovery never blocks MCP configuration.
+
+Keep the check immediately after the skill frontmatter.
