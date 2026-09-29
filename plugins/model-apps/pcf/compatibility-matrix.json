@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewed": "2026-09-28",
+  "reviewed": "2026-09-29",
   "sources": {
     "platformLibraries": "https://learn.microsoft.com/power-apps/developer/component-framework/react-controls-platform-libraries",
     "pagesField": "https://learn.microsoft.com/power-pages/configure/component-framework",
@@ -66,9 +66,8 @@
     },
     "msbuildPcf": {
       "version": "1.52.1",
-      "source": "plan-time package cache observation",
+      "source": "resolved by a NuGet restore of 1.* on 2026-09-28; CI package-smoke restores this package from nuget.org",
       "sourceUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.powerapps.msbuild.pcf/index.json",
-      "verificationStatus": "unverified-local-tls-handshake-failure",
       "date": "2026-09-28"
     }
   },
@@ -178,16 +177,23 @@
         "source": "https://learn.microsoft.com/power-apps/developer/component-framework/react-controls-platform-libraries",
         "date": "2026-09-28"
       },
-      "testedRuntime": []
+      "testedRuntime": [
+        {
+          "version": "9.46.2",
+          "scope": "accepted at import in a test environment",
+          "source": "observed 2026-09-29 via pac pcf push",
+          "date": "2026-09-29"
+        }
+      ]
     }
   },
   "baselineExclusions": [
     {
       "library": "Fluent",
       "version": "9.68.0",
-      "reason": "The official React template currently emits this runtime version, but it is above the Microsoft Learn documented declaration range; templates pin 9.46.2 until the documented declaration range changes.",
-      "evidence": "https://github.com/microsoft/powerplatform-build-tools/issues/1265",
-      "scope": "documented-range"
+      "reason": "The official React template currently emits this runtime version, but it is above the Microsoft Learn documented declaration range and is rejected at import.",
+      "evidence": "observed 2026-09-29 in a test environment via pac pcf push; also reported publicly in https://github.com/microsoft/powerplatform-build-tools/issues/1265",
+      "scope": "observed-rejection"
     }
   ],
   "hosts": {

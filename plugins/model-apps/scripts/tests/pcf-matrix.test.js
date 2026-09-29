@@ -8,8 +8,40 @@ const m = require('../lib/pcf-matrix.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 test('the committed matrix validates', () => {
   assert.deepEqual(m.validateMatrix(m.loadMatrix()), []);
+});
+
+test('validateMatrix rejects declaration-like entries without a version or range', () => {
+  const mx = clone(m.loadMatrix());
+  delete mx.platformLibraries.Fluent.documentedDeclarations[2].min;
+  delete mx.platformLibraries.Fluent.documentedDeclarations[2].max;
+
+  const errors = m.validateMatrix(mx);
+
+  assert.ok(
+    errors.some((error) => error.includes('platformLibraries.Fluent.documentedDeclarations[2]')),
+    errors.join('\n'),
+  );
+});
+
+test('loadMatrix reports schema errors with the compatibility-matrix prefix', () => {
+  const mx = clone(m.loadMatrix());
+  delete mx.platformLibraries.React.recommendedBaseline.version;
+
+  assert.throws(
+    () =>
+      m.loadMatrix({
+        fs: { readFileSync: () => JSON.stringify(mx) },
+        path,
+        root: ROOT,
+      }),
+    /compatibility-matrix\.json: .*platformLibraries\.React\.recommendedBaseline/,
+  );
 });
 
 test('compareVersions / inRange', () => {
@@ -38,6 +70,18 @@ test('platform library findings: range, known-bad, 8+9, pages', () => {
   assert.ok(codes([{ name: 'Vue', version: '3.0.0' }], ['model']).includes('PCF_PLATFORM_LIB_UNKNOWN'));
 });
 
+test('baseline exclusion severity depends on observed-rejection scope', () => {
+  const mx = clone(m.loadMatrix());
+  const severity = (matrix) =>
+    m.platformLibraryFindings(matrix, [{ name: 'Fluent', version: '9.68.0' }], ['model'])
+      .find((finding) => finding.code === 'PCF_PLATFORM_LIB_KNOWN_BAD')
+      .severity;
+
+  assert.equal(severity(mx), 'error');
+  mx.baselineExclusions[0].scope = 'documented-range';
+  assert.equal(severity(mx), 'warning');
+});
+
 test('dependency sets expose the committed lock package versions', () => {
   const mx = m.loadMatrix();
   for (const set of ['standard', 'virtual']) {
@@ -47,11 +91,60 @@ test('dependency sets expose the committed lock package versions', () => {
   }
 });
 
+test('dependencySet honors injected fs, path and root dependencies', () => {
+  const mx = clone(m.loadMatrix());
+  mx.dependencySets.standard.lockDir = 'locks/standard';
+  const deps = m.dependencySet(mx, 'standard', {
+    root: 'ROOT',
+    path: path.posix,
+    fs: {
+      readFileSync(file) {
+        assert.equal(file, 'ROOT/locks/standard/package.json');
+        return JSON.stringify({
+          dependencies: { react: '16.14.0' },
+          devDependencies: { 'pcf-scripts': '1.51.1' },
+        });
+      },
+    },
+  });
+
+  assert.equal(deps.lockDir, 'ROOT/locks/standard');
+  assert.deepEqual(deps.dependencies, { react: '16.14.0' });
+  assert.deepEqual(deps.devDependencies, { 'pcf-scripts': '1.51.1' });
+});
+
+test('virtual lock pins React, ReactDOM and Fluent to the matrix baselines', () => {
+  const mx = m.loadMatrix();
+  const deps = m.dependencySet(mx, 'virtual').dependencies;
+
+  assert.equal(deps.react, mx.platformLibraries.React.recommendedBaseline.version);
+  assert.equal(deps['react-dom'], mx.platformLibraries.React.recommendedBaseline.version);
+  assert.equal(deps['@fluentui/react-components'], mx.platformLibraries.Fluent.recommendedBaseline.version);
+});
+
 test('host policies expose model and pages rules', () => {
   const mx = m.loadMatrix();
   assert.equal(m.hostPolicy(mx, 'model').platformLibraries, true);
   assert.equal(m.hostPolicy(mx, 'pages').platformLibraries, false);
   assert.ok(m.hostPolicy(mx, 'pages').unsupportedPropertyTypes.includes('File'));
+});
+
+test('Pages requirements are schema-validated before renderHostsTable consumes them', () => {
+  const mx = clone(m.loadMatrix());
+  delete mx.hosts.pages.requirements.dataset.siteVersion.source;
+
+  const errors = m.validateMatrix(mx);
+
+  assert.ok(errors.some((error) => error.includes('hosts.pages.requirements.dataset.siteVersion')), errors.join('\n'));
+  assert.throws(
+    () =>
+      m.loadMatrix({
+        fs: { readFileSync: () => JSON.stringify(mx) },
+        path,
+        root: ROOT,
+      }),
+    /compatibility-matrix\.json: .*hosts\.pages\.requirements\.dataset\.siteVersion/,
+  );
 });
 
 test('renderHostsTable emits the sync block and pages prerequisites', () => {

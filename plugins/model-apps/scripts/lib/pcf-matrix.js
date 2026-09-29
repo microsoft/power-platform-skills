@@ -52,25 +52,96 @@ function hasSourceAndDate(value) {
   return value && typeof value.source === 'string' && value.source && typeof value.date === 'string' && value.date;
 }
 
+function hasVersionSelector(value) {
+  return value && (typeof value.version === 'string' || typeof value.min === 'string' || typeof value.max === 'string');
+}
+
+function validateVersionSelector(errors, value, name, options = {}) {
+  if (!hasSourceAndDate(value)) {
+    errors.push(`${name} must include source and date`);
+  }
+  if (options.sourceUrl && (!value || typeof value.source !== 'string' || !/^https:\/\//.test(value.source))) {
+    errors.push(`${name}.source must be an https URL`);
+  }
+  if (!hasVersionSelector(value)) {
+    errors.push(`${name} must include version or min/max`);
+  }
+}
+
+function validateStringArray(errors, value, name) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item)) {
+    errors.push(`${name} must be an array of strings`);
+  }
+}
+
 function validateLibrary(errors, name, library) {
   if (!addRequiredObject(errors, library, `platformLibraries.${name}`)) return;
-  if (!hasSourceAndDate(library.recommendedBaseline) || typeof library.recommendedBaseline.version !== 'string') {
-    errors.push(`platformLibraries.${name}.recommendedBaseline must include version, source and date`);
+  if (!addRequiredObject(errors, library.recommendedBaseline, `platformLibraries.${name}.recommendedBaseline`)) {
+    return;
   }
+  validateVersionSelector(errors, library.recommendedBaseline, `platformLibraries.${name}.recommendedBaseline`);
   for (const section of ['documentedDeclarations', 'toolingAccepted', 'testedRuntime']) {
     if (!Array.isArray(library[section])) {
       errors.push(`platformLibraries.${name}.${section} must be an array`);
       continue;
     }
     for (const [index, item] of library[section].entries()) {
-      if (!hasSourceAndDate(item) && section !== 'testedRuntime') {
-        errors.push(`platformLibraries.${name}.${section}[${index}] must include source and date`);
-      }
+      validateVersionSelector(errors, item, `platformLibraries.${name}.${section}[${index}]`);
     }
   }
   if (!hasSourceAndDate(library.documentedRuntime)) {
     errors.push(`platformLibraries.${name}.documentedRuntime must include source and date`);
   }
+}
+
+function validatePagesRequirements(errors, requirements) {
+  if (!addRequiredObject(errors, requirements, 'hosts.pages.requirements')) return;
+  for (const [capability, requirement] of Object.entries(requirements)) {
+    const basePath = `hosts.pages.requirements.${capability}`;
+    if (!addRequiredObject(errors, requirement, basePath)) continue;
+    if (!addRequiredObject(errors, requirement.siteVersion, `${basePath}.siteVersion`)) continue;
+    validateVersionSelector(errors, requirement.siteVersion, `${basePath}.siteVersion`, { sourceUrl: true });
+    for (const packageField of ['starterPackageVersion', 'basePackageVersion']) {
+      if (!Object.hasOwn(requirement, packageField)) continue;
+      if (!addRequiredObject(errors, requirement[packageField], `${basePath}.${packageField}`)) continue;
+      validateVersionSelector(errors, requirement[packageField], `${basePath}.${packageField}`, { sourceUrl: true });
+    }
+  }
+}
+
+function validateHosts(errors, hosts) {
+  if (!addRequiredObject(errors, hosts, 'hosts')) return;
+  for (const host of KNOWN_HOSTS) {
+    if (!addRequiredObject(errors, hosts[host], `hosts.${host}`)) continue;
+    if (typeof hosts[host].displayName !== 'string' || !hosts[host].displayName) {
+      errors.push(`hosts.${host}.displayName must be a string`);
+    }
+    validateStringArray(errors, hosts[host].controlTypes, `hosts.${host}.controlTypes`);
+    if (typeof hosts[host].platformLibraries !== 'boolean') {
+      errors.push(`hosts.${host}.platformLibraries must be a boolean`);
+    }
+  }
+
+  if (!hosts.pages || typeof hosts.pages !== 'object') return;
+  if (typeof hosts.pages.requiredFeaturesAllowed !== 'boolean') {
+    errors.push('hosts.pages.requiredFeaturesAllowed must be a boolean');
+  }
+  validateStringArray(errors, hosts.pages.unsupportedFeatures, 'hosts.pages.unsupportedFeatures');
+  validateStringArray(errors, hosts.pages.fieldTypes, 'hosts.pages.fieldTypes');
+  if (typeof hosts.pages.multiFieldBinding !== 'boolean') {
+    errors.push('hosts.pages.multiFieldBinding must be a boolean');
+  }
+  if (Array.isArray(hosts.pages.fieldTypeNotes)) {
+    for (const [index, note] of hosts.pages.fieldTypeNotes.entries()) {
+      const notePath = `hosts.pages.fieldTypeNotes[${index}]`;
+      if (!addRequiredObject(errors, note, notePath)) continue;
+      for (const key of ['displayName', 'manifestType']) {
+        if (typeof note[key] !== 'string' || !note[key]) errors.push(`${notePath}.${key} must be a string`);
+      }
+      if (!hasSourceAndDate(note)) errors.push(`${notePath} must include source and date`);
+    }
+  }
+  validatePagesRequirements(errors, hosts.pages.requirements);
 }
 
 function validateMatrix(matrix) {
@@ -111,13 +182,19 @@ function validateMatrix(matrix) {
   validateLibrary(errors, 'React', matrix.platformLibraries.React);
   validateLibrary(errors, 'Fluent', matrix.platformLibraries.Fluent);
 
-  if (!Array.isArray(matrix.baselineExclusions)) errors.push('baselineExclusions must be an array');
-  if (!addRequiredObject(errors, matrix.hosts, 'hosts')) return errors;
-  for (const host of KNOWN_HOSTS) {
-    if (!addRequiredObject(errors, matrix.hosts[host], `hosts.${host}`)) continue;
-    if (!Array.isArray(matrix.hosts[host].controlTypes)) errors.push(`hosts.${host}.controlTypes must be an array`);
+  if (!Array.isArray(matrix.baselineExclusions)) {
+    errors.push('baselineExclusions must be an array');
+  } else {
+    for (const [index, exclusion] of matrix.baselineExclusions.entries()) {
+      const exclusionPath = `baselineExclusions[${index}]`;
+      if (!addRequiredObject(errors, exclusion, exclusionPath)) continue;
+      for (const key of ['library', 'version', 'reason', 'evidence', 'scope']) {
+        if (typeof exclusion[key] !== 'string' || !exclusion[key]) errors.push(`${exclusionPath}.${key} must be a string`);
+      }
+    }
   }
-  if (!Array.isArray(matrix.unsupportedPropertyTypes)) errors.push('unsupportedPropertyTypes must be an array');
+  validateHosts(errors, matrix.hosts);
+  validateStringArray(errors, matrix.unsupportedPropertyTypes, 'unsupportedPropertyTypes');
 
   return errors;
 }
@@ -135,10 +212,13 @@ function loadMatrix(deps = {}) {
   return matrix;
 }
 
-function dependencySet(matrix, kind) {
+function dependencySet(matrix, kind, deps = {}) {
   if (!['standard', 'virtual'].includes(kind)) throw new Error(`Unknown PCF dependency set: ${kind}`);
-  const lockDir = path.join(DEFAULT_ROOT, matrix.dependencySets[kind].lockDir);
-  const packageJson = JSON.parse(fs.readFileSync(path.join(lockDir, 'package.json'), 'utf8'));
+  const readFs = deps.fs || fs;
+  const pathApi = deps.path || path;
+  const root = deps.root || DEFAULT_ROOT;
+  const lockDir = pathApi.join(root, matrix.dependencySets[kind].lockDir);
+  const packageJson = JSON.parse(readFs.readFileSync(pathApi.join(lockDir, 'package.json'), 'utf8'));
   return {
     lockDir,
     dependencies: { ...(packageJson.dependencies || {}) },
