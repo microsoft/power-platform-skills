@@ -242,6 +242,15 @@ test('featureCoherence reports Pages device calls without method-level guards an
 test('featureCoherence rejects unsafe dotted method guards and accepts namespace plus method guards', () => {
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device != null && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device !== undefined && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (!!context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+});
+
+test('featureCoherence rejects negative, disjoined, and late namespace guards', () => {
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (!context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device || typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function" && context.device) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
 });
 
 test('featureCoherence accepts parenthesized and composed method guards', () => {

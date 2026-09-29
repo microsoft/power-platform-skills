@@ -354,11 +354,43 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
     if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) return true;
 
-    const namespaceCheck = new RegExp(`\\bcontext\\.${escapedNamespace}\\b(?![?.])`, 'g');
     const dottedMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
-    if (hasCodeMatch(namespaceCheck, rawCondition, maskCondition) && hasCodeMatch(dottedMethodGuard, rawCondition, maskCondition)) return true;
+    let methodMatch;
+    while ((methodMatch = dottedMethodGuard.exec(rawCondition)) !== null) {
+      if (maskCondition[methodMatch.index] === ' ') continue;
+      if (hasPositiveNamespaceGuardBefore(rawCondition.slice(0, methodMatch.index), maskCondition.slice(0, methodMatch.index), namespace)) return true;
+    }
   }
   return false;
+}
+
+function hasPositiveNamespaceGuardBefore(rawPrefix, maskPrefix, namespace) {
+  const escapedNamespace = escapeRegExp(namespace);
+  // Heuristic only: require an explicit positive namespace check joined by && before the dotted
+  // method check, so `!context.device && typeof context.device.m === "function"` and `||` do not
+  // make an unsafe dereference look guarded.
+  const guards = [
+    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*!=\\s*null\\s*&&`, 'g'),
+    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*!==\\s*undefined\\s*&&`, 'g'),
+    new RegExp(`!!\\s*context\\.${escapedNamespace}\\s*&&`, 'g'),
+    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*&&`, 'g'),
+  ];
+  for (const guard of guards) {
+    let match;
+    while ((match = guard.exec(rawPrefix)) !== null) {
+      if (maskPrefix[match.index] === ' ') continue;
+      if (guard.source.startsWith('\\b') && previousNonSpace(rawPrefix, match.index) === '!') continue;
+      if (!rawPrefix.slice(match.index + match[0].length).includes('||')) return true;
+    }
+  }
+  return false;
+}
+
+function previousNonSpace(text, index) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (!/\s/.test(text[i])) return text[i];
+  }
+  return '';
 }
 
 function findMatchingParen(mask, open) {
