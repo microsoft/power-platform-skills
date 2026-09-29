@@ -21,6 +21,7 @@ function render(parameters: Partial<IInputs>, disabled = false) {
         control,
         notify,
         container,
+        context,
         element: control.updateView(context) as React.ReactElement<FieldElementProps>,
         input: () => container.querySelector("input") as HTMLInputElement,
     };
@@ -30,6 +31,12 @@ test("null raw value renders an empty field", () => {
     const { input } = render({ sampleProperty: mockProperty<string>(null) as IInputs["sampleProperty"] });
 
     expect(input().value).toBe("");
+});
+
+test("init tracks container resize", () => {
+    const { context } = render({ sampleProperty: mockProperty("Existing") as IInputs["sampleProperty"] });
+
+    expect(context.mode.trackContainerResize).toHaveBeenCalledWith(true);
 });
 
 test("missing parameter object does not crash", () => {

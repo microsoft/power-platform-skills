@@ -14,6 +14,10 @@ function mount(dataSet: IInputs["sampleDataSet"]) {
         container,
         dataSet,
         buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
+        headers: () => Array.from(container.querySelectorAll("th")).map((header) => ({
+            text: header.textContent,
+            scope: header.getAttribute("scope"),
+        })),
         rows: () => Array.from(container.querySelectorAll("tbody tr")),
     };
 }
@@ -52,6 +56,15 @@ test("renders records in sortedRecordIds order", () => {
     expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
 });
 
+test("renders column headers", () => {
+    const { headers } = mount(dataSet());
+
+    expect(headers()).toEqual([
+        { text: "Value", scope: "col" },
+        { text: "Actions", scope: "col" },
+    ]);
+});
+
 test("next and previous paging call one request at a time", () => {
     const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
     const { buttons } = mount(ds);
@@ -80,7 +93,9 @@ test("opens records through openDatasetItem", () => {
     const ds = dataSet();
     const { buttons } = mount(ds);
 
+    expect(buttons()[0].getAttribute("aria-label")).toBe("Open First");
+
     buttons()[0].click();
 
     expect(ds.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "first" }));
-    });
+});

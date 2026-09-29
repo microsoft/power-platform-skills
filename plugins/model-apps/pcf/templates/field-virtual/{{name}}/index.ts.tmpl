@@ -8,11 +8,15 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     private value = "";
 
     public init(
-        _context: ComponentFramework.Context<IInputs>,
+        context: ComponentFramework.Context<IInputs>,
         notifyOutputChanged: () => void,
         _state: ComponentFramework.Dictionary,
     ): void {
         this.notifyOutputChanged = notifyOutputChanged;
+
+        // Field controls must opt in before they can react to allocatedWidth/allocatedHeight changes.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
+        context.mode.trackContainerResize(true);
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {

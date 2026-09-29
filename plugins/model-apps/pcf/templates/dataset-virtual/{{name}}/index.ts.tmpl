@@ -6,6 +6,7 @@ import "./css/{{name}}.css";
 type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
 
 export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+    private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
     private pagingRequest: Promise<void> | null = null;
 
@@ -14,12 +15,15 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        this.context = context;
         this.dataSet = context.parameters.sampleDataSet;
         return React.createElement({{name}}View, {
             cssClass: "{{cssClass}}",
             messageClass: "{{cssMessageClass}}",
             dataSet: this.dataSet,
             busy: this.pagingRequest !== null,
+            actionHeader: this.stringResource("Action_Header_Key", "Actions"),
+            openRecordLabel: this.stringResource("Open_Record_Label_Key", "Open {0}"),
             onNextPage: this.loadNextPage,
             onPreviousPage: this.loadPreviousPage,
             onOpenRecord: this.openRecord,
@@ -31,6 +35,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     }
 
     public destroy(): void {
+        this.context = null;
         this.dataSet = null;
     }
 
@@ -63,4 +68,8 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
         // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/opendatasetitem
         this.dataSet?.openDatasetItem(record.getNamedReference());
     };
+
+    private stringResource(key: string, fallback: string): string {
+        return this.context?.resources?.getString(key) || fallback;
+    }
 }

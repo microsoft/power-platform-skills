@@ -7,6 +7,8 @@ export interface {{name}}ViewProps {
     messageClass: string;
     dataSet: ComponentFramework.PropertyTypes.DataSet | null;
     busy: boolean;
+    actionHeader: string;
+    openRecordLabel: string;
     onNextPage: () => void;
     onPreviousPage: () => void;
     onOpenRecord: (record: DataSetRecord) => void;
@@ -26,7 +28,13 @@ export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
 
     return React.createElement("div", { className: props.cssClass },
         React.createElement("table", { className: "{{nameLower}}-table" },
-            React.createElement("tbody", null, dataSet.sortedRecordIds.map((id) => row(dataSet, id, props.onOpenRecord))),
+            React.createElement("thead", null,
+                React.createElement("tr", null,
+                    React.createElement("th", { scope: "col" }, displayColumnName(dataSet)),
+                    React.createElement("th", { scope: "col" }, props.actionHeader),
+                ),
+            ),
+            React.createElement("tbody", null, dataSet.sortedRecordIds.map((id) => row(dataSet, id, props))),
         ),
         pager(props, dataSet),
     );
@@ -41,7 +49,7 @@ function message(props: {{name}}ViewProps, text: string): React.ReactElement {
 function row(
     dataSet: ComponentFramework.PropertyTypes.DataSet,
     id: string,
-    onOpenRecord: (record: DataSetRecord) => void,
+    props: {{name}}ViewProps,
 ): React.ReactElement | null {
     const record = dataSet.records[id];
     if (!record) return null;
@@ -49,9 +57,17 @@ function row(
     return React.createElement("tr", { key: id },
         React.createElement("td", null, text),
         React.createElement("td", null,
-            React.createElement("button", { type: "button", onClick: () => onOpenRecord(record) }, "Open"),
+            React.createElement("button", {
+                type: "button",
+                "aria-label": props.openRecordLabel.replace("{0}", text),
+                onClick: () => props.onOpenRecord(record),
+            }, "Open"),
         ),
     );
+}
+
+function displayColumnName(dataSet: ComponentFramework.PropertyTypes.DataSet): string {
+    return dataSet.columns.find((column) => column.name === "sampleProperty")?.displayName || "Value";
 }
 
 function pager(

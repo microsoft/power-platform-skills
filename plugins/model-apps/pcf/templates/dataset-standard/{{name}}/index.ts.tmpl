@@ -9,6 +9,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private message: HTMLDivElement | null = null;
     private previousButton: HTMLButtonElement | null = null;
     private nextButton: HTMLButtonElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
     private pagingRequest: Promise<void> | null = null;
 
@@ -19,6 +20,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         container: HTMLDivElement,
     ): void {
         this.container = container;
+        this.context = context;
 
         const root = document.createElement("div");
         root.className = "{{cssClass}}";
@@ -47,6 +49,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
         this.dataSet = context.parameters.sampleDataSet;
         this.render();
     }
@@ -64,6 +67,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.message = null;
         this.previousButton = null;
         this.nextButton = null;
+        this.context = null;
         this.dataSet = null;
     }
 
@@ -116,29 +120,63 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         }
 
         this.message.hidden = true;
+        const thead = document.createElement("thead");
+        const headerRow = document.createElement("tr");
+        headerRow.append(
+            this.header(this.displayColumnName(dataSet)),
+            this.header(this.stringResource("Action_Header_Key", "Actions")),
+        );
+        thead.append(headerRow);
+
         const tbody = document.createElement("tbody");
         for (const id of dataSet.sortedRecordIds) {
             const record = dataSet.records[id];
             if (!record) continue;
             const row = document.createElement("tr");
-            row.append(this.cell(record, "sampleProperty"));
+            const primaryValue = this.displayValue(record, "sampleProperty");
+            row.append(this.cell(primaryValue));
             const action = document.createElement("button");
             action.type = "button";
             action.textContent = "Open";
+            action.setAttribute("aria-label", this.format(this.stringResource("Open_Record_Label_Key", "Open {0}"), primaryValue));
             action.addEventListener("click", () => this.openRecord(record));
             const actionCell = document.createElement("td");
             actionCell.append(action);
             row.append(actionCell);
             tbody.append(row);
         }
-        this.table.append(tbody);
+        this.table.append(thead, tbody);
         this.updatePaging(dataSet);
     }
 
-    private cell(record: DataSetRecord, columnName: string): HTMLTableCellElement {
+    private header(text: string): HTMLTableCellElement {
+        const header = document.createElement("th");
+        header.scope = "col";
+        header.textContent = text;
+        return header;
+    }
+
+    private cell(text: string): HTMLTableCellElement {
         const cell = document.createElement("td");
-        cell.textContent = record.getFormattedValue(columnName) || String(record.getValue(columnName) ?? "");
+        cell.textContent = text;
         return cell;
+    }
+
+    private displayValue(record: DataSetRecord, columnName: string): string {
+        return record.getFormattedValue(columnName) || String(record.getValue(columnName) ?? "");
+    }
+
+    private displayColumnName(dataSet: ComponentFramework.PropertyTypes.DataSet): string {
+        return dataSet.columns.find((column) => column.name === "sampleProperty")?.displayName
+            || this.stringResource("Property_Display_Key", "Value");
+    }
+
+    private stringResource(key: string, fallback: string): string {
+        return this.context?.resources?.getString(key) || fallback;
+    }
+
+    private format(template: string, value: string): string {
+        return template.replace("{0}", value);
     }
 
     private openRecord(record: DataSetRecord): void {

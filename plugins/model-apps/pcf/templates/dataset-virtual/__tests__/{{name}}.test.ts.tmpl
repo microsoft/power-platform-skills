@@ -25,6 +25,10 @@ function render(dataSet: IInputs["sampleDataSet"]) {
         dataSet,
         element: control.updateView(context) as React.ReactElement<DatasetElementProps>,
         buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
+        headers: () => Array.from(container.querySelectorAll("th")).map((header) => ({
+            text: header.textContent,
+            scope: header.getAttribute("scope"),
+        })),
         rows: () => Array.from(container.querySelectorAll("tbody tr")),
     };
 }
@@ -63,6 +67,15 @@ test("renders records in sortedRecordIds order", () => {
     expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
 });
 
+test("renders column headers", () => {
+    const { headers } = render(dataSet());
+
+    expect(headers()).toEqual([
+        { text: "Value", scope: "col" },
+        { text: "Actions", scope: "col" },
+    ]);
+});
+
 test("next and previous paging call one request at a time", () => {
     const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
     const { element } = render(ds);
@@ -86,7 +99,9 @@ test("updateView does not refresh the dataset", () => {
 
 test("opens records through openDatasetItem", () => {
     const ds = dataSet();
-    const { element } = render(ds);
+    const { buttons, element } = render(ds);
+
+    expect(buttons()[0].getAttribute("aria-label")).toBe("Open First");
 
     element.props.onOpenRecord(ds.records.first);
 
