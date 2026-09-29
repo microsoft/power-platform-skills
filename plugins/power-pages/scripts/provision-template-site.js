@@ -9,6 +9,7 @@ const { readWebsiteYml } = require('./lib/detect-project-context');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLONED_IDENTITY_PATH = path.join('.powerpages-site', 'website.yml');
+const GENERIC_MANIFEST_PATH = path.join('.powerpages-site', '.portalconfig', 'manifest.yml');
 
 function parseArgs(argv) {
   const args = {};
@@ -60,7 +61,11 @@ function copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl = fs) {
     const sourceDir = path.join(sourcePath, relativeDir);
     for (const entry of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
       const relativePath = path.join(relativeDir, entry.name);
-      if (relativePath === CLONED_IDENTITY_PATH) continue;
+      // PAC clone has been observed to report:
+      //   Deleted manifest file from cloned output: ...\.powerpages-site\.portalconfig\manifest.yml
+      // Both files are PAC-owned clone identity/state. Restoring the source manifest can
+      // reintroduce stale powerpagecomponent IDs that do not exist in the new environment.
+      if (relativePath === CLONED_IDENTITY_PATH || relativePath === GENERIC_MANIFEST_PATH) continue;
       const sourceEntryPath = path.join(sourcePath, relativePath);
       const clonedEntryPath = path.join(clonedPath, relativePath);
       const sourceStat = fsImpl.lstatSync(sourceEntryPath);
@@ -250,6 +255,56 @@ function removeScriptCreatedOutputDirectory(outputDirectory, existedBeforeRun, f
   }
 }
 
+function isStaleManifestUploadFailure(result) {
+  const output = `${String(result.stderr || '')}\n${String(result.stdout || '')}`;
+  const authenticationFailure = /(?:Authentication failed|not authenticated|AADSTS\d+|401 Unauthorized|403 Forbidden|access token (?:has )?expired|run\s+pac\s+auth)/i;
+  const missingComponent = new RegExp(
+    String.raw`Entity\s+'powerpagecomponent'\s+With\s+Id\s*=\s*\{?` +
+    String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` +
+    String.raw`\}?\s+Does\s+Not\s+Exist`,
+    'i'
+  );
+  return !authenticationFailure.test(output) &&
+    missingComponent.test(output) &&
+    /PortalFileContentUploadFailed/i.test(output);
+}
+
+function removeGenericManifestForRetry(clonedPath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const platform = deps.platform || process.platform;
+  const resolvedClonedPath = path.resolve(clonedPath);
+  const manifestPath = path.join(resolvedClonedPath, GENERIC_MANIFEST_PATH);
+
+  let manifestStat;
+  try {
+    manifestStat = fsImpl.lstatSync(manifestPath);
+  } catch (err) {
+    throw new Error(`Generic PAC manifest is unavailable at ${manifestPath}: ${err.message}`);
+  }
+  if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
+    throw new Error(`Generic PAC manifest is not a real regular file: ${manifestPath}`);
+  }
+
+  let canonicalClonedPath;
+  let canonicalManifestPath;
+  try {
+    canonicalClonedPath = fsImpl.realpathSync(resolvedClonedPath);
+    canonicalManifestPath = fsImpl.realpathSync(manifestPath);
+  } catch (err) {
+    throw new Error(`Could not resolve the generic PAC manifest safely: ${err.message}`);
+  }
+  if (!pathContains(canonicalClonedPath, canonicalManifestPath, platform)) {
+    throw new Error(`Generic PAC manifest resolves outside the cloned project: ${manifestPath}`);
+  }
+
+  try {
+    fsImpl.unlinkSync(manifestPath);
+  } catch (err) {
+    throw new Error(`Could not delete the generic PAC manifest at ${manifestPath}: ${err.message}`);
+  }
+  return manifestPath;
+}
+
 function provisionTemplateSite(options, deps = {}) {
   const fsImpl = deps.fs || fs;
   const sourcePath = path.resolve(options.sourcePath || '');
@@ -400,19 +455,50 @@ function provisionTemplateSite(options, deps = {}) {
     };
   }
 
-  const uploadResult = pac([
+  const uploadArgs = [
     'pages', 'upload-code-site',
     '--rootPath', clonedPath,
     '--siteName', siteName,
-  ], pacCommandOptions);
+  ];
+  const uploadResult = pac(uploadArgs, pacCommandOptions);
   if (uploadResult.status !== 0) {
-    return {
-      ok: false,
-      step: 'upload',
-      clonedPath,
-      ...clonedIdentity,
-      error: commandError('pac pages upload-code-site', uploadResult),
-    };
+    const originalUploadError = commandError('pac pages upload-code-site', uploadResult);
+    if (isStaleManifestUploadFailure(uploadResult)) {
+      try {
+        removeGenericManifestForRetry(clonedPath, deps);
+      } catch (err) {
+        return {
+          ok: false,
+          step: 'upload',
+          clonedPath,
+          ...clonedIdentity,
+          error: `${originalUploadError}\nStale-manifest recovery could not continue: ${err.message}`,
+        };
+      }
+
+      const retryResult = pac(uploadArgs, pacCommandOptions);
+      if (retryResult.status !== 0) {
+        return {
+          ok: false,
+          step: 'upload',
+          clonedPath,
+          ...clonedIdentity,
+          error: [
+            `${originalUploadError}`,
+            'Stale-manifest recovery was attempted, but the upload retry failed.',
+            commandError('pac pages upload-code-site retry', retryResult),
+          ].join('\n'),
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        step: 'upload',
+        clonedPath,
+        ...clonedIdentity,
+        error: originalUploadError,
+      };
+    }
   }
   return {
     ok: true,
@@ -437,9 +523,11 @@ module.exports = {
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
+  isStaleManifestUploadFailure,
   parseArgs,
   pathContains,
   provisionTemplateSite,
+  removeGenericManifestForRetry,
   removeScriptCreatedOutputDirectory,
   runNpm,
   runPac,

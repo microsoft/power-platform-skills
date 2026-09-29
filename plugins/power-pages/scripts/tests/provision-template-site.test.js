@@ -11,8 +11,10 @@ const {
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
+  isStaleManifestUploadFailure,
   parseArgs,
   provisionTemplateSite,
+  removeGenericManifestForRetry,
   runNpm,
   runPac,
 } = require('../provision-template-site');
@@ -30,6 +32,82 @@ function createSource(root, { id = SOURCE_ID, name = 'Template Site' } = {}) {
   fs.writeFileSync(path.join(root, 'powerpages.config.json'), JSON.stringify({ compiledPath: 'dist' }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
   fs.writeFileSync(path.join(root, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
+}
+
+function staleManifestFailure(fileName = 'index.html') {
+  return {
+    status: 1,
+    stdout: '',
+    stderr: [
+      `Upload failed for ${fileName}.`,
+      `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+      'PortalFileContentUploadFailed',
+    ].join('\n'),
+  };
+}
+
+function runUploadScenario(t, {
+  firstUploadResult,
+  fsImpl = fs,
+  retryUploadResult = { status: 0, stdout: 'uploaded', stderr: '' },
+  manifestKind = 'file',
+} = {}) {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  const clonedPath = path.join(output, 'supplier-portal');
+  const manifestPath = path.join(clonedPath, '.powerpages-site', '.portalconfig', 'manifest.yml');
+  const environmentManifestPath = path.join(
+    clonedPath,
+    '.powerpages-site',
+    '.portalconfig',
+    'target-environment-manifest.yml'
+  );
+  createSource(source);
+  const uploadCalls = [];
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: 'Supplier Portal',
+  }, {
+    fs: fsImpl,
+    runPac(args, commandOptions) {
+      if (args[1] === 'clone') {
+        createSource(clonedPath, { id: CLONED_ID, name: 'Supplier Portal' });
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        if (manifestKind === 'file') {
+          fs.writeFileSync(manifestPath, 'stale clone state\n');
+        } else if (manifestKind === 'directory') {
+          fs.mkdirSync(manifestPath);
+        } else if (manifestKind === 'symlink') {
+          const outsideManifest = path.join(dir, 'outside-manifest.yml');
+          fs.writeFileSync(outsideManifest, 'outside clone\n');
+          fs.symlinkSync(outsideManifest, manifestPath, 'file');
+        }
+        fs.writeFileSync(environmentManifestPath, 'target environment state\n');
+        return { status: 0, stdout: 'cloned', stderr: '' };
+      }
+      uploadCalls.push({ args, cwd: commandOptions.cwd });
+      return uploadCalls.length === 1 ? firstUploadResult : retryUploadResult;
+    },
+    runNpm(args, cwd) {
+      if (args[0] === 'run') {
+        fs.mkdirSync(path.join(cwd, 'dist'));
+        fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
+      }
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  return {
+    clonedPath,
+    environmentManifestPath,
+    manifestPath,
+    result,
+    uploadCalls,
+  };
 }
 
 test('parseArgs accepts source, output, and site name', () => {
@@ -360,6 +438,253 @@ test('provisionTemplateSite reports upload failure without retrying', (t) => {
   assert.equal(calls, 2);
 });
 
+test('isStaleManifestUploadFailure requires both exact PAC signatures', () => {
+  assert.equal(isStaleManifestUploadFailure(staleManifestFailure('index.html')), true);
+  assert.equal(isStaleManifestUploadFailure({
+    status: 1,
+    stdout: 'portalfilecontentuploadfailed',
+    stderr: `ENTITY 'POWERPAGECOMPONENT' WITH ID = ${SOURCE_ID} DOES NOT EXIST`,
+  }), true);
+  assert.equal(isStaleManifestUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+  }), false);
+  assert.equal(isStaleManifestUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: 'PortalFileContentUploadFailed',
+  }), false);
+  assert.equal(isStaleManifestUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: [
+      `Entity 'adx_webfile' With Id = ${SOURCE_ID} Does Not Exist`,
+      'PortalFileContentUploadFailed',
+    ].join('\n'),
+  }), false);
+  assert.equal(isStaleManifestUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: [
+      `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+      'PortalFileContentUploadFailed',
+      'Authentication failed. Run pac auth create.',
+    ].join('\n'),
+  }), false);
+});
+
+test('provisionTemplateSite deletes the generic manifest and retries once for index.html', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure('index.html'),
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.deepEqual(scenario.uploadCalls[1], scenario.uploadCalls[0]);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), true);
+});
+
+test('provisionTemplateSite stale-manifest recovery is independent of compiled file names', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure('assets/site.7f3a91c2.css'),
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), true);
+});
+
+test('provisionTemplateSite does not recover unrelated or partial upload failures', async (t) => {
+  const failures = [
+    {
+      name: 'unrelated upload error',
+      result: { status: 1, stdout: '', stderr: 'upload rejected' },
+    },
+    {
+      name: 'only missing-component signature',
+      result: {
+        status: 1,
+        stdout: '',
+        stderr: `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+      },
+    },
+    {
+      name: 'only file-upload signature',
+      result: { status: 1, stdout: '', stderr: 'PortalFileContentUploadFailed' },
+    },
+    {
+      name: 'authentication failure',
+      result: {
+        status: 1,
+        stdout: '',
+        stderr: [
+          `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+          'PortalFileContentUploadFailed',
+          'Authentication failed. Run pac auth create.',
+        ].join('\n'),
+      },
+    },
+    {
+      name: 'different missing entity',
+      result: {
+        status: 1,
+        stdout: '',
+        stderr: [
+          `Entity 'adx_webfile' With Id = ${SOURCE_ID} Does Not Exist`,
+          'PortalFileContentUploadFailed',
+        ].join('\n'),
+      },
+    },
+  ];
+
+  for (const failure of failures) {
+    await t.test(failure.name, (subtest) => {
+      const scenario = runUploadScenario(subtest, { firstUploadResult: failure.result });
+      assert.equal(scenario.result.ok, false);
+      assert.equal(scenario.result.step, 'upload');
+      assert.equal(scenario.uploadCalls.length, 1);
+      assert.equal(fs.readFileSync(scenario.manifestPath, 'utf8'), 'stale clone state\n');
+    });
+  }
+});
+
+test('provisionTemplateSite fails closed when the generic manifest is missing', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure(),
+    manifestKind: 'missing',
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /Entity 'powerpagecomponent'/);
+  assert.match(scenario.result.error, /Stale-manifest recovery could not continue/);
+  assert.match(scenario.result.error, /Generic PAC manifest is unavailable/);
+});
+
+test('provisionTemplateSite fails closed when the generic manifest is a symlink', (t) => {
+  let scenario;
+  try {
+    scenario = runUploadScenario(t, {
+      firstUploadResult: staleManifestFailure(),
+      manifestKind: 'symlink',
+    });
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`file symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /Entity 'powerpagecomponent'/);
+  assert.match(scenario.result.error, /not a real regular file/);
+});
+
+test('provisionTemplateSite fails closed when the generic manifest is not a regular file', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure(),
+    manifestKind: 'directory',
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /Entity 'powerpagecomponent'/);
+  assert.match(scenario.result.error, /not a real regular file/);
+});
+
+test('provisionTemplateSite preserves the PAC failure when manifest deletion fails', (t) => {
+  const failingFs = {
+    ...fs,
+    unlinkSync() {
+      throw new Error('permission denied');
+    },
+  };
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure(),
+    fsImpl: failingFs,
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /Entity 'powerpagecomponent'/);
+  assert.match(scenario.result.error, /Stale-manifest recovery could not continue/);
+  assert.match(scenario.result.error, /Could not delete the generic PAC manifest/);
+  assert.match(scenario.result.error, /permission denied/);
+  assert.equal(fs.existsSync(scenario.manifestPath), true);
+});
+
+test('removeGenericManifestForRetry rejects a manifest reached through an escaping parent symlink', (t) => {
+  const dir = tempDir();
+  const clone = path.join(dir, 'clone');
+  const outside = path.join(dir, 'outside');
+  const portalConfig = path.join(clone, '.powerpages-site', '.portalconfig');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(clone, '.powerpages-site'), { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'manifest.yml'), 'outside clone\n');
+  try {
+    fs.symlinkSync(outside, portalConfig, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () => removeGenericManifestForRetry(clone),
+    /resolves outside the cloned project/
+  );
+  assert.equal(fs.readFileSync(path.join(outside, 'manifest.yml'), 'utf8'), 'outside clone\n');
+});
+
+test('removeGenericManifestForRetry uses Windows case-insensitive containment', () => {
+  const unlinked = [];
+  removeGenericManifestForRetry('C:\\SiteClone', {
+    platform: 'win32',
+    fs: {
+      lstatSync() {
+        return {
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        };
+      },
+      realpathSync(targetPath) {
+        return targetPath.endsWith('manifest.yml')
+          ? path.join('/tmp/siteclone', '.powerpages-site', '.portalconfig', 'manifest.yml')
+          : '/tmp/SiteClone';
+      },
+      unlinkSync(targetPath) {
+        unlinked.push(targetPath);
+      },
+    },
+  });
+
+  assert.equal(unlinked.length, 1);
+  assert.match(unlinked[0], /manifest\.yml$/);
+});
+
+test('provisionTemplateSite reports a failed retry and stops after two upload calls', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: staleManifestFailure('assets/app.8c2f.js'),
+    retryUploadResult: { status: 1, stdout: '', stderr: 'retry still rejected' },
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.result.step, 'upload');
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.match(scenario.result.error, /Stale-manifest recovery was attempted/);
+  assert.match(scenario.result.error, /retry still rejected/);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), true);
+});
+
 test('provisionTemplateSite stops before upload when dependency installation fails', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -614,6 +939,10 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
   fs.writeFileSync(path.join(source, 'tests', 'serviceRequests.test.mjs'), 'export {};\n');
   fs.mkdirSync(path.join(source, '.powerpages-site', '.portalconfig'));
   fs.writeFileSync(path.join(source, '.powerpages-site', '.portalconfig', 'manifest.yml'), 'portalVersion: 1\n');
+  fs.writeFileSync(
+    path.join(source, '.powerpages-site', '.portalconfig', 'source-environment-manifest.yml'),
+    'environment: source\n'
+  );
   const npmCalls = [];
   let pacCalls = 0;
 
@@ -636,7 +965,13 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
       assert.equal(fs.existsSync(path.join(cwd, '.npmrc')), true);
       assert.equal(fs.existsSync(path.join(cwd, 'dataverse-choice-values.json')), true);
       assert.equal(fs.existsSync(path.join(cwd, 'tests', 'serviceRequests.test.mjs')), true);
-      assert.equal(fs.existsSync(path.join(cwd, '.powerpages-site', '.portalconfig', 'manifest.yml')), true);
+      assert.equal(fs.existsSync(path.join(cwd, '.powerpages-site', '.portalconfig', 'manifest.yml')), false);
+      assert.equal(
+        fs.existsSync(
+          path.join(cwd, '.powerpages-site', '.portalconfig', 'source-environment-manifest.yml')
+        ),
+        true
+      );
       if (args[0] === 'run') {
         fs.mkdirSync(path.join(cwd, 'dist'));
         fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
@@ -655,7 +990,7 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
   );
 });
 
-test('copyMissingTemplateFiles rejects source symlinks and preserves cloned website metadata', (t) => {
+test('copyMissingTemplateFiles skips PAC-owned identity files and restores ordinary files', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');
@@ -663,13 +998,30 @@ test('copyMissingTemplateFiles rejects source symlinks and preserves cloned webs
   createSource(source, { id: SOURCE_ID });
   createSource(clone, { id: CLONED_ID });
   fs.writeFileSync(path.join(source, 'extra.json'), '{}');
+  fs.mkdirSync(path.join(source, '.powerpages-site', '.portalconfig'));
+  fs.writeFileSync(
+    path.join(source, '.powerpages-site', '.portalconfig', 'manifest.yml'),
+    'stale clone state\n'
+  );
 
   assert.deepEqual(copyMissingTemplateFiles(source, clone), ['extra.json']);
   assert.match(
     fs.readFileSync(path.join(clone, '.powerpages-site', 'website.yml'), 'utf8'),
     new RegExp(CLONED_ID)
   );
+  assert.equal(
+    fs.existsSync(path.join(clone, '.powerpages-site', '.portalconfig', 'manifest.yml')),
+    false
+  );
+});
 
+test('copyMissingTemplateFiles rejects source symlinks', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const clone = path.join(dir, 'clone');
+  createSource(source);
+  createSource(clone);
   const target = path.join(dir, 'outside.json');
   const link = path.join(source, 'linked.json');
   fs.writeFileSync(target, '{}');
