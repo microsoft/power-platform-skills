@@ -87,8 +87,7 @@ test('verifyBinding treats undeclared FormXML client factors as errors even when
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 'error');
-  assert.ok(issueCodes(result).includes('PCF_BIND_FACTOR_UNDECLARED'));
-  assert.equal(result.issues.find((issue) => issue.code === 'PCF_BIND_FACTOR_UNDECLARED').level, 'error');
+  assertIssue(result, 'PCF_BIND_FACTOR_UNDECLARED', 'error');
 });
 
 test('verifyBinding verifies all requested clients and static parameter shape', () => {
@@ -115,26 +114,32 @@ test('verifyBinding reports case-only forControl joins as info while still bindi
 
   assert.equal(result.ok, true);
   assert.equal(result.status, 'bound');
-  assert.deepEqual(result.issues.map((issue) => [issue.code, issue.level]), [['PCF_BIND_FORCONTROL_CASE', 'info']]);
+  assertIssue(result, 'PCF_BIND_FORCONTROL_CASE', 'info');
 });
 
 test('verifyBinding distinguishes missing descriptions, non-custom cells, and duplicate target cells', () => {
-  assert.deepEqual(issueCodes(verifyBinding(xml('missing-description.xml'), {
+  const missingDescription = verifyBinding(xml('missing-description.xml'), {
     controlName: 'new_Contoso.Controls.StarRating',
     column: 'new_rating',
-  })), ['PCF_BIND_NO_DESCRIPTION']);
+  });
+  assert.equal(missingDescription.status, 'not-bound');
+  assertIssue(missingDescription, 'PCF_BIND_NO_DESCRIPTION', 'error');
 
-  assert.deepEqual(issueCodes(verifyBinding(xml('default-control-only.xml'), {
+  const defaultControl = verifyBinding(xml('default-control-only.xml'), {
     controlName: 'new_Contoso.Controls.StarRating',
     column: 'new_rating',
-  })), ['PCF_BIND_NOT_CUSTOM', 'PCF_BIND_NO_UNIQUEID', 'PCF_BIND_NO_DESCRIPTION']);
+  });
+  assert.equal(defaultControl.status, 'not-bound');
+  assertIssue(defaultControl, 'PCF_BIND_NOT_CUSTOM', 'error');
+  assertIssue(defaultControl, 'PCF_BIND_NO_UNIQUEID', 'error');
+  assertIssue(defaultControl, 'PCF_BIND_NO_DESCRIPTION', 'error');
 
   const duplicate = verifyBinding(xml('duplicate-column-cells.xml'), {
     controlName: 'new_Contoso.Controls.StarRating',
     column: 'new_rating',
   });
   assert.equal(duplicate.status, 'ambiguous');
-  assert.deepEqual(issueCodes(duplicate), ['PCF_BIND_MULTIPLE_CELLS']);
+  assertIssue(duplicate, 'PCF_BIND_MULTIPLE_CELLS', 'error');
 });
 
 test('verifyBinding reports no-cell evidence from a roundtrip-derived fixture when the column is absent', () => {
@@ -179,8 +184,8 @@ test('verifyBinding reports parameter mismatches and static parameters without t
     parameters: { value: { column: 'new_other' }, missing: { column: 'new_missing' } },
   });
   assert.equal(mismatch.status, 'error');
-  assert.ok(issueCodes(mismatch).includes('PCF_BIND_PARAM_MISSING'));
-  assert.ok(issueCodes(mismatch).includes('PCF_BIND_PARAM_MISMATCH'));
+  assertIssue(mismatch, 'PCF_BIND_PARAM_MISSING', 'error');
+  assertIssue(mismatch, 'PCF_BIND_PARAM_MISMATCH', 'error');
 
   const staticNoType = verifyBinding(xml('static-without-type.xml'), {
     controlName: 'new_Contoso.Controls.StarRating',
@@ -188,7 +193,7 @@ test('verifyBinding reports parameter mismatches and static parameters without t
     parameters: { max: { static: '5' } },
   });
   assert.equal(staticNoType.status, 'error');
-  assert.ok(issueCodes(staticNoType).includes('PCF_BIND_STATIC_NO_TYPE'));
+  assertIssue(staticNoType, 'PCF_BIND_STATIC_NO_TYPE', 'error');
 });
 
 test('verifyBinding preserves data-set nesting but returns configuration-not-verified without a real dataset fixture', () => {
@@ -208,7 +213,7 @@ test('verifyBinding preserves data-set nesting but returns configuration-not-ver
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 'configuration-not-verified');
-  assert.ok(issueCodes(result).includes('PCF_BIND_KIND_NOT_VERIFIED'));
+  assertIssue(result, 'PCF_BIND_KIND_NOT_VERIFIED', 'info');
 });
 
 test('verifyBinding returns configuration-not-verified for grid customizer bindings until a real fixture exists', () => {
@@ -220,5 +225,5 @@ test('verifyBinding returns configuration-not-verified for grid customizer bindi
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 'configuration-not-verified');
-  assert.ok(issueCodes(result).includes('PCF_BIND_KIND_NOT_VERIFIED'));
+  assertIssue(result, 'PCF_BIND_KIND_NOT_VERIFIED', 'info');
 });
