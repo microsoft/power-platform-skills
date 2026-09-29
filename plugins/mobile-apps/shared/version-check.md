@@ -14,8 +14,8 @@ Result: the only required tooling is what Node/npm, the Power Apps CLI (`pa`), a
 
 This is also a standard **Expo managed workflow** project. That means:
 
-- `ios/` and `android/` folders are **generated artifacts** — produced by `npx expo prebuild` from `app.json` plugins. They are **git-ignored**. Developers never hand-edit them.
-- Adding a native capability = `npx expo install <plugin>` + add the plugin name to `app.json` plugins array. The plugin's "config plugin" patches `Info.plist` / `AndroidManifest.xml` automatically on the next prebuild (which happens transparently inside `npm run build` and native run workflows when needed).
+- `ios/` and `android/` folders are **generated artifacts** — produced by `expo prebuild` from `app.json` plugins. They are **git-ignored**. Developers never hand-edit them.
+- Adding a native capability = `expo install <plugin>` + add the plugin name to `app.json` plugins array. The plugin's "config plugin" patches `Info.plist` / `AndroidManifest.xml` automatically on the next prebuild (which happens transparently inside `npm run build` and native run workflows when needed).
 - Tamagui, Expo Router, MSAL, secure-store, camera, etc. all ship as plugins — you `npm install` them like any other package. **No Xcode project surgery, no `build.gradle` edits.**
 
 ### What the user owns vs what Expo generates
