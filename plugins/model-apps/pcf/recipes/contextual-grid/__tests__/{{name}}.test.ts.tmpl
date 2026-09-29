@@ -137,6 +137,79 @@ test("Web API permission failures and empty results render messages without noti
     expect(empty.notify).not.toHaveBeenCalled();
 });
 
+
+test("renders formatted choice, money and date annotations when present", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                statuscode: 1,
+                "statuscode@OData.Community.Display.V1.FormattedValue": "Active",
+                revenue: 1234.5,
+                "revenue@OData.Community.Display.V1.FormattedValue": "$1,234.50",
+                createdon: "2026-09-29T10:00:00Z",
+                "createdon@OData.Community.Display.V1.FormattedValue": "9/29/2026 10:00 AM",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(mounted.container.textContent).toContain("Active");
+    expect(mounted.container.textContent).toContain("$1,234.50");
+    expect(mounted.container.textContent).toContain("9/29/2026 10:00 AM");
+    expect(mounted.container.textContent).not.toContain("1234.5");
+});
+
+test("falls back to raw choice, money and date values when formatted annotations are absent", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                statuscode: 2,
+                revenue: 987.65,
+                createdon: "2026-09-29T10:00:00Z",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(mounted.container.textContent).toContain("2");
+    expect(mounted.container.textContent).toContain("987.65");
+    expect(mounted.container.textContent).toContain("2026-09-29T10:00:00Z");
+});
+
+test("renders lookup formatted names for FetchXML attribute result keys", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                _parentcustomerid_value: "22222222-2222-4222-8222-222222222222",
+                "_parentcustomerid_value@OData.Community.Display.V1.FormattedValue": "Litware, Inc.",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("parentcustomerid");
+    expect(mounted.container.textContent).toContain("Litware, Inc.");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
+test("does not render raw lookup GUIDs when formatted lookup annotations are absent", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                _parentcustomerid_value: "22222222-2222-4222-8222-222222222222",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("parentcustomerid");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
 test("load more follows documented nextLink paging", async () => {
     const retrieveMultipleRecords = jest.fn()
         .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))

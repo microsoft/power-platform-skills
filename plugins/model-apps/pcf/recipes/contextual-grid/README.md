@@ -40,20 +40,22 @@ A maker can bind it in either designer path:
 - Displays a table for returned row values, an empty state when no rows return, and an error state when Web API access fails.
 - Renders an unsaved-record disabled state when the current record id is missing.
 - Provides a **Load more** button when `nextLink` is returned.
-- Respects `security.readable`, `security.editable`, and `context.mode.isControlDisabled` without throwing.
+- Respects `security.readable` for configuration values and `context.mode.isControlDisabled` for the displayed grid. `security.editable` is not used because this recipe is a read-only view and does not write outputs.
 - Keeps state per control instance; no module-global mutable state or hard-coded element ids.
 
 ## Limits
 
 - Model-driven apps only in this release. Power Pages support is planned separately because contextual grids require another field binding in addition to the record id input, and this release does not assume a Liquid-provided record context.
 - The FetchXML must include `{recordId}` and should select only the columns the maker wants to display.
-- The table columns are inferred from the returned row keys after omitting OData annotation keys.
+- The FetchXML template is maker-trusted configuration. Entity and attribute names are sent to Dataverse as configured; invalid names surface as Web API failures and are shown through the control error state.
+- The table columns are inferred from the returned row keys after omitting OData annotation keys. When a `<column>@OData.Community.Display.V1.FormattedValue` annotation is present, it is displayed instead of the raw value. Lookup result keys such as `_parentcustomerid_value` are labeled as `parentcustomerid`; formatted lookup names are shown when present, and raw lookup GUIDs are not displayed.
 - Offline behavior is not claimed; this recipe is designed for online Web API access.
 
 ## Microsoft Learn references confirmed
 
 - Current record context: the [Power Apps component framework FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/faq#how-can-i-access-the-record-id-or-table-name) says PCF context does not provide the record id/table name directly and documents adding `entityId` and `entityName` input properties, binding `entityId` to the table primary key column, and setting `entityName` to the logical name.
 - Web API availability: [`WebAPI`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/webapi) documents `context.webAPI` for model-driven apps and portals.
-- FetchXML retrieval and paging: [`retrieveMultipleRecords`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/webapi/retrievemultiplerecords) documents `retrieveMultipleRecords(entityLogicalName, options, maxPageSize)`, states that `options` can be a FetchXML query using the `fetchXml` parameter, and documents `nextLink` for additional pages.
+- FetchXML retrieval and paging: [`retrieveMultipleRecords`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/webapi/retrievemultiplerecords) documents `retrieveMultipleRecords(entityLogicalName, options, maxPageSize)`, states that `options` can be a FetchXML query using the `fetchXml` parameter, and documents `nextLink` for additional pages. The PCF page describes returned entities as key/value records and does not explicitly promise formatted-value annotations; the control uses `@OData.Community.Display.V1.FormattedValue` when the host returns it and keeps raw fallbacks for non-lookup values.
 - Standard control lifecycle: [`init`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/control/init), [`updateView`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/control/updateview), and [`destroy`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/control/destroy).
+- Lookup result shape: the model-driven [`Xrm.WebApi.retrieveMultipleRecords`](https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/clientapi/reference/xrm-webapi/retrievemultiplerecords#retrieve-or-filter-by-lookup-properties) page documents lookup values coming back as computed `_<name>_value` properties for online scenarios.
 - Manifest properties, resources, and features: [`property`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/property), [`resources`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/resources), and [`uses-feature`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/uses-feature).

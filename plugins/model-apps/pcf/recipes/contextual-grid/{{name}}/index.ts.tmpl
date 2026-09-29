@@ -213,6 +213,18 @@ function readPageSize(raw: unknown): number {
     return Math.min(MAX_PAGE_SIZE, Math.max(MIN_PAGE_SIZE, numeric));
 }
 
+interface ColumnDescriptor {
+    key: string;
+    label: string;
+}
+
+// PCF Learn documents retrieveMultipleRecords as returning key/value entities, but does not state
+// whether formatted annotations are included by default. Xrm.WebApi examples use the same Entity
+// result shape, so this display layer uses Dataverse's standard annotation if the host returns it
+// and keeps a raw fallback for non-lookup values. See:
+// https://learn.microsoft.com/power-apps/developer/component-framework/reference/webapi/retrievemultiplerecords
+const FORMATTED_VALUE_SUFFIX = "@OData.Community.Display.V1.FormattedValue";
+
 function renderTable(rows: GridRow[], captionText: string, disabled: boolean): HTMLTableElement {
     const table = document.createElement("table");
     table.className = "{{cssClass}}-table";
@@ -227,7 +239,7 @@ function renderTable(rows: GridRow[], captionText: string, disabled: boolean): H
     for (const column of columns) {
         const th = document.createElement("th");
         th.scope = "col";
-        th.textContent = column;
+        th.textContent = column.label;
         headRow.append(th);
     }
     thead.append(headRow);
@@ -238,7 +250,7 @@ function renderTable(rows: GridRow[], captionText: string, disabled: boolean): H
         const tr = document.createElement("tr");
         for (const column of columns) {
             const cell = document.createElement("td");
-            cell.textContent = formatCell(row[column]);
+            cell.textContent = formatCell(row, column.key);
             tr.append(cell);
         }
         tbody.append(tr);
@@ -247,19 +259,42 @@ function renderTable(rows: GridRow[], captionText: string, disabled: boolean): H
     return table;
 }
 
-function visibleColumns(rows: GridRow[]): string[] {
-    const columns: string[] = [];
+function visibleColumns(rows: GridRow[]): ColumnDescriptor[] {
+    const columns: ColumnDescriptor[] = [];
     for (const row of rows) {
         for (const key of Object.keys(row)) {
-            if (key.startsWith("@") || key.includes("@OData") || key.includes("@odata")) continue;
-            if (!columns.includes(key)) columns.push(key);
+            if (isAnnotationKey(key)) continue;
+            const label = displayColumnName(key);
+            if (!columns.some((column) => column.key === key)) columns.push({ key, label });
         }
     }
-    return columns.length ? columns : ["id"];
+    return columns.length ? columns : [{ key: "id", label: "id" }];
 }
 
-function formatCell(value: unknown): string {
+function formatCell(row: GridRow, key: string): string {
+    const formatted = row[`${key}${FORMATTED_VALUE_SUFFIX}`];
+    if (formatted != null) return String(formatted);
+
+    const value = row[key];
     if (value == null) return "";
+    if (isLookupResultKey(key) && isGuidLike(value)) return "";
     if (value instanceof Date) return value.toLocaleString();
     return String(value);
+}
+
+function isAnnotationKey(key: string): boolean {
+    return key.startsWith("@") || key.includes("@OData") || key.includes("@odata");
+}
+
+function displayColumnName(key: string): string {
+    return isLookupResultKey(key) ? key.slice(1, -"_value".length) : key;
+}
+
+function isLookupResultKey(key: string): boolean {
+    return key.startsWith("_") && key.endsWith("_value");
+}
+
+function isGuidLike(value: unknown): boolean {
+    if (typeof value !== "string") return false;
+    return /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\}?$/.test(value.trim());
 }
