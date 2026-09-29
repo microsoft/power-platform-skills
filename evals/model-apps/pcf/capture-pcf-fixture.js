@@ -33,6 +33,18 @@ function copyTree(src, dest) {
   }
   if (stat.isFile()) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (path.basename(src) === 'package-lock.json') {
+      // Keep the lockfile-exists doctor signal without copying dependency data into the public
+      // eval corpus. Full captured locks bloat the repo and make GitHub dependency scanning raise
+      // security alerts for fixture-only packages that the harness never installs.
+      fs.writeFileSync(dest, `${JSON.stringify({
+        name: path.basename(path.dirname(src)),
+        lockfileVersion: 3,
+        requires: true,
+        packages: {},
+      }, null, 2)}\n`);
+      return;
+    }
     fs.copyFileSync(src, dest);
   }
 }

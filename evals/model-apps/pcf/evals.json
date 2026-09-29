@@ -409,9 +409,6 @@
         "contract: expected upgrade step ids are present",
         "contract: expected manual step ids are present"
       ],
-      "needs": [
-        "build"
-      ],
       "hosts": [
         "model"
       ]
