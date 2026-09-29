@@ -137,12 +137,14 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` type-checks the page but does not execute
-`makeStyles`; unsupported Griffel shorthands can therefore compile and then log
-runtime errors in the browser. Before returning, Grep the generated `.tsx` with
-the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted, and spaced property
-syntax are all caught. Replace every match with the four explicit longhands:
-`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
+`pac model genpage transpile` only transpiles the page: it does not type-check it
+(a type error, or a reference to a column that does not exist, still transpiles
+and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
+therefore no proof that the page is type-safe, and unsupported Griffel shorthands
+can compile and then log runtime errors in the browser. Before returning, Grep the
+generated `.tsx` with the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted,
+and spaced property syntax are all caught. Replace every match with the four
+explicit longhands: `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
 `borderLeftWidth`. Do not return a file that still matches the regex.
 
 ## Step 3 — Read References and Samples
@@ -177,10 +179,13 @@ Custom-API-backed and also read:
 ${PLUGIN_ROOT}/references/custom-api.md
 ```
 
-If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
-empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
-do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
-`listBoundActions` code.
+If the `## Custom API Bindings` section is exactly `No custom API bindings.`, the page has
+**no Custom APIs** — do not read custom-api.md and do not emit any `executeAction` /
+`executeFunction` / `listBoundActions` code. That sentinel is the only way a plan says
+"none". If the section is empty, missing entirely, or neither the sentinel nor a binding
+table, **stop and report it instead of writing the page**: the orchestrator halts on such a
+plan before dispatch, so reaching you means the plan is broken, and treating it as "no
+Custom APIs" would silently drop an approved binding.
 
 Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
 asks to measure, track, monitor, or diagnose something do you instrument the page and
@@ -304,6 +309,8 @@ export default GeneratedComponent;
   - TimePicker from `@fluentui/react-timepicker-compat`
 - **Single-file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
+  (see `references/supported-dependencies.md`; `scripts/lib/supported-dependencies.js`
+  is the source of truth for the generated package names, versions, and feature gates)
 - **makeStyles with tokens** — no inline styles for static values
   ```typescript
   const useStyles = makeStyles({

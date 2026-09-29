@@ -36,7 +36,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
-const { readerFor } = require('./verify-model-app.js');
+const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
@@ -93,12 +93,17 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
     cleanup();
     throw err;
   }
-  // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
-  // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
-  // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
-  // vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw client
-  // has no caller. Returning it anyway would advertise a bypass this file no longer takes.
-  return { sdk, provisionSdk, cleanup };
+  // Only the two SDK instances, the cleanup and verify's isolated dashboard reader are returned. The raw
+  // `httpClient` used to come back with them so the caller could wire verify's role-privilege reader — that
+  // read had no SDK surface and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request
+  // itself. The vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw
+  // client has no caller. Returning it anyway would advertise a bypass this file no longer takes.
+  //
+  // The isolated reader is built HERE so it shares this client, and with it the Azure CLI token: made by the
+  // caller, it created a client of its own, and a second `az account get-access-token`, for every build's
+  // dashboard verify. Each read still gets its own throwaway workspace and SDK (verify-model-app.js).
+  const isolatedReader = isolatedReaderFor(env, { httpClient });
+  return { sdk, provisionSdk, cleanup, isolatedReader };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -449,6 +454,12 @@ async function buildModelApp(spec, opts, deps) {
 // "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
 function isTransientHalt(err) {
   if (!err) return false;
+  // An error that says it must not be retried wins over any status or text it carries. A dashboard
+  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
+  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
+  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
+  // prevent.
+  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
   const status = (err.cause && err.cause.statusCode) || err.statusCode;
   const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
   return (
@@ -630,7 +641,7 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  const { sdk, provisionSdk, cleanup, isolatedReader } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -690,7 +701,7 @@ async function main() {
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, isolatedReader }), verifyOpts),
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

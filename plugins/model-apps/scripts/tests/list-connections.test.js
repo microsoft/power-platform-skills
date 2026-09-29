@@ -169,6 +169,28 @@ test('parses current PAC Id/Name/API Id/Status output without a separator row', 
   ]);
 });
 
+// A row that does not match the Id/Name/API Id shape is kept as a row with no ids: when every row fails to
+// match (a changed column layout, say) the listing fails closed instead of reading as "no connections", and
+// beside a usable row it is dropped — never offered as a connection.
+test('an Id/Name/API Id listing with no row carrying both ids fails closed', () => {
+  const header = 'Id                               Name                                API Id                                                              Status';
+  // Connection rows read wrong: each carries a connector's API path but not the columns around it.
+  assert.throws(() => parsePacConnectionList([header, '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', 'Contoso /providers/Microsoft.PowerApps/apis/shared_office365'].join('\n')),
+    /Id\/Name\/API Id table contained 2 row\(s\), but no usable connection rows/);
+  // A line with no API path is no connection: a message under the header is still an empty listing.
+  assert.deepEqual(parsePacConnectionList([header, 'No connections found.'].join('\n')), []);
+  // A Status of several words, or none, still parses.
+  const status = (s) => `00000000000000000000000000000001 Contoso Dataverse                   /providers/Microsoft.PowerApps/apis/shared_commondataservice${s}`;
+  for (const s of ['        Not connected', '']) {
+    assert.deepEqual(parsePacConnectionList([header, status(s)].join('\n')).map((r) => r.connectionId), ['00000000000000000000000000000001'], JSON.stringify(s));
+  }
+  const mixed = [header,
+    '00000000000000000000000000000001 Contoso Dataverse                   /providers/Microsoft.PowerApps/apis/shared_commondataservice        Connected',
+    '(wrapped name tail)'].join('\n');
+  assert.deepEqual(parsePacConnectionList(mixed).map((r) => r.connectionId), ['00000000000000000000000000000001']);
+  assert.deepEqual(parsePacConnectionList(header), [], 'a header with no rows is still an empty listing');
+});
+
 test('header matching is case- and punctuation-insensitive', () => {
   // normalizeHeader strips non-alphanumerics and lower-cases, so "Connection Id", "connectionId"
   // and "CONNECTION-ID" are the same column. Without that, a cosmetic CLI header change silently
@@ -201,4 +223,33 @@ test('unparseable output yields no rows rather than throwing', () => {
 test('rows with no identifying field at all are dropped', () => {
   const raw = JSON.stringify([{ 'Connection Name': '', 'Connection Id': '' }, { 'Connection Name': 'Real', 'Connection Id': SP_CONN }]);
   assert.deepEqual(parsePacConnectionList(raw).map((r) => r.displayName), ['Real']);
+});
+
+test('display-name-only JSON rows fail instead of becoming selectable connections', () => {
+  assert.throws(
+    () => parsePacConnectionList(JSON.stringify([{ Name: 'Looks Real But Has No IDs' }])),
+    /no usable connection rows/i,
+  );
+});
+
+// Beside real rows, an unidentified one is dropped rather than offered. Older PAC builds wrap a long
+// friendly name onto a second table line, and that continuation line parses as a name with no ids —
+// it used to be listed as a connection of its own that a maker could pick and never bind.
+test('a row without both ids is dropped beside usable rows, never offered as a phantom connection', () => {
+  const rows = parsePacConnectionList(JSON.stringify([
+    { Name: 'Contoso SharePoint (wrapped name continues here)' },
+    { Name: 'Contoso SharePoint', Id: SP_CONN },
+  ]));
+  assert.deepEqual(rows, [{ connectorId: SP_API, connectionId: SP_CONN, displayName: 'Contoso SharePoint' }]);
+  //   Connection Name        Connector Id                                                Connection Id
+  //   ---------------------  ----------------------------------------------------------  ------------------------------
+  //   Contoso SharePoint     /providers/Microsoft.PowerApps/apis/shared_sharepointonline  <SP_CONN>
+  //   (wrapped name tail)
+  const table = [
+    'Connection Name        Connector Id                                                Connection Id',
+    '---------------------  ----------------------------------------------------------  ------------------------------',
+    `Contoso SharePoint     ${SP_API.padEnd(58)}  ${SP_CONN}`,
+    '(wrapped name tail)',
+  ].join('\n');
+  assert.deepEqual(parsePacConnectionList(table).map((r) => r.connectionId), [SP_CONN]);
 });

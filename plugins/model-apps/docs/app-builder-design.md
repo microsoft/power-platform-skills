@@ -586,13 +586,53 @@ ONLY after effective success (apply+verify).
 
 ## Eligibility state machine (durable, fail-closed)
 - **INVALIDATE (→false) before any write** of every full/unsupported/fast apply and teardown; abort if
-  the invalidation write fails.
+  the invalidation write fails. A `--changed-only` invalidate is **fenced** to the generation its
+  decision was read at: a snapshot tombstoned, rewritten or deleted since that read aborts the run
+  before it writes anything. A run that read **no** snapshot (a first build) **claims** one instead — an
+  ineligible, debt-free placeholder written under the lease only while there is still none — so its
+  baseline write has a generation to be fenced by; a claim refused because a snapshot appeared aborts
+  the run the same way.
 - **debt** accrues on any unsupported change/removal; `eligible:true` requires empty debt; debt clears
   ONLY by proven-fresh recreation (artifact absent before build) or an exact verifier — never by a plain
   full rebuild that re-skips a stale artifact.
 - **teardown TOMBSTONE**: teardown writes `eligible:false` + `teardown-in-progress` debt BEFORE deleting
   anything, and deletes the envelope ONLY after teardown success + verified live absence; a partial/
-  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined).
+  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined). The tombstone
+  also **rotates the generation** — without that, a run that read the snapshot first still matched it
+  and re-blessed its stale view over the tombstone — and a teardown that cannot write it **deletes
+  nothing**. The CAS write takes the workspace lease itself, so a tombstone cannot land between its
+  compare and its write. A workspace with **no** snapshot gets a fresh tombstone too (creating the folder
+  if needed, and removing it again after a clean teardown): with none, a first build's baseline write
+  expected "none", nothing ever changed that, and the build blessed the app the teardown was deleting.
+  The tombstone **lists every teardown in flight** (id, pid, start time), and every teardown that
+  finishes removes its own entry, under the lease (retried briefly if another writer holds it): one
+  that failed or threw keeps the tombstone. After a clean teardown the snapshot is deleted when the last
+  live entry goes — whatever it has become by then — and until then it stays tombstoned, its generation
+  rotated, fencing the deletes still running. A `--changed-only` build that reads a tombstone listing a
+  teardown still running refuses to build until it finishes (the no-identity fallback included, which
+  writes no snapshot and so reads the workspace again before it builds, refusing when the generation moved
+  during identity discovery). A
+  running teardown refreshes its entry every minute, and an entry whose process is gone, or that has not
+  been seen for five minutes, no longer counts — so a killed teardown's entry stops blocking within
+  minutes, even under a reused pid. `--clear-workspace` leaves a workspace whose fence is still held. A
+  workspace lease is reclaimed only from a DEAD holder — or, for a lock with no readable token, one older
+  than five minutes — never from a live one however old: a holder paused mid-write would commit its stale
+  view over the fence on resuming. It is reclaimed by one writer only (an exclusive claim file, itself
+  abandoned only once its claimer is dead, and a re-check of the lock); a reclaim that fails after its
+  write releases what it wrote. An old lease whose holder's pid is alive names the file to delete, in case
+  that pid was reused.
+- **overlap**: a `--changed-only` run whose generation moved while it built, or whose baseline write
+  another writer refused, reports failure whatever its build returned, and **invalidates** whatever
+  snapshot it then finds (fenced to the generation it read, retried briefly): a baseline another writer
+  blessed meanwhile would certify a state this run may since have changed. When every attempt is refused,
+  the lease held by a live writer or a snapshot there that cannot be read (only a provably absent one
+  leaves nothing to distrust), the refusal is recorded in a **distrust marker**
+  (`<workspace>/apply-snapshot.distrust.<id>.json`, one file per refusal), written beside the snapshot and
+  outside the lease. The next `--changed-only` run builds in full however eligible the snapshot reads; a
+  full build that lands its baseline deletes the markers it found at its start, by name, never one written
+  since; the last clean teardown deletes them all with the snapshot. An unreadable marker still counts. A
+  marker is only ever created or deleted, never moved or rewritten, so a concurrent reader always sees
+  every other run's.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

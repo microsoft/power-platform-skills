@@ -97,6 +97,11 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      // Which dashboards the app's solution holds (componenttype 60 = systemform) — the ownership
+      // evidence the build uses to pick among several same-named dashboards.
+      if (e === 'solutioncomponent' && /componenttype eq 60/.test(filter)) {
+        return (opts.dashboardsInSolution || []).filter((id) => filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+      }
       // The chart description reconcile (#496) reads the deployed value before deciding to write, so
       // it must only PATCH when the spec's description actually differs.
       if (e === 'savedqueryvisualization') {
@@ -164,6 +169,12 @@ function mockSdk(opts = {}) {
       return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
     },
     // Artifact idempotency: reuse existing view/chart/form/app when opts.artifactsExist is set.
+    // listArtifacts mirrors the real SDK's dirty flag (a local copy holding unpushed edits); a test marks
+    // the existing app's copy dirty with `dirtyApp`.
+    listArtifacts: async (kind) => {
+      calls.push({ name: 'listArtifacts', args: [kind] });
+      return kind === 'app' && opts.artifactsExist ? [{ type: 'app', id: 'app-existing', isDirty: !!opts.dirtyApp }] : [];
+    },
     findArtifact: async (kind, identity) => {
       calls.push({ name: 'findArtifact', args: [kind, identity] });
       if (!opts.artifactsExist) return null;
@@ -182,7 +193,9 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'resolveArtifact', args: [kind, identity] });
       const out = [];
       if (kind === 'dashboard') {
-        for (const n of opts.existingDashboards || []) out.push({ id: `dashboard-existing-${n}`, name: n });
+        // An entry is a name (id derived from it) or `{ id, name }` when a test needs same-named
+        // dashboards with DIFFERENT ids.
+        for (const n of opts.existingDashboards || []) out.push(typeof n === 'string' ? { id: `dashboard-existing-${n}`, name: n } : n);
         for (const k of Object.keys(store)) if (k.startsWith('dashboard:') && store[k].name) out.push({ id: store[k].id, name: store[k].name });
         return identity && identity.name != null ? out.filter((o) => o.name === identity.name) : out;
       }
@@ -195,8 +208,14 @@ function mockSdk(opts = {}) {
     },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
-    fetchArtifact: async (t, id) => {
-      calls.push({ name: 'fetchArtifact', args: [t, id] });
+    fetchArtifact: async (t, id, o) => {
+      calls.push({ name: 'fetchArtifact', args: o === undefined ? [t, id] : [t, id, o] });
+      // `{ overwrite: true }` resets the local copy to the server's, as the real SDK does; a test can
+      // make that reset fail with `failOverwriteFetch`.
+      if (o && o.overwrite) {
+        if (opts.failOverwriteFetch) throw new Error('fetch failed: network down');
+        delete store[`${t}:${id}`];
+      }
       // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
       if (!store[`${t}:${id}`]) {
         // `existingFormJson` overrides the single-tab default so a test can seed a deployed form
@@ -210,7 +229,7 @@ function mockSdk(opts = {}) {
         // when its pointer resolves to undefined, whereas this mock's jpSet would happily create the
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
-        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
+        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
         // The chart description reconcile reads through fetchArtifact/getArtifact rather than
         // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
         // unpublished one (measured live). Seed `description` for the same reason as the view.
@@ -284,12 +303,28 @@ function mockSdk(opts = {}) {
           const n = arr.findIndex((x) => x && x.id === pos.after); at = n < 0 ? arr.length : n + 1;
         } else throw new TypeError(`Cannot use 'in' operator to search for 'index' in ${pos}`);
         arr.splice(at, 0, clone(el));
+      } else if (arr !== null && typeof arr === 'object' && el !== null && typeof el === 'object' && !Array.isArray(el)) {
+        // An OBJECT parent: the real SDK adds each property of `el` (refusing `id` and `position`),
+        // which is how a key the fetched artifact lacks — the app's `aiDescription` — gets added.
+        if (opts && opts.position !== undefined) throw new Error('position is not supported for an object parent');
+        for (const k of Object.keys(el)) {
+          if (k === 'id') throw new Error("refusing to write 'id' — that re-keys the node rather than adding a property");
+          arr[k] = clone(el[k]);
+        }
       }
       return clone(art);
     },
     updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
       calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
+      // The real SDK THROWS PathNotFoundError when the pointer resolves to nothing. Modelled here for
+      // the app's `aiDescription` — which a fetched app carries only when the row has one — because
+      // the build's routing-description write depends on that failure to fall back to addElement.
+      if (t === 'app' && ptr === '/aiDescription' && jpGet(art, ptr) === undefined) {
+        const e = new Error(`Path ${ptr} not found in ${t}/${id}`);
+        e.code = 'PATH_NOT_FOUND';
+        throw e;
+      }
       // The real SDK MERGES when the current value and the patch are BOTH plain objects, and
       // replaces otherwise:  `Xu(o) && Xu(i) ? {...o, ...i} : i`.
       // Measured against the vendored bundle: updateElement('/…/cells/0/control', {isReadOnly:true})
@@ -325,7 +360,15 @@ function mockSdk(opts = {}) {
       return clone(art || { id });
     },
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
-    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
+    // `appPushResult` lets a test answer an APP push the way the real SDK answers a 412: it RESOLVES with
+    // `saved:false` and a VERSION_CONFLICT error rather than throwing. `appPushThrows` is the other shape:
+    // refusals the SDK THROWS (a never-published app's header, a sitemap target that no longer exists).
+    pushArtifact: async (t, id) => {
+      calls.push({ name: 'pushArtifact', args: [t, id] });
+      if (t === 'app' && opts.appPushThrows) throw Object.assign(new Error(`push refused: ${opts.appPushThrows}`), { code: opts.appPushThrows });
+      if (t === 'app' && opts.appPushResult) return { type: t, id, ...opts.appPushResult };
+      return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } };
+    },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => {
       calls.push({ name: 'publishArtifact', args: [t, id] });
@@ -574,6 +617,386 @@ test('sitemap: an existing (edit) app also gets its sitemap added to the solutio
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'] });
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'app'), 'no duplicate app created on the edit path');
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 62 && c.args[0].componentId === 'sm-1'), 'sitemap added to solution on the edit path too');
+});
+
+// #583: the routing description (`app.aiDescription` → appmodule.aiappdescription). Written at create;
+// on an existing app only when the spec sets one that differs from the FETCHED artifact; never blanked
+// and never written when the spec omits it (the platform can author this text itself).
+const ROUTING = 'Dispatch work: assigning and rescheduling tickets. Prefer My Work for your own assigned items.';
+const appShellPhases = ['solution', 'data-model', 'app-shell'];
+const appCalls = (calls, name, pred = () => true) => find(calls, name).filter((c) => c.args[0] === 'app' && pred(c));
+
+test('#583 appDef carries app.aiDescription only when the spec sets one', () => {
+  const built = { forms: {}, views: {}, charts: {}, dashboards: {} };
+  assert.ok(!('aiDescription' in appDef(makeSpec(), built)));
+  assert.strictEqual(appDef(makeSpec({ app: { name: 'Support Desk', aiDescription: ROUTING } }), built).aiDescription, ROUTING);
+});
+
+test('#583 a new app is created with its routing description', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'createArtifact')[0].args[1].aiDescription, ROUTING);
+});
+
+test('#583 an existing app without one gets it added, on the same push as its sitemap', async () => {
+  // The mock's updateElement THROWS PATH_NOT_FOUND for an absent `/aiDescription`, as the real SDK does,
+  // so this also proves the key is added rather than "updated" onto a path that is not there.
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  const added = appCalls(calls, 'addElement', (c) => c.args[2] === '');
+  assert.deepStrictEqual(added.map((c) => c.args[3]), [{ aiDescription: ROUTING }], 'added at the artifact root');
+  // One push: the sitemap rewrite carries the new field. A second push from the same fetch would race
+  // the first on the row's If-Match.
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  const addAt = calls.indexOf(added[0]);
+  assert.ok(addAt < calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'added before the push that writes it');
+  assert.ok(calls.indexOf(appCalls(calls, 'fetchArtifact')[0]) < calls.indexOf(appCalls(calls, 'getArtifact')[0]), 'compared against the FETCHED artifact');
+});
+
+test('#583 an existing app with a different routing description is updated in place', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Old routing text.' });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').map((c) => c.args[3]), [ROUTING]);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 an existing app whose routing description already matches is left alone', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: ROUTING });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 a spec with no routing description never reads or writes one', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Written by the platform.' });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 0, 'not even read');
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+test('#583 when the sitemap write is deferred, the routing description is pushed on its own', async () => {
+  // A page subarea defers the existing app's sitemap write to the pages finalizer, which does not run
+  // in an app-shell-only build, so the routing description needs its own push or it never lands.
+  const spec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap').length, 0, 'the sitemap write is deferred');
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 1);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push carries the routing description');
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1);
+});
+
+// That push re-sends the workspace copy's sitemap, which is the live one only while the copy is clean: a
+// plain fetch returns a copy holding an earlier run's unpushed sitemap rewrite unchanged, and pushing it
+// replayed the rewrite — detaching live pages with no gate. A dirty copy is refused before anything is
+// applied; a spec with no routing description never looks.
+test('#583 the deferred routing-description push refuses a copy holding an earlier run\u2019s unpushed edits', async () => {
+  const spec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
+    assert.match(e.message, /holds edits an earlier run did not push/);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing pushed');
+  // …even when the copy already carries the wanted routing description: that may be the very edit the
+  // earlier run failed to push, so "unchanged" against the copy is no proof the server has it.
+  const same = mockSdk({ artifactsExist: true, dirtyApp: true, existingAppAiDescription: ROUTING });
+  await assert.rejects(runSdkBuild(spec, { sdk: same.sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-copy-unpushed-edits');
+  assert.strictEqual(appCalls(same.calls, 'pushArtifact').length, 0, 'nothing pushed');
+  const noRouting = makeSpec();
+  noRouting.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const quiet = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await runSdkBuild(noRouting, { sdk: quiet.sdk, apply: true, phases: appShellPhases });
+  assert.strictEqual(find(quiet.calls, 'listArtifacts').length, 0, 'without a routing description there is nothing to push');
+});
+
+// #583: the SDK refuses a header write with a 412 while an earlier header change is unpublished, and the
+// generic remedy (re-download) cannot clear that. The explanation is keyed on a PROVEN draft only. The
+// error is shaped as the real bundle returns it: `detail` names the refused request (pinned in
+// app-ai-description-real-bundle.test.js), and the message carries it too.
+const conflictOn = (row) => {
+  const detail = `Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/${row}`;
+  return { saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(`Version conflict for app/x: local=W/"2", server=(none). Re-fetch and reapply changes. ${detail}`), { code: 'VERSION_CONFLICT', detail }) };
+};
+const HEADER_412 = conflictOn('appmodules(x)');
+// The SDK writes the header first, then the sitemap: a 412 on the SITEMAP comes after this push's own
+// header write committed, and so over the very unpublished layer the header state is proven by.
+const SITEMAP_412 = conflictOn('sitemaps(y)');
+// Models ONLY the app draft read. The data-model phase's narrow metadata reads also go through
+// `dataverse.get`; a failed read is the input each of them already tolerates (they fall back to
+// findTables/findColumns/fetchEntityMetadata), so they are handed one rather than a fake draft row.
+const draftReader = (answer, seen = []) => ({ get: async (url) => {
+  if (!/^\/appmodules\//.test(url)) throw new Error(`not modelled by this test: ${url}`);
+  seen.push(url);
+  if (answer instanceof Error) throw answer;
+  return answer;
+} });
+const routingSpec = () => makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
+
+test('#583 a 412 over an unpublished header change halts with the step that works', async () => {
+  // The last case puts the PUBLISHED row first: the unpublished layer must be found wherever it is.
+  for (const [deferred, value] of [[false, [{ componentstate: 1 }]], [true, [{ componentstate: 1 }]], [false, [{ componentstate: 0 }, { componentstate: 1 }]]]) {
+    const spec = routingSpec();
+    if (deferred) spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    const seen = [];
+    sdk.dataverse = draftReader({ status: 200, body: { value } }, seen);
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'app-header-unpublished', `${deferred ? 'deferred' : 'sitemap'} path, rows ${JSON.stringify(value)}: ${e.message}`);
+      assert.match(e.message, /unpublished change to its name, description or routing description/);
+      assert.match(e.message, /publish the app in Power Apps \(or discard the change\), then re-run the build\.$/);
+      return true;
+    });
+    assert.strictEqual(seen.length, 1);
+    assert.match(seen[0], /^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=componentstate&\$filter=appmoduleid eq \S+$/);
+    assert.strictEqual(appCalls(calls, 'publishArtifact').length, 0, 'nothing is published after the refused push');
+    // The refused push left this run's edits in the workspace copy; it is reset so the re-run's plain
+    // fetch is not refused with LOCAL_EDITS_WOULD_BE_LOST once the operator has published.
+    const resets = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
+    assert.strictEqual(resets.length, 1, 'the workspace copy is reset');
+    assert.ok(calls.indexOf(resets[0]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the refused push');
+  }
+});
+
+test('#583 when the workspace copy cannot be reset, the halt names the workspace to delete', async () => {
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412, failOverwriteFetch: true });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /then re-run the build\. First delete the \.maker-workspace directory \(or the --workspace one\)/);
+    return true;
+  });
+});
+
+test('#583 any other 412 keeps the generic re-download halt', async () => {
+  for (const [what, answer] of [
+    ['a settled row', { status: 200, body: { value: [{ componentstate: 0 }] } }],
+    ['no row', { status: 200, body: { value: [] } }],
+    ['a non-2xx draft read, whatever its body', { status: 500, body: { value: [{ componentstate: 1 }] } }],
+    ['a failed draft read', new Error('network down')],
+  ]) {
+    const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    sdk.dataverse = draftReader(answer);
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'version-conflict', `${what}: ${e.message}`);
+      return true;
+    });
+  }
+});
+
+test('#583 a push refused for another reason keeps its own halt, even over a pending draft', async () => {
+  const refused = { ...HEADER_412, error: Object.assign(new Error('a row already exists at that id'), { code: 'ARTIFACT_ALREADY_EXISTS' }) };
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: refused });
+  const seen = [];
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'already-exists');
+  assert.strictEqual(seen.length, 0, 'only a VERSION_CONFLICT is re-diagnosed');
+});
+
+// The halt reads a push result the way requireSuccessfulPush does: `saved`, then the older SDK spelling
+// `success`. Reading `saved` alone sent a legacy-shaped refusal to the generic conflict remedy.
+test('#583 the unpublished-header halt reads the older `success` result shape as well', async () => {
+  const legacy = { success: false, error: HEADER_412.error };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: legacy });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'and resets the copy');
+});
+
+// Only the APPMODULE row's 412 can be the unpublished-header state. A sitemap 412 is a concurrent sitemap
+// edit, over the unpublished layer this very push's header write just left — relabelling it reset the copy,
+// and "publish, then re-run" then overwrote the other edit. So is a conflict that names no request at all.
+test('#583 a 412 that is not the appmodule row\u2019s keeps the generic halt and the copy, over a pending draft too', async () => {
+  const unnamed = { ...HEADER_412, error: Object.assign(new Error('Version conflict for app/x: local=W/"2", server=W/"3". Re-fetch and reapply changes.'), { code: 'VERSION_CONFLICT' }) };
+  for (const [what, result] of [['a sitemap 412', SITEMAP_412], ['a conflict naming no request', unnamed]]) {
+    for (const phases of [appShellPhases, fullPhases]) {
+      const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: result });
+      const seen = [];
+      sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+      await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases, genpageCli: noPages }), (e) => {
+        assert.strictEqual(e.code, 'version-conflict', `${what}, ${phases.join(',')}: ${e.message}`);
+        return true;
+      });
+      assert.strictEqual(seen.length, 0, `${what}: not re-diagnosed, so no draft read`);
+      assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, `${what}: the copy is kept as the fence`);
+    }
+  }
+});
+
+// With the pages phase in the run — every CLI apply — the finalizer is the only existing-app sitemap
+// writer, so the routing description must ride ITS push. An app-shell push would re-send the live
+// sitemap, which the SDK validates reference by reference: a subarea whose page was deleted in Maker
+// would halt the run before the pages phase could drop it.
+const fullPhases = ['solution', 'data-model', 'app-shell', 'pages'];
+const noPages = { enumerateEnv: async () => ({ ok: true, ids: [] }) };
+
+test('#583 with the pages phase, the routing description rides the finalizer push — app-shell pushes nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(routingSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  const pushes = appCalls(calls, 'pushArtifact');
+  const fetches = appCalls(calls, 'fetchArtifact');
+  assert.strictEqual(pushes.length, 1, 'one app push in the whole run');
+  assert.strictEqual(fetches.length, 2, 'app-shell fetches, the finalizer re-fetches');
+  const added = appCalls(calls, 'addElement', (c) => c.args[2] === '');
+  assert.deepStrictEqual(added.map((c) => c.args[3]), [{ aiDescription: ROUTING }]);
+  const at = (c) => calls.indexOf(c);
+  assert.ok(at(fetches[1]) < at(added[0]) && at(added[0]) < at(pushes[0]), 'applied after the finalizer fetch, before its push');
+  assert.ok(at(pushes[0]) > at(appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap')[0]), 'on the same push as the finalized sitemap');
+});
+
+test('#583 the finalizer push halts precisely over an unpublished header change, after resetting the copy', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /^pages failed: push app Support Desk failed: the app has an unpublished change/);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+// #583 review: a copy an earlier run left holding unpushed edits went out with the next push of the app, whatever
+// that run asked for — a routing description the spec left out was overwritten with the earlier run's, and a
+// wanted one read as already set. Every run that pushes the app refuses such a copy before it applies anything.
+test('#583 a build that pushes the app refuses a copy holding an earlier run\u2019s unpushed edits, before applying anything', async () => {
+  for (const spec of [makeSpec(), routingSpec()]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, dirtyApp: true });
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: fullPhases, genpageCli: noPages }), (e) => {
+      assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
+      assert.match(e.message, /holds edits an earlier run did not push/);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing pushed');
+    assert.strictEqual(appCalls(calls, 'updateElement').length + appCalls(calls, 'addElement').length, 0, 'nothing applied');
+  }
+  // …and so does an app-shell run of a page-less app, whose sitemap push would carry them.
+  const pageLess = mockSdk({ artifactsExist: true, dirtyApp: true });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: pageLess.sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-copy-unpushed-edits');
+  assert.strictEqual(appCalls(pageLess.calls, 'updateElement', (c) => c.args[2] === '/siteMap').length, 0);
+  // CONTROL: a clean copy builds, with the one finalizer push.
+  const clean = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk: clean.sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  assert.strictEqual(appCalls(clean.calls, 'pushArtifact').length, 1);
+});
+
+// A failed push of the app resets the copy even when it carried no header change: the edits are projected from
+// the spec and the re-run re-applies them, so a failure no longer leaves a copy the next run must refuse. A
+// concurrent edit keeps it — that copy is what stops a blind re-run from overwriting the other edit.
+test('#583 a failed app push resets the workspace copy, header change or not — except a concurrent edit', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'ECONNRESET' });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset');
+  // …and a failure the SDK RETURNS by value, with a code that is no concurrent edit.
+  const returned = mockSdk({ artifactsExist: true, appPushResult: { saved: false, error: Object.assign(new Error('sitemap target not found'), { code: 'SITEMAP_TARGET_NOT_FOUND' }) } });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: returned.sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(returned.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'a returned failure resets it too');
+  const conflict = mockSdk({ artifactsExist: true, appPushResult: SITEMAP_412 });
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk: conflict.sdk, apply: true, phases: fullPhases, genpageCli: noPages }));
+  assert.strictEqual(appCalls(conflict.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, 'a concurrent edit keeps it');
+});
+
+test('#583 a never-published app\u2019s THROWN refusal halts the same way, after resetting the copy', async () => {
+  for (const phases of [appShellPhases, fullPhases]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+    const seen = [];
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases, genpageCli: noPages }), (e) => {
+      assert.strictEqual(e.code, 'app-header-unpublished', `${phases.join(',')}: ${e.message}`);
+      assert.match(e.message, /the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is\. .*: publish the app in Power Apps, then re-run the build\.$/);
+      return true;
+    });
+    assert.strictEqual(seen.length, 0, 'the SDK\u2019s own code proves the state; no draft read');
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset');
+  }
+});
+
+// A push that carried the routing change and failed for any reason but a concurrent edit left that change
+// unrecorded in the workspace copy — where the re-run's plain fetch refuses it once the server moves, and
+// where applyAppAiDescription (which reads the copy) mistakes it for "already set". So the copy is reset
+// before the error propagates — unchanged. Without a routing change it is reset too: the sitemap edit it holds
+// is projected from the spec as well, and a copy left holding it would be refused by the next run that pushes
+// the app (refuseUnpushedAppCopy).
+test('#583 any other thrown push error propagates unchanged, and resets the copy, routing change or not', async () => {
+  for (const [what, spec, resets] of [['with a routing change', routingSpec(), 1], ['without one', makeSpec(), 1]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, 'SITEMAP_TARGET_NOT_FOUND', `${what}: ${e.message}`);
+      return true;
+    });
+    const overwrite = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
+    assert.strictEqual(overwrite.length, resets, `${what}: ${resets ? 'the copy is reset' : 'no reset'}`);
+    if (resets) assert.ok(calls.indexOf(overwrite[0]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the failed push');
+  }
+  // A reset that itself fails leaves the error exactly as it was.
+  const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND', failOverwriteFetch: true });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_TARGET_NOT_FOUND');
+  // A THROWN failure with no code (the connection dropped mid-push) resets too: the code-less 412 that
+  // keeps the copy is one the SDK RETURNS by value.
+  const dropped = mockSdk({ artifactsExist: true });
+  const push = dropped.sdk.pushArtifact;
+  dropped.sdk.pushArtifact = async (t, id) => {
+    if (t !== 'app') return push(t, id);
+    dropped.calls.push({ name: 'pushArtifact', args: [t, id] });
+    throw new Error('socket hang up');
+  };
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk: dropped.sdk, apply: true, phases: appShellPhases }), (e) => /socket hang up/.test(e.message));
+  assert.strictEqual(appCalls(dropped.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+test('#583 a returned push failure resets the copy, but a concurrent edit keeps it as the fence', async () => {
+  const withCode = (code, message) => ({ saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(message), code ? { code } : {}) });
+  for (const [what, result, haltCode, resets] of [
+    ['a failure with its own code', withCode('SITEMAP_REFERENCE_UNRESOLVED', 'subarea target missing'), 'SITEMAP_REFERENCE_UNRESOLVED', 1],
+    // requireSuccessfulPush asks for a fresh download on these; the unrecorded copy is what stops a blind
+    // re-run from overwriting the other edit.
+    ['a VERSION_CONFLICT on a settled row', HEADER_412, 'version-conflict', 0],
+    ['a code-less 412', withCode(null, 'version conflict (412)'), 'version-conflict', 0],
+  ]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: result });
+    sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 0 }] } });
+    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+      assert.strictEqual(e.code, haltCode, `${what}: ${e.message}`);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, resets, what);
+  }
+  // `success` (the older SDK spelling) is read the same way as `saved`.
+  const legacy = { success: false, error: Object.assign(new Error('subarea target missing'), { code: 'SITEMAP_REFERENCE_UNRESOLVED' }) };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: legacy });
+  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_REFERENCE_UNRESOLVED');
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+// Without the pages phase the live-page gate guards the page-less sitemap write. The routing description
+// used to be applied BEFORE it, so a gate that halted left the edit unrecorded in the workspace copy.
+test('#583 without the pages phase, a live-page gate that halts leaves no routing edit behind', async () => {
+  const spec = routingSpec();
+  const appUnique = appUniqueName(spec);
+  const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`; // the live app HAS a genpage
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP, selfAppUnique: appUnique, liveSitemapXml: sm });
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true, env: 'https://x', phases: appShellPhases }), (e) => e && e.phase === 'app-shell' && e.code === 'pages-removed');
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 0, 'not even compared');
+  assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0);
+});
+
+test('#583 a 412 on a push that carries no routing change is never re-diagnosed', async () => {
+  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+  const seen = [];
+  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } }, seen);
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'version-conflict');
+  assert.strictEqual(seen.length, 0, 'the draft is not even read');
 });
 
 test('Tier 1 data model: global choices, rich column types, customer, status, alt keys, N:N', async () => {
@@ -1215,6 +1638,106 @@ test('dashboards: an existing dashboard is reused (no duplicate) and reported in
   assert.ok(find(calls, 'resolveArtifact').some((c) => c.args[0] === 'dashboard' && c.args[1].name === 'Ops'), 'discovered via resolveArtifact');
 });
 
+// Names are neither unique nor compared exactly, so the lookup can return several dashboards. Reusing
+// the first one returned silently bound the app to an arbitrary one — possibly another app's. The app's
+// own is the one its solution holds; when that does not single one out the build halts, creating nothing.
+test('dashboards: several dashboards matching the name halt the build unless the solution singles one out', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const halts = [
+    ['no solution to ask', { existingDashboards: ['Ops', 'Ops'] }, /cannot say which is its own/],
+    ['none in the solution', { existingDashboards: [{ id: 'd-1', name: 'Ops' }, { id: 'd-2', name: 'Ops' }], solutionExists: true, dashboardsInSolution: [] }, /none of them is in this app's solution/],
+    ['two in the solution', { existingDashboards: [{ id: 'd-1', name: 'Ops' }, { id: 'd-2', name: 'Ops' }], solutionExists: true, dashboardsInSolution: ['d-1', 'd-2'] }, /2 of them are in this app's solution/],
+  ];
+  for (const [what, opts, why] of halts) {
+    const { sdk, calls } = mockSdk(opts);
+    await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), (err) => /2 dashboards in this environment match the name 'Ops'/.test(err.message) && why.test(err.message) && /Rename or delete the extra ones/.test(err.message), what);
+    assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), `${what}: no dashboard is created beside them`);
+  }
+});
+
+test('dashboards: among several same-named dashboards the build reuses the one its solution holds', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  // The foreign one is returned FIRST, so the old "reuse existing[0]" would have adopted it.
+  const { sdk, calls } = mockSdk({ existingDashboards: [{ id: 'd-foreign', name: 'Ops' }, { id: 'd-ours', name: 'Ops' }], solutionExists: true, dashboardsInSolution: ['d-ours'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.strictEqual(result.created.dashboards.Ops, 'd-ours');
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'reused, not duplicated');
+});
+
+// A LONE match is still reused: a downloaded app's dashboard may never have joined the solution the
+// download recovered. But when the solution does not hold it, nothing proves it is this app's rather than
+// another app's namesake, so the build says so — never when the solution holds it, when there is no real
+// solution to ask, or when the read fails.
+test('dashboards: a lone same-named dashboard outside the solution is reused, with a warning', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const lone = [{ id: 'd-1', name: 'Ops' }];
+  for (const [what, opts, warned, failRead] of [
+    ['outside the solution', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: [] }, true],
+    ['in the solution', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: ['d-1'] }, false],
+    ['no solution to ask', { existingDashboards: lone }, false],
+    ['a membership read that fails', { existingDashboards: lone, solutionExists: true, dashboardsInSolution: [] }, false, true],
+  ]) {
+    const { sdk, calls } = mockSdk(opts);
+    if (failRead) {
+      const query = sdk.queryRecords;
+      sdk.queryRecords = async (set, q) => { if (set === 'solutioncomponent') throw new Error('read refused'); return query(set, q); };
+    }
+    const warnings = [];
+    const result = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+    assert.strictEqual(result.created.dashboards.Ops, 'd-1', `${what}: reused`);
+    assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), `${what}: not duplicated`);
+    assert.strictEqual(warnings.some((w) => /dashboard "Ops": the one dashboard with this name is not in this app's solution/.test(w)), warned, `${what}: ${JSON.stringify(warnings)}`);
+  }
+});
+
+// The vendored name lookup reads one page of ten, in no defined order, so with more matches the app's
+// own dashboard can sort beyond it — and reuse, verify and teardown would all decide without it. A full
+// page is re-read in full, and membership is then asked in bounded chunks.
+test('dashboards: a full lookup page is re-read in full, so the app\'s own cannot hide beyond it', async () => {
+  const { findDashboardsByName, dashboardsInSolution } = require('../lib/sdk-build.js');
+  const foreign = Array.from({ length: 10 }, (_, i) => ({ id: `d-foreign-${i}`, name: 'Ops' }));
+  const all = [...foreign, { id: 'd-ours', name: 'Ops' }];
+  const asRows = () => all.map((d) => ({ formid: d.id, name: d.name }));
+  const reads = [];
+  const sdkWith = (page) => ({
+    resolveArtifact: async () => page,
+    queryRecords: async (set, q) => { reads.push(q); return set === 'systemform' ? asRows() : []; },
+  });
+  assert.deepStrictEqual(await findDashboardsByName(sdkWith(foreign.slice(0, 3)), 'Ops'), foreign.slice(0, 3), 'a short page is the whole set');
+  assert.strictEqual(reads.length, 0, 'and needs no second read');
+  assert.deepStrictEqual((await findDashboardsByName(sdkWith(foreign), 'Ops')).map((d) => d.id), all.map((d) => d.id), 'a full page is re-read in full');
+  assert.strictEqual(reads.length, 1);
+  assert.strictEqual(reads[0].paginate, true);
+  assert.strictEqual(reads[0].top, undefined, 'uncapped');
+  assert.strictEqual(reads[0].filter, "type eq 0 and name eq 'Ops'");
+  reads.length = 0;
+  await findDashboardsByName({ queryRecords: sdkWith([]).queryRecords }, 'Ops');
+  assert.strictEqual(reads.length, 1, 'a reader without resolveArtifact (verify\'s) always reads in full');
+
+  const ids = Array.from({ length: 30 }, (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const chunks = [];
+  const members = await dashboardsInSolution({
+    queryRecords: async (set, q) => {
+      if (set === 'solution') return [{ solutionid: 'sol-1' }];
+      chunks.push((q.filter.match(/objectid eq /g) || []).length);
+      return [ids[3], ids[27]].filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+    },
+  }, 'ContosoSln', ids);
+  assert.deepStrictEqual(chunks, [25, 5], 'membership is asked in bounded chunks');
+  assert.deepStrictEqual([...members].sort(), [ids[3], ids[27]].sort(), 'and members from every chunk are kept');
+
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk } = mockSdk({ existingDashboards: foreign, solutionExists: true, dashboardsInSolution: ['d-ours'] });
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (set, q) => (set === 'systemform' && q && q.paginate ? asRows() : query(set, q));
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.strictEqual(result.created.dashboards.Ops, 'd-ours', 'the build reuses its own from beyond the first page');
+});
+
 test('dashboards: a new dashboard is still created + pushed + added to the solution', async () => {
   const spec = makeSpec();
   spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
@@ -1223,6 +1746,59 @@ test('dashboards: a new dashboard is still created + pushed + added to the solut
   assert.ok(find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard created when absent');
   assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard pushed');
   assert.ok(result.created.dashboards.Ops, 'created id recorded');
+});
+
+// Solution membership is the only later proof that a dashboard is this app's. A push that landed but
+// whose add-to-solution then failed left the dashboard outside it for good: a rebuild reused it as a
+// lone name match without ever adding it, and teardown kept it while its tiles blocked the chart and
+// view deletes. The build now undoes the push, and says exactly what is left when it cannot. Whether
+// the halt is auto-retried follows what is left: nothing (safe — the cause's status is kept) or the
+// dashboard (never — a retry would reuse it outside the solution, whatever transient text it quotes).
+test('dashboards: a dashboard the build cannot add to its solution is removed again, never left outside it', async () => {
+  const { isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const attempt = async ({ cause, undoFails = false, rowRemains = true, rowUnreadable = false }) => {
+    const { sdk, calls } = mockSdk();
+    const add = sdk.addSolutionComponent;
+    // Forms are component type 60 too, so fail only the add for the dashboard that was just pushed.
+    sdk.addSolutionComponent = async (o) => {
+      const last = find(calls, 'pushArtifact').at(-1);
+      if (o.componentType === 60 && last && last.args[0] === 'dashboard' && last.args[1] === o.componentId) throw cause;
+      return add(o);
+    };
+    sdk.deleteRemoteArtifact = async (t, id) => { calls.push({ name: 'deleteRemoteArtifact', args: [t, id] }); if (undoFails) throw new Error('EPERM: operation not permitted, unlink'); };
+    const query = sdk.queryRecords;
+    sdk.queryRecords = async (set, q) => {
+      if (set === 'systemform' && /^formid eq /.test((q && q.filter) || '')) {
+        if (rowUnreadable) throw new Error('HTTP 500');
+        return rowRemains ? [{ formid: q.filter.slice('formid eq '.length) }] : [];
+      }
+      return query(set, q);
+    };
+    let error = null;
+    await runSdkBuild(spec, { sdk, apply: true }).catch((e) => { error = e; });
+    const pushed = find(calls, 'pushArtifact').find((c) => c.args[0] === 'dashboard');
+    return { error, pushed, undo: find(calls, 'deleteRemoteArtifact') };
+  };
+  const busy = Object.assign(new Error('HTTP 503 Service Unavailable'), { statusCode: 503 });
+  const undone = await attempt({ cause: busy });
+  assert.ok(undone.error, 'the build halts');
+  assert.match(undone.error.message, /dashboard "Ops" could not be added to solution '[^']+' \(HTTP 503 Service Unavailable\), so it was removed again — re-run to create it afresh/);
+  assert.deepStrictEqual(undone.undo.map((c) => c.args), [['dashboard', undone.pushed.args[1]]], 'the dashboard just pushed is the one removed');
+  assert.strictEqual(isTransientHalt(undone.error), true, 'nothing is left behind, so a 503 is still auto-retried');
+
+  const lock = new Error('Microsoft.Crm.ObjectModel.CustomizationLockException: try again later');
+  const stranded = await attempt({ cause: lock, undoFails: true });
+  assert.match(stranded.error.message, /dashboard "Ops" was created \([^)]+\) but could not be added to solution '[^']+' \(.*CustomizationLockException.*\), and removing it again failed \(EPERM.*\) — add it to the solution or delete it in Maker before re-running/);
+  assert.strictEqual(isTransientHalt(stranded.error), false, 'a retry would reuse the stranded dashboard outside the solution');
+  assert.strictEqual(isTransientHalt((await attempt({ cause: busy, undoFails: true, rowUnreadable: true })).error), false, 'when its absence cannot be read, it is assumed to be there');
+
+  // The row went but the local workspace copy could not be removed: nothing is left outside the
+  // solution, so it is reported (and retried) as removed.
+  const localOnly = await attempt({ cause: busy, undoFails: true, rowRemains: false });
+  assert.match(localOnly.error.message, /so it was removed again — re-run to create it afresh/);
+  assert.strictEqual(isTransientHalt(localOnly.error), true);
 });
 
 test('commands: an existing command bar is reused (no duplicate) and reported in result.created', async () => {
@@ -1990,7 +2566,12 @@ test('form topology: a tab the deployed form lacks is CREATED with empty section
   const tabAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === '/tabs');
   assert.strictEqual(tabAdds.length, 1, `exactly one tab added; saw ${tabAdds.length}`);
   assert.strictEqual(tabAdds[0].args[3].name, 'tab_audit');
-  assert.deepStrictEqual(tabAdds[0].args[3].columns[0].sections[0].rows, [], 'its sections arrive EMPTY so the field pass owns every control');
+  // The tab arrives with its form-columns but no sections: each section then goes through the same
+  // per-section pass as an existing tab's, so one already on the form elsewhere would be MOVED in.
+  assert.deepStrictEqual(tabAdds[0].args[3].columns[0].sections, [], 'the new tab arrives without sections');
+  const sectionAdd = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/1/columns/0/sections');
+  assert.ok(sectionAdd && sectionAdd.args[3].name === 'section_audit', 'its genuinely new section is then created in it');
+  assert.deepStrictEqual(sectionAdd.args[3].rows, [], 'EMPTY, so the field pass owns every control');
   // And the field it declares still lands inside the new tab rather than back in the first section.
   const extra = find(calls, 'addElement').find((c) => /\/rows$/.test(String(c.args[2])) && (((c.args[3] || {}).cells || [])[0] || {}).control && c.args[3].cells[0].control.fieldName === 'new_extra');
   assert.ok(extra && extra.args[2].startsWith('/tabs/1/'), `new_extra should land in the new tab, landed at ${extra && extra.args[2]}`);
@@ -2011,7 +2592,10 @@ test('form topology: a tab that gains a second form-column has the column ADDED 
   assert.strictEqual(colAdds.length, 1, `exactly one form-column added; saw ${colAdds.map((c) => c.args[2]).join(', ')}`);
   assert.strictEqual(colAdds[0].args[2], '/tabs/0/columns');
   assert.strictEqual(colAdds[0].args[3].width, '40%', 'the authored width is carried onto the new column');
-  assert.deepStrictEqual(colAdds[0].args[3].sections[0].rows, [], 'and its sections arrive empty');
+  assert.deepStrictEqual(colAdds[0].args[3].sections, [], 'the new column arrives without sections');
+  const sectionAdd = find(calls, 'addElement').find((c) => String(c.args[2]) === '/tabs/0/columns/1/sections');
+  assert.ok(sectionAdd && sectionAdd.args[3].name === 'section_side', 'its new section is then created in it');
+  assert.deepStrictEqual(sectionAdd.args[3].rows, [], 'and arrives empty');
 });
 
 test('form topology: a field moving into an EMPTY section gets a row seeded for it first', async () => {
@@ -3470,7 +4054,7 @@ test('dashboardTileOpts id-passthrough: a tile carrying viewId/visualizationId +
 
 test('dashboardTileOpts name-based still resolves from result.created (author-declared dashboard)', () => {
   const spec = { views: [{ name: 'V', entity: 'new_ohproject' }], charts: [{ name: 'C', entity: 'new_ohproject' }] };
-  const result = { created: { views: { 'new_ohproject|V': 'view-id' }, charts: { C: 'chart-id' } } };
+  const result = { created: { views: { 'new_ohproject|V': 'view-id' }, charts: { 'new_ohproject|C': 'chart-id' } } };
   const chart = dashboardTileOpts(spec, { type: 'chart', chart: 'C', view: 'V' }, result);
   assert.strictEqual(chart.viewId, 'view-id');
   assert.strictEqual(chart.visualizationId, 'chart-id');
@@ -3486,6 +4070,32 @@ test('dashboardTileOpts keys created.views by entity|name so same-named views ac
   assert.strictEqual(listA.viewId, 'view-a', 'new_a tile binds the new_a Active view');
   const listB = dashboardTileOpts(spec, { type: 'list', view: 'Active', entity: 'new_b' }, result);
   assert.strictEqual(listB.viewId, 'view-b', 'new_b tile binds the new_b Active view');
+});
+
+// #586 item 3, found live: two charts with the same NAME on different tables and a dashboard tile on
+// one of them. Charts were keyed by name alone, so the tile took whichever chart was built last — a
+// tile whose view is one table's and whose visualization is another's. The platform accepts and
+// publishes that, and `--verify` passed it.
+test('dashboards: same-named charts on different tables do not cross-wire a tile', async () => {
+  const spec = makeSpec(); // new_ticket: view "Active Tickets", chart "By Priority"
+  spec.views.push({ entity: 'new_customer', name: 'All Customers', columns: ['new_name', 'new_tier'] });
+  // Declared LAST, so a name-only key ends on this one.
+  spec.charts.push({ entity: 'new_customer', name: 'By Priority', chartType: 'Pie', groupBy: 'new_tier', measure: 'count' });
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'By Priority', view: 'Active Tickets' }] }];
+  const { sdk, calls } = mockSdk();
+  const chartIdByEntity = {};
+  const create = sdk.createArtifact;
+  const record = (t, def, art) => { if (t === 'chart' && art) chartIdByEntity[String(def.entityLogicalName).toLowerCase()] = art.id; return art; };
+  sdk.createArtifact = (t, def) => {
+    const art = create(t, def);
+    return art && typeof art.then === 'function' ? art.then((a) => record(t, def, a)) : record(t, def, art);
+  };
+  await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(chartIdByEntity.new_ticket && chartIdByEntity.new_customer, `both charts are built: ${JSON.stringify(chartIdByEntity)}`);
+  const tile = find(calls, 'addElement').find((c) => c.args[0] === 'dashboard' && c.args[2] === '/components').args[3];
+  assert.strictEqual(tile.parameters.TargetEntityType, 'new_ticket');
+  assert.strictEqual(tile.parameters.VisualizationId, chartIdByEntity.new_ticket,
+    `the tile must show the new_ticket chart; charts built: ${JSON.stringify(chartIdByEntity)}`);
 });
 
 test('pages phase (v2, page key != name): result.created.pages is keyed by KEY so the sitemap finalize resolves', async () => {
@@ -4288,6 +4898,8 @@ test('form topology: a section emptied by a layout move is removed, not left as 
     `exactly one vacated section should be reclaimed; saw ${removedSections.map((c) => c.args[2]).join(', ')}`);
   assert.ok(warnings.some((w) => /removed the now-empty section/.test(w) && /section_0_1/.test(w)),
     `the removal must be reported and name the section; got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some((w) => /section_0_1/.test(w) && /Give a section an explicit `name`/.test(w)),
+    'a GENERATED name lost its identity on the move, so the report says how to keep it');
 });
 
 // The sweep must never touch a section that still holds anything, nor one the engine owns.
@@ -4350,7 +4962,7 @@ test('form topology: an UNCLAIMED section that still holds a cell is never remov
     'a section still holding the primary field must survive — removing it would take the record title off the form');
 });
 
-// Astra review, HIGH: "zero cells" does not establish that THIS reconcile vacated the section. A
+// "Zero cells" does not establish that THIS reconcile vacated the section. A
 // maker-added section that was ALREADY empty — one a form script may show/hide by name — would be
 // deleted by an otherwise no-op rebuild, and the destructive preflight cannot see it because that
 // compares fields and sitemap targets, not containers.
@@ -5240,4 +5852,520 @@ test('form topology: narrowing a cell in an already-overflowing reserved row is 
     [['new_name', 'new_tier', 'new_code'], ['(spacer)']], 'but no cell moves — the row is not re-flowed');
   assert.ok(res.skipped.layout.some((m) => /was applied, but its row still overflows/.test(m)),
     `the remaining overflow must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
+});
+
+// --- A NAMED section the spec places in another tab or form-column is MOVED there ------------------
+//
+// It used to be reused in place: found by name anywhere on the form, its attributes patched, its
+// location left alone. The build reported success with the section still in the old tab, and verify,
+// which checks placement, then failed the form.
+const tabsForm = (tabs) => ({ id: 'f1', bag: { a: [], c: [] }, tabs: tabs.map(([name, label, sections], ti) => ({
+  id: `t${ti}`, name, label, expanded: true, visible: true,
+  columns: [{ width: '100%', sections: sections.map(([id, sname, slabel, fields]) => ({
+    id, ...(sname ? { name: sname } : {}), label: slabel, visible: true, showLabel: true, columns: 1,
+    rows: fields.map((fn) => ({ cells: [{ control: { fieldName: fn } }] })) })) }] })) });
+const formShape = async (sdk, calls) => {
+  const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+  return form.tabs.map((t) => [t.name, t.columns.flatMap((c) => c.sections.map((s) =>
+    [s.id || 'new', s.name || null, (s.rows || []).flatMap((r) => (r.cells || []).map((x) => x.control && x.control.fieldName))]))]);
+};
+const sectionMoves = (calls) => find(calls, 'moveElement')
+  .filter((c) => c.args[0] === 'form' && /\/sections\/\d+$/.test(String(c.args[2])))
+  .map((c) => [c.args[2], c.args[3], c.args[4] && c.args[4].index]);
+const sectionAdds = (calls) => find(calls, 'addElement').filter((c) => c.args[0] === 'form' && /\/sections$/.test(String(c.args[2])));
+const relocateSpec = () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  return spec;
+};
+const formsOnly = ['solution', 'data-model', 'forms'];
+const inOldTab = () => tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]], ['tab_two', 'Two', []]]);
+
+test('form topology: a named section the spec moves to another tab is MOVED there — the same section, fields and all', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: inOldTab() });
+  const warnings = [];
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 0]]);
+  assert.ok(warnings.some((w) => w.includes("moved section 'sec_wide' from tab 'tab_one' (form-column 1) to tab 'tab_two' (form-column 1)")),
+    `a move a maker may not expect is reported; got ${JSON.stringify(warnings)}`);
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ], 'the section keeps its id and its field, and nothing is left behind');
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty twin is created in the new tab');
+});
+
+test('form topology: a section relocation converges — a second build moves nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: inOldTab() });
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  const first = calls.length;
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls.slice(first)), []);
+  assert.strictEqual(find(calls.slice(first), 'moveElement').length, 0, 'no cell moves either');
+});
+
+test('form topology: a moved section lands after the ones its new column already matched', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.unshift({ name: 'sec_first', label: 'First', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]],
+    ['tab_two', 'Two', [['s5', 'sec_first', 'First', []], ['s6', 'sec_maker', 'Added in Maker', []]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 1]]);
+  assert.deepStrictEqual((await formShape(sdk, calls))[1][1].map((s) => s[1]), ['sec_first', 'sec_wide', 'sec_maker'],
+    'after the authored section before it, ahead of a section the author never declared');
+});
+
+// Without the guard, sec_main claimed sec_wide by its LABEL, and sec_wide's own name hit then moved it
+// to tab_two — carrying sec_main's field along and leaving sec_main nowhere.
+test('form topology: a label or position match never takes a section another authored section claims by name', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s1', 'sec_wide', 'Main', ['new_name', 'new_tier']]]], ['tab_two', 'Two', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['sec_main'], 'sec_main gets a section of its own');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['new', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});
+
+// The naming hint is for a GENERATED name, which loses its identity on a move. An author may NAME a section
+// `section_1_0`, and a copy of that needs no advice to give it a name — while a copy of the same name
+// generated from the section's position still gets it.
+test('form topology: an emptied copy is given the naming hint only when its name was generated', async () => {
+  for (const [what, named] of [['named by the author', true], ['generated from its position', false]]) {
+    const spec = relocateSpec();
+    if (named) spec.forms[0].tabs[1].sections[0].name = 'section_1_0';
+    else delete spec.forms[0].tabs[1].sections[0].name;
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'section_1_0', 'Wide', ['new_tier']]]],
+      ['tab_two', 'Two', [['s9', 'section_1_0', 'Wide', []]]]]);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+    const removal = warnings.find((w) => /removed the now-empty section 'section_1_0'/.test(w));
+    assert.ok(removal, `${what}: the emptied copy is removed; got ${JSON.stringify(warnings)}`);
+    assert.strictEqual(/Give a section an explicit `name`/.test(removal), !named, `${what}: ${removal}`);
+    assert.deepStrictEqual((await formShape(sdk, calls))[1], ['tab_two', [['s9', 'section_1_0', ['new_tier']]]], what);
+  }
+});
+
+// A GENERATED name encodes the section's place (`section_<tab>[_<column>]_<index>`), so it is no identity to
+// look for across the form: a section of that name found elsewhere — dragged there in Maker, or another
+// section that now carries it after a reorder — is not moved back. As documented for a generated section,
+// it is created where the layout places it, its fields follow, and the original, emptied, is removed.
+test('form topology: a section with a generated name found elsewhere is recreated in place, not moved', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }, { label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_two', label: 'Two', columns: 1, fields: [] }] },
+  ]);
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]],
+    ['tab_two', 'Two', [['s9', 'sec_two', 'Two', []], ['s1', 'section_0_1', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the dragged section is not moved back');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_0_1', ['new_tier']]]],
+    ['tab_two', [['s9', 'sec_two', []]]],
+  ]);
+  assert.ok(warnings.some((w) => /removed the now-empty section 'section_0_1'/.test(w) && /Give a section an explicit `name`/.test(w)), JSON.stringify(warnings));
+});
+
+// A section the build CREATES lands where the layout places it — right after the sections already matched in
+// its column — not at the end. Appended, it followed every section still to come, and since the build never
+// reorders what exists (and verify does not check order) the wrong order was permanent: a new section
+// declared mid-column, or a generated one recreated after a drag in Maker.
+test('form topology: a section the build creates lands where the layout places it, not at the end', async () => {
+  const layout = (middle) => explicitForm([
+    { name: 'tab_one', label: 'One', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }, middle, { name: 'sec_after', label: 'After', columns: 1, fields: ['new_x'] }] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_two', label: 'Two', columns: 1, fields: [] }] },
+  ]);
+  for (const [what, middle, dragged] of [
+    ['a new named section declared mid-column', { name: 'sec_new', label: 'New', columns: 1, fields: ['new_tier'] }, false],
+    ['a generated section dragged away in Maker', { label: 'Wide', columns: 1, fields: ['new_tier'] }, true],
+  ]) {
+    const spec = makeSpec();
+    spec.forms = layout(middle);
+    const two = [['s9', 'sec_two', 'Two', []]].concat(dragged ? [['s1', 'section_0_1', 'Wide', ['new_tier']]] : []);
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s2', 'sec_after', 'After', ['new_x']]]], ['tab_two', 'Two', two]]);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    const name = middle.name || 'section_0_1';
+    const shape = [
+      ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', name, ['new_tier']], ['s2', 'sec_after', ['new_x']]]],
+      ['tab_two', [['s9', 'sec_two', []]]],
+    ];
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, what);
+    const first = calls.length;
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    const later = calls.slice(first);
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, `${what}: stable`);
+    assert.deepStrictEqual([find(later, 'moveElement').length, sectionAdds(later).length, find(later, 'removeElement').length], [0, 0, 0], `${what}: the next build changes nothing`);
+  }
+});
+
+// An older build could leave two sections of one name: the real one in the old tab and an empty twin
+// in the new one. The twin already in place is used, so nothing is moved on top of it.
+test('form topology: a same-named section already in the target column wins over one elsewhere', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]],
+    ['tab_two', 'Two', [['s9', 'sec_wide', 'Wide', []]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(relocateSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'no section is moved');
+  const removal = warnings.find((w) => /removed the now-empty section 'sec_wide'/.test(w));
+  assert.ok(removal && !/Give a section an explicit/.test(removal), `the copy is reported without a naming hint it does not need; got ${JSON.stringify(warnings)}`);
+  const shape = await formShape(sdk, calls);
+  assert.deepStrictEqual(shape[1], ['tab_two', [['s9', 'sec_wide', ['new_tier']]]], 'the field is moved into the twin in place');
+  // The emptied original is not the section the layout claims, so the sweep reclaims it: claims are
+  // judged by where each target resolves, never by a name the two share.
+  assert.deepStrictEqual(shape[0], ['tab_one', [['s0', 'sec_main', ['new_name']]]], 'and the empty copy left behind is removed');
+});
+
+// A match made by label or position keeps the deployed section's own (here: absent) name, so the
+// field pass finds it through the POINTER recorded when it matched — the pointer a later move shifts.
+test('form topology: a section recorded by position still receives its field after a move shifts it', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_other', displayName: 'Other', type: 'Text' });
+  spec.forms = explicitForm([
+    { name: 'tab_one', label: 'One', sections: [
+      { name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] },
+      { name: 'sec_old', label: 'Old', columns: 1, fields: ['new_other'] },
+    ] },
+    { name: 'tab_two', label: 'Two', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']], ['s2', null, 'Old', []]]],
+    ['tab_two', 'Two', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s2', null, ['new_other']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});// The correction is scoped to the column the section LEFT. A position-recorded section in another
+// column is untouched by the move, so correcting it too would send its field somewhere else.
+test('form topology: a move corrects recorded pointers only in the column it left', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_other', displayName: 'Other', type: 'Text' });
+  spec.forms = explicitForm([
+    { name: 'tab_a', label: 'A', sections: [
+      { name: 'sec_a', label: 'Main', columns: 1, fields: ['new_name'] },
+      { name: 'sec_old', label: 'Old', columns: 1, fields: ['new_other'] },
+    ] },
+    { name: 'tab_c', label: 'C', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ]);
+  const deployed = tabsForm([['tab_a', 'A', [['s0', 'sec_a', 'Main', ['new_name']], ['s2', null, 'Old', []]]],
+    ['tab_b', 'B', [['s1', 'sec_wide', 'Wide', ['new_tier']]]], ['tab_c', 'C', []]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  const shape = await formShape(sdk, calls);
+  assert.deepStrictEqual(shape[0], ['tab_a', [['s0', 'sec_a', ['new_name']], ['s2', null, ['new_other']]]]);
+  assert.deepStrictEqual(shape[2], ['tab_c', [['s1', 'sec_wide', ['new_tier']]]]);
+});// A section the spec moves into a tab or form-column the deployed form does not have yet is still
+// MOVED: the new container arrives without sections, and each of its sections goes through the same
+// per-section pass. Creating the container WITH its sections made a same-named copy, the field pass
+// filled the copy, and the emptied original survived the sweep under its claimed name — while verify,
+// which looks only at authored containers, passed the form.
+test('form topology: a named section moved into a NEW tab is moved, not duplicated', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1] = { name: 'tab_three', label: 'Three', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 0]]);
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), [], 'no copy is created');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_three', [['s1', 'sec_wide', ['new_tier']]]],
+  ]);
+});
+
+test('form topology: a named section moved into a NEW form-column is moved, not duplicated', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', tabs: [{ name: 'tab_one', label: 'One', columns: [
+    { width: '60%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] },
+    { width: '40%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_tier'] }] },
+  ] }] }];
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  // Same tab, different form-columns: different arrays, so the index needs no compensation.
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/0/columns/1/sections', 0]]);
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'no copy is created');
+  const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+  assert.deepStrictEqual(form.tabs[0].columns.map((c) => c.sections.map((s) => s.id)), [['s0'], ['s1']]);
+});
+
+// The notes/timeline section is appended by the COMPILER, not placed by the author, and nothing
+// verifies where it sits — so a timeline a maker moved to another tab stays there.
+test('form topology: an engine-owned section a maker moved is left where it is', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[1].columns[0].sections.push({ id: 's7', name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
+    rows: [{ cells: [{ control: { classId: '{06375649-C143-495E-A496-C962E5B4488E}', fieldName: null } }] }] });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the timeline is not dragged back to the first tab');
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'nor copied there');
+  assert.ok((await formShape(sdk, calls))[1][1].some((s) => s[0] === 's7'), 'it stays in the tab the maker put it in');
+});
+
+// An AUTHORED section may legally carry the name the engine gives its own host — `section_notes` is a
+// natural name for a section that holds a notes field — and the name lookups took the host: the move
+// dragged the timeline into the author's tab and the field pass poured the author's fields into it.
+// An engine-owned host is simply not a candidate for an authored want; the want is matched or created
+// like any other authored section, and the host stays exactly as it was.
+// The timeline's real control class id, as the SDK projects it (no braces, its original case).
+const NOTES_CONTROL = '06375649-c143-495e-a496-c962e5b4488e';
+const timelineHost = (id) => ({ id, name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: NOTES_CONTROL, fieldName: null } }] }] });
+test('form topology: an authored section named like the timeline host never takes the host from another tab', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the timeline host is not moved into the author\u2019s tab');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s7', 'section_notes', [null]]]],
+    ['tab_two', [['new', 'section_notes', ['new_tier']]]],
+  ], 'the author gets a section of their own, and the host keeps only its timeline');
+});
+
+test('form topology: an authored section named like the timeline host never takes the host in its own column', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[0].sections.push({ name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]],
+  ], 'not by name, label or position: the host stays a timeline, and the authored section is created beside it, where the layout places it');
+});
+
+// With notes on, the COMPILER appends its own `section_notes` want after the author's sections in the
+// first form-column, so an authored `section_notes` there shares its name. Recording the engine's want
+// replaced the author's field target: the field pass poured the author's fields into the timeline, the
+// sweep removed the emptied authored section, and verify still passed.
+const notesOnSpec = () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].tabs[0].sections.push({ name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  return spec;
+};
+test('form topology: with notes on, the compiled notes section never takes an authored section_notes\u2019 fields', async () => {
+  // Deployed exactly as compiled: the author's section_notes, then the timeline host.
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  const warnings = [];
+  await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['s3', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]],
+  ], 'an unchanged spec changes nothing');
+  assert.ok(!warnings.some((w) => /removed the now-empty section/.test(w)), warnings.join('\n'));
+  assert.deepStrictEqual([find(calls, 'moveElement').length, sectionAdds(calls).length], [0, 0]);
+});
+
+test('form topology: with notes on and the authored section_notes not deployed, it is created with its fields, and the builds settle', async () => {
+  for (const [what, withHost] of [['only the timeline deployed', true], ['neither deployed', false]]) {
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+    if (withHost) deployed.tabs[0].columns[0].sections.push(timelineHost('s7'));
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const shape = [['tab_one', withHost
+      ? [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['s7', 'section_notes', [null]]]
+      : [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', ['new_tier']], ['new', 'section_notes', [null]]]]];
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, `${what}: the field lands in the authored section, not the timeline`);
+    const first = calls.length;
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const later = calls.slice(first);
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, what);
+    assert.deepStrictEqual([find(later, 'moveElement').length, sectionAdds(later).length, find(later, 'removeElement').length], [0, 0, 0], `${what}: the next build changes nothing`);
+  }
+});
+
+// The timeline's host is found form-wide (a maker may have moved it), and the author's own section_notes
+// holding fields elsewhere is not it: taking that one meant the form never got its timeline.
+test('form topology: with notes on, an authored section_notes in another tab is never taken for the timeline host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), []);
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'section_notes', [null]]]],
+    ['tab_two', [['s3', 'section_notes', ['new_tier']]]],
+  ], 'the timeline is added to the first tab, and the author\u2019s section keeps its field');
+});
+
+// With no host to find, the notes section is CREATED. It has no label or position to go on, and taking the
+// maker section at its index relabelled it "Notes" and re-flowed it to one column, with still no timeline,
+// on every build.
+test('form topology: with notes on and no timeline deployed, the maker section at its index is never taken for it', async () => {
+  for (const [what, prune, extra] of [
+    ['a maker section with fields, prune off', false, (s) => Object.assign(s, { columns: 2, rows: [{ cells: [{ control: { fieldName: 'new_x' } }, { control: { fieldName: 'new_y' } }] }] })],
+    ['an empty maker section', true, (s) => s],
+  ]) {
+    const spec = notesOnSpec();
+    if (!prune) spec.forms[0].prune = false;
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']], ['s9', 'sec_extra', 'Extra', []]]]]);
+    extra(deployed.tabs[0].columns[0].sections[2]);
+    const before = JSON.parse(JSON.stringify(deployed.tabs[0].columns[0].sections[2]));
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    for (const build of [1, 2]) {
+      await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+      const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+      const sections = form.tabs[0].columns[0].sections;
+      assert.deepStrictEqual(sections.find((s) => s.id === 's9'), before, `${what}, build ${build}: the maker's section is untouched`);
+      assert.strictEqual(sections.filter((s) => s.name === 'section_notes' && s.rows.some((r) => r.cells.some((c) => c.control && !c.control.fieldName))).length, 1,
+        `${what}, build ${build}: exactly one timeline, created on the first build`);
+      assert.strictEqual(sections[sections.length - 1].name, 'section_notes', `${what}, build ${build}: added last, where the compiler places it`);
+    }
+  }
+});
+
+// The timeline's host holds the timeline's own control. An authored `section_notes` holding a field and a
+// maker's web resource holds AN unbound control but not that one — taking it for the host meant the form
+// never got its timeline, and the notes want re-patched the author's section on every build.
+test('form topology: with notes on, a section_notes holding a field and a maker web resource is never the timeline host', async () => {
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']], ['s3', 'section_notes', 'Notes', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections[1].rows.push({ cells: [{ control: { classId: 'webresource-class', fieldName: null } }] });
+  const before = JSON.parse(JSON.stringify(deployed.tabs[0].columns[0].sections[1]));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  for (const build of [1, 2]) {
+    await runSdkBuild(notesOnSpec(), { sdk, apply: true, phases: formsOnly });
+    const form = await sdk.getArtifact('form', find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1]);
+    const sections = form.tabs[0].columns[0].sections;
+    assert.deepStrictEqual(sections.find((s) => s.id === 's3'), before, `build ${build}: the author's section is untouched`);
+    assert.strictEqual(sections.filter((s) => s.rows.some((r) => r.cells.some((c) => c.control && String(c.control.classId).toLowerCase() === NOTES_CONTROL))).length, 1,
+      `build ${build}: exactly one timeline`);
+  }
+});
+
+// …while a timeline host a maker put a field into still holds that control, so it is still found and no
+// second timeline is added.
+test('form topology: with notes on, a timeline host a maker added a field to is still the host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  const host = timelineHost('s7');
+  host.rows.push({ cells: [{ control: { fieldName: 'new_x' } }] });
+  deployed.tabs[0].columns[0].sections.push(host);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), [], 'no second timeline section');
+});
+
+// A timeline or sub-grid host a maker added a bound field to is no longer engine-owned by STRUCTURE — not
+// every cell is unbound — yet it is still the host: it holds the control the engine put it there for. An
+// authored section sharing its name took it by name, so the build moved the host into the author's tab and
+// poured the author's fields into it; and any authored want could take it by label or position.
+const mixedHost = (host) => { host.rows.push({ cells: [{ control: { fieldName: 'new_x' } }] }); return host; };
+const subgridHost = (id) => ({ id, name: 'section_grid_contacts', label: 'Contacts', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: 'E7A81278-8635-4D9E-8D4D-59480B391C5B', fieldName: null, parameters: { RelationshipName: 'new_customer_contacts' } } }] }] });
+test('form topology: an engine host a maker added a field to is never taken by an authored section named like it', async () => {
+  for (const [what, host] of [['timeline', mixedHost(timelineHost('s7'))], ['sub-grid', mixedHost(subgridHost('s7'))]]) {
+    const spec = relocateSpec();
+    spec.forms[0].prune = false;
+    spec.forms[0].tabs[1].sections[0] = { name: host.name, label: host.label, columns: 1, fields: ['new_tier'] };
+    const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+    deployed.tabs[0].columns[0].sections.push(host);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    assert.deepStrictEqual(sectionMoves(calls), [], `${what}: the host is not moved into the author\u2019s tab`);
+    assert.deepStrictEqual(await formShape(sdk, calls), [
+      ['tab_one', [['s0', 'sec_main', ['new_name']], ['s7', host.name, [null, 'new_x']]]],
+      ['tab_two', [['new', host.name, ['new_tier']]]],
+    ], `${what}: the author gets a section of their own, and the host keeps its control and the maker's field`);
+  }
+});
+
+// A host is known by the control ITS name exists for. A `section_notes` holding a sub-grid and a field is no
+// timeline host, so it is the author's, and the spec moves it like any other named section.
+test('form topology: a section named like the timeline host but holding a sub-grid is the author\u2019s', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].prune = false;
+  spec.forms[0].tabs[1].sections[0] = { name: 'section_notes', label: 'Notes', columns: 1, fields: ['new_tier'] };
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', []]]);
+  deployed.tabs[0].columns[0].sections.push(mixedHost(Object.assign(subgridHost('s7'), { name: 'section_notes', label: 'Notes' })));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionAdds(calls).length, 0, 'no second section_notes');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s7', 'section_notes', [null, 'new_x', 'new_tier']]]],
+  ]);
+});
+
+test('form topology: a timeline host a maker added a field to is never taken by label or position', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].notes = true;
+  spec.forms[0].prune = false;
+  spec.forms[0].tabs[0].sections.push({ name: 'sec_new', label: 'Notes', columns: 1, fields: ['new_tier'] });
+  spec.forms[0].tabs.pop();
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]]]);
+  deployed.tabs[0].columns[0].sections.push(mixedHost(timelineHost('s7')));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']], ['new', 'sec_new', ['new_tier']], ['s7', 'section_notes', [null, 'new_x']]]],
+  ], 'the new section sits where its label and index point, but beside the host, not in it');
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['sec_new'], 'and the timeline is not added twice');
+});
+
+// A section is engine-owned by STRUCTURE (only unbound controls), which cannot say who laid it out: an
+// authored section declared with no fields that a maker filled with a web resource looks the same. Skipping
+// it by name created an empty duplicate beside it, and when the spec moved it, left the maker's control
+// behind. Its authored name is the evidence it is the author's; only the engine's own names mark a host.
+const makerFilled = (id, name) => ({ id, name, label: 'Related', visible: true, showLabel: true, columns: 1,
+  rows: [{ cells: [{ control: { classId: 'webresource-class', fieldName: null } }] }] });
+test('form topology: an authored section a maker filled with a control is still found by its name', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[0].sections.push({ name: 'sec_related', label: 'Related', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s4', 'sec_related'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty duplicate is created beside it');
+  assert.deepStrictEqual((await formShape(sdk, calls))[0], ['tab_one', [['s0', 'sec_main', ['new_name']], ['s4', 'sec_related', [null]]]]);
+});
+
+test('form topology: an authored section a maker filled with a control moves WITH its control', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.push({ name: 'sec_related', label: 'Related', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s4', 'sec_related'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [['/tabs/0/columns/0/sections/1', '/tabs/1/columns/0/sections', 1]]);
+  assert.strictEqual(sectionAdds(calls).length, 0, 'no empty copy in the new tab');
+  assert.deepStrictEqual(await formShape(sdk, calls), [
+    ['tab_one', [['s0', 'sec_main', ['new_name']]]],
+    ['tab_two', [['s1', 'sec_wide', ['new_tier']], ['s4', 'sec_related', [null]]]],
+  ]);
+});
+
+// …while a host under the engine's OTHER name — a sub-grid's `section_grid_<relationship>` — is kept from
+// an authored want of that name exactly like the timeline.
+test('form topology: an authored section named like a sub-grid host never takes the host', async () => {
+  const spec = relocateSpec();
+  spec.forms[0].tabs[1].sections.push({ name: 'section_grid_new_ticket', label: 'Tickets', columns: 1, fields: [] });
+  const deployed = tabsForm([['tab_one', 'One', [['s0', 'sec_main', 'Main', ['new_name']]]], ['tab_two', 'Two', [['s1', 'sec_wide', 'Wide', ['new_tier']]]]]);
+  deployed.tabs[0].columns[0].sections.push(makerFilled('s8', 'section_grid_new_ticket'));
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+  assert.deepStrictEqual(sectionMoves(calls), [], 'the host stays where it is');
+  assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['section_grid_new_ticket'], 'the authored section is created');
 });

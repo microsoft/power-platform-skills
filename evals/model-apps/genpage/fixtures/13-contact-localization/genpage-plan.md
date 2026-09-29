@@ -50,6 +50,9 @@ No connector bindings.
 - dir attribute set from locale.isRtl
 - Logical CSS properties (marginInlineStart/End, paddingInlineStart/End)
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - DataGrid with sortable, resizable columns

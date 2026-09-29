@@ -41,6 +41,9 @@ No entity creation required — all entities already exist.
 |--------------|--------------|---------|----------------|---------------------|------------|--------|------------|----------|
 | new_uxtest_sharepoint | /providers/Microsoft.PowerApps/apis/shared_sharepointonline | https://contoso.sharepoint.com/sites/team | 5709dd6f-c73e-4079-ad23-2334e45e0e13 | Documents | | ID (number), Title (string), Author (string), FileType ({Value:string}), Created (string), Modified (string) | | |
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - Clean card list layout for document browsing

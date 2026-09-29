@@ -207,6 +207,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
   warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
   a silent success.
+  **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
+  and on an existing app when it differs from the fetched draft, riding that run's app push. The
+  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
+  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
+  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  other failed push that carried the change resets the copy too — except a concurrent edit
+  (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
+  without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
+  nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
+  run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -347,14 +359,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
-  still tears down cleanly instead of erroring. Command teardown
+  still tears down cleanly instead of erroring. It is also **kept while any earlier step failed**:
+  dashboards are found by name, and the app's own are the ones its solution holds (a built-in container
+  holds every dashboard, so with no real solution teardown deletes none), which makes the solution the
+  only proof a re-run has — deleted after a failure, the retry kept the app's dashboards for good. A
+  membership read that fails is itself a failed step, never a skip or a not-found (as either, the
+  solution was deleted right after it). Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
   writes); best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
   error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
   and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
-  `--clear-workspace` prunes `.maker-workspace/` after a clean apply. `planTeardown(spec)` is pure (dry-run +
+  `--clear-workspace` prunes `.maker-workspace/` after a clean apply (not while another teardown of it
+  still holds the changed-only fence). `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
@@ -419,7 +437,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a downgrade there silently stops custom nav icons from round-tripping. Recovered **tables are flagged
   `existing: true`**, so a teardown of a downloaded spec never deletes a table (+ its data) this build
   cannot prove it created — download can't distinguish app-created from merely-referenced tables, so it
-  fails safe (an orphaned table is recoverable; deleted customer data is not).
+  fails safe (an orphaned table is recoverable; deleted customer data is not). The **same flag is set on
+  every recovered relationship and global choice** and teardown honours it for all three (#587 item 6):
+  deleting a relationship strips its lookup column off a retained table, and an option set is org-wide.
+  An app in **several unmanaged solutions** is never resolved to one of them (#587 item 9): Dataverse
+  has no "owning" solution, a rebuild adds to the spec's solution and teardown deletes it, and the
+  app-name heuristic is the unreliable guess above. The spec keeps `Default` (never torn down), the
+  download names the candidates in `solutionCandidates` and scopes its inventory by all of them, and
+  keeps a publisher prefix only when every candidate's publisher agrees. A membership that cannot be
+  read is reported as such — business rules and solution-owned global choices become "unknown" —
+  rather than read as "no solution".
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
   changed in Maker throws a version conflict → re-pull, never clobber). **Classic DashBoard subareas
@@ -455,7 +482,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
   column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. It also reconciles
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
+  checked too (#586): each declared dashboard must exist. A name can also match another app's
+  dashboard, so when it matches several, verify checks the one the app's solution holds — the one the
+  build reuses (`dashboardsInSolution`, shared with the build and teardown) — and fails only when the
+  solution cannot single one out. All three find the candidates with `findDashboardsByName`: the
+  vendored lookup reads one page of ten in no defined order, so a full page is re-read in full and the
+  app's own cannot sort out of sight. The sitemap subarea check asks the same question (one lookup per
+  name, shared), so the two cannot pick different dashboards — it used to take the first match, and live
+  a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every chart tile's
+  visualization and view must belong to the tile's `TargetEntityType` — the cross-wiring a same-named
+  chart on another table produced. A tile whose owner rows cannot be read is reported unverified, not
+  passed. It also reconciles
   **AI app features**: for every `ai.appFeatures` entry it proves an APP-SCOPE OVERRIDE ROW exists in
   `appsettings` holding the requested value. Verify previously had no awareness of `spec.ai` at all, so
   a run whose every AI feature was skipped (admin gate off) or silently not persisted still reported a
@@ -622,6 +660,9 @@ scripts/
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
+  genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
@@ -635,6 +676,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
@@ -663,7 +705,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
@@ -824,7 +866,27 @@ All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
-backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper.
+backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper. It also
+backs the navigation oracle (`pageref-resolver.js`), which finds each call AND parses its object
+in the lexer's mask — executable code inside a template's `${…}` is visible, template text and
+string bodies are not — and reads each value from the source at the same offsets, so one lexer
+drives both. It also backs the worker-output gate
+(`genpage-worker-output.js`), and `findElisionMarker` — the one "was code elided?" rule the
+worker gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
+a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
+as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
+code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
+scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
+`!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
+head, after which a statement starts. Each of those rules was once broken, and each break refused
+a complete page as truncated or hid a navigation call. `hasDefaultExport` also needs the export
+itself to be complete (a function or class reaches its body; a bare name is one the module
+declares or imports, not a token that merely appears — the `as` of `import * as React` is not a
+binding), because a write cut inside its export line balances; any complete `export default` will
+do, for overloads. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
+lexer reports when a file stops inside a string, template, comment or JSX element, and a file
+may not end on a token that needs more (`a +`, `React.`, `=>`). Both gates run all three checks.
 
 Judge changes to it by **both** error directions, and weight them correctly:
 - a false **accept** promotes prose as a page, and promotion is sticky — the page is then
@@ -836,7 +898,10 @@ Judge changes to it by **both** error directions, and weight them correctly:
 committed `.tsx` in `samples/` and `evals/model-apps/genpage/fixtures/` (enumerated via
 `git ls-files`, so it does not race the transient fixture dirs `capture-fixture.test.js`
 creates). Two lexer bugs were invisible to hand-written cases and caught only by that
-corpus — keep it, and add to it rather than around it.
+corpus — keep it, and add to it rather than around it. The worker-output gate
+(`genpage-worker-output.test.js`) and the icon hook (`validate-icon-imports.test.js`, samples
+only) run the same kind of corpus: every committed page must pass them, because a false reject
+there throws away a good page or blocks a pattern the page builder was told to copy.
 
 Residual limits, accepted deliberately:
 - **`<` disambiguation is structural, not semantic.** A generic arrow is recognised by its

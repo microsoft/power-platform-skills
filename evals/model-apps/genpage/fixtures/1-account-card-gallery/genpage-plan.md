@@ -41,6 +41,9 @@ account
 
 No connector bindings.
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - Card grid layout, responsive auto-fill columns

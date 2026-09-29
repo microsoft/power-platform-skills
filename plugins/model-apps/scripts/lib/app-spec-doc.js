@@ -42,6 +42,9 @@ function overview(spec) {
   const app = spec.app || {};
   const out = [`# ${text(app.name, 'Model-driven app')} — design`, ''];
   if (app.description) out.push(text(app.description), '');
+  // #583: the routing description is reviewed beside the tile text, since the two now say different
+  // things — the tile stays short, and the routing text says who the app is for and what it leaves out.
+  if (app.aiDescription) out.push(`**Routing description:** ${text(app.aiDescription)}`, '');
   out.push(
     'Generated from `app-spec.json` by `scripts/write-app-spec-doc.js`. **Regenerate rather than',
     'hand-edit** — `app-spec.json` is the source of truth, so a manual edit here is lost on the next',

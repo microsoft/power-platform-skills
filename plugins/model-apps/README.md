@@ -14,6 +14,8 @@ Build and deploy generative pages (genux) for Power Apps model-driven apps. This
 ### From a local clone
 
 ```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+# or
 claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 ```
 
@@ -141,6 +143,22 @@ Creates, updates, and deploys generative pages for model-driven Power Apps. Hand
 ## Running Without Interruption
 
 The plugin invokes multiple tools during a session. To reduce approval prompts:
+
+### GitHub Copilot CLI
+
+**Option 1 — Allow specific tools (recommended)**
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(pac *)' --allow-tool 'shell(node *)' --allow-tool 'shell(powershell *)' --allow-tool 'shell(az *)'
+```
+
+**Option 2 — Allow all tools**
+
+```bash
+copilot --allow-all-tools
+```
+
+### Claude Code
 
 **Option 1 — Permission mode (recommended)**
 

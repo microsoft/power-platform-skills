@@ -216,6 +216,10 @@ unless destructive authority was supplied independently.
      `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
      (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
      warning; `personas[]` does not take one at all. See the schema reference for why.)
+     The app itself takes two: `app.description` is the short tile text, and `app.aiDescription` is
+     the **routing description** an orchestrator reads to choose between apps — who the app is for,
+     what it covers and excludes, and how to tell it from a sibling app over the same tables. Write
+     it whenever such a sibling exists or is planned.
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison
@@ -288,7 +292,10 @@ After plan-mode approval (before the full build):
    `{ ok, planPath, pages: [{ name, key, file, dataMode, intent }] }`. Pass `--languages` through
    from the environment probe — omitting it silently defaults every plan to English-only and drops
    the localization pattern. The command fails (before writing) if the plan would name a sample that
-   doesn't exist.
+   doesn't exist, or if a page a worker will write is not a safe target in the working directory — a
+   link at its path, a folder that links outside the directory, or a page already there under another
+   spelling — or if a link, a hard link or a folder is already at the plan's own path. Stop and fix
+   what it names; do not dispatch any worker.
 
 4. **Generate** — for each page from step 3 with `intent: true`, dispatch the **headless**
    `genpage-page-builder` worker via `Task`. Use its documented input contract verbatim — a missing
@@ -432,7 +439,12 @@ table's privileges can block that table's delete. Command
 teardown removes the whole command bar for any entity the spec authored commands on. **Teardown only
 deletes tables this build created** — a **system/standard table** (account, contact, …) is
 auto-detected and **skipped**, and a **reused custom table** is skipped when its entity is flagged
-`"existing": true`, so pre-existing data survives. **Dry-run by default**; add `--apply
+`"existing": true`, so pre-existing data survives. The same flag protects **relationships and global
+choices** — a download sets it on every one it recovers, so tearing down a downloaded spec never removes
+a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
+teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
+has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
+failed, so a re-run can still tell. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.

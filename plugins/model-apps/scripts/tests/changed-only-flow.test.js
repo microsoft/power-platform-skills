@@ -109,6 +109,16 @@ test('decide: identity mismatch -> full (gate blocks)', () => {
   assert.match(d.reason, /orgId/);
 });
 
+test('decide: a distrust marker forces a full build, even on an eligible snapshot with nothing changed', () => {
+  const prior = annotate(baseSpec(), 'v1');
+  const env = seedFromPrior(prior);
+  const cur = annotate(baseSpec(), 'v1');
+  assert.strictEqual(flow.decideChangedOnly({ annotatedSpec: cur, snapshot: env, live: LIVE }).decision, 'noop', 'control: nothing changed');
+  const d = flow.decideChangedOnly({ annotatedSpec: cur, snapshot: env, live: LIVE, distrust: { names: ['apply-snapshot.distrust.x.json'], reason: 'snapshot lease unavailable (held)' } });
+  assert.strictEqual(d.decision, 'full');
+  assert.match(d.reason, /could not invalidate the snapshot \(snapshot lease unavailable \(held\)\)/);
+});
+
 test('decide: ineligible (debt-carrying) snapshot -> full even for a page edit', () => {
   const prior = annotate(baseSpec(), 'v1');
   const env = snap.makeEnvelope(LIVE, { generation: 'g' });
@@ -346,6 +356,584 @@ test('run: invalidate failure (lease held) ABORTS a fast apply without building'
     assert.strictEqual(record.length, 0, 'must not build while another holds the lease');
     assert.match(r.errors[0], /invalidate/);
     store.releaseLease(held);
+  } finally { rm(dir); }
+});
+
+// #587 item 1: a teardown that tombstones the snapshot while a changed-only run is between its read and
+// its first write must fence that run. Measured before the fix: the run resumed with decision FAST,
+// invalidated the tombstoned copy, and its re-bless CAS still matched — leaving the snapshot eligible with
+// no debt, i.e. the tombstone erased. The identity lookup is the slow network step where that lands.
+for (const [path_, spec, content] of [
+  ['FAST', baseSpec, 'v2'],
+  ['FULL', () => { const s = baseSpec(); s.charts[0].kind = 'pie'; return s; }, 'v1'],
+]) {
+  test(`run: a teardown tombstone landing during identity discovery fences a ${path_} apply (#587 item 1)`, async () => {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: spec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, {
+        buildModelApp: stubBuild(record), readContent: readFor(content),
+        resolveLiveIdentity: async () => { assert.ok(store.tombstoneSnapshot(dir).ok); return LIVE; },
+      }) });
+      assert.strictEqual(r.changedOnly.decision, path_.toLowerCase(), 'precondition: the stale read still decides this path');
+      assert.strictEqual(r.ok, false, 'the run must fail closed');
+      assert.strictEqual(record.length, 0, 'nothing may be applied on a snapshot a teardown has fenced');
+      assert.match(r.errors[0], /changed since/);
+      const disk = store.readSnapshot(dir);
+      assert.ok(snap.isTombstoned(disk) && disk.eligible === false, 'the tombstone survives');
+    } finally { rm(dir); }
+  });
+
+  // The other window: the tombstone lands AFTER this run's invalidate, while its build is running. The
+  // run's re-bless must then lose its CAS rather than write its pre-teardown view over the tombstone.
+  test(`run: a teardown tombstone landing during a ${path_} build is not re-blessed away (#587 item 1)`, async () => {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const build = async () => {
+        assert.ok(store.tombstoneSnapshot(dir).ok);
+        return { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: true } };
+      };
+      const r = await flow.runChangedOnlyApply({ spec: spec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor(content) }) });
+      assert.strictEqual(r.changedOnly.decision, path_.toLowerCase());
+      const disk = store.readSnapshot(dir);
+      assert.ok(snap.isTombstoned(disk) && disk.eligible === false, `the tombstone must survive the re-bless; got ${JSON.stringify({ eligible: disk && disk.eligible, debt: disk && disk.debt })}`);
+      // And the run fails: what it built may already be deleted, and no baseline records it.
+      assert.strictEqual(r.ok, false);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this (fast apply|build) ran/);
+    } finally { rm(dir); }
+  });
+}
+
+// The same fence for a FIRST build, which has no snapshot to be fenced by. Its baseline write expected
+// "no snapshot", and a teardown that found none either wrote nothing, so the build blessed an app the
+// teardown had just deleted — the fence above only covered a workspace that already had a snapshot. The
+// build now claims a placeholder before it builds, and a teardown tombstones even an empty workspace.
+const FRESH = { orgId: 'org-1', envUrl: 'https://e', appUniqueName: 'new_app', appId: null };
+test('run: a teardown landing during identity discovery stops a FIRST build before it builds anything', async () => {
+  const dir = ws();
+  try {
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, {
+      buildModelApp: stubBuild(record), readContent: readFor('v1'),
+      resolveLiveIdentity: async () => { assert.ok(store.tombstoneSnapshot(dir).ok); return FRESH; },
+    }) });
+    assert.match(r.changedOnly.reason, /no snapshot/, 'precondition: the run read no snapshot');
+    assert.strictEqual(r.ok, false, 'the run must fail closed');
+    assert.strictEqual(record.length, 0, 'nothing may be built while a teardown holds the workspace');
+    assert.match(r.errors[0], /could not claim the workspace for the first baseline \(a snapshot appeared since/);
+    const disk = store.readSnapshot(dir);
+    assert.ok(snap.isTombstoned(disk) && disk.eligible === false, 'the tombstone survives');
+  } finally { rm(dir); }
+});
+
+for (const [when, teardown] of [
+  ['finishes with errors', (dir) => assert.ok(store.tombstoneSnapshot(dir).ok)],
+  ['finishes cleanly', (dir) => { assert.ok(store.tombstoneSnapshot(dir).ok); assert.ok(store.deleteSnapshot(dir).ok); }],
+]) {
+  test(`run: a teardown that ${when} during a FIRST build leaves no eligible baseline behind`, async () => {
+    const dir = ws();
+    try {
+      const build = async () => {
+        teardown(dir);
+        return { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: true } };
+      };
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+      assert.match(r.changedOnly.reason, /no snapshot/);
+      const disk = store.readSnapshot(dir);
+      assert.ok(!disk || (disk.eligible === false && snap.isTombstoned(disk)), `no eligible baseline may be written over a teardown; got ${JSON.stringify(disk && { eligible: disk.eligible, debt: disk.debt })}`);
+    } finally { rm(dir); }
+  });
+}
+
+// The placeholder a crashed first build leaves must not poison the next one: no debt (a baseline inherits
+// its prior's), and no identity mismatch in the reason a reader sees.
+test('run: a FIRST build that fails leaves a debt-free placeholder, and the next run still certifies a fresh baseline', async () => {
+  const dir = ws();
+  try {
+    const failed = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: async () => ({ ok: false, errors: ['boom'] }), resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+    assert.strictEqual(failed.ok, false);
+    const placeholder = store.readSnapshot(dir);
+    assert.ok(placeholder && placeholder.eligible === false && placeholder.debt.length === 0 && placeholder.priorSpec === null, JSON.stringify(placeholder));
+    const d = flow.decideChangedOnly({ annotatedSpec: annotate(baseSpec(), 'v1'), snapshot: placeholder, live: FRESH });
+    assert.strictEqual(d.decision, 'full');
+    assert.match(d.reason, /not eligible/, `reported as not eligible, not as an identity mismatch: ${d.reason}`);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: async () => FRESH, readContent: readFor('v1') }) });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(record.length, 1);
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, true, `the retry certifies its fresh baseline; debt ${JSON.stringify(disk.debt)}`);
+    assert.strictEqual(disk.appId, 'app-1');
+  } finally { rm(dir); }
+});
+
+// A tombstone that lists a teardown still running means that teardown is deleting the app right now: a
+// build would recreate what it deletes, and its fenced invalidate would pass — the generation it compares
+// is the tombstone's own. So a changed-only run refuses and builds nothing until the teardown finishes.
+test('run: a changed-only build refuses while a teardown of the workspace is still running', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const t = store.tombstoneSnapshot(dir);
+    const before = store.readSnapshot(dir);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /^changed-only: 1 teardown\(s\) of this workspace are still running \(pid \d+, last seen \d+s ago\) — re-run the build once they have finished\. A teardown that died stops counting 5 minutes after it was last seen\.$/);
+    assert.strictEqual(record.length, 0, 'nothing is built while the teardown deletes');
+    assert.deepStrictEqual(store.readSnapshot(dir), before, 'and the tombstone is untouched');
+    assert.deepStrictEqual(store.releaseTombstone(dir, t.teardownId), { ok: true, deleted: true }, 'the teardown then finishes as usual');
+  } finally { rm(dir); }
+});
+
+// …whichever build it would have run: a run that cannot resolve its live identity falls back to a plain
+// full build, and that one waits for the teardown too — before it even asks for the identity.
+test('run: the no-identity fallback also waits for a teardown still running', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    store.tombstoneSnapshot(dir);
+    const record = [];
+    let asked = 0;
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => { asked += 1; return null; } }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /teardown\(s\) of this workspace are still running/);
+    assert.deepStrictEqual([record.length, asked], [0, 0], 'nothing built, and the identity never asked for');
+  } finally { rm(dir); }
+});
+
+// …and a teardown that BEGINS while the identity is being resolved is not in the first read. The fenced
+// branches catch it through their invalidate; the no-identity one writes no snapshot, so it reads the
+// workspace again and refuses when it moved — a teardown's tombstone, or another build's invalidate.
+test('run: the no-identity fallback refuses when the workspace changed during identity discovery', async () => {
+  for (const [what, seed, during] of [
+    ['a teardown began', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.tombstoneSnapshot(dir)],
+    ['a teardown began on a workspace with no snapshot', () => {}, (dir) => store.tombstoneSnapshot(dir)],
+    ['another build invalidated it', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.invalidateSnapshot(dir, { expectedGeneration: store.readSnapshot(dir).generation })],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => { during(dir); return null; } }) });
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[0], /the workspace changed while the live identity was being resolved/, what);
+      assert.strictEqual(record.length, 0, `${what}: nothing is built`);
+    } finally { rm(dir); }
+  }
+});
+
+// A teardown that begins after that re-read, while the build runs, is not fenced by it, and this path writes no
+// baseline whose CAS could be refused. The workspace is read again when the build returns, and a moved generation
+// fails the run: what the build made may already be partly deleted.
+test('run: the no-identity fallback fails when the workspace changed while the build ran', async () => {
+  for (const [what, seed, during] of [
+    ['a teardown began', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.tombstoneSnapshot(dir)],
+    ['a teardown began on a workspace with no snapshot', () => {}, (dir) => store.tombstoneSnapshot(dir)],
+    ['another build invalidated it', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1')), (dir) => store.invalidateSnapshot(dir, { expectedGeneration: store.readSnapshot(dir).generation })],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const record = [];
+      const build = async (spec, opts) => { record.push(opts.phases); during(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+      assert.strictEqual(record.length, 1, `${what}: the build ran`);
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/, what);
+      assert.strictEqual(r.changedOnly.reason, 'the workspace changed during the build', what);
+    } finally { rm(dir); }
+  }
+  // CONTROL: nothing changes the workspace during the build — the full build's result stands.
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.changedOnly, { decision: 'full', reason: 'no live identity' });
+  } finally { rm(dir); }
+});
+
+// With no snapshot there was no generation to compare: a teardown that began AND finished during the build wrote its
+// tombstone and deleted it on release, and "none" before and after hid it. The run claims a placeholder first, and
+// drops it afterwards when nothing raced, so this path still leaves no snapshot behind.
+test('run: the no-identity fallback on a workspace with no snapshot sees a teardown that came and went during the build', async () => {
+  const dir = ws();
+  try {
+    const record = [];
+    const build = async (spec, opts) => {
+      record.push(opts.phases);
+      assert.ok(store.readSnapshot(dir), 'the build runs under the placeholder the run claimed');
+      const t = store.tombstoneSnapshot(dir);
+      assert.deepStrictEqual(store.releaseTombstone(dir, t.teardownId), { ok: true, deleted: true }, 'precondition: the teardown finished and deleted its tombstone');
+      return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+    };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(record.length, 1);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/);
+  } finally { rm(dir); }
+  // CONTROL: nothing raced — the build's result stands, and the placeholder is gone again.
+  const quiet = ws();
+  try {
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: quiet, apply: true }, deps: baseDeps(quiet, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual(store.readSnapshot(quiet), null, 'no snapshot is left behind');
+  } finally { rm(quiet); }
+  // A claim that cannot be made (another writer holds the lease) stops the run before it builds anything.
+  const busy = ws();
+  try {
+    fs.writeFileSync(store.leasePath(busy), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: busy, apply: true }, deps: baseDeps(busy, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /could not claim the workspace before the build/);
+    assert.strictEqual(record.length, 0, 'nothing is built');
+  } finally { rm(busy); }
+});
+
+// Two no-identity builds that read the same generation, one inside the other, each saw it unchanged at the end and
+// both reported success. Each now takes a generation of its own before it builds, so the first sees the second's.
+test('run: overlapping no-identity builds do not both pass', async () => {
+  for (const [what, seed] of [
+    ['on a workspace with no snapshot', () => {}],
+    ['on a workspace with an eligible snapshot', (dir) => seedEligible(dir, annotate(baseSpec(), 'v1'))],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      let inner = null;
+      const innerDeps = baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => null });
+      const build = async () => {
+        inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+        return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+      };
+      const outer = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+      assert.ok(inner, `${what}: the second build ran inside the first`);
+      assert.strictEqual(outer.ok, false, `${what}: the first build saw the second`);
+      assert.match(outer.errors[outer.errors.length - 1], /the workspace changed while this build ran/, what);
+    } finally { rm(dir); }
+  }
+});
+
+// A no-identity build outdates the baseline it read, as any full build does, so the baseline is invalidated first —
+// fenced to the generation read — and never left eligible behind the build.
+test('run: the no-identity fallback invalidates an existing baseline before it builds', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const seen = store.readSnapshot(dir).generation;
+    let during = null;
+    const build = async () => { during = store.readSnapshot(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(during && during.eligible === false && during.generation !== seen, 'invalidated, with a rotated generation, before the build ran');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false, 'and still ineligible afterwards');
+  } finally { rm(dir); }
+  // An invalidate that cannot be made (the lease is held) stops the run before it builds anything.
+  const busy = ws();
+  try {
+    seedEligible(busy, annotate(baseSpec(), 'v1'));
+    fs.writeFileSync(store.leasePath(busy), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: busy, apply: true }, deps: baseDeps(busy, { buildModelApp: stubBuild(record), readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.errors[0], /could not invalidate the snapshot before the build/);
+    assert.strictEqual(record.length, 0);
+  } finally { rm(busy); }
+});
+
+// A build that sees the workspace change under it cannot vouch for a baseline another build blessed meanwhile: it may
+// have overwritten what that baseline certifies since. The snapshot it finds is made ineligible, so the next run
+// cannot noop on it.
+test('run: a build that saw the workspace change under it leaves no eligible baseline behind', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const blessedInside = async (dir) => {
+    const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+    assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
+    assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: the inner build blessed a fresh baseline');
+  };
+  for (const [what, seed, outerIdentity] of [
+    ['a no-identity build', () => {}, async () => null],
+    ['a full build whose baseline write is refused', () => {}, async () => FRESH],
+  ]) {
+    const dir = ws();
+    try {
+      seed(dir);
+      const build = async () => { await blessedInside(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+      await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: outerIdentity }) });
+      assert.strictEqual(store.readSnapshot(dir).eligible, false, `${what}: the baseline blessed meanwhile is no longer eligible`);
+      const next = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+      assert.notStrictEqual(next.noop, true, `${what}: the next run does not noop on it`);
+    } finally { rm(dir); }
+  }
+});
+
+// A fresh-app build that has built and verified still holds the generation its baseline write will CAS against, and
+// its snapshot is ineligible until then. Distrust that skipped an ineligible snapshot left that generation standing,
+// and the paused build then blessed a state the other build had since changed. Distrust rotates it.
+test('run: a build paused before its baseline write cannot bless it after another build distrusted the workspace', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    let signalPaused;
+    const paused = new Promise((res) => { signalPaused = res; });
+    let release;
+    const gate = new Promise((res) => { release = res; });
+    let calls = 0;
+    const innerDeps = baseDeps(dir, {
+      buildModelApp: stubBuild([]),
+      readContent: readFor('v1'),
+      // The second lookup is the one a fresh build makes after its build, just before its baseline CAS.
+      resolveLiveIdentity: async () => { calls += 1; if (calls === 2) { signalPaused(); await gate; } return FRESH; },
+    });
+    let inner = null;
+    const outerBuild = async () => {
+      inner = flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+      await paused;
+      return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
+    };
+    const outer = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: outerBuild, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
+    assert.strictEqual(outer.ok, false, 'the older build saw the newer one');
+    release();
+    await inner;
+    assert.notStrictEqual(store.readSnapshot(dir).eligible, true, 'the paused build could not bless its baseline');
+  } finally { rm(dir); }
+});
+
+// A build that fails verification, or halts, has still changed the environment. Its way out skipped the conflict check,
+// and a baseline another build blessed while it ran stayed eligible.
+test('run: a build that fails or throws still distrusts a baseline another build blessed while it ran', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, finish, outerIdentity] of [
+    ['a full build whose verify fails', () => ({ ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: false } }), async () => FRESH],
+    ['a full build that throws', () => { throw new Error('build halted'); }, async () => FRESH],
+    ['a no-identity build that throws', () => { throw new Error('build halted'); }, async () => null],
+  ]) {
+    const dir = ws();
+    try {
+      const build = async () => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
+        assert.strictEqual(store.readSnapshot(dir).eligible, true, `${what}: precondition: the inner build blessed a baseline`);
+        return finish();
+      };
+      let threw = null;
+      try {
+        await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: outerIdentity }) });
+      } catch (e) { threw = e; }
+      if (/throws/.test(what)) assert.match(String(threw && threw.message), /build halted/, `${what}: the original error goes on`);
+      assert.strictEqual(store.readSnapshot(dir).eligible, false, `${what}: the baseline blessed meanwhile is no longer eligible`);
+    } finally { rm(dir); }
+  }
+});
+
+// A writer can also land after the build returns but before the baseline write: a fresh-app build looks its identity up
+// again in between. Its refused CAS distrusts what that writer left, too.
+test('run: a baseline blessed between a build and its own baseline write is distrusted', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    let calls = 0;
+    const resolve = async () => {
+      calls += 1;
+      if (calls === 2) {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
+        assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: blessed between the build and the write');
+      }
+      return FRESH;
+    };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
+    assert.ok(calls >= 2, 'the fresh build looked its identity up again before writing');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false);
+    assert.strictEqual(r.ok, false, 'the refused write was a conflict, so the run fails');
+    assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/);
+  } finally { rm(dir); }
+});
+
+// A write refused only because another writer held the lease for a moment is no conflict: the generation is still
+// this run's, and the build's result stands.
+test('run: a baseline write refused by a busy lease leaves the result standing', async (t) => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  const dir = ws();
+  try {
+    t.mock.method(store, 'casWriteSnapshot', () => ({ ok: false, reason: 'snapshot lease unavailable (held)' }));
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+    t.mock.restoreAll();
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.notStrictEqual(store.readSnapshot(dir).eligible, true, 'and nothing is blessed');
+  } finally { rm(dir); }
+});
+
+// A baseline write refused by a busy lease looked like no conflict: the generation read then was still this run's. But
+// that lease can be an older build's, about to rotate the generation. What distrust then sees decides it too, and a
+// distrust that cannot land at all fails the run closed.
+test('run: a busy-lease refusal whose lease turns out to be another writer\'s fails the run', async (t) => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, invalidate] of [
+    ['another writer rotates the generation during distrust', (real) => {
+      let calls = 0;
+      return (d, o) => {
+        calls += 1;
+        if (calls === 1) { real(d, { expectedGeneration: o.expectedGeneration }); return { ok: false, reason: 'the snapshot changed since this run read it' }; }
+        return real(d, o);
+      };
+    }],
+    ['distrust never lands', () => () => ({ ok: false, reason: 'snapshot lease unavailable (held)' })],
+  ]) {
+    const dir = ws();
+    try {
+      const realInvalidate = store.invalidateSnapshot;
+      t.mock.method(store, 'casWriteSnapshot', () => ({ ok: false, reason: 'snapshot lease unavailable (held)' }));
+      t.mock.method(store, 'invalidateSnapshot', invalidate(realInvalidate));
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      t.mock.restoreAll();
+      assert.strictEqual(r.ok, false, what);
+      assert.match(r.errors[r.errors.length - 1], /the workspace changed while this build ran/, what);
+    } finally { t.mock.restoreAll(); rm(dir); }
+  }
+});
+
+// When distrust cannot land at all (every invalidate refused, the lease held by a live writer), the run fails, but the
+// snapshot that writer leaves can read eligible, and the next run would noop on it. So distrust records the refusal
+// beside the snapshot, outside the lease: the next run builds in full, and its landed baseline clears the marker.
+test('run: a distrust that cannot land leaves a marker, and the next run builds in full and clears it', async () => {
+  const FRESH = { ...LIVE, appId: null, appIdKnown: true };
+  for (const [what, finish] of [
+    ['a build that throws', () => { throw new Error('build halted'); }],
+    ['a build that returns', () => ({ ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } })],
+  ]) {
+    const dir = ws();
+    try {
+      const build = async () => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
+        // Another live writer holds the lease, so no invalidate this run's distrust tries can land.
+        fs.writeFileSync(store.leasePath(dir), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
+        return finish();
+      };
+      let threw = null;
+      let r = null;
+      try {
+        r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      } catch (e) { threw = e; }
+      if (/throws/.test(what)) assert.match(String(threw && threw.message), /build halted/, `${what}: the original error goes on`);
+      else assert.strictEqual(r.ok, false, `${what}: the overlapped run fails`);
+      assert.strictEqual(store.readSnapshot(dir).eligible, true, `${what}: precondition: the other writer's baseline stayed eligible`);
+      assert.ok(store.readDistrust(dir), `${what}: the refusal is recorded`);
+      fs.rmSync(store.leasePath(dir), { force: true });
+      // Nothing changed since that eligible baseline, which alone would be a noop; the marker makes it a full build.
+      let built = 0;
+      const record = [];
+      const next = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: async (...a) => { built += 1; return stubBuild(record)(...a); }, readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+      assert.strictEqual(next.ok, true, `${what}: ${JSON.stringify(next.errors)}`);
+      assert.strictEqual(built, 1, `${what}: the next run builds`);
+      assert.strictEqual(record[0].phases, undefined, `${what}: in full`);
+      assert.match(next.changedOnly.reason, /could not invalidate the snapshot/, `${what}: because of the marker`);
+      assert.strictEqual(store.readDistrust(dir), null, `${what}: its landed baseline clears the marker`);
+    } finally { rm(dir); }
+  }
+});
+
+// A full build clears only the marker it read when it started. One written while it built is another run's, which
+// found the workspace changed under it, and this build's baseline cannot vouch for what that run did.
+test('run: a full build clears the distrust marker it read, and leaves one written while it built', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-seeded');
+    assert.strictEqual(store.markDistrusted(dir, { reason: 'before' }).ok, true);
+    const during = async (...a) => { store.markDistrusted(dir, { reason: 'during' }); return stubBuild([])(...a); };
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: during, readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual((store.readDistrust(dir) || {}).reason, 'during', 'the marker written during the build stays');
+  } finally { rm(dir); }
+});
+
+// A writer can land between distrust's read and its invalidate (the fenced invalidate is then refused). What it left is
+// read again and invalidated in turn, rather than left eligible.
+test('distrustWorkspace invalidates a baseline that landed between its read and its invalidate', (t) => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-first');
+    const realInvalidate = store.invalidateSnapshot;
+    let calls = 0;
+    t.mock.method(store, 'invalidateSnapshot', (d, o) => {
+      calls += 1;
+      if (calls === 1) {
+        seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-landed');
+        return realInvalidate(d, o);
+      }
+      return realInvalidate(d, o);
+    });
+    flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(calls, 2, 'the refused invalidate is retried');
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, false, 'the baseline that landed is invalidated too');
+    assert.notStrictEqual(disk.generation, 'g-landed', 'and its generation rotated');
+  } finally { rm(dir); }
+});
+
+// readSnapshot answers null for an absent snapshot and for one it could not read alike. A snapshot that exists but reads
+// as nothing, a transient read error, may still be another writer's eligible baseline, readable again by the next run,
+// so distrust reads it again, and records the refusal if it never reads. Only a snapshot that is provably absent leaves
+// nothing to distrust.
+test('distrustWorkspace does not take a snapshot it cannot read for an absent one', (t) => {
+  const dir = ws();
+  const empty = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-first');
+    const realRead = store.readSnapshot;
+    let failures = 1;
+    t.mock.method(store, 'readSnapshot', (d) => (failures-- > 0 ? null : realRead(d)));
+    const once = flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(once.resolved, true, 'a read that recovers is retried');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false, 'and the baseline is invalidated');
+    assert.strictEqual(store.readDistrust(dir), null, 'with no marker needed');
+    seedEligible(dir, annotate(baseSpec(), 'v1'), 'g-second');
+    t.mock.method(store, 'readSnapshot', () => null);
+    const never = flow.distrustWorkspace(dir, () => {});
+    t.mock.restoreAll();
+    assert.strictEqual(never.resolved, false, 'a snapshot that never reads is not an absent one');
+    assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: it stayed as the other writer left it');
+    assert.match(store.readDistrust(dir).reason, /exists but could not be read/, 'so the refusal is recorded');
+    assert.deepStrictEqual(flow.distrustWorkspace(empty, () => {}), { foreign: false, resolved: true }, 'CONTROL: an absent snapshot');
+    assert.strictEqual(store.readDistrust(empty), null, 'leaves nothing to record');
+  } finally { t.mock.restoreAll(); rm(dir); rm(empty); }
+});
+
+test('dropBaselineClaim removes only the placeholder it was given', () => {
+  const dir = ws();
+  try {
+    const claim = store.claimBaselineSnapshot(dir, {});
+    assert.strictEqual(claim.ok, true);
+    assert.strictEqual(store.dropBaselineClaim(dir, 'another-generation').ok, false, 'not a placeholder this run claimed');
+    assert.ok(store.readSnapshot(dir), 'so it stays');
+    assert.deepStrictEqual(store.dropBaselineClaim(dir, claim.generation), { ok: true });
+    assert.strictEqual(store.readSnapshot(dir), null);
+    assert.strictEqual(store.dropBaselineClaim(dir, claim.generation).ok, false, 'nothing left to drop');
+  } finally { rm(dir); }
+});
+
+// A tombstone no teardown still holds — one that failed, or a day old — does not block: the build runs, and
+// the tombstone's debt keeps its baseline ineligible, as it always did.
+test('run: a tombstone no teardown still holds only makes the baseline ineligible', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    store.tombstoneSnapshot(dir, { now: () => Date.now() - store.TEARDOWN_STALE_MS - 1000 });
+    assert.deepStrictEqual(store.teardownsInFlight(store.readSnapshot(dir)), [], 'precondition: no teardown is still running');
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
+    assert.strictEqual(r.changedOnly.decision, 'full');
+    assert.strictEqual(record.length, 1);
+    const disk = store.readSnapshot(dir);
+    assert.ok(disk && disk.eligible === false && snap.isTombstoned(disk), 'the teardown debt keeps the baseline ineligible');
   } finally { rm(dir); }
 });
 

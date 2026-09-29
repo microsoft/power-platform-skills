@@ -96,6 +96,16 @@ test('tombstone: eligible->false + teardown debt, and the gate refuses even a pr
   assert.match(gate.reason, /tombstone/);
 });
 
+// A teardown that found no snapshot writes a fresh tombstone with no identity (it never asks WhoAmI). An
+// identity-first gate reported that as another org — fail-closed, but pointing at the wrong problem.
+test('a tombstone with no identity is reported as tombstoned, not as a different org', () => {
+  const env = S.makeEnvelope({});
+  S.tombstone(env);
+  const gate = S.isFastPathEligible(env, LIVE);
+  assert.strictEqual(gate.eligible, false);
+  assert.match(gate.reason, /tombstone/);
+});
+
 test('markIneligible forces eligible:false (the invalidate-before-write step), idempotently', () => {
   const env = eligibleEnvelope();
   S.markIneligible(env);

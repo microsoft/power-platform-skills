@@ -2,9 +2,11 @@
 name: add-datasource
 description: Use when adding an unspecified data source to an Expo/React Native Power Apps mobile app; routes to Dataverse, SharePoint, or another connector.
 user-invocable: true
-allowed-tools: Read, Grep, Glob, AskUserQuestion, Skill
+allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
 
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 

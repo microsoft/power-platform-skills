@@ -83,6 +83,9 @@ None.
 
 No connector bindings.
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - DataGrid layout, sortable, resizable columns
