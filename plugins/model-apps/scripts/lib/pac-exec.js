@@ -50,9 +50,16 @@ function buildPacInvocation(args, platform = process.platform, opts = {}) {
 }
 
 function runPac(args, opts = {}) {
-  const inv = buildPacInvocation(args, process.platform, opts);
-  const r = inv.args ? spawnSync(inv.command, inv.args, inv.options) : spawnSync(inv.command, inv.options);
-  return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  const run = opts.spawnSync || spawnSync;
+  const inv = buildPacInvocation(args, opts.platform || process.platform, opts);
+  const r = inv.args ? run(inv.command, inv.args, inv.options) : run(inv.command, inv.options);
+  return {
+    status: r.status == null ? 1 : r.status,
+    stdout: r.stdout || '',
+    stderr: r.stderr || '',
+    error: r.error,
+    signal: r.signal,
+  };
 }
 
 module.exports = { quoteArg, buildPacInvocation, runPac };

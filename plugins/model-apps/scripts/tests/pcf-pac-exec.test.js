@@ -24,3 +24,22 @@ test('posix invocation is an argv array without a shell', () => {
   assert.equal(inv.options.shell, undefined);
   assert.equal(inv.options.cwd, '/p');
 });
+
+test('runPac preserves spawn timeout error and signal for callers that need timeout handling', () => {
+  const timeout = Object.assign(new Error('spawnSync pac ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  const result = pacExec.runPac(['pcf', 'push'], {
+    platform: 'linux',
+    spawnSync: (command, args, options) => {
+      assert.equal(command, 'pac');
+      assert.deepEqual(args, ['pcf', 'push']);
+      assert.equal(options.shell, undefined);
+      return { status: null, stdout: '', stderr: 'timed out', error: timeout, signal: 'SIGTERM' };
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'timed out');
+  assert.equal(result.error, timeout);
+  assert.equal(result.signal, 'SIGTERM');
+});

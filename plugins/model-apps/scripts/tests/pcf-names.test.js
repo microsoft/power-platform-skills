@@ -5,6 +5,7 @@ const {
   validateNamespace,
   validateControlName,
   validatePublisherPrefix,
+  validateSolutionUniqueName,
   validateVersion,
   orgControlName,
   parseOrgControlName,
@@ -51,6 +52,17 @@ test('validatePublisherPrefix enforces publisher prefix shape and reserved mscrm
   assert.match(validatePublisherPrefix('a'), /must be 2 to 8 characters.*Allowed: letters and digits, starting with a letter/i);
   assert.match(validatePublisherPrefix('mscrmx'), /must not start with "mscrm".*Allowed: letters and digits, starting with a letter, not starting with "mscrm", and 2 to 8 characters/i);
   assert.match(validatePublisherPrefix('abcdefghi'), /must be 2 to 8 characters.*Allowed: letters and digits, starting with a letter/i);
+});
+
+test('validateSolutionUniqueName enforces Dataverse solution unique-name shape', () => {
+  assert.equal(validateSolutionUniqueName('Contoso_Solution01'), null);
+  assert.equal(validateSolutionUniqueName('_ContosoSolution'), null);
+
+  assert.match(validateSolutionUniqueName('Contoso Solution'), /letters, digits, and underscores/i);
+  assert.match(validateSolutionUniqueName('Contoso&Solution'), /letters, digits, and underscores/i);
+  assert.match(validateSolutionUniqueName('Contoso"Solution'), /letters, digits, and underscores/i);
+  assert.match(validateSolutionUniqueName('1Contoso'), /start with a letter or underscore/i);
+  assert.match(validateSolutionUniqueName('A'.repeat(66)), /at most 65 characters/i);
 });
 
 test('validateVersion accepts semantic three-part numeric versions', () => {

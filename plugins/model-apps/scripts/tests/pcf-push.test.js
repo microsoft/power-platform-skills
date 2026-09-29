@@ -45,6 +45,12 @@ function ineffectivePcfproj() {
     .replace('  <Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />', '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n  <Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />');
 }
 
+function conditionedPcfproj() {
+  return productionPcfproj()
+    .replace('    <PcfBuildMode>production</PcfBuildMode>\n', '')
+    .replace('  </PropertyGroup>', '  </PropertyGroup>\n  <PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>');
+}
+
 function manifestXml(opts = {}) {
   const version = opts.version || '1.2.3';
   return [
@@ -81,6 +87,7 @@ async function run(argv, overrides = {}) {
         return overrides.runPac ? overrides.runPac(args, options) : { status: 0, stdout: 'pushed', stderr: '' };
       },
     },
+    ...(overrides.requires || {}),
     './lib/pcf-dataverse': {
       makePcfSdk: async (env, workspace) => {
         calls.push(['makePcfSdk', env, workspace]);
@@ -227,7 +234,7 @@ test('timeout reports best-effort state and log path without claiming the push w
     '--env', 'https://contoso.crm.dynamics.com',
     '--publisher-prefix', 'abc',
   ], {
-    runPac: () => ({ status: 1, stdout: '', stderr: 'timed out', error: Object.assign(new Error('spawnSync pac ETIMEDOUT'), { code: 'ETIMEDOUT' }) }),
+    runPac: () => ({ status: 1, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync pac ETIMEDOUT'), { code: 'ETIMEDOUT' }), signal: 'SIGTERM' }),
   });
 
   assert.equal(cli.exitCode, 1);
@@ -294,4 +301,78 @@ test('refuses development and ineffective build modes unless --allow-dev-bundle 
   const allowed = await run(['--project', devProject, '--env', 'https://contoso.crm.dynamics.com', '--publisher-prefix', 'abc', '--allow-dev-bundle']);
   assert.equal(allowed.exitCode, 0);
   assert.equal(allowed.calls.some((call) => call[0] === 'runPac'), true);
+});
+
+test('refuses conditioned PcfBuildMode with Debug-specific guidance', async () => {
+  const projectDir = makeProject('conditioned-mode', { pcfproj: conditionedPcfproj() });
+  const cli = await run(['--project', projectDir, '--env', 'https://contoso.crm.dynamics.com', '--publisher-prefix', 'abc']);
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText(), /pac pcf push builds Debug/i);
+  assert.match(cli.stderrText(), /make the production setting unconditional below the Microsoft\.Common\.props import/i);
+  assert.doesNotMatch(cli.stderrText(), /move it below/);
+  assert.equal(cli.calls.some((call) => call[0] === 'runPac'), false);
+});
+
+test('rejects invalid solution unique names before passing them to pac', async () => {
+  const projectDir = makeProject('bad-solution-name');
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--solution', 'Bad & Solution',
+  ]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText(), /Solution unique name/);
+  assert.equal(cli.calls.some((call) => call[0] === 'runPac'), false);
+});
+
+test('push failure emits scrubbed bounded stdout and stderr tails', async () => {
+  const projectDir = makeProject('scrubbed-output');
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature';
+  const stdout = Array.from({ length: 65 }, (_, i) => `out-${i + 1}`).join('\n') + `\nBearer secret-token\naccess_token=${jwt}`;
+  const stderr = Array.from({ length: 64 }, (_, i) => `err-${i + 1}`).join('\n') + '\nclient_secret=abc123 password=p@ss';
+
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: () => ({ status: 1, stdout, stderr }),
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stdout.length, 60);
+  assert.equal(payload.stdout[0], 'out-8');
+  assert.equal(payload.stdout.at(-2), 'Bearer <redacted>');
+  assert.equal(payload.stdout.at(-1), 'access_token=<redacted>');
+  assert.equal(payload.stderr.length, 60);
+  assert.equal(payload.stderr[0], 'err-6');
+  assert.equal(payload.stderr.at(-1), 'client_secret=<redacted> password=<redacted>');
+  assert.doesNotMatch(JSON.stringify(payload), /secret-token|eyJhbGci|abc123|p@ss/);
+});
+
+test('failed receipt write leaves no partial receipt behind', async () => {
+  const projectDir = makeProject('receipt-write-failure');
+  const realFs = require('node:fs');
+  const fsStub = {
+    ...realFs,
+    renameSync: (from, to) => {
+      if (String(to).endsWith('pcf-receipt.json')) throw new Error('rename failed');
+      return realFs.renameSync(from, to);
+    },
+  };
+
+  await assert.rejects(
+    run([
+      '--project', projectDir,
+      '--env', 'https://contoso.crm.dynamics.com',
+      '--publisher-prefix', 'abc',
+      '--no-verify',
+    ], { requires: { 'node:fs': fsStub } }),
+    /rename failed/,
+  );
+  assert.equal(realFs.existsSync(path.join(projectDir, 'pcf-receipt.json')), false);
+  assert.deepEqual(realFs.readdirSync(projectDir).filter((entry) => entry.startsWith('.pcf-receipt-')), []);
 });

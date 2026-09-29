@@ -9,6 +9,7 @@
 //   75-character namespace+control-name limit and JavaScript reserved-word
 //   constructor names.
 const MAX_NAMESPACE_AND_CONTROL_LENGTH = 75;
+const MAX_SOLUTION_UNIQUE_NAME_LENGTH = 65;
 
 const JS_RESERVED_WORDS = new Set([
   'await',
@@ -65,6 +66,7 @@ const CONTROL_ALLOWED = 'Allowed: letters and digits, starting with a letter.';
 const CONTROL_RESERVED_ALLOWED = 'Allowed: letters and digits, starting with a letter, and not a JavaScript reserved word.';
 const PREFIX_ALLOWED = 'Allowed: letters and digits, starting with a letter, not starting with "mscrm", and 2 to 8 characters.';
 const VERSION_ALLOWED = 'Allowed: digits in x.y.z format.';
+const SOLUTION_UNIQUE_NAME_ALLOWED = `Allowed: letters, digits, and underscores, starting with a letter or underscore, at most ${MAX_SOLUTION_UNIQUE_NAME_LENGTH} characters.`;
 
 function asString(value) {
   return typeof value === 'string' ? value : '';
@@ -146,6 +148,24 @@ function validateVersion(version) {
   return null;
 }
 
+function validateSolutionUniqueName(name) {
+  const value = asString(name);
+
+  // Dataverse exposes solution.uniquename as the solution identity used by PAC and caps it at 65
+  // characters. The character allow-list also keeps the value shell-safe for the Windows pac.cmd
+  // path, where `pac` must run through cmd.exe.
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution#uniquename
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    return `Solution unique name must start with a letter or underscore and contain only letters, digits, and underscores. ${SOLUTION_UNIQUE_NAME_ALLOWED}`;
+  }
+
+  if (value.length > MAX_SOLUTION_UNIQUE_NAME_LENGTH) {
+    return `Solution unique name must be at most ${MAX_SOLUTION_UNIQUE_NAME_LENGTH} characters. ${SOLUTION_UNIQUE_NAME_ALLOWED}`;
+  }
+
+  return null;
+}
+
 function orgControlName(prefix, namespace, constructor) {
   return `${prefix}_${namespace}.${constructor}`;
 }
@@ -183,6 +203,7 @@ module.exports = {
   validateNamespace,
   validateControlName,
   validatePublisherPrefix,
+  validateSolutionUniqueName,
   validateVersion,
   orgControlName,
   parseOrgControlName,

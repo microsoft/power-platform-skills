@@ -6,7 +6,7 @@ const path = require('node:path');
 const nodeProcess = require('node:process');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { runPac } = require('./lib/pac-exec.js');
-const { validatePublisherPrefix, validateNamespace, validateControlName, orgControlName } = require('./lib/pcf-names.js');
+const { validatePublisherPrefix, validateSolutionUniqueName, validateNamespace, validateControlName, orgControlName } = require('./lib/pcf-names.js');
 const { findControlProject } = require('./lib/pcf-build.js');
 const { pcfprojBuildMode } = require('./lib/pcf-doctor.js');
 const { makePcfSdk, findCustomControl, solutionPrefix } = require('./lib/pcf-dataverse.js');
@@ -87,6 +87,9 @@ async function main(argv = process.argv.slice(2)) {
   if (hasPrefix) {
     const prefixError = validatePublisherPrefix(String(flags['publisher-prefix']));
     if (prefixError) usageError(prefixError);
+  } else {
+    const solutionError = validateSolutionUniqueName(String(flags.solution));
+    if (solutionError) usageError(solutionError);
   }
 
   const found = findControlProject(path.resolve(String(flags.project)));
@@ -138,8 +141,8 @@ async function main(argv = process.argv.slice(2)) {
       status: push.status,
       hints: pushHints(push),
       logTail: readBuildLogTail(projectDir),
-      stdout: push.stdout || '',
-      stderr: push.stderr || '',
+      stdout: scrubbedTail(push.stdout, 60),
+      stderr: scrubbedTail(push.stderr, 60),
     });
   }
 
@@ -188,6 +191,9 @@ function normalizeEnvOrigin(value) {
 
 function buildModeError(mode) {
   const base = 'Refusing to run pac pcf push because Debug builds otherwise ship a development bundle that fails the solution checker eval rule.';
+  if (mode.status === 'ineffective' && mode.reason === 'conditioned') {
+    return `${base} PcfBuildMode is set but ineffective — pac pcf push builds Debug, so make the production setting unconditional below the Microsoft.Common.props import.`;
+  }
   if (mode.status === 'ineffective') {
     return `${base} PcfBuildMode is set but ineffective — move it below the Microsoft.Common.props import.`;
   }
@@ -213,10 +219,7 @@ function validateControlIdentity(control) {
 }
 
 function timedOut(result) {
-  const text = [result && result.error && (result.error.code || result.error.message), result && result.stderr, result && result.stdout]
-    .filter(Boolean)
-    .join('\n');
-  return /ETIMEDOUT|timed out|timeout/i.test(text);
+  return !!(result && result.error && result.error.code === 'ETIMEDOUT');
 }
 
 function pushHints(result) {
@@ -241,6 +244,20 @@ function readBuildLogTail(projectDir) {
   } catch {
     return [];
   }
+}
+
+function scrubbedTail(text, maxLines) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map(scrubSecrets)
+    .slice(-maxLines);
+}
+
+function scrubSecrets(line) {
+  return String(line || '')
+    .replace(/\bBearer\s+[^\s]+/gi, 'Bearer <redacted>')
+    .replace(/\b(?:access_token|client_secret|password)=([^\s&]+)/gi, (match) => `${match.split('=')[0]}=<redacted>`)
+    .replace(/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>');
 }
 
 async function readRegistration({ envOrigin, projectDir, solution, publisherPrefix, manifest }) {
@@ -272,6 +289,7 @@ function stripPrivateRegistration(registered) {
 
 function writeReceipt(projectDir, data) {
   const receiptPath = path.join(projectDir, 'pcf-receipt.json');
+  const tempPath = path.join(projectDir, `.pcf-receipt-${nodeProcess.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
   const receipt = {
     schemaVersion: 1,
     pushedAt: new Date().toISOString(),
@@ -286,7 +304,20 @@ function writeReceipt(projectDir, data) {
     },
     registered: stripPrivateRegistration(data.registered),
   };
-  fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+  let fd = null;
+  try {
+    fd = fs.openSync(tempPath, 'wx');
+    fs.writeFileSync(fd, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, receiptPath);
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* best-effort cleanup after a failed receipt write */ }
+    }
+    try { fs.unlinkSync(tempPath); } catch { /* the temp may not have been created yet */ }
+    throw err;
+  }
   return receiptPath;
 }
 
