@@ -127,11 +127,11 @@ test('buildControl refuses absolute, parent, and project-root outDir values with
     const { dir, bin } = tempProject();
     const parentSibling = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
     const absoluteOut = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-build-absolute-out-'));
-    const outDir = item === 'absolute outDir' ? absoluteOut : item === 'parent sibling outDir' ? '../x' : '.';
+    const outDir = item === 'absolute outDir' ? absoluteOut : item === 'parent sibling outDir' ? `../${path.basename(parentSibling)}` : '.';
     const resolvedTarget = item === 'absolute outDir'
       ? absoluteOut
       : item === 'parent sibling outDir'
-        ? path.resolve(dir, '..', 'x')
+        ? parentSibling
         : dir;
     fs.mkdirSync(item === 'parent sibling outDir' ? resolvedTarget : path.dirname(resolvedTarget), { recursive: true });
     const sentinel = path.join(resolvedTarget, 'sentinel.txt');
@@ -156,7 +156,6 @@ test('buildControl refuses absolute, parent, and project-root outDir values with
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(absoluteOut, { recursive: true, force: true });
       fs.rmSync(parentSibling, { recursive: true, force: true });
-      fs.rmSync(path.resolve(dir, '..', 'x'), { recursive: true, force: true });
     }
   }
 });
