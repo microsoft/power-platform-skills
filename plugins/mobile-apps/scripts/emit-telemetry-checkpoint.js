@@ -77,8 +77,9 @@ function emitCheckpoint(payload, opts = {}) {
 function captureSuccessfulDataverseRequest(environmentUrl, token, whoAmI, env = process.env) {
   try {
     const runId = env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID;
-    if (!GUID.test(runId || '')) return false;
-    const projectRoot = process.cwd();
+    const spanId = env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID;
+    if (!GUID.test(runId || '') || !GUID.test(spanId || '')) return false;
+    const projectRoot = env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || process.cwd();
     const context = telemetry.createTelemetryContext({}, {
       cwd: projectRoot,
       env,
@@ -89,6 +90,7 @@ function captureSuccessfulDataverseRequest(environmentUrl, token, whoAmI, env = 
       projectRoot,
       configDir: context.configDir,
       runId,
+      spanId,
       environmentUrl,
       lifecycle: telemetry.lifecycle,
       token,
@@ -216,10 +218,12 @@ function executeCommand(args, overrides = {}) {
     commandEnv.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID = start.runId;
     commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID = start.spanId;
     commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID = args.parentSpanId;
+    commandEnv.POWER_PLATFORM_SKILLS_PROJECT_ROOT = cwd;
   } else {
     delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID;
     delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID;
     delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID;
+    delete commandEnv.POWER_PLATFORM_SKILLS_PROJECT_ROOT;
   }
 
   // An argument array plus inherited stdio preserves the original command

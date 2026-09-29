@@ -95,7 +95,8 @@ function readProjectEnvironment(projectRoot) {
   const configuredEnvironmentId = powerConfig && powerConfig.environmentId;
   if (configuredEnvironmentId && !GUID_RE.test(configuredEnvironmentId)) return null;
   const cached = readCachedResolution(configuredEnvironmentId || null, projectRoot);
-  return cached ? toEnvironmentResult(cached, 'cache') : null;
+  if (!cached || !GUID_RE.test(cached.environmentId || '')) return null;
+  return toEnvironmentResult(cached, 'cache');
 }
 
 function hasCachedEnvironmentDetails(value) {

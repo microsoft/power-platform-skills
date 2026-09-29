@@ -286,6 +286,7 @@ function commonFields(context, invocation, opts = {}) {
       lifecycle,
       configDir: context.configDir,
       runId: opts.runId,
+      spanId: opts.spanId,
     })
     : {};
   if (projectContext.tenantId) fields.tenantId = projectContext.tenantId;

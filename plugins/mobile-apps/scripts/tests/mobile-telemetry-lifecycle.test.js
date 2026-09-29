@@ -15,9 +15,12 @@ const {
 const { sanitizeData } = require('../lib/mobile-telemetry-dispatcher');
 const {
   readProjectTelemetryContext,
-  recordVerifiedDataverseOrganization,
 } = require('../lib/mobile-telemetry-context');
-const { runCommand } = require('../emit-telemetry-checkpoint');
+const { readProjectEnvironment } = require('../lib/environment-resolution');
+const {
+  captureSuccessfulDataverseRequest,
+  runCommand,
+} = require('../emit-telemetry-checkpoint');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const provisioned = {
@@ -244,6 +247,7 @@ test('command wrapper preserves exit code without recording command content', (c
       assert.equal(options.shell, false);
       assert.equal(options.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID, root.runId);
       assert.ok(options.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID);
+      assert.equal(options.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT, projectRoot);
       return { status: 7 };
     },
   });
@@ -679,6 +683,29 @@ test('verified Dataverse context excludes user identity and token claims', (cont
     configDir,
     skillName: 'create-mobile-app',
   });
+  const verifiedStep = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'create-mobile-app',
+    checkpointName: 'select_app_environment',
+  });
+  const descendant = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: verifiedStep.spanId,
+    skillName: 'add-dataverse',
+  });
+  const sibling = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'create-mobile-app',
+    checkpointName: 'gather_app_requirements',
+  });
   const token = `header.${Buffer.from(JSON.stringify({
     oid: '33333333-3333-4333-8333-333333333333',
     tid: tenantId,
@@ -691,6 +718,7 @@ test('verified Dataverse context excludes user identity and token claims', (cont
     configDir,
     lifecycle,
     runId: root.runId,
+    spanId: verifiedStep.spanId,
   };
   assert.deepEqual(readProjectTelemetryContext(projectRoot, options), {});
   assert.deepEqual(readProjectTelemetryContext(projectRoot), {});
@@ -711,27 +739,51 @@ test('verified Dataverse context excludes user identity and token claims', (cont
   assert.equal(unverified.data.tenantId, undefined);
   assert.equal(unverified.data.eventInfo.environmentId, undefined);
 
-  assert.equal(recordVerifiedDataverseOrganization({
-    ...options,
+  const ikeyPath = path.join(configDir, 'ikey.json');
+  fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
+  assert.equal(captureSuccessfulDataverseRequest(
     environmentUrl,
     token,
-    whoAmI: {
+    {
       OrganizationId: orgId,
       UserId: '55555555-5555-4555-8555-555555555555',
     },
-  }), true);
+    {
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+      POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+      POWER_PLATFORM_SKILLS_MOBILE_RUN_ID: root.runId,
+      POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID: verifiedStep.spanId,
+      POWER_PLATFORM_SKILLS_PROJECT_ROOT: projectRoot,
+    },
+  ), true);
   assert.deepEqual(readProjectTelemetryContext(projectRoot, options), {
     environmentId,
     tenantId,
     orgId,
   });
+  assert.deepEqual(readProjectTelemetryContext(projectRoot, {
+    ...options,
+    spanId: descendant.spanId,
+  }), {
+    environmentId,
+    tenantId,
+    orgId,
+  });
+  assert.deepEqual(readProjectTelemetryContext(projectRoot, {
+    ...options,
+    spanId: root.spanId,
+  }), {});
+  assert.deepEqual(readProjectTelemetryContext(projectRoot, {
+    ...options,
+    spanId: sibling.spanId,
+  }), {});
   let captured;
   const event = emitLifecycle({
     configDir,
     env: {},
     eventStreamName: 'event',
     sessionId: root.sessionId,
-  }, root, {
+  }, verifiedStep, {
     cwd: projectRoot,
     emit: (value) => {
       captured = value;
@@ -745,6 +797,23 @@ test('verified Dataverse context excludes user identity and token claims', (cont
   assert.equal(event.data.eventInfo.aadObjectId, undefined);
   assert.equal(event.data.eventInfo.userId, undefined);
 
+  let siblingEvent;
+  emitLifecycle({
+    configDir,
+    env: {},
+    eventStreamName: 'event',
+    sessionId: root.sessionId,
+  }, sibling, {
+    cwd: projectRoot,
+    emit: (value) => {
+      siblingEvent = value;
+    },
+    readAiAgent: () => ({}),
+  });
+  assert.equal(siblingEvent.data.orgId, undefined);
+  assert.equal(siblingEvent.data.tenantId, undefined);
+  assert.equal(siblingEvent.data.eventInfo.environmentId, undefined);
+
   const runDirectory = lifecycle.runDirectory(configDir, root.runId);
   const recorded = fs.readdirSync(runDirectory)
     .map((name) => fs.readFileSync(path.join(runDirectory, name), 'utf8'))
@@ -753,6 +822,16 @@ test('verified Dataverse context excludes user identity and token claims', (cont
     recorded,
     /PRIVATE|private@example|signature|user_impersonation|55555555|33333333/,
   );
+});
+
+test('project environment rejects malformed cached environment IDs', (context) => {
+  const projectRoot = tempProject(context);
+  fs.writeFileSync(path.join(projectRoot, '.resolved-environment.json'), JSON.stringify({
+    environmentId: '../outside',
+    environmentUrl: 'https://contoso.crm.dynamics.com',
+    tenantId: '22222222-2222-4222-8222-222222222222',
+  }));
+  assert.equal(readProjectEnvironment(projectRoot), null);
 });
 
 test('mobile telemetry reuses canonical helpers without parallel modules', () => {
