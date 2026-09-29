@@ -13,6 +13,44 @@ const CACHE_FILE = '.resolved-environment.json';
 const AUTH_CONFIG_FILE = 'auth.config.json';
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function redactDiagnostic(value) {
+  return String(value || '')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/([?&](?:token|access_token|client_secret|code)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted-jwt]')
+    .slice(0, 240);
+}
+
+function describeResponseShape(data) {
+  if (data === null) return 'null body';
+  if (data === undefined) return 'no body';
+  if (Array.isArray(data)) return `array(${data.length})`;
+  if (typeof data === 'string') return data.length ? `text(${data.length})` : 'empty text';
+  if (typeof data === 'object') {
+    const keys = Object.keys(data).sort();
+    return keys.length > 0
+      ? `object keys [${keys.slice(0, 8).join(', ')}]`
+      : 'empty object';
+  }
+  return typeof data;
+}
+
+function formatRequestFailure(operation, response) {
+  const status = response && response.statusCode;
+  const parts = [
+    status ? `HTTP ${status}` : 'request failed',
+    describeResponseShape(response && response.data),
+  ];
+  const code = response && response.data && typeof response.data === 'object'
+    ? response.data.code || (response.data.error && response.data.error.code)
+    : null;
+  if (code) parts.push(`code ${redactDiagnostic(code)}`);
+  if (!status && response && response.error) {
+    parts.push(redactDiagnostic(response.error));
+  }
+  return `${operation}: ${parts.join('; ')}`;
+}
+
 function normalizeUrl(value) {
   return value.replace(/\/+$/, '');
 }
@@ -75,13 +113,14 @@ function toEnvironmentResult(value, source) {
   };
 }
 
-function shouldWriteCache(result, projectRoot) {
+function shouldWriteCache(result, projectRoot = process.cwd()) {
   return Boolean(result && result.environmentId && result.environmentUrl
     && fs.existsSync(path.join(projectRoot, AUTH_CONFIG_FILE)));
 }
 
-function writeCacheIfProject(result, projectRoot) {
-  if (!shouldWriteCache(result, projectRoot)) return;
+function writeCacheIfProject(result, projectRoot, options = {}) {
+  if (options.noCache) return false;
+  if (!shouldWriteCache(result, projectRoot)) return false;
   const cachePath = path.join(projectRoot, CACHE_FILE);
   const cache = { ...result, cachedAt: new Date().toISOString() };
   fs.writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`);
@@ -92,6 +131,7 @@ function writeCacheIfProject(result, projectRoot) {
     authConfig.environment = cache;
     fs.writeFileSync(authPath, `${JSON.stringify(authConfig, null, 2)}\n`);
   }
+  return true;
 }
 
 function getAzTenantId() {
@@ -239,25 +279,29 @@ async function resolveEnvironmentId(environmentId, tenantId) {
     if (record) return environmentFromPowerPlatformPayload(record, environmentId);
   }
 
-  const apiMessage = res.data && typeof res.data === 'object'
-    ? [res.data.code, res.data.message, res.data.innererror && res.data.innererror.message].filter(Boolean).join(': ')
-    : res.error || `HTTP ${res.statusCode}`;
-  const recovery = /Forbidden|Unauthorized|Authorization|permission|privilege|Insufficient/i.test(apiMessage || '')
-    ? ' The Azure CLI account may not have permission to read this environment through the BAP admin API. Use an account with environment read access, or provide the Dataverse environment URL directly.'
-    : '';
-  throw new Error(`Could not resolve environment ID ${environmentId} through ${endpointUrl}: ${apiMessage || 'unknown error'}.${recovery}`);
+  const failure = formatRequestFailure(
+    `Could not resolve environment ID ${environmentId} through the Power Platform admin API`,
+    res,
+  );
+  const recovery = [401, 403].includes(res.statusCode)
+    ? ' The Azure CLI account may not have permission to read this environment. Sign in with an account that has environment read access, or provide the Dataverse environment URL directly.'
+    : res.statusCode === 404
+      ? ' Verify the environment ID and tenant, or provide the Dataverse environment URL directly.'
+      : '';
+  throw new Error(`${failure}.${recovery}`);
 }
 
-async function resolveEnvironment(target, projectRoot = process.cwd(), allowLegacyCache = false) {
+async function resolveEnvironment(target, projectRoot = process.cwd(), allowLegacyCache = false, options = {}) {
   if (!target) {
     const powerConfig = readJsonFile(path.join(projectRoot, 'power.config.json'));
     target = powerConfig?.environmentId || readCachedResolution(null, projectRoot)?.environmentId;
     if (typeof target !== 'string' || !GUID_RE.test(target)) return null;
   }
   const cached = readCachedResolution(target, projectRoot);
-  if (canUseCachedResolution(cached, target, allowLegacyCache)) {
+  // Read-only planning needs identity, not a refresh solely for telemetry routing.
+  if (canUseCachedResolution(cached, target, allowLegacyCache || options.noCache)) {
     const result = toEnvironmentResult(cached, 'cache');
-    writeCacheIfProject(result, projectRoot);
+    writeCacheIfProject(result, projectRoot, options);
     return result;
   }
 
@@ -305,8 +349,19 @@ async function resolveEnvironment(target, projectRoot = process.cwd(), allowLega
   }
 
   const result = toEnvironmentResult(resolved, resolved.source || (isUrl(target) ? 'environment-url' : 'environment-id'));
-  writeCacheIfProject(result, projectRoot);
+  writeCacheIfProject(result, projectRoot, options);
   return result;
 }
 
-module.exports = { cacheMatchesTarget, canUseCachedResolution, toEnvironmentResult, environmentFromPowerPlatformPayload, resolveEnvironment };
+module.exports = {
+  cacheMatchesTarget,
+  canUseCachedResolution,
+  toEnvironmentResult,
+  environmentFromPowerPlatformPayload,
+  describeResponseShape,
+  formatRequestFailure,
+  redactDiagnostic,
+  resolveEnvironment,
+  shouldWriteCache,
+  writeCacheIfProject,
+};

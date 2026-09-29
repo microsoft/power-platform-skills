@@ -56,7 +56,32 @@ function checkWorkspaceClearable(dir, deps = {}) {
   if (typeof dir !== 'string' || !dir.trim()) return { ok: false, reason: 'no workspace path was given' };
   const resolved = path.resolve(dir);
 
-  // 1. Never a filesystem/drive root, and never directly inside one. `C:\\.maker-workspace` or
+  // 1. Never a UNC/network path. MEASURED: `\\server\share\proj\.maker-workspace` resolves with root
+  //    `\\server\share\` and dirname `\\server\share\proj`, so the filesystem-root rules below do NOT
+  //    reject it and it reaches `lstatSync` — which BLOCKS on an unreachable share until the SMB
+  //    timeout. No try/catch helps a hang, and this cleanup runs immediately after a SUCCESSFUL
+  //    teardown, so the operator is left staring at a command that appears wedged for no reason.
+  //
+  //    Checked FIRST so the refusal names the real problem. `\\server\share\.maker-workspace` would
+  //    otherwise be caught by the root rule below and reported as "directly inside a filesystem root"
+  //    — true of its UNC root, but it tells the operator nothing about the path they typed.
+  //
+  //    Refusing is also right on the merits: the workspace is a LOCAL metadata cache by design, and a
+  //    recursive delete over SMB is slow and partially-fails in ways a local one does not. The cost is
+  //    a stale cache directory the operator can remove by hand — the same trade the rest of this guard
+  //    makes. A MAPPED DRIVE (`Z:\…`) is not a UNC path and is unaffected, so the ordinary way of
+  //    working from a network location still clears.
+  //
+  //    `\\?\C:\…` is the extended-length form of a LOCAL path and is allowed; `\\?\UNC\…` is not.
+  if (/^\\\\/.test(resolved) && !/^\\\\\?\\[A-Za-z]:\\/.test(resolved)) {
+    return {
+      ok: false,
+      reason: `refusing to delete '${resolved}': it is a UNC/network path, not a local workspace cache `
+        + '(a recursive delete there can block on an unreachable share)',
+    };
+  }
+
+  // 2. Never a filesystem/drive root, and never directly inside one. `C:\\.maker-workspace` or
   //    `/.maker-workspace` is not a project layout; it is what an empty or truncated base path
   //    produces, so treat it as a mistake rather than an instruction.
   const parent = path.dirname(resolved);
@@ -67,7 +92,7 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `refusing to delete '${resolved}': a workspace directly inside a filesystem root is not a project workspace` };
   }
 
-  // 2. The final component must not be a symlink/junction. Deleting through one is how a directory
+  // 3. The final component must not be a symlink/junction. Deleting through one is how a directory
   //    that merely POINTS at something else (a source tree, a home directory) turns a cache cleanup
   //    into arbitrary data loss. Only the last component is checked, because a symlinked ANCESTOR is
   //    ordinary and legitimate (/tmp is a symlink on macOS) and refusing those would reject real
@@ -86,7 +111,7 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `refusing to delete '${resolved}': not a directory` };
   }
 
-  // 3. Resolve the real path BEFORE the identity test, so a junction in the chain cannot land the
+  // 4. Resolve the real path BEFORE the identity test, so a junction in the chain cannot land the
   //    delete somewhere that was never inspected.
   let real;
   try {
@@ -95,7 +120,7 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `cannot resolve '${resolved}' (${e.code || e.message})` };
   }
 
-  // 3b. Re-apply the root rules to the CANONICAL target. Adversarial review found the lexical-only
+  // 4b. Re-apply the root rules to the CANONICAL target. Adversarial review found the lexical-only
   //     check bypassable: `D:\review-link\project\.maker-workspace` reached through an ancestor
   //     junction resolves to `D:\.maker-workspace`, which passing directly would be refused. The
   //     rules have to hold for the path actually deleted, not merely the one typed.
@@ -104,7 +129,7 @@ function checkWorkspaceClearable(dir, deps = {}) {
     return { ok: false, reason: `refusing to delete '${resolved}': it resolves to '${real}', at or directly inside a filesystem root` };
   }
 
-  // 4. IDENTITY, proven by CONTENT. The directory must carry the SDK's own workspace manifest.
+  // 5. IDENTITY, proven by CONTENT. The directory must carry the SDK's own workspace manifest.
   //
   //    The default NAME is deliberately NOT accepted as an alternative. `--workspace` is
   //    caller-supplied, so `--workspace /some/important/.maker-workspace` would otherwise reach

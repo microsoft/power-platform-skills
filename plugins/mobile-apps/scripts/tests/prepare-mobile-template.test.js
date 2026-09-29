@@ -22,9 +22,12 @@ function tempDirectory(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
 }
 
-function copyTemplate() {
+function copyTemplate(sourceRoot = templateRoot) {
   const projectRoot = tempDirectory('mobile-template');
-  fs.cpSync(templateRoot, projectRoot, { recursive: true });
+  fs.cpSync(sourceRoot, projectRoot, {
+    recursive: true,
+    filter: (source) => path.basename(source) !== 'node_modules',
+  });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
 }
@@ -73,6 +76,18 @@ function assertSnapshotsEqual(left, right) {
     assert.deepStrictEqual(right.get(relativePath), content, relativePath);
   }
 }
+
+test('template test fixtures exclude installed dependencies and local dependency caches', (context) => {
+  const sourceRoot = tempDirectory('mobile-template-source');
+  context.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(sourceRoot, 'package.json'), '{"name":"fixture"}\n');
+  fs.mkdirSync(path.join(sourceRoot, 'node_modules', '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, 'node_modules', '.cache', 'local-run.txt'), 'not template source');
+  const projectRoot = copyTemplate(sourceRoot);
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'), '{"name":"fixture"}\n');
+  assert.deepStrictEqual(fs.readdirSync(path.join(projectRoot, 'node_modules')), ['expo']);
+});
 
 test('preparation is idempotent and preserves generated and existing helper files', () => {
   const projectRoot = copyTemplate();

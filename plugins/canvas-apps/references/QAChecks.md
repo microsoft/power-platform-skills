@@ -156,6 +156,16 @@ numeric branch calculations in `QA layout evidence`; unsupported PASS text fails
 These calculations are static evidence. Browser execution remains necessary to prove the
 rendered controls are visible, scrollable, and pointer-reachable.
 
+For `QACHK-ROOT-CONTAINMENT`, a responsive or unknown-device screen passes only when its
+declared viewport root is the sole top-level child, uses `AutoLayout`, and has exact
+`Width: =Parent.Width` and `Height: =Parent.Height`. Every alert, receipt, confirmation,
+form, and navigation region must be nested beneath it.
+
+For `QACHK-TEXT-CONTENT-FIT`, test the longest reachable label/value. A wrapped multiword
+button, badge, or label needs height for every line plus vertical padding; a fixed 44px
+height is not evidence of two-line fit. If wrapping is disabled, prove the longest value
+fits the available width.
+
 ---
 
 ## Check 1 — `QACHK-CONTROL-CREATION-KEYWORDS` (creation keywords differ from `describe_control`)

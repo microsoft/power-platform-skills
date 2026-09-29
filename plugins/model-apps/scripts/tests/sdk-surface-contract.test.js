@@ -71,6 +71,9 @@ const SKILL_SDK_SURFACE = [
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
+  // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
+  // run's unpushed edits (sdk-build.js).
+  'listArtifacts',
   'moveElement',
   'publishArtifact',
   'pushArtifact',

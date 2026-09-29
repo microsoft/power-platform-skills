@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -271,6 +271,12 @@ function validateProvisionInput(input) {
 
         if (!Array.isArray(records)) {
           errors.push(`sampleData['${entityKey}']: value must be an array of records`);
+        } else {
+          // Same row-level gate the app-builder path applies — see validateSampleDataRows. This is
+          // the OTHER public provisioning entry point and it seeds through the same loader, so
+          // without this a `null` row still crashed here and primitives were still coerced, after
+          // the solution and data model had already been written.
+          validateSampleDataRows(entityKey, records, errors);
         }
       }
     }

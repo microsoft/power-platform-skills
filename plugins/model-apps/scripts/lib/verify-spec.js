@@ -5,16 +5,18 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
+const { authoredSectionNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -177,6 +179,89 @@ async function verifySpec(spec, read, opts = {}) {
     const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
     add('chart', ch.name, rows && rows[0]);
   }
+  // DASHBOARDS — existence, then that every deployed chart tile is internally consistent (#586 item 3).
+  // A chart tile names a table (`TargetEntityType`), a view and a chart. The platform accepts and
+  // publishes a tile whose chart belongs to ANOTHER table, and two same-named charts on different
+  // tables made the build produce exactly that — live, with the dashboard present and verify passing.
+  // So a dashboard is proven only when each chart tile's view and chart both belong to its table.
+  //
+  // Existence is checked for every dashboard. The tile check needs `dashboardComponents` on the
+  // reader (additive and reader-gated, like the other content checks); the CLI's reader supplies it.
+  // Every read failure is reported as unverified, never as correct.
+  const ownerTable = async (table, idColumn, entityColumn, id) => {
+    if (!id) return undefined;
+    try {
+      const rows = await read.queryRecords(table, { select: [entityColumn], filter: `${idColumn} eq ${id}`, top: 1 });
+      return rows && rows[0] ? String(rows[0][entityColumn] || '').toLowerCase() : null; // null = no such row
+    } catch { return undefined; } // undefined = could not look
+  };
+  // Tile parameters carry braced GUIDs (`{…}`); a filter needs the bare, unquoted form.
+  const bareGuid = (g) => { const s = String(g || '').replace(/[{}]/g, '').trim().toLowerCase(); return /^[0-9a-f-]{36}$/.test(s) ? s : ''; };
+  // The dashboard this spec builds, by name → `{ id }`, or `{ id: null, detail }` when it is absent or
+  // cannot be told apart. A name can also match another app's dashboard (names are not unique, and
+  // Dataverse compares them ignoring case, most accents and trailing spaces), so with several matches
+  // it is the one the app's solution holds — the one the build reuses (dashboardsInSolution,
+  // sdk-build.js). The dashboard check below and the sitemap subarea check both ask this, so the two
+  // can never pick different dashboards: live, the subarea check took the first match, and a
+  // same-named dashboard of another app sorted first and failed a correctly wired app. Memoized per
+  // name, so each name is read once.
+  const ownDashboards = new Map();
+  const identifyDashboard = async (name) => {
+    let rows = null;
+    try {
+      rows = await findDashboardsByName(read, name);
+    } catch (e) {
+      return { id: null, detail: `could not be read (${(e && e.message) || e}) — unverified, not proven correct` };
+    }
+    if (!rows || !rows.length) return { id: null, detail: '' };
+    if (rows.length === 1) return { id: rows[0].id };
+    let ours = null;
+    let why = '';
+    try {
+      const members = await dashboardsInSolution(read, spec.solution && spec.solution.uniqueName, rows.map((r) => r.id));
+      ours = members ? rows.filter((r) => members.has(String(r.id).replace(/[{}]/g, '').toLowerCase())) : null;
+    } catch (e) {
+      why = ` (${(e && e.message) || e})`;
+    }
+    if (ours && ours.length === 1) return { id: ours[0].id };
+    const reason = ours === null
+      ? `this app's solution cannot say which is its own${why}`
+      : `${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution`;
+    return { id: null, detail: `${rows.length} dashboards share this name and ${reason}, so the one this spec builds cannot be identified` };
+  };
+  const ownDashboard = (name) => {
+    if (!ownDashboards.has(name)) ownDashboards.set(name, identifyDashboard(name));
+    return ownDashboards.get(name);
+  };
+  for (const d of spec.dashboards || []) {
+    if (!d || !d.name) continue;
+    const own = await ownDashboard(d.name);
+    if (!own.id) { add('dashboard', d.name, false, own.detail); continue; }
+    const dashboardId = own.id;
+    if (typeof read.dashboardComponents !== 'function') { add('dashboard', d.name, true); continue; }
+    const problems = [];
+    let components = null;
+    try { components = await read.dashboardComponents(dashboardId); } catch (e) {
+      problems.push(`its tiles could not be read (${(e && e.message) || e}) — unverified, not proven correct`);
+    }
+    for (const c of components || []) {
+      if (!c || c.type !== 'chart') continue;
+      const p = c.parameters || {};
+      const table = String(p.TargetEntityType || '').toLowerCase();
+      const label = `chart tile '${c.name || '(unnamed)'}'`;
+      const chartTable = await ownerTable('savedqueryvisualization', 'savedqueryvisualizationid', 'primaryentitytypecode', bareGuid(p.VisualizationId));
+      const viewTable = await ownerTable('savedquery', 'savedqueryid', 'returnedtypecode', bareGuid(p.ViewId));
+      if (chartTable === undefined || viewTable === undefined) {
+        problems.push(`${label}: its chart or view could not be resolved — unverified, not proven correct`);
+      } else if (chartTable !== table || viewTable !== table) {
+        const wrong = [];
+        if (chartTable !== table) wrong.push(`its chart ${chartTable ? `belongs to ${chartTable}` : 'does not exist'}`);
+        if (viewTable !== table) wrong.push(`its view ${viewTable ? `belongs to ${viewTable}` : 'does not exist'}`);
+        problems.push(`${label} shows ${table || '(no table)'}, but ${wrong.join(' and ')}`);
+      }
+    }
+    add('dashboard', d.name, problems.length === 0, problems.join('; '));
+  }
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
@@ -252,6 +337,7 @@ async function verifySpec(spec, read, opts = {}) {
       if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
+      const formFieldOptions = fieldOptionsMap(f);
       if (!canReadTopology) {
         add('form-topology', `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
@@ -284,10 +370,20 @@ async function verifySpec(spec, read, opts = {}) {
       }
 
       const deployed = parseFormTopology(xml);
-      // Where the DEPLOYED form actually placed each bound field, keyed by section name.
+      // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
+      // holding it — not merely its name.
+      //
+      // A name alone aliases: the builder can produce two sections called `packed_fields` in
+      // DIFFERENT tabs (one holding the fields, one empty in the requested tab), and a name-keyed
+      // comparison found the empty one equal to the real one and reported verify PASS while the
+      // requested relocation had not happened. Live-reproduced: 28/28 PASS against a form whose
+      // fields were in the wrong tab.
+      //
+      // The identity is the section object itself, so a later comparison can ask "is this the SAME
+      // section I matched?" rather than "does it have the same name as the one I matched?".
       const placedIn = new Map();
       for (const t of deployed) for (const c of t.columns || []) for (const sec of c.sections || []) {
-        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, String(sec.name || '').toLowerCase());
+        for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, sec);
       }
 
       const problems = [];
@@ -297,6 +393,9 @@ async function verifySpec(spec, read, opts = {}) {
       // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
+      // The section names the author declared — the same set the build's compiler records — so the
+      // label and position passes skip a section another want owns by name, exactly as the build does.
+      const authoredNames = authoredSectionNames(f);
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -319,55 +418,112 @@ async function verifySpec(spec, read, opts = {}) {
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
+            // Every want here is authored (the spec's own sections), and an authored section never
+            // matches an engine HOST by name, label or position — the same rule the build's topology pass
+            // follows, a host a maker added a field to included. A section a maker filled with a control
+            // but that carries the authored name is still found by it.
             const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
-              { claimed: claimedSections, skip: isEngineOwnedSection });
+              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredNames)(s), nameSkip: isEngineHostSection });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;
             }
             claimedSections.add(secHit.index);
+            // The grid width the COMPILER emits for this authored section — taken from the same
+            // function the compiler uses, never re-derived here. Reading the raw `columns` instead
+            // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
+            // and a QuickCreate section is capped at 1, so "the spec declares 2" was never what the
+            // build was asked to produce. It is still the AUTHORED width, not the deployed one — see
+            // the span comparison below for why that distinction matters.
+            const wantCols = sectionGridWidth(sec, f.formType || 'Main');
+            // GRID WIDTH. Checked independently, because the span comparison below derives its
+            // expectation from the AUTHORED width: without this, a section deployed narrower than
+            // asked would go unreported AND would quietly lower the span expectation to match
+            // itself.
+            const secCols = Number(secHit.item.columns);
+            if (Number.isFinite(secCols) && secCols !== wantCols) {
+              problems.push(`section '${secName}' is deployed ${secCols} column(s) wide, the spec declares ${wantCols}`);
+            }
             // OCCUPANCY: no deployed row may carry more columns of content than its section has.
             // This is the shape defect the reconcile fixes (a field packed into a full row, or a
             // widened span overflowing one), and a field-to-section check alone cannot see it.
             // Skipped when the deployed section declares no width — unknown is not "one".
-            const secCols = Number(secHit.item.columns);
+            //
+            // A row-spanning cell also fills its column(s) in the rows beneath it (FormXML rows follow
+            // HTML-table semantics), so a row's occupancy is its own cells PLUS the slots still reserved
+            // by spans from the rows above. Counting a row's own cells alone verified a full row
+            // sitting under a rowspan — live, `[name rowspan=2, tier] / [code, zeta]` in a 2-column
+            // section passed, with row 2 needing three columns.
             if (Number.isFinite(secCols) && secCols >= 1) {
+              let carried = []; // one entry per reserving cell: its width and the rows it still covers
               for (const [ri, drow] of (secHit.item.rows || []).entries()) {
-                const used = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                const own = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+                const reserved = carried.reduce((n, r) => n + r.width, 0);
+                const used = own + reserved;
                 if (used > secCols) {
-                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content in a ${secCols}-column section`);
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content`
+                    + (reserved ? ` (${reserved} reserved by a row-spanning cell above)` : '')
+                    + ` in a ${secCols}-column section`);
+                }
+                carried = carried.map((r) => ({ width: r.width, left: r.left - 1 })).filter((r) => r.left > 0);
+                for (const c of drow.cells || []) {
+                  const rs = Number(c.rowspan) || 1;
+                  if (rs > 1) carried.push({ width: Number(c.colspan) || 1, left: rs - 1 });
                 }
               }
             }
             // A span the author DECLARED must be the deployed span. An UNDECLARED one is not
             // checked — the build never writes it, so a maker's hand-widened cell must survive
             // both the rebuild and the verification.
+            //
+            // "Declared" means what the COMPILER was asked for: the inline entry merged over the
+            // form's `fieldOptions`, by the compiler's own merge. Checking inline objects only left
+            // every `fieldOptions` span unverified — including one the build had to skip.
             const deployedCellOf = (logical) => (secHit.item.rows || [])
               .flatMap((r2) => r2.cells || [])
               .find((c) => c.control && c.control.fieldName === logical);
             for (const entry of (sec.fields || [])) {
-              if (!entry || typeof entry !== 'object') continue;
-              const fl = String(entry.name || '').toLowerCase();
+              const inline = normalizeFieldEntry(entry);
+              const fl = inline.name;
               if (!fl) continue;
+              const eff = mergeFieldOptions(formFieldOptions[fl], inline, fl);
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
               for (const key of ['colspan', 'rowspan']) {
-                const want = Number(entry[key]);
-                if (!Number.isFinite(want) || want < 1) continue; // not declared
+                const declared = Number(eff[key]);
+                if (!Number.isFinite(declared) || declared < 1) continue; // not declared
+                // Compare the EFFECTIVE span, clamped against the AUTHORED grid width — never the
+                // deployed one. Deriving the expectation from what was deployed let a section that
+                // came out too narrow LOWER ITS OWN EXPECTATION and excuse a wrong span: authored
+                // `columns: 4, colspan: 4` deployed as `columns: 1, colspan: 1` verified PASS. The
+                // deployed width is now reported separately above, so both faults are visible.
+                //
+                // Only `colspan` is bounded by the grid; `rowspan` has no such limit, so it is
+                // compared as authored.
+                const want = key === 'colspan' ? Math.min(declared, wantCols) : declared;
                 const got = Number(dc[key]) || 1;
-                if (got !== want) problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${want}`);
+                if (got !== want) {
+                  problems.push(`field '${fl}' has ${key} ${got}, the spec declares ${declared}`
+                    + (want !== declared ? ` (clamped to ${want} by the ${wantCols}-column section)` : ''));
+                }
               }
             }
-            // Fields are compared against the section that was MATCHED, not the authored name — the
-            // deployed section legitimately keeps its own name.
-            const deployedSecName = String(secHit.item.name || '').toLowerCase();
+            // Fields are compared against the section OBJECT that was matched, not its name — the
+            // deployed section legitimately keeps its own name, and two sections can share one.
+            // Identity comparison is what catches a field sitting in a same-named section under a
+            // DIFFERENT tab, which a name comparison reported as correct.
             for (const entry of (sec.fields || [])) {
               const fieldName = typeof entry === 'string' ? entry : (entry && entry.name);
               if (!fieldName) continue;
               const fl = String(fieldName).toLowerCase();
               const where = placedIn.get(fl);
               if (where === undefined) problems.push(`field '${fl}' is not placed on the deployed form`);
-              else if (where !== deployedSecName) problems.push(`field '${fl}' is deployed in section '${where}', the spec places it in '${secName}'`);
+              else if (where !== secHit.item) {
+                const whereName = String(where.name || '').toLowerCase();
+                problems.push(`field '${fl}' is deployed in section '${whereName}'`
+                  + (whereName === secName ? ' under a different tab' : '')
+                  + `, the spec places it in '${secName}'`);
+              }
             }
           });
         });
@@ -518,12 +674,11 @@ async function verifySpec(spec, read, opts = {}) {
       for (const sa of g.subAreas || []) {
         if (sa.entity) add('subarea', sa.title || sa.entity, hasElement(xml, 'SubArea', { Entity: sa.entity }));
         if (sa.dashboard) {
-          // Resolve the declared dashboard (a system dashboard = systemform type 0) by name, then
-          // confirm the sitemap points a SubArea at THAT dashboard id — not just that some dashboard
-          // subarea exists. Missing/unresolvable dashboard => not present.
-          const rows = await read.queryRecords('systemform', { select: ['formid'], filter: `type eq 0 and name eq '${odataLit(sa.dashboard)}'`, top: 1 });
-          const dashId = rows && rows[0] && rows[0].formid;
-          add('subarea', sa.title || sa.dashboard, dashId ? subareaHasDashboard(xml, dashId) : false);
+          // Confirm the sitemap points a SubArea at the dashboard this spec builds — not just that
+          // some dashboard subarea exists, and not at another app's same-named dashboard, which the
+          // name lookup returns too (see ownDashboard above). Absent or unidentifiable => not present.
+          const own = await ownDashboard(sa.dashboard);
+          add('subarea', sa.title || sa.dashboard, own.id ? subareaHasDashboard(xml, own.id) : false, own.id ? '' : own.detail);
         }
         if (sa.icon) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
@@ -963,6 +1118,31 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // App routing description (`app.aiDescription`, #583). Asserted only when the spec sets one: absent
+  // means the build left the deployed value alone, so there is nothing to compare. The oracle is the
+  // row's own `appmodule.aiappdescription`, found by the SAME identity the build wrote under
+  // (`appUniqueName(spec)`). Reader-gated on `queryRecords`; a failed read FAILS the check, because a
+  // routing description nobody can read back is not proven applied.
+  const wantAiDescription = spec.app && typeof spec.app.aiDescription === 'string' && spec.app.aiDescription.trim()
+    ? spec.app.aiDescription : null;
+  if (wantAiDescription && typeof read.queryRecords === 'function') {
+    let got;
+    let error;
+    try {
+      const rows = await read.queryRecords('appmodule', { select: ['aiappdescription'], filter: `uniquename eq '${odataLit(appUniqueName(spec))}'`, top: 1 });
+      if (!rows || !rows[0]) error = `no app module with unique name '${appUniqueName(spec)}' was found`;
+      else got = rows[0].aiappdescription;
+    } catch (e) {
+      error = (e && e.message) || String(e);
+    }
+    const present = !error && got === wantAiDescription;
+    const shown = (s) => JSON.stringify(s.length > 80 ? `${s.slice(0, 77)}...` : s);
+    add('app-ai-description', 'app.aiDescription', present, present ? ''
+      : error ? `could not read the app's routing description: ${error}`
+        : got ? `the deployed routing description ${shown(got)} differs from the spec's`
+          : 'the app has no routing description (appmodule.aiappdescription is empty)');
+  }
+
   // AI row summaries (`ai.summaries`). AB#6689110.
   //
   // Without this a spec that REQUESTS a row summary verified clean when none was created: the build
@@ -1297,10 +1477,13 @@ function parseFormTopology(xml) {
       // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
       // notes timeline or a web resource — engine-owned, never something the spec's field list
       // claims to place. The CELL still records that a control was present, because that is what
-      // distinguishes an engine-owned section from a merely empty one.
+      // distinguishes an engine-owned section from a merely empty one — and its `classid`
+      // (`{06375649-C143-495E-A496-C962E5B4488E}`, braces and case as written), which is what still
+      // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
+      const classId = attr(raw, 'classid');
       if (f) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = f ? { fieldName: String(f).toLowerCase() } : {};
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {});
     }
   }
   return tabs;

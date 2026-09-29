@@ -128,7 +128,7 @@ test('the appmodule is packaged BEFORE any page or connection reference', async 
 });
 
 test('a connection reference that does not exist fails the run instead of packaging a partial solution', async () => {
-  const { cli, emitted } = harness({
+  const { cli, calls, emitted } = harness({
     argv: [ENV, 'sol', 'app-1', '--connection-refs', 'new_missing'],
     refLookup: (requestPath) =>
       requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")
@@ -138,6 +138,34 @@ test('a connection reference that does not exist fails the run instead of packag
   await cli.main();
   assert.equal(emitted[0].ok, false);
   assert.match(String(emitted[0].payload.message || emitted[0].payload), /new_missing.*not found/);
+  assert.equal(
+    calls.filter((call) => call.path === 'AddSolutionComponent').length,
+    0,
+    'missing connection references must be validated before any solution mutation',
+  );
+});
+
+test('all requested connection references are validated before adding the app or pages', async () => {
+  const { cli, calls, emitted } = harness({
+    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1,p2', '--connection-refs', 'new_missing'],
+    refLookup: (requestPath) => {
+      if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
+        return { status: 200, data: { ObjectTypeCode: 10372 } };
+      }
+      if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
+        return { status: 200, data: { ObjectTypeCode: 10158 } };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  await cli.main();
+  assert.equal(emitted[0].ok, false);
+  assert.match(String(emitted[0].payload.message || emitted[0].payload), /new_missing.*not found/);
+  assert.deepEqual(
+    calls.filter((call) => call.path === 'AddSolutionComponent'),
+    [],
+    'a failed connection-reference lookup must leave app and pages unmodified',
+  );
 });
 
 test('a connection reference logical name with a quote is OData-escaped, not injected', async () => {

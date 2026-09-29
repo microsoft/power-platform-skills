@@ -4,7 +4,7 @@ Official agent skills/plugins for Power Platform development by Microsoft.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository is a **plugin marketplace** containing GitHub Copilot/Claude Code plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
 ## Installation
 
@@ -27,13 +27,13 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/mai
 The installer automatically:
 
 - Installs `pac` CLI if not already installed
-- Detects available tools (Claude Code, GitHub Copilot CLI)
+- Detects available tools (GitHub Copilot CLI, Claude Code)
 - Registers the plugin marketplace and installs all listed plugins
 - Enables auto-update so plugins stay current
 
 ### Manual Installation
 
-If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
+If you prefer to install manually, run these commands inside a GitHub Copilot CLI or Claude Code session:
 
 1. Add the marketplace
 
@@ -122,7 +122,22 @@ Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP ser
 To develop and test plugins locally, follow these steps:
 
 1. Clone this repository
-1. Launch Claude Code with plugin path:
+1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
+
+    GitHub Copilot CLI:
+
+    ```bash
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    ```
+
+    Claude Code:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
@@ -140,6 +155,30 @@ To develop and test plugins locally, follow these steps:
 Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
 
 > **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
+
+### GitHub Copilot CLI
+
+#### Option 1 — Allow specific tools (recommended)
+
+Pre-approve only the tools your workflow needs:
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
+```
+
+#### Option 2 — Allow all tools in Copilot
+
+```bash
+copilot --allow-all-tools
+```
+
+To allow everything except dangerous commands:
+
+```bash
+copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
+```
+
+See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
 
 ### Claude Code
 
@@ -171,30 +210,6 @@ claude --dangerously-skip-permissions
 ```
 
 See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
-
-### GitHub Copilot CLI
-
-#### Option 1 — Allow specific tools (recommended)
-
-Pre-approve only the tools your workflow needs:
-
-```bash
-copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
-```
-
-#### Option 2 — Allow all tools in Copilot
-
-```bash
-copilot --allow-all-tools
-```
-
-To allow everything except dangerous commands:
-
-```bash
-copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
-```
-
-See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
 
 ## Repository Structure
 

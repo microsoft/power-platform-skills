@@ -738,3 +738,149 @@ test('appEntityComponents(): matches an objectid whose CASING differs from the r
   assert.strictEqual(r.ok, true);
   assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
 });
+// The dashboard oracle through the REAL reader seam: `dashboardComponents` is implemented here with
+// the SDK's own deserializer (fetch, then read the artifact), so a stub-only test would prove nothing
+// about the reader verify actually runs with.
+// A dashboard the SDK returns no artifact for, or a component list that is not a list, is not "no tiles": verify
+// reports it unverified. Converting it to an empty list passed the check having read nothing.
+test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unverified, never passed', async () => {
+  for (const [what, art] of [['no artifact', null], ['a malformed component list', { components: { chart: 1 } }]]) {
+    const sdk = {
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1', formxml: '<form/>' }] : []),
+      listArtifacts: async () => [],
+      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+      fetchArtifact: async () => {},
+      getArtifact: async () => art,
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    };
+    const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+      dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+    const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+    const chk = r.checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, new RegExp(`its tiles could not be read \\(the SDK returned ${what}`), what);
+  }
+});
+
+// verify checks what users see: the PUBLISHED dashboard. The SDK's read is the unpublished draft, and verify runs
+// in the build's workspace, whose copy can hold unpushed edits — so a fix saved but not published, or never
+// pushed, passed while users still saw the broken dashboard. Either is now unverified. So is a draft saved and put
+// back while the tiles were read: that leaves the FormXML as it was, but not the draft's token.
+test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const fetches = [];
+  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read. `laterVersion` is
+  // the draft's token then: a draft saved and put back leaves the FormXML as it was, but not its token.
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null, version = 'W/"1"', laterVersion = null } = {}) => {
+    let reads = 0;
+    const xml = () => (later && reads > 2 ? later : '<form/>');
+    return {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, o) => {
+      // The published row carries its own token, which a write to the draft does not move.
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml(), '@odata.etag': 'W/"9"' }]; }
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async (type) => (type === 'dashboard' ? [{ type, id: 'dash-1', isDirty: dirty }] : []),
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      reads += 1;
+      const token = laterVersion && reads > 2 ? laterVersion : version;
+      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml, ...(token === null ? {} : { '@odata.etag': token }) } };
+    } },
+    fetchArtifact: async (type, id, o) => { fetches.push(o); },
+    getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
+      TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    };
+  };
+  const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
+  for (const [what, opts, detail] of [
+    ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
+    ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
+    ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft saved and put back while it was read', { laterVersion: 'W/"3"' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft read with no version', { version: null }, /the version of dashboard dash-1 could not be read/],
+  ]) {
+    const chk = await check(sdkWith(opts));
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, detail, what);
+  }
+  // CONTROL: published, with nothing pending — the tiles are read and checked.
+  const ok = await check(sdkWith());
+  assert.strictEqual(ok.present, true, ok.detail);
+  // With an isolated reader the tiles come from IT — a throwaway workspace — and never from the build's copy, which
+  // may hold unpushed edits (the main SDK here would answer cross-wired tiles and is never asked), and it is disposed.
+  const main = sdkWith();
+  main.fetchArtifact = async () => { throw new Error('the build workspace must not be read for tiles'); };
+  main.getArtifact = async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_customer' } }] });
+  const iso = sdkWith();
+  let disposed = 0;
+  const isolated = await verifySpec(spec, readerFor(main, 'new_supportdesk', { isolatedReader: async () => ({ sdk: iso, dispose: () => { disposed += 1; } }) }));
+  const chk = isolated.checks.find((c) => c.kind === 'dashboard');
+  assert.strictEqual(chk.present, true, chk.detail);
+  assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
+});
+
+// A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
+// run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
+test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {
+  const { isolatedReaderFor } = require('../verify-model-app.js');
+  const client = { request: async () => { throw new Error('no request is made'); } };
+  let made = 0;
+  const makeClient = () => { made += 1; return client; };
+  const read = isolatedReaderFor('https://contoso.crm.dynamics.com', { makeClient });
+  const a = await read();
+  const b = await read();
+  assert.strictEqual(made, 1, 'one client for the run');
+  assert.notStrictEqual(a.sdk, b.sdk, 'a fresh SDK per read');
+  a.dispose();
+  b.dispose();
+  const own = await isolatedReaderFor('https://contoso.crm.dynamics.com', { httpClient: client, makeClient })();
+  own.dispose();
+  assert.strictEqual(made, 1, 'with the run\u2019s own client, none is made');
+});
+
+test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_customer' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+    fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
+    getArtifact: async (type, id) => {
+      calls.push(['getArtifact', type, id]);
+      return { components: [{ type: 'chart', name: 'By Priority', parameters: {
+        TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] };
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk, 'a dashboard check must be produced');
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /shows new_ticket, but its chart belongs to new_customer/);
+  assert.deepStrictEqual(calls, [['fetchArtifact', 'dashboard', 'dash-1'], ['getArtifact', 'dashboard', 'dash-1']], 'the tiles come from the SDK artifact of THAT dashboard');
+});

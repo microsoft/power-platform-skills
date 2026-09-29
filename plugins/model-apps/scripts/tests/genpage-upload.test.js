@@ -17,7 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const { main } = require('../genpage-upload.js');
+const { main, notPlainFile } = require('../genpage-upload.js');
 const { buildPacInvocation, makeGenpageCli } = require('../lib/genpage-cli.js');
 
 const dirs = [];
@@ -153,6 +153,95 @@ test('a hostile multi-line prompt reaches upload() byte-identical when passed by
   assert.strictEqual(r.payload.pageId, '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8');
 });
 
+// The page's display name travelled on the command line (`--name "<name>"`): PowerShell expanded `$(…)` in it before
+// the script ran — a name could run a command — and `Revenue $100` arrived as `Revenue `. By file it keeps every
+// character; the line break an editor adds at its end is not part of it.
+test('a display name passed by file reaches upload() intact, and a blank or doubled one is refused', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const af = path.join(d, 'agent.txt');
+  const nf = path.join(d, 'page-name.txt');
+  fs.writeFileSync(pf, 'Build the revenue page', 'utf8');
+  fs.writeFileSync(af, 'Initial deploy', 'utf8');
+  const NAME = 'Revenue $100 \u2014 "Q3" $(whoami) `x` 100% & more';
+  fs.writeFileSync(nf, `\uFEFF${NAME}\r\n`, 'utf8');
+  const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx', '--prompt-file', pf, '--agent-message-file', af];
+  const cli = capturingCli();
+  const r = await runMain([...base, '--name-file', nf], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls[0].name, NAME, 'every character, and no BOM or trailing line break');
+  const both = capturingCli();
+  const doubled = await runMain([...base, '--name', 'x', '--name-file', nf], both);
+  assert.strictEqual(doubled.ok, false);
+  assert.match(doubled.payload.error, /only one of --name or --name-file/);
+  assert.strictEqual(both.calls.length, 0);
+  fs.writeFileSync(nf, '\r\n', 'utf8');
+  const empty = capturingCli();
+  const blank = await runMain([...base, '--name-file', nf], empty);
+  assert.strictEqual(blank.ok, false);
+  assert.match(blank.payload.error, /the page name resolved to empty/);
+  assert.strictEqual(empty.calls.length, 0, 'no generated name deployed in place of the one supplied');
+});
+
+// The skill writes these files into the working directory just before the upload, and a write through a link left at
+// one of those names — a symbolic link or junction, or a hard link — rewrote the file it points to, outside the working
+// directory included. An input that is not a plain file stops the upload, and says the other file may have changed.
+test('a prompt, agent-message, name, connectors or actions file that is a link or a folder stops the upload', async (t) => {
+  const d = tmp();
+  const outside = tmp();
+  const plain = (name, text) => { const p = path.join(d, name); fs.writeFileSync(p, text, 'utf8'); return p; };
+  const pf = plain('prompt.txt', 'Build the revenue page');
+  const af = plain('agent-message.txt', 'Initial deploy');
+  const nf = plain('page-name.txt', 'Revenue');
+  const cf = plain('connectors.json', '[]');
+  const xf = plain('actions.json', '[]');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'not the skill\'s file', 'utf8');
+  const argv = (over = {}) => {
+    const files = { 'prompt-file': pf, 'agent-message-file': af, 'name-file': nf, connectors: cf, actions: xf, ...over };
+    return ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx',
+      ...Object.entries(files).flatMap(([k, v]) => [`--${k}`, v])];
+  };
+  // CONTROL: every input a plain file — the upload runs.
+  const ok = capturingCli();
+  assert.strictEqual((await runMain(argv(), ok)).ok, true);
+  assert.strictEqual(ok.calls.length, 1);
+  for (const flag of ['prompt-file', 'agent-message-file', 'name-file', 'connectors', 'actions']) {
+    const hard = path.join(d, `hard-${flag}`);
+    fs.linkSync(victim, hard);
+    const cli = capturingCli();
+    const r = await runMain(argv({ [flag]: hard }), cli);
+    assert.strictEqual(r.ok, false, flag);
+    assert.match(r.payload.error, new RegExp(`^--${flag} .*hard-${flag} is a hard link \\(2 names for one file\\)`), flag);
+    assert.match(r.payload.error, /changed its other names too/, flag);
+    assert.strictEqual(cli.calls.length, 0, `${flag}: nothing uploaded`);
+    fs.unlinkSync(hard);
+  }
+  const folder = path.join(d, 'folder.txt');
+  fs.mkdirSync(folder);
+  const inFolder = capturingCli();
+  const r = await runMain(argv({ 'name-file': folder }), inFolder);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /^--name-file .*folder\.txt is not a plain file \(a folder or a special file\)/);
+  assert.strictEqual(inFolder.calls.length, 0);
+  const sym = path.join(d, 'sym-prompt.txt');
+  try { fs.symlinkSync(victim, sym, 'file'); } catch (e) { t.skip(`cannot create a file symlink here: ${e.message}`); return; }
+  const viaLink = capturingCli();
+  const s = await runMain(argv({ 'prompt-file': sym }), viaLink);
+  assert.strictEqual(s.ok, false);
+  assert.match(s.payload.error, /^--prompt-file .*sym-prompt\.txt is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to/);
+  assert.strictEqual(viaLink.calls.length, 0);
+});
+
+// Fail closed: an input that cannot be inspected is not one proven to be a plain file. A missing one is left to the
+// read, which says it could not be read.
+test('an input file that cannot be inspected is refused; a missing one is left to the read', (t) => {
+  const d = tmp();
+  assert.strictEqual(notPlainFile(path.join(d, 'absent.txt')), null);
+  t.mock.method(fs, 'lstatSync', () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); });
+  assert.match(notPlainFile(path.join(d, 'prompt.txt')), /prompt\.txt could not be inspected \(EPERM\)/);
+});
+
 test('a downloaded conversation transcript survives an update by file', async () => {
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');
@@ -163,8 +252,8 @@ test('a downloaded conversation transcript survives an update by file', async ()
     '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt-file', pf, '--agent-message', 'Re-upload after edit'], cli);
 
   assert.strictEqual(r.ok, true);
-  // \r\n is normalized by neither side: only a SINGLE trailing newline is stripped, so every
-  // interior line break — which is what makes a transcript a transcript — is preserved.
+  // \r\n is normalized by neither side, and nothing is trimmed — not even a trailing newline — so every
+  // line break, which is what makes a transcript a transcript, is preserved.
   assert.strictEqual(cli.calls[0].prompt, TRANSCRIPT, 'the transcript must not be flattened');
   assert.strictEqual(cli.calls[0].pageId, '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d');
   assert.strictEqual(r.payload.updated, true, 'an upload carrying --page-id is an update');
@@ -220,7 +309,7 @@ test('a U+FEFF inside the prompt body is preserved', async () => {
   assert.strictEqual(cli.calls[0].prompt, body, 'only a LEADING BOM is an encoding marker');
 });
 
-// Adversarial review (astra HIGH 3 / grok MEDIUM 4). The wrapper OMITS `--add-to-sitemap` on an
+// The wrapper OMITS `--add-to-sitemap` on an
 // update as a backstop, but omission is not an answer to an explicit contradictory request: the
 // caller believes a placement happened and it never did. The docs claimed "refused"; now it is.
 test('--add-to-sitemap combined with --page-id is refused, not silently dropped', async () => {
@@ -232,7 +321,7 @@ test('--add-to-sitemap combined with --page-id is refused, not silently dropped'
   assert.strictEqual(cli.calls.length, 0, 'nothing may be uploaded on a contradictory request');
 });
 
-// grok MEDIUM 5 — `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
+// `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
 // when no prompt was supplied, but a caller who passed --prompt-file asked for THAT text, and
 // deploying a generated placeholder instead is exactly the provenance break this path exists to
 // prevent. A blank, newline-only or BOM-only file is the realistic way it happens.
@@ -257,7 +346,7 @@ test('a prompt file that resolves to empty is refused rather than silently defau
   assert.strictEqual(cli.calls[0].prompt, 'A real approved prompt');
 });
 
-// astra HIGH 3b — the worse half. A CREATE that asked for placement, crashed mid-flight and was
+// The worse half of the sitemap problem. A CREATE that asked for placement, crashed mid-flight and was
 // recovered as an UPDATE leaves the page deployed but absent from the app's navigation, and the old
 // code returned plain success. An unreachable page is an incomplete deployment, not a success.
 test('a page deployed but left out of the sitemap is reported as incomplete, with its id', async () => {
@@ -369,9 +458,9 @@ test('the standalone flags are emitted, and --add-to-sitemap only on a create', 
   assert.strictEqual(update[update.indexOf('--data-sources') + 1], 'account,contact');
 });
 
-// astra MEDIUM 8 — the option tests above call the LIBRARY directly and mostly check flag presence.
-// Astra mutated `main()` to drop forwarding of model/connectors/actions/addToSitemap, and replaced
-// the library's model and file arguments with "WRONG", and every committed test stayed green. So the
+// The option tests above call the LIBRARY directly and mostly check flag presence. A mutation run
+// that made `main()` drop forwarding of model/connectors/actions/addToSitemap, and replaced
+// the library's model and file arguments with "WRONG", left every committed test green. So the
 // wiring from CLI flag → wrapper → actual pac invocation was unprotected.
 //
 // This drives the REAL wrapper through `main()` and asserts exact flag/value pairs on the captured
@@ -744,7 +833,7 @@ test('the current bindings are found even when --page-id casing differs from pac
   assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket'], 'the bindings must still be preserved');
 });
 
-// --- Review follow-ups on the unbind guard --------------------------------------------------------
+// --- The unbind guard: flag values that must NOT authorise clearing --------------------------------
 
 // `parseArgs` yields the STRING "false" for `--clear-data-sources=false`, which is truthy. Testing
 // the raw flag read an explicit refusal to clear as permission to clear — unbinding the page the
@@ -844,7 +933,7 @@ test('a cleanup failure does not fail an update whose bindings were read', async
   assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket']);
 });
 
-// --- PR review: --prompt-file must deliver the file byte-for-byte -------------------------------
+// --- --prompt-file must deliver the file byte-for-byte --------------------------------------------
 // A trailing newline used to be stripped here while the direct /app-builder wrapper path preserved
 // it, so the SAME text deployed differently depending on which path carried it. This transport
 // exists precisely so an arbitrary prompt survives verbatim.

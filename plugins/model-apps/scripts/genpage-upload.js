@@ -33,7 +33,7 @@ const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank } = require('./lib/genpage-cli.js');
 
-const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name',
+const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
   'model', 'connectors', 'actions', 'add-to-sitemap'];
 // Bare switches; every other flag carries a value.
@@ -41,9 +41,31 @@ const SWITCHES = ['add-to-sitemap', 'clear-data-sources'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
-  + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name <text>] '
+  + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
   + '[--connectors <path>] [--actions <path>] [--add-to-sitemap]';
+
+// The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
+// into the working directory just before the upload, and a write through a link left at one of those names (a
+// symbolic link, a junction, or a hard link whose other name lives elsewhere) rewrites the file it points to,
+// outside the working directory included. The skill checks each name before it writes (SKILL.md Phase 6); this is
+// the check that holds when that step was skipped: the upload stops, and says the linked file may have been
+// changed. Returns null for a plain file, and for a path that is not there (the read or pac reports that).
+//
+// Scope: both checks close a link left in the folder BEFORE the run, such as one shipped in a cloned repository. A
+// process racing the skill to plant one between its check and its write is out of their reach. Such a process
+// already holds the user's rights over the whole working directory (its pages, plan and manifest), and no check
+// inside the skill can stop it.
+function notPlainFile(abs) {
+  let st;
+  try { st = fs.lstatSync(abs); } catch (e) {
+    return e && e.code === 'ENOENT' ? null : `${abs} could not be inspected (${(e && e.code) || e})`;
+  }
+  if (st.isFile() && st.nlink <= 1) return null;
+  if (st.isSymbolicLink()) return `${abs} is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to; check that file, remove the link and re-run`;
+  if (st.isFile()) return `${abs} is a hard link (${st.nlink} names for one file), not a file written in place — writing it changed its other names too; check them, remove this one and re-run`;
+  return `${abs} is not a plain file (a folder or a special file) — remove it and re-run`;
+}
 
 // Resolve one text input that may arrive inline or by file. Returns { ok, value } or { ok:false,
 // error }. Supplying BOTH is rejected rather than silently preferring one: the two would be
@@ -71,6 +93,8 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     // /app-builder wrapper path preserves a final newline, so stripping one here made the same text
     // deploy differently depending on which path carried it. A prompt that legitimately ends with a
     // newline (a downloaded transcript, a heredoc) keeps it.
+    const linked = notPlainFile(path.resolve(file));
+    if (linked) return { ok: false, error: `--${fileFlag} ${linked}` };
     try {
       return {
         ok: true,
@@ -102,6 +126,13 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   if (!prompt.ok) return emit(false, { error: prompt.error });
   const agentMessage = resolveText(flags, 'agent-message', 'agent-message-file', readFile);
   if (!agentMessage.ok) return emit(false, { error: agentMessage.error });
+  // The page's display name travels by file too. It is the maker's text as well, and the skill substituted it
+  // into `--name "<name>"`: PowerShell expanded `$(…)` in it before this script ran — a name could run a
+  // command — and `Revenue $100` arrived as `Revenue `. By file it is never command text, and keeps every
+  // character. Its trailing line break, which an editor adds, is not part of the name.
+  const pageName = resolveText(flags, 'name', 'name-file', readFile);
+  if (!pageName.ok) return emit(false, { error: pageName.error });
+  if (typeof flags['name-file'] === 'string' && pageName.value !== undefined) pageName.value = pageName.value.replace(/(?:\r?\n)+$/, '');
 
   // An EMPTY prompt or agent-message is refused rather than defaulted. `upload()` substitutes
   // `Generative page <name>` for a blank prompt and `Authored by app-builder` for a blank agent
@@ -112,6 +143,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   for (const [label, inlineFlag, fileFlag, resolved] of [
     ['prompt', 'prompt', 'prompt-file', prompt],
     ['agent message', 'agent-message', 'agent-message-file', agentMessage],
+    ['page name', 'name', 'name-file', pageName],
   ]) {
     const given = typeof flags[inlineFlag] === 'string' || typeof flags[fileFlag] === 'string';
     if (given && suppliedButBlank(resolved.value === undefined ? '' : resolved.value)) {
@@ -143,6 +175,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       error: '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
         + 'entry, and the page it names is already placed. Drop one of the two.',
     });
+  }
+
+  // pac reads these two itself; they are checked here for the same reason as the text files (notPlainFile).
+  for (const flag of ['connectors', 'actions']) {
+    const linked = typeof flags[flag] === 'string' && flags[flag] ? notPlainFile(path.resolve(flags[flag])) : null;
+    if (linked) return emit(false, { error: `--${flag} ${linked}` });
   }
 
   const cli = cliFactory(flags.env);
@@ -253,7 +291,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       pageId: flags['page-id'] || undefined,
       codeFile: flags['code-file'],
       compiledCodeFile: flags['compiled-code-file'] || undefined,
-      name: flags.name || undefined,
+      name: pageName.value || undefined,
       prompt: prompt.value,
       agentMessage: agentMessage.value,
       // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
@@ -296,4 +334,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { main, resolveText };
+module.exports = { main, resolveText, notPlainFile };

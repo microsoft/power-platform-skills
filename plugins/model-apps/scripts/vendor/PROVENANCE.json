@@ -1,14 +1,14 @@
 {
-  "commit": "50a43bd3f570ec9ea5545dcc257fae1949f22aaa",
-  "subject": "fix(cds-maker-sdk): three regressions from the last two PRs, plus BPF concurrency tokens",
+  "commit": "e3483d6951cefa0876ce943501b9980317163856",
+  "subject": "fix(cds-maker-sdk): condition every BPF write on the token the previous write produced",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-17T23:34:42.907Z",
-  "newestSrcAt": "2026-09-17T23:33:11.099Z",
+  "libBuiltAt": "2026-09-23T16:22:40.381Z",
+  "newestSrcAt": "2026-09-23T16:18:15.285Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-17T23:35:33.267Z",
-  "bundleSha256": "609cfc9fda047b2a3f6cbea80823942e81e8b99b44a044a681ca98dcb6379467",
-  "bundleBytes": 708362
+  "builtAt": "2026-09-23T16:23:33.084Z",
+  "bundleSha256": "7a64e8b1962d4845f7ea7b1cdb753b8934dbb16a2d2bad510843d32911a3a2b8",
+  "bundleBytes": 723384
 }

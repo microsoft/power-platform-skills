@@ -553,6 +553,15 @@ function makeRunner({ emit, total }) {
   return { run, mapLimit, skip, emit, total };
 }
 
+// Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see
+// requireSuccessfulPush below for which, and why both spellings of the commit flag are read). Shared so
+// every caller that reacts to a failed push decides "failed" exactly as the halt does.
+function pushFailed(result) {
+  if (!result) return false;
+  const committed = result.saved !== undefined ? result.saved : result.success;
+  return committed === false || (committed === undefined && Boolean(result.error));
+}
+
 // Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
 // pushArtifact RESOLVES (it does NOT throw) with a failed PushResult on a 412 — the artifact changed
 // in Maker since our last fetch — and on an ARTIFACT_ALREADY_EXISTS collision. The engine previously
@@ -570,8 +579,7 @@ function makeRunner({ emit, total }) {
 // the check is written to fail CLOSED against both bundle generations rather than assume one.
 function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
-  const committed = result.saved !== undefined ? result.saved : result.success;
-  if (committed === false || (committed === undefined && result.error)) {
+  if (pushFailed(result)) {
     // SEVERAL different by-value failures reach here and they need different remedies, so the
     // diagnosis is SELECTED from the SDK's own error code rather than assumed.
     //
@@ -587,8 +595,17 @@ function requireSuccessfulPush(result, what, warn) {
     const opts = { phase: 'push', recoverable: true, cause: result.error };
     // Reporting an already-exists collision as a concurrent edit tells the operator to re-download
     // when nothing changed under them, and hides the actual cause.
+    //
+    // The remedy is NOT "re-run" and NOT a plain `fetchArtifact`. The collision means an earlier push
+    // committed but the workspace never recorded it, so it still holds a local copy marked never-
+    // pushed at that id. A plain fetch KEEPS such a copy and adopts nothing — and the build's
+    // existing-artifact path is exactly a plain fetch — so a re-run on the same workspace re-issues
+    // the create and halts here again. Measured against the vendored bundle: same workspace → the
+    // same ARTIFACT_ALREADY_EXISTS; a fresh workspace → the fetch adopts the row and the push is a
+    // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
+    // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: delete the .maker-workspace directory (or the --workspace one), then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
@@ -1335,4 +1352,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

@@ -136,6 +136,39 @@ test('deleteAppCascade rejection is reported as a failed app step and dependent 
   assert.ok(cap.logs.some((l) => /teardown finished with errors/.test(l)), 'the summary stays visibly non-clean');
 });
 
+// After an app-delete abort the summary read "0 deleted, 8 not found, 1 failed" — eight steps never even
+// QUERIED, reported as a fact about the environment. Likewise a step left in place on purpose (an
+// `existing: true` table, a system table) is not "not found". Each skip is counted as what it is, and the
+// counts must agree with the per-step lines the operator just read.
+test('the teardown summary counts not-found, kept and not-attempted steps apart', async () => {
+  const tally = (logs) => {
+    const steps = logs.filter((l) => /^\s+\[\d+\/\d+\] ⊘ /.test(l));
+    return {
+      notFound: steps.filter((l) => /\(not found\)$/.test(l)).length,
+      notAttempted: steps.filter((l) => /\(not attempted — /.test(l)).length,
+      kept: steps.filter((l) => !/\(not found\)$/.test(l) && !/\(not attempted — /.test(l)).length,
+    };
+  };
+  const summaryOf = (logs) => logs.find((l) => /teardown (complete|finished with errors) — /.test(l)) || '';
+
+  const aborted = presentSdk();
+  aborted.deleteAppCascade = async () => { throw new Error('delete not confirmed'); };
+  const a = logCapture();
+  await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk: aborted, log: a.log });
+  const at = tally(a.logs);
+  assert.ok(at.notAttempted > 0 && at.notFound === 0, JSON.stringify(at));
+  assert.match(summaryOf(a.logs), new RegExp(`0 deleted, 0 not found, 1 failed, ${at.notAttempted} not attempted \\(`), summaryOf(a.logs));
+
+  const retained = JSON.parse(JSON.stringify(desk));
+  for (const e of retained.entities) e.existing = true;
+  const k = logCapture();
+  await teardownModelApp(retained, { apply: true, allowDestructive: true }, { sdk: presentSdk(), log: k.log });
+  const kt = tally(k.logs);
+  assert.ok(kt.kept >= retained.entities.length, JSON.stringify(kt));
+  assert.match(summaryOf(k.logs), new RegExp(`, ${kt.notFound} not found, 0 failed, ${kt.kept} kept \\(`), summaryOf(k.logs));
+  assert.doesNotMatch(summaryOf(k.logs), /not attempted/, 'nothing was abandoned, so the clause is omitted');
+});
+
 test('deleteAppCascade resolved success:false reports orphaned generative-page children', async () => {
   const sdk = presentSdk();
   sdk.deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
@@ -215,6 +248,11 @@ function loadTeardownCli({
   // #587 item 8 — lets a test drive the destructive-cleanup guard both ways. `null` means the
   // guard accepts (the ordinary case); a string is the refusal reason.
   clearRefusedBecause = null,
+  // What releasing the changed-only tombstone answers: deleted (the ordinary case), or left in place
+  // because another teardown of the workspace is still running.
+  releaseResult = { ok: true, deleted: true },
+  // What the lease-held clear answers.
+  clearResult = { ok: true },
 }) {
   const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
@@ -293,8 +331,12 @@ function loadTeardownCli({
     }
     if (id === './lib/apply-snapshot-store.js') {
       return {
-        tombstoneSnapshot: (workspaceDir) => { events.push({ type: 'tombstoneSnapshot', workspaceDir }); return { ok: true }; },
+        tombstoneSnapshot: (workspaceDir) => { events.push({ type: 'tombstoneSnapshot', workspaceDir }); return { ok: true, generation: 'g-tomb', teardownId: 'td-1' }; },
         deleteSnapshot: (workspaceDir) => events.push({ type: 'deleteSnapshot', workspaceDir }),
+        releaseTombstone: (workspaceDir, teardownId, deps) => { events.push({ type: 'releaseTombstone', workspaceDir, teardownId, keep: !!(deps && deps.keep) }); return releaseResult; },
+        beatTeardown: (workspaceDir, teardownId) => { events.push({ type: 'beatTeardown', workspaceDir, teardownId }); return { ok: true }; },
+        clearWorkspace: (target) => { events.push({ type: 'clearWorkspace', target }); return clearResult; },
+        TEARDOWN_BEAT_MS: 60000,
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
@@ -332,6 +374,8 @@ function loadTeardownCli({
     process: sandboxProcess,
     Buffer,
     setImmediate,
+    setInterval,
+    clearInterval,
   }, { filename: scriptPath });
   return { main: mod.exports.__mainForTest, events, stderr, sdkTemp, settle: () => new Promise((resolve) => setImmediate(resolve)) };
 }
@@ -365,12 +409,14 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   await harness.main();
   const emitIndex = harness.events.findIndex((e) => e.type === 'emitResult');
   const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
-  const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === workspaceDir);
+  const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'clearWorkspace' && e.target === workspaceDir);
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'never removed in place, outside the lease');
 
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
   assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
-  assert.ok(harness.events.some((e) => e.type === 'deleteSnapshot' && e.workspaceDir === workspaceDir));
+  assert.ok(harness.events.some((e) => e.type === 'releaseTombstone' && e.workspaceDir === workspaceDir && e.teardownId === 'td-1'),
+    'a clean teardown releases the tombstone entry IT wrote');
   assert.ok(workspaceCleanupIndex > -1, '--clear-workspace removes the caller workspace only after clean apply');
   assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex, 'emitResult exits, so SDK cleanup must happen first');
   assert.match(harness.stderr.join(''), /cleared workspace/);
@@ -403,7 +449,7 @@ test('teardown CLI does not delete a workspace the safety guard refuses', async 
 
   assert.ok(harness.events.some((e) => e.type === 'checkWorkspaceClearable' && e.dir === workspaceDir),
     'the guard must be consulted before any delete');
-  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir),
+  assert.ok(!harness.events.some((e) => (e.type === 'rmSync' && e.dir === workspaceDir) || e.type === 'clearWorkspace'),
     'a refused workspace must NOT be removed');
   const err = harness.stderr.join('');
   assert.match(err, /skipped --clear-workspace/, 'the refusal must be reported, not silent');
@@ -411,6 +457,94 @@ test('teardown CLI does not delete a workspace the safety guard refuses', async 
   const emitted = harness.events.find((e) => e.type === 'emitResult');
   assert.strictEqual(emitted.ok, true,
     'the teardown succeeded; refusing an unsafe cleanup must not turn it into a failure');
+});
+
+// --clear-workspace removes the whole workspace — and with it the changed-only tombstone, which another
+// teardown of the same workspace may still be relying on. The release reports that, and the clear is
+// skipped rather than deleting the fence.
+test('teardown CLI skips --clear-workspace while the workspace still holds another teardown\u2019s fence', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\overlapped';
+  const harness = loadTeardownCli({
+    releaseResult: { ok: true, deleted: false, left: true, reason: '1 other teardown(s) of this workspace are still running' },
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(!harness.events.some((e) => (e.type === 'rmSync' && e.dir === workspaceDir) || e.type === 'clearWorkspace'), 'the fence is not deleted');
+  assert.ok(!harness.events.some((e) => e.type === 'checkWorkspaceClearable'), 'the clear is not even considered');
+  const err = harness.stderr.join('');
+  assert.match(err, /the changed-only snapshot stays tombstoned: 1 other teardown\(s\) of this workspace are still running\. The last of them to finish removes it\./);
+  assert.match(err, /skipped --clear-workspace: the workspace still holds the changed-only fence/);
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, true, 'the teardown itself succeeded');
+});
+
+// The clear runs under the workspace's lease and refuses a snapshot written since this teardown's release —
+// another teardown's tombstone. Removing the folder in place deleted it. The teardown itself still succeeded.
+test('teardown CLI skips --clear-workspace when a fence appeared after its release', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\refenced';
+  const harness = loadTeardownCli({
+    clearResult: { ok: false, reason: 'a changed-only snapshot was written to it after this teardown finished — another teardown or build of it is running' },
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(harness.events.some((e) => e.type === 'clearWorkspace' && e.target === workspaceDir));
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'nothing removed in place');
+  const err = harness.stderr.join('');
+  assert.match(err, /skipped --clear-workspace: a changed-only snapshot was written to it after this teardown finished/);
+  assert.doesNotMatch(err, /cleared workspace/);
+  assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, true, 'the teardown itself succeeded');
+});
+
+// A release that FAILED (a held lease, a busy file) leaves the tombstone in place — safe, since a
+// --changed-only build then only full-builds — and so the workspace holding it is not cleared either.
+test('teardown CLI keeps the workspace when releasing the tombstone fails, and says what that costs', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\busy';
+  const harness = loadTeardownCli({
+    releaseResult: { ok: false, deleted: false, reason: 'release failed: EBUSY: resource busy or locked' },
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir));
+  const err = harness.stderr.join('');
+  assert.match(err, /stays tombstoned: release failed: EBUSY: resource busy or locked\. A --changed-only build full-builds until a clean teardown removes it\./);
+  assert.match(err, /skipped --clear-workspace: the workspace still holds the changed-only fence \(release failed: EBUSY/);
+  assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, true);
 });
 
 test('teardown CLI dry-runs a positional spec with the default workspace and no destructive cleanup', async () => {
@@ -452,6 +586,32 @@ test('teardown CLI emits an engine failure only after cleaning the SDK temp work
   assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex);
   assert.strictEqual(harness.events[emitIndex].ok, false);
   assert.match(harness.events[emitIndex].payload.message, /engine failed/);
+  // Even a teardown that throws drops its entry from the changed-only fence, keeping the tombstone.
+  const released = harness.events.filter((e) => e.type === 'releaseTombstone');
+  assert.deepStrictEqual(released.map((e) => [e.teardownId, e.keep]), [['td-1', true]]);
+});
+
+test('teardown CLI releases a teardown that finished with errors with keep, and clears nothing', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\failed';
+  const harness = loadTeardownCli({
+    runResult: { ok: false, dryRun: false, errors: ['app delete failed'] },
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main().catch(() => {});
+  assert.deepStrictEqual(harness.events.filter((e) => e.type === 'releaseTombstone').map((e) => [e.teardownId, e.keep]), [['td-1', true]]);
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir), 'a failed teardown clears no workspace');
+  assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, false);
 });
 
 test('teardown CLI entrypoint reports SDK startup failures after removing the throwaway workspace', async () => {
@@ -513,6 +673,66 @@ test('a teardown that finishes WITH ERRORS leaves the tombstone (snapshot not de
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 
+// A teardown that FINISHED is no longer in flight, whatever its outcome: its entry is dropped and only the
+// tombstone stays. Left behind, the entry read as a teardown still running whenever its pid was alive —
+// here the very process the clean re-run runs in — and that re-run then kept the fence for up to a day.
+test('a failed teardown drops its entry, so a clean re-run in the same process removes the snapshot', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    const failing = presentSdk();
+    failing.deleteAppCascade = async () => { throw new Error('app delete failed'); };
+    const r1 = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk: failing });
+    assert.strictEqual(r1.ok, false);
+    const kept = snapStore.readSnapshot(ws);
+    assert.ok(snap.isTombstoned(kept) && kept.eligible === false, 'the tombstone stays');
+    assert.deepStrictEqual(kept.teardowns, [], 'but no longer lists the teardown that finished');
+    const r2 = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk: presentSdk() });
+    assert.strictEqual(r2.ok, true, JSON.stringify(r2.errors));
+    assert.strictEqual(r2.snapshotKept, undefined, 'no other teardown is running');
+    assert.strictEqual(snapStore.readSnapshot(ws), null, 'the clean re-run removes the snapshot');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// While it runs, a teardown refreshes its entry, so the entry keeps counting; once it has finished it stops.
+// An entry that is no longer seen stops counting, which is what lets a KILLED teardown's entry go.
+test('a running teardown keeps its entry fresh, and stops once it has finished', async (t) => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const beat = t.mock.method(snapStore, 'beatTeardown');
+    const sdk = presentSdk();
+    let seen = null;
+    const del = sdk.deleteAppCascade;
+    sdk.deleteAppCascade = async (...args) => {
+      const before = snapStore.readSnapshot(ws).teardowns[0].beat;
+      t.mock.timers.tick(snapStore.TEARDOWN_BEAT_MS);
+      seen = [before, snapStore.readSnapshot(ws).teardowns[0].beat];
+      return del(...args);
+    };
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual(seen[0], undefined, 'no beat before the first interval');
+    assert.strictEqual(typeof seen[1], 'number', 'a beat after it');
+    const beats = beat.mock.callCount();
+    t.mock.timers.tick(snapStore.TEARDOWN_BEAT_MS * 3);
+    assert.strictEqual(beat.mock.callCount(), beats, 'a finished teardown beats no more');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('a teardown that throws drops its entry too, and keeps the tombstone', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    await assert.rejects(teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws },
+      { sdk: presentSdk(), emit: () => { throw new Error('emit failed'); } }), /emit failed/);
+    const kept = snapStore.readSnapshot(ws);
+    assert.ok(snap.isTombstoned(kept) && kept.eligible === false);
+    assert.deepStrictEqual(kept.teardowns, []);
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
 test('teardown dry-run does NOT tombstone or delete the snapshot', async () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
   try {
@@ -521,4 +741,112 @@ test('teardown dry-run does NOT tombstone or delete the snapshot', async () => {
     const disk = snapStore.readSnapshot(ws);
     assert.ok(disk && disk.eligible === true, 'a dry-run leaves the eligible snapshot untouched');
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// #587 item 2: the tombstone is the fence, so a teardown that cannot write it must not mutate. It used
+// to warn and carry on — and if the app delete then failed after lower-level artifacts were gone, the
+// old ELIGIBLE snapshot survived describing a state that no longer existed.
+test('teardown --apply refuses to delete anything when the snapshot cannot be fenced', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    // Another live, young build holds the workspace lease, so the tombstone cannot be written.
+    const held = snapStore.acquireLease(ws, { now: () => Date.now(), pid: process.pid, processAlive: () => true, staleMs: snapStore.LEASE_STALE_MS });
+    assert.ok(held.ok);
+    const sdk = presentSdk();
+    const { log, logs } = logCapture();
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk, log });
+    snapStore.releaseLease(held);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((e) => /fence|tombstone/.test(e)), JSON.stringify(r.errors));
+    assert.deepStrictEqual(sdk.calls.filter((c) => /^delete/.test(c.method)), [], 'no delete may run before the fence is in place');
+    assert.ok(logs.some((m) => /nothing was deleted/i.test(m)), logs.join('\n'));
+    const disk = snapStore.readSnapshot(ws);
+    assert.ok(disk && disk.eligible === true && !snap.isTombstoned(disk), 'the untouched snapshot still describes the untouched app');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// A workspace with NO snapshot is fenced too — a FIRST changed-only build has none until it finishes, and
+// "nothing to fence" let it bless the app this teardown was deleting. That means creating the folder when
+// there is none: a clean teardown removes it again, and a failed one leaves the tombstone, which is what
+// keeps a surviving artifact from being blessed by the next baseline.
+test('teardown --apply from a folder with no workspace fences it while deleting, then leaves none behind', async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    const ws = path.join(parent, '.maker-workspace');
+    const sdk = presentSdk();
+    let fencedDuringDelete = null;
+    const deleteApp = sdk.deleteAppCascade;
+    sdk.deleteAppCascade = async (...args) => { fencedDuringDelete = snap.isTombstoned(snapStore.readSnapshot(ws)); return deleteApp(...args); };
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.strictEqual(fencedDuringDelete, true, 'a tombstone must be in place while the app is deleted');
+    assert.deepStrictEqual(fs.readdirSync(parent), [], 'a folder that never had a workspace is left without one');
+  } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('a failed teardown from a folder with no workspace leaves the fresh tombstone behind', async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    const ws = path.join(parent, '.maker-workspace');
+    const sdk = presentSdk();
+    sdk.deleteAppCascade = async () => { throw new Error('app delete failed'); };
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    assert.strictEqual(r.ok, false);
+    const disk = snapStore.readSnapshot(ws);
+    assert.ok(disk && snap.isTombstoned(disk) && disk.eligible === false, 'the tombstone outlives a failed teardown');
+  } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
+// An existing workspace folder is the build's, so a clean teardown removes only the snapshot from it — even
+// when that leaves it empty.
+test('a clean teardown keeps a workspace folder that already existed, even one it leaves empty', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk: presentSdk() });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(fs.existsSync(ws), 'the folder survives');
+    assert.deepStrictEqual(fs.readdirSync(ws), [], 'and only the snapshot is gone');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// Two teardowns can overlap — an agent re-running one that timed out. The tombstone lists each one in
+// flight, and only the LAST to finish deletes it, in either finishing order. Deleting it when the first one
+// finished let a first changed-only build claim and bless a baseline for an app the other was still deleting.
+test('overlapping teardowns keep the fence until the last one finishes, whichever finishes first', async () => {
+  for (const order of ['the other finishes after this one', 'the other finishes first']) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+    try {
+      const ws = path.join(parent, '.maker-workspace');
+      const sdk = presentSdk();
+      let other = null;
+      let claimedDuring = null;
+      const deleteApp = sdk.deleteAppCascade;
+      sdk.deleteAppCascade = async (...args) => {
+        other = snapStore.tombstoneSnapshot(ws);
+        if (order === 'the other finishes first') {
+          assert.deepStrictEqual(snapStore.releaseTombstone(ws, other.teardownId).left, true, 'the other leaves the fence to this one');
+          claimedDuring = snapStore.claimBaselineSnapshot(ws, { orgId: 'o', envUrl: 'https://e', appUniqueName: 'a' });
+        }
+        return deleteApp(...args);
+      };
+      const logs = [];
+      const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk, log: (m) => logs.push(m) });
+      assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+      if (order === 'the other finishes first') {
+        assert.strictEqual(claimedDuring.ok, false, 'no first build may claim while this teardown is still deleting');
+        assert.strictEqual(snapStore.readSnapshot(ws), null, 'the last teardown to finish deletes the snapshot');
+        assert.deepStrictEqual(fs.readdirSync(parent), [], 'and the folder it created');
+        assert.strictEqual(r.snapshotKept, undefined);
+      } else {
+        const disk = snapStore.readSnapshot(ws);
+        assert.ok(disk && snap.isTombstoned(disk), 'the other teardown\u2019s fence survives this one finishing');
+        assert.deepStrictEqual(disk.teardowns.map((t) => t.id), [other.teardownId], 'with only the other\u2019s entry left');
+        assert.match(r.snapshotKept, /1 other teardown\(s\) of this workspace are still running/);
+        assert.ok(logs.some((m) => /stays tombstoned: .*The last of them to finish removes it/.test(m)), logs.join('\n'));
+        assert.deepStrictEqual(snapStore.releaseTombstone(ws, other.teardownId), { ok: true, deleted: true }, 'the other, finishing last, deletes it');
+      }
+    } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+  }
 });

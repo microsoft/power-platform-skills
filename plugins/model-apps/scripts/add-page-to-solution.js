@@ -74,6 +74,21 @@ async function resolveEntityComponentType(envUrl, logicalName) {
   return componentType;
 }
 
+async function resolveConnectionReferences(envUrl, refs) {
+  const resolved = [];
+  for (const logicalName of refs) {
+    const query =
+      `connectionreferences?$filter=connectionreferencelogicalname eq '${escapeODataString(logicalName)}'` +
+      '&$select=connectionreferenceid&$top=1';
+    const lookup = await dataverseRequest(envUrl, 'GET', query);
+    ensureOk(lookup, `Lookup connection reference ${logicalName}`);
+    const id = lookup.data?.value?.[0]?.connectionreferenceid;
+    if (!id) throw new Error(`Connection reference '${logicalName}' not found in env`);
+    resolved.push({ logicalName, id });
+  }
+  return resolved;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
@@ -122,6 +137,9 @@ async function main() {
     const connectionReferenceComponentType = refs.length
       ? await resolveEntityComponentType(envUrl, CONNECTION_REFERENCE_LOGICAL_NAME)
       : null;
+    const resolvedConnectionRefs = refs.length
+      ? await resolveConnectionReferences(envUrl, refs)
+      : [];
 
     // The appmodule (type 80) with AddRequiredComponents=true pulls the sitemap and
     // appmodulecomponent, but NOT the GenPage — the page is added explicitly below.
@@ -138,15 +156,7 @@ async function main() {
 
     const refsToAdd = connectionRefsToAdd(refs, connectorsOn);
     const skippedConnectionRefs = connectorsOn ? [] : refs;
-    for (const logicalName of refsToAdd) {
-      const query =
-        `connectionreferences?$filter=connectionreferencelogicalname eq '${escapeODataString(logicalName)}'` +
-        '&$select=connectionreferenceid&$top=1';
-      const lookup = await dataverseRequest(envUrl, 'GET', query);
-      ensureOk(lookup, `Lookup connection reference ${logicalName}`);
-      const id = lookup.data?.value?.[0]?.connectionreferenceid;
-      if (!id) throw new Error(`Connection reference '${logicalName}' not found in env`);
-
+    for (const { logicalName, id } of resolvedConnectionRefs.filter((ref) => refsToAdd.includes(ref.logicalName))) {
       await addComponent(envUrl, solutionUniqueName, id, connectionReferenceComponentType, false);
       added.push({ type: 'connectionreference', logicalName, id });
     }
@@ -172,4 +182,5 @@ module.exports = {
   UXAGENTPROJECT_LOGICAL_NAME,
   CONNECTION_REFERENCE_LOGICAL_NAME,
   resolveEntityComponentType,
+  resolveConnectionReferences,
 };

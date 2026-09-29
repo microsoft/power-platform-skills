@@ -396,6 +396,41 @@ test('validation rejects a non-boolean flag rather than coercing it ("false" is 
   assert.ok(errsFor(spec).some((e) => /readOnly must be a boolean/.test(e)));
 });
 
+// A form-level span reaches the compiler through mergeFieldOptions exactly as an inline one does, so
+// it must meet the same rules. Before, a bad value was dropped in silence, and a form-level rowspan
+// skipped the trailing rule entirely: under an auto layout `{ new_points: { rowspan: 2 } }` compiled
+// a reservation directly above the next field.
+test('validation checks a fieldOptions span the way it checks an inline one', () => {
+  for (const bad of [0, -1, 1.5, 'abc', '2']) {
+    const errs = errsFor(specWithBigInt({ fieldOptions: { new_points: { colspan: bad } } }));
+    assert.ok(errs.some((e) => /fieldOptions\['new_points'\] has colspan .* whole number/.test(e)), `colspan ${JSON.stringify(bad)}: ${errs.join(' | ')}`);
+  }
+  for (const good of [1, 2, 4]) {
+    assert.deepStrictEqual(errsFor(specWithBigInt({ fieldOptions: { new_points: { colspan: good } } })), [], `colspan ${good}`);
+  }
+});
+
+test('validation rejects a form-level rowspan above 1 under either layout, and still allows rowspan 1', () => {
+  const auto = specWithBigInt({ fieldOptions: { new_points: { rowspan: 2 } } });
+  const explicit = specWithBigInt({
+    layout: 'explicit',
+    fieldOptions: { new_points: { rowspan: 2 } },
+    tabs: [{ label: 'G', sections: [{ columns: 2, fields: ['new_name', 'new_points', 'new_duedate'] }] }],
+  });
+  for (const [lbl, spec] of [['auto', auto], ['explicit', explicit]]) {
+    const errs = errsFor(spec);
+    assert.ok(errs.some((e) => /sets rowspan 2, which only an explicit layout can place safely/.test(e) && /"name": "new_points", "rowspan": 2/.test(e)), `${lbl}: ${errs.join(' | ')}`);
+  }
+  // rowspan 1 is the explicit "narrow back" claim and places nothing beneath the cell.
+  assert.deepStrictEqual(errsFor(specWithBigInt({ fieldOptions: { new_points: { rowspan: 1 } } })), []);
+  // The inline route stays open for the one safe position — the LAST field of a section.
+  const inlineLast = specWithBigInt({
+    layout: 'explicit',
+    tabs: [{ label: 'G', sections: [{ columns: 2, fields: ['new_name', 'new_duedate', { name: 'new_points', rowspan: 2 }] }] }],
+  });
+  assert.deepStrictEqual(errsFor(inlineLast), []);
+});
+
 test('validation rejects `after` inside an explicit tabs layout — two competing orderings', () => {
   const spec = specWithBigInt({
     layout: 'explicit',

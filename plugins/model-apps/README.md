@@ -14,6 +14,8 @@ Build and deploy generative pages (genux) for Power Apps model-driven apps. This
 ### From a local clone
 
 ```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+# or
 claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 ```
 
@@ -142,6 +144,22 @@ Creates, updates, and deploys generative pages for model-driven Power Apps. Hand
 
 The plugin invokes multiple tools during a session. To reduce approval prompts:
 
+### GitHub Copilot CLI
+
+**Option 1 — Allow specific tools (recommended)**
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(pac *)' --allow-tool 'shell(node *)' --allow-tool 'shell(powershell *)' --allow-tool 'shell(az *)'
+```
+
+**Option 2 — Allow all tools**
+
+```bash
+copilot --allow-all-tools
+```
+
+### Claude Code
+
 **Option 1 — Permission mode (recommended)**
 
 ```jsonc
@@ -202,10 +220,10 @@ export MODEL_APPS_DISABLE_HOOKS=1
 ## Telemetry
 
 model-apps ships opt-out usage telemetry (1DS). The committed config ships
-**disabled** (`disabled: true`) — it emits nothing until go-live, even though it now
+**disabled** (`disabled: true`) — until go-live it builds, sends and mirrors nothing, even though it now
 carries the provisioned model-apps key + stream (staged, not yet enabled). `disabled:
 true` is the active guard; the placeholder-key check is only a secondary guard for
-un-provisioned copies. Once enabled it is **on by default** (you opt out).
+un-provisioned copies. Once enabled it is **on by default** (you opt out), and then:
 
 - **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
   session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when

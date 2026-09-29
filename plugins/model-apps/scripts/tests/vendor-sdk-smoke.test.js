@@ -342,6 +342,11 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
       if (/\/appmodules\([^)]+\)/.test(url)) {
         return { status: 200, headers: {}, body: { '@odata.etag': 'W/"1"', appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE, uniquename: 'new_cascadeapp', name: 'Cascade App' } };
       }
+      // The by-id sitemap read supplies the ROW token the conditional delete carries. It answers
+      // with the single row (never a collection) and the token in the header and the body.
+      if (/\/sitemaps\([^)]+\)/.test(url)) {
+        return { status: 200, headers: { etag: 'W/"2"' }, body: { '@odata.etag': 'W/"2"', sitemapid: SITEMAP_ID } };
+      }
       // Only a navigational <SubArea GenPageId="…"> counts as a live generative-page reference.
       if (/\/sitemaps/.test(url)) {
         return {
