@@ -1,0 +1,17 @@
+.starrating-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+.starrating-input {
+  box-sizing: border-box;
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.starrating-message {
+  color: #605e5c;
+  font-size: 0.875rem;
+}

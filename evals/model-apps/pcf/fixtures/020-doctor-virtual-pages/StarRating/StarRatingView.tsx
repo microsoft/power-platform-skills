@@ -1,0 +1,32 @@
+import * as React from "react";
+
+export interface StarRatingViewProps {
+    cssClass: string;
+    inputClass: string;
+    messageClass: string;
+    label: string;
+    value: string;
+    disabled: boolean;
+    readOnly: boolean;
+    hidden: boolean;
+    message: string;
+    onChange: (next: string) => void;
+}
+
+export function StarRatingView(props: StarRatingViewProps): React.ReactElement {
+    return React.createElement(
+        "div",
+        { className: props.cssClass },
+        React.createElement("input", {
+            "aria-label": props.label,
+            className: props.inputClass,
+            disabled: props.disabled,
+            hidden: props.hidden,
+            readOnly: props.readOnly,
+            type: "text",
+            value: props.value,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => props.onChange(event.currentTarget.value),
+        }),
+        React.createElement("div", { className: props.messageClass, hidden: !props.message }, props.message),
+    );
+}
