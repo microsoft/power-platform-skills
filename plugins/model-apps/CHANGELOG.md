@@ -5,7 +5,15 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.9.0
+## [Unreleased] — 2.10.0
+
+A new code-component workflow for PCF projects.
+
+### Added
+
+- **`/pcf`** builds, tests, diagnoses, upgrades, deploys, binds, verifies and inventories Power Apps component framework code components for model-driven apps and Power Pages.
+
+## [2.9.0]
 
 A dry run that says what an apply would really do, sample data that can express a hierarchy, and
 downloads that round-trip Choice columns.

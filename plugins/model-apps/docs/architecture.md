@@ -1,9 +1,9 @@
 # Model Apps Plugin — Architecture
 
-The **wiring / flow reference** for both skills, as one page of ASCII diagrams. They are two
-**independent** flows, documented here in order — `/genpage` (page generation) below, then
-`/app-builder` (intent → whole model-driven app via the headless `cds-maker-sdk`). Neither is a
-stage of the other; document order is not a pipeline. For **per-component behavioral specs**, the canonical file tree, conventions, and
+The **wiring / flow reference** for the user-invocable skills, as one page of ASCII diagrams. They
+are **independent** flows, documented here in order — `/genpage` (page generation), `/app-builder`
+(intent → whole model-driven app via the headless `cds-maker-sdk`), then `/pcf` (code components).
+None is a stage of another; document order is not a pipeline. For **per-component behavioral specs**, the canonical file tree, conventions, and
 build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
 [`../references/app-spec-schema.md`](../references/app-spec-schema.md); the app-builder skill is
 [`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the capabilities doc/TODO is
@@ -245,6 +245,70 @@ authoring); the vendored SDK owns the **deterministic Dataverse mechanics** (cre
 `seedRecordGraph`, `enrichDefaultViews`, AI settings/row-summaries, artifact resolve/cascade). Each
 script's behavioral spec is in [`../AGENTS.md`](../AGENTS.md); the App Spec shape is
 [`../references/app-spec-schema.md`](../references/app-spec-schema.md).
+
+## /pcf — flow
+
+Build, repair, upgrade, deploy, bind, verify and inventory a PCF code component. The flow runs in the
+**main conversation loop**: user approval, unattended defaults, deploy consent, binding choices and
+runtime-verification choices are not delegated to a headless subagent. Script behavior is specified in
+[`../AGENTS.md`](../AGENTS.md) → `## pcf — code components (PCF)`; the design record is
+[`pcf-design.md`](pcf-design.md).
+
+```text
+User invokes /pcf
+       │
+       v
+┌──────────────────────────────┐
+│ skills/pcf/SKILL.md          │  route: new | existing | doctor | upgrade | deploy | bind | verify | inventory
+│ + create/deploy/bind/pages   │  resolve interaction mode; prompts never authorize writes by themselves
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Preflight / doctor           │  pcf-doctor.js, check-auth.js when an env is involved
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Intent + plan                │  pcf-intent.json -> write-pcf-plan.js -> pcf-plan.md
+│                              │  attended: plan-mode approval; unattended: explicit safe defaults only
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Scaffold / edit              │  pcf-scaffold.js renders matrix-pinned template + optional recipe
+│                              │  implementation follows references/pcf-*.md and recipe README
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Gates loop                   │  pcf-gates.js: manifest -> source -> lint -> test -> production build
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Deploy                       │  pcf-push.js wraps pac pcf push --environment after recorded consent
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Bind                         │  Maker binding guidance; publish before claiming published evidence
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Verify                       │  verify-pcf.js: registration + draft/published FormXML + optional runtime smoke
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Inventory                    │  pcf-inventory.js: registered controls + where-used dependency warning
+└──────────────────────────────┘
+```
+
+Evidence levels reported by the skill:
+
+| Level | Meaning |
+|---|---|
+| `built` | Production build completed locally. |
+| `gated` | Manifest, source, lint, unit tests and production build passed. |
+| `registered` | Dataverse has the expected custom control and version. |
+| `bound(draft)` | Draft form/grid metadata contains the binding. |
+| `bound(published)` | Published metadata contains the binding after publish. |
+| `runtime-verified` | Browser/manual/Playwright smoke confirmed the target host journey. |
+| `runtime-not-checked` | Metadata was checked but no runtime host journey was run. |
 
 ## Eval suite
 

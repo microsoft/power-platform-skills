@@ -1,6 +1,6 @@
 # Model Apps Plugin
 
-Build and deploy generative pages (genux) for Power Apps model-driven apps. This plugin provides a complete workflow — from validating prerequisites and gathering requirements, through generating React + TypeScript + Fluent code, to deploying via PAC CLI and verifying in the browser.
+Build model-driven Power Apps, generative pages (genux), and Power Apps component framework (PCF) code components. This plugin provides complete workflows from validating prerequisites and gathering requirements through generating, testing, deploying and verifying artifacts for model-driven apps and Power Pages.
 
 ## Installation
 
@@ -23,11 +23,12 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 
 | Prerequisite | Required for | Install |
 |---|---|---|
-| [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
-| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
+| [Node.js](https://nodejs.org/) 20+ (LTS) and npm | All skills; required for all PCF work | `winget install OpenJS.NodeJS.LTS` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, generative-page deployment; PCF deploy in this release | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [.NET SDK](https://dotnet.microsoft.com/download) | PCF deploy/package paths that invoke PAC/MSBuild in this release | `winget install Microsoft.DotNet.SDK.8` |
+| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation; PCF verify/inventory | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed. `/pcf` can scaffold, lint, test, build, doctor and upgrade locally without `az`; verification and inventory need `az` for Dataverse reads, and deploy needs PAC CLI plus .NET SDK in this release.
 
 ## Feature flags (experimental & in-progress)
 
@@ -78,18 +79,15 @@ capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased
 
 ## Skills
 
-The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
-`/genpage` builds standalone generative pages for an existing app. **They are independent — you can
-use either on its own, and neither requires the other.**
+The plugin provides three authoring skills: `/app-builder` builds a whole model-driven app, `/genpage` builds standalone generative pages for an existing app, and `/pcf` builds Power Apps component framework code components. **They are independent — you can use any one on its own, and none requires the others.**
 
 | Skill | Status | Use it when |
 |---|---|---|
 | [`/app-builder`](#app-builder) | Stable | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
 | [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
+| [`/pcf`](#pcf) | Stable | You want a PCF code component built, fixed, upgraded, deployed, bound, verified or inventoried |
 
-Already have an app and just want to add a page? Use `/genpage` — you never need to run
-`/app-builder` first. Building from scratch? `/app-builder` authors its own generative pages as part
-of the build, so you don't need to run `/genpage` afterwards.
+Already have an app and just want to add a page? Use `/genpage` — you never need to run `/app-builder` first. Need a reusable field, dataset or grid code component? Use `/pcf`. Building from scratch? `/app-builder` authors its own generative pages as part of the build, so you don't need to run `/genpage` afterwards.
 
 ### `/app-builder`
 
@@ -139,6 +137,30 @@ Creates, updates, and deploys generative pages for model-driven Power Apps. Hand
 - `I need a genux page to display account records with sorting and filtering`
 - `Generate a CRUD page for managing custom entities in Power Apps`
 - `Add a new page to my model-driven app that shows opportunity records as cards`
+
+### `/pcf`
+
+Builds, tests, diagnoses, upgrades, deploys, binds, verifies and inventories Power Apps component framework code components for model-driven apps and Power Pages.
+
+What it covers:
+
+1. **Plan** — captures `pcf-intent.json`, renders `pcf-plan.md`, and asks for approval before writes.
+2. **Scaffold** — creates field/dataset and standard/virtual projects from Microsoft-maintained templates, with optional recipes such as star rating, hierarchy tree and grid customizer.
+3. **Implement and repair** — applies PCF best practices, host policy, source checks and upgrade guidance.
+4. **Gate** — runs manifest, host, source, lint, unit-test and production-build checks.
+5. **Deploy** — uses `pac pcf push` with an explicit environment and recorded consent in this release.
+6. **Bind and verify** — guides Maker binding, then checks registration and draft/published metadata.
+7. **Inventory** — lists registered controls and registered where-used dependencies, with the documented caveat that this is not proof of Liquid or arbitrary text references.
+
+**PCF prerequisites:** Node.js 20+ and npm are required for all PCF work. PAC CLI and .NET SDK are required only for deploy/package flows in this release. Azure CLI (`az`) is required only for verify and inventory.
+
+**Usage:** Invoke directly with `/pcf`, or use prompts like:
+
+- `Create a PCF star rating control for a model-driven form`
+- `Diagnose why this PCF project will not build`
+- `Upgrade this PCF control to the model-apps compatibility matrix`
+- `Deploy this PCF control and verify the binding`
+- `Inventory where this PCF control is used`
 
 ## Running Without Interruption
 
@@ -195,7 +217,7 @@ validator blocks a single tool call (the agent reworks it) — never the whole s
 
 | Hook | When | What it does |
 |---|---|---|
-| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a model-apps authoring session (a `genpage-plan.md`, `app-spec.json`, or `model-app-plan.md` at/under cwd, so it covers both `/genpage` and `/app-builder`). Never blocks; silent in unrelated projects. |
+| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a model-apps authoring session (a `genpage-plan.md`, `app-spec.json`, `model-app-plan.md`, `pcf-intent.json`, or `pcf-plan.md` at/under cwd, so it covers `/genpage`, `/app-builder`, and `/pcf`). Never blocks; silent in unrelated projects. |
 | Icon validator | after a generated `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. Fires for both skills (gated on the `export default GeneratedComponent` marker, or a sibling `genpage-plan.md` / `model-app-plan.md`). |
 | Skill validator | after a skill runs | Runs the skill's `validate*.js` if it has one. |
 | Telemetry | on skill start / prompt | Emits `skill_started` usage telemetry (see [Telemetry](#telemetry)). |
