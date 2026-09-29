@@ -62,7 +62,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private uploading = false;
     private operationId = 0;
     private destroyed = false;
-    private nextElementId = 0;
+    private activeOperationSignature: string | null = null;
     private state: RenderState = "ready";
     private messageKey: string | null = null;
     private messageValue: string | null = null;
@@ -99,8 +99,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.readable = valueParameter?.security?.readable ?? true;
         this.editable = valueParameter?.security?.editable ?? true;
         this.disabled = context.mode.isControlDisabled;
+        const config = this.readConfiguration();
+        if (this.uploading && this.activeOperationSignature !== this.configSignature(config)) {
+            this.operationId += 1;
+            this.uploading = false;
+            this.activeOperationSignature = null;
+        }
         if (!this.uploading) {
-            const nextState = this.evaluateState(this.readConfiguration());
+            const nextState = this.evaluateState(config);
             this.state = nextState.state;
             this.messageKey = nextState.messageKey;
             this.messageValue = null;
@@ -117,6 +123,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     public destroy(): void {
         this.operationId += 1;
         this.uploading = false;
+        this.activeOperationSignature = null;
         this.destroyed = true;
         this.container?.replaceChildren();
         this.root = null;
@@ -129,18 +136,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.root.replaceChildren();
 
         const label = this.root.ownerDocument.createElement("div");
-        const labelId = this.createElementId("label");
-        const buttonId = this.createElementId("button");
-        label.id = labelId;
         label.className = "{{cssInputClass}}-label";
         label.textContent = this.getString(STRINGS.label);
 
         const button = this.root.ownerDocument.createElement("button");
-        button.id = buttonId;
         button.className = "{{cssInputClass}}-button";
         button.type = "button";
         button.textContent = this.getString(STRINGS.button);
-        button.setAttribute("aria-labelledby", `${labelId} ${buttonId}`);
+        button.setAttribute("aria-label", `${this.getString(STRINGS.label)}: ${this.getString(STRINGS.button)}`);
         button.disabled = !this.canUpload();
         button.setAttribute("aria-busy", this.uploading ? "true" : "false");
         button.addEventListener("click", () => {
@@ -262,7 +265,8 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private beginOperation(config: Configuration): OperationToken {
         this.operationId += 1;
-        return { operationId: this.operationId, signature: this.configSignature(config) };
+        this.activeOperationSignature = this.configSignature(config);
+        return { operationId: this.operationId, signature: this.activeOperationSignature };
     }
 
     private isOperationCurrent(token: OperationToken): boolean {
@@ -276,15 +280,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private finishOperation(token: OperationToken, state: RenderState, messageKey: string | null, messageValue: string | null): void {
         if (!this.isOperationCurrent(token)) return;
         this.uploading = false;
+        this.activeOperationSignature = null;
         this.state = state;
         this.messageKey = messageKey;
         this.messageValue = messageValue;
         this.render();
-    }
-
-    private createElementId(kind: string): string {
-        this.nextElementId += 1;
-        return `{{name}}-${kind}-${this.nextElementId}`;
     }
 
     private normalizeGuid(raw: string): string | null {

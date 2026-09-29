@@ -51,7 +51,7 @@ function parameters(overrides: Partial<IInputs> = {}): Partial<IInputs> {
     };
 }
 
-function mount(overrides: Partial<IInputs> = {}, options: { disabled?: boolean; editable?: boolean; readable?: boolean; createRecord?: jest.Mock; useDefaults?: boolean } = {}): Mounted {
+function mount(overrides: Partial<IInputs> = {}, options: { disabled?: boolean; editable?: boolean; readable?: boolean; createRecord?: jest.Mock; createAnnotation?: jest.Mock; useDefaults?: boolean } = {}): Mounted {
     const createRecord = options.createRecord ?? jest.fn().mockResolvedValue({ id: "note-id", entityType: "annotation" });
     const contextParameters = options.useDefaults === false ? overrides : parameters({
         value: mockProperty<string>(null, undefined, { editable: options.editable, readable: options.readable }) as IInputs["value"],
@@ -62,7 +62,7 @@ function mount(overrides: Partial<IInputs> = {}, options: { disabled?: boolean; 
         webAPI: mockWebApi({ createRecord }),
     }));
     const pickFile = jest.fn<Promise<AdapterFile | null>, [string]>();
-    const control = new {{name}}({ pickFile });
+    const control = new {{name}}(options.createAnnotation ? { pickFile, createAnnotation: options.createAnnotation } : { pickFile });
     const notify = jest.fn();
     const container = document.createElement("div");
 
@@ -221,7 +221,7 @@ test("destroy during file selection abandons upload without creating or mutating
     expect(container.textContent).toBe("");
 });
 
-test("record change before create abandons the stale upload", async () => {
+test("record change before create abandons the stale upload and recovers immediately", async () => {
     const picked = deferred<AdapterFile | null>();
     const { control, container, context, createRecord, pickFile } = mount();
     pickFile.mockReturnValue(picked.promise);
@@ -230,10 +230,17 @@ test("record change before create abandons the stale upload", async () => {
     await Promise.resolve();
     const changed = parameters({ entityId: mockProperty("{00000000-0000-0000-0000-000000000002}") as IInputs["entityId"] });
     control.updateView(withStrings({ ...context, parameters: changed } as ComponentFramework.Context<IInputs>));
+
+    expect(button(container).disabled).toBe(false);
+    expect(button(container).getAttribute("aria-busy")).toBe("false");
+    expect(container.textContent).not.toContain("Uploading attachment");
+
     picked.resolve({ name: "stale.txt", type: "text/plain", size: 12, contentBase64: "c3RhbGU=" });
     await flushPromises();
 
     expect(createRecord).not.toHaveBeenCalled();
+    expect(button(container).disabled).toBe(false);
+    expect(container.textContent).not.toContain("Uploading attachment");
 });
 
 test("raw file size is capped at the documented direct-create safety boundary", async () => {
@@ -253,12 +260,39 @@ test("raw file size is capped at the documented direct-create safety boundary", 
     expect(overCap.container.textContent).toContain("larger than 3072 KB");
 });
 
-test("button accessible name is associated with the visible label", () => {
-    const { container } = mount();
-    const uploadButton = button(container);
-    const labelId = uploadButton.getAttribute("aria-labelledby")?.split(" ")[0];
-    const label = labelId ? container.querySelector(`#${labelId}`) : null;
+test("button accessible name uses visible text without duplicate ids across instances", () => {
+    const host = document.createElement("div");
+    const first = mount();
+    const second = mount();
+    host.append(first.container, second.container);
 
-    expect(label?.textContent).toBe("Upload attachment");
-    expect(uploadButton.getAttribute("aria-labelledby")).toContain(uploadButton.id);
+    expect(button(first.container).textContent).toBe("Choose file");
+    expect(button(second.container).textContent).toBe("Choose file");
+    const ids = Array.from(host.querySelectorAll<HTMLElement>("[id]")).map((element) => element.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(button(first.container).getAttribute("aria-labelledby")).toBeNull();
+    expect(button(second.container).getAttribute("aria-labelledby")).toBeNull();
+});
+
+
+test("destroy during create annotation resolve or reject does not mutate after destroy", async () => {
+    for (const outcome of ["resolve", "reject"] as const) {
+        const pendingCreate = deferred<ComponentFramework.LookupValue>();
+        const createAnnotation = jest.fn(() => pendingCreate.promise);
+        const { control, container, pickFile } = mount({}, { createAnnotation });
+        pickFile.mockResolvedValue({ name: `${outcome}.txt`, type: "text/plain", size: 12, contentBase64: "AA==" });
+
+        button(container).click();
+        await flushPromises();
+        expect(createAnnotation).toHaveBeenCalledTimes(1);
+        control.destroy();
+        if (outcome === "resolve") {
+            pendingCreate.resolve({ id: "note-id", entityType: "annotation" });
+        } else {
+            pendingCreate.reject(new Error("late failure"));
+        }
+        await flushPromises();
+
+        expect(container.textContent).toBe("");
+    }
 });
