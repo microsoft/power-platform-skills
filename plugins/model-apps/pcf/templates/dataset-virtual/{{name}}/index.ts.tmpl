@@ -1,0 +1,66 @@
+import * as React from "react";
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { {{name}}View } from "./{{name}}View";
+import "./css/{{name}}.css";
+
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+    private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
+    private pagingRequest: Promise<void> | null = null;
+
+    public init(): void {
+        // Virtual controls render by returning React elements from updateView; the host owns the root.
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        this.dataSet = context.parameters.sampleDataSet;
+        return React.createElement({{name}}View, {
+            cssClass: "{{cssClass}}",
+            messageClass: "{{cssMessageClass}}",
+            dataSet: this.dataSet,
+            busy: this.pagingRequest !== null,
+            onNextPage: this.loadNextPage,
+            onPreviousPage: this.loadPreviousPage,
+            onOpenRecord: this.openRecord,
+        });
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        this.dataSet = null;
+    }
+
+    private readonly loadNextPage = (): void => {
+        this.requestPage("next");
+    };
+
+    private readonly loadPreviousPage = (): void => {
+        this.requestPage("previous");
+    };
+
+    private requestPage(direction: "next" | "previous"): void {
+        if (!this.dataSet || this.pagingRequest) return;
+        const paging = this.dataSet.paging;
+        const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
+        if (!canLoad) return;
+
+        // Dataset paging APIs ask the framework to load a page asynchronously; keep one request in
+        // flight so repeated clicks cannot queue duplicate page loads.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/paging
+        this.pagingRequest = Promise.resolve(direction === "next" ? paging.loadNextPage() : paging.loadPreviousPage())
+            .finally(() => {
+                this.pagingRequest = null;
+            });
+    }
+
+    private readonly openRecord = (record: DataSetRecord): void => {
+        // Model-driven dataset controls should let the host open the row so navigation matches the
+        // app shell instead of constructing URLs in the control.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/opendatasetitem
+        this.dataSet?.openDatasetItem(record.getNamedReference());
+    };
+}

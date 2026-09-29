@@ -112,6 +112,11 @@ export function mockDataSet(
           const value = row[columnName];
           return value == null ? "" : String(value);
         },
+        getNamedReference: () => ({
+          id,
+          name: String(row.name ?? row.sampleProperty ?? id),
+          entityName: String(row.entityName ?? "account"),
+        }),
       }];
     })),
     paging: {
@@ -120,6 +125,7 @@ export function mockDataSet(
       loadNextPage: jest.fn(),
       loadPreviousPage: jest.fn(),
     },
+    openDatasetItem: jest.fn(),
     refresh: jest.fn(),
   } as unknown as ComponentFramework.PropertyTypes.DataSet;
 }

@@ -24,9 +24,13 @@ function findFile(plan, relPath) {
 }
 
 function renderFieldPlan(overrides = {}) {
+  return renderTemplatePlan('field-standard', overrides);
+}
+
+function renderTemplatePlan(template, overrides = {}) {
   const scaffold = loadScaffold();
   return scaffold.planScaffold({
-    template: 'field-standard',
+    template,
     namespace: 'Contoso.Controls',
     name: 'StarRating',
     displayName: 'Star rating',
@@ -44,7 +48,10 @@ test('listTemplates exposes the data-only template catalog', () => {
   const { listTemplates } = loadScaffold();
 
   assert.deepEqual(listTemplates(), [
+    { id: 'dataset-standard', controlType: 'standard', kind: 'dataset', hosts: ['model'] },
+    { id: 'dataset-virtual', controlType: 'virtual', kind: 'dataset', hosts: ['model'] },
     { id: 'field-standard', controlType: 'standard', kind: 'field', hosts: ['model', 'pages'] },
+    { id: 'field-virtual', controlType: 'virtual', kind: 'field', hosts: ['model'] },
   ]);
 });
 
@@ -92,6 +99,87 @@ test('planScaffold renders field-standard without leftover placeholders and with
   assert.doesNotMatch(manifestXml, /<uses-feature\b/);
   assert.doesNotMatch(manifestXml, /<feature-usage\b/);
   assert.match(manifestXml, /Features are declared only when this control's code uses them\./);
+});
+
+test('planScaffold renders every template without leftover placeholders and with clean model manifests', () => {
+  const cases = [
+    { id: 'field-standard', dependencySet: 'standard', controlType: 'standard', kind: 'field' },
+    { id: 'dataset-standard', dependencySet: 'standard', controlType: 'standard', kind: 'dataset' },
+    { id: 'field-virtual', dependencySet: 'virtual', controlType: 'virtual', kind: 'field' },
+    { id: 'dataset-virtual', dependencySet: 'virtual', controlType: 'virtual', kind: 'dataset' },
+  ];
+
+  for (const item of cases) {
+    const plan = renderTemplatePlan(item.id);
+    for (const file of plan.files) {
+      assert.doesNotMatch(file.relPath, /\{\{[^}]+\}\}/, `${item.id} ${file.relPath}`);
+      assert.doesNotMatch(file.content, /\{\{[^}]+\}\}/, `${item.id} ${file.relPath}`);
+    }
+
+    const manifestXml = findFile(plan, path.join('StarRating', 'ControlManifest.Input.xml'));
+    const parsed = parseManifest(manifestXml);
+    assert.deepEqual(parsed.errors, [], item.id);
+    assert.deepEqual(lintManifest(parsed.model, { hosts: ['model'], matrix: MATRIX }), { ok: true, errors: [], warnings: [] }, item.id);
+    assert.equal(parsed.model.control.controlType, item.controlType);
+    assert.equal(parsed.model.dataSets.length, item.kind === 'dataset' ? 1 : 0);
+    assert.equal(parsed.model.properties.length, item.kind === 'field' ? 1 : 0);
+    assert.doesNotMatch(manifestXml, /<feature-usage\b/, item.id);
+    assert.match(manifestXml, /Features are declared only when this control's code uses them\./, item.id);
+
+    const pkg = JSON.parse(findFile(plan, 'package.json'));
+    const expected = dependencySet(MATRIX, item.dependencySet);
+    assert.deepEqual(pkg.dependencies || {}, expected.dependencies, `${item.id} dependencies`);
+    assert.deepEqual(pkg.devDependencies || {}, expected.devDependencies, `${item.id} devDependencies`);
+  }
+});
+
+test('virtual templates declare platform libraries from the compatibility matrix', () => {
+  for (const id of ['field-virtual', 'dataset-virtual']) {
+    const manifestXml = findFile(renderTemplatePlan(id), path.join('StarRating', 'ControlManifest.Input.xml'));
+    const parsed = parseManifest(manifestXml);
+
+    assert.deepEqual(parsed.model.resources.platformLibraries, [
+      { name: 'React', version: MATRIX.platformLibraries.React.recommendedBaseline.version },
+      { name: 'Fluent', version: MATRIX.platformLibraries.Fluent.recommendedBaseline.version },
+    ], id);
+  }
+});
+
+test('dataset templates render sorted rows, page once at a time, and open records without refreshing in updateView', () => {
+  for (const id of ['dataset-standard', 'dataset-virtual']) {
+    const plan = renderTemplatePlan(id);
+    const source = findFile(plan, path.join('StarRating', 'index.ts'));
+    const viewSource = id === 'dataset-virtual' ? findFile(plan, path.join('StarRating', 'StarRatingView.tsx')) : '';
+    const runtimeSource = source + viewSource;
+    const templateTest = findFile(plan, path.join('__tests__', 'StarRating.test.ts'));
+
+    assert.match(runtimeSource, /sortedRecordIds/, id);
+    assert.match(runtimeSource, /loadNextPage/, id);
+    assert.match(runtimeSource, /loadPreviousPage/, id);
+    assert.match(runtimeSource, /openDatasetItem/, id);
+    assert.doesNotMatch(source, /refresh\(\)/, id);
+    assert.match(templateTest, /loading state/, id);
+    assert.match(templateTest, /empty state/, id);
+    assert.match(templateTest, /error state/, id);
+    assert.match(templateTest, /sortedRecordIds order/, id);
+    assert.match(templateTest, /next and previous paging/, id);
+    assert.match(templateTest, /opens records/, id);
+  }
+});
+
+test('field-virtual mirrors field-standard field behavior tests', () => {
+  const templateTest = findFile(renderTemplatePlan('field-virtual'), path.join('__tests__', 'StarRating.test.ts'));
+
+  for (const expected of [
+    'null raw value renders an empty field',
+    'missing parameter object does not crash',
+    'disabled mode disables the input',
+    'non-editable security renders read-only',
+    'change notifies exactly once',
+    'two instances keep independent state and DOM',
+  ]) {
+    assert.match(templateTest, new RegExp(escapeRegExp(expected)));
+  }
 });
 
 test('planScaffold renders the template id into shared README content', () => {
@@ -271,7 +359,7 @@ test('CLI --list emits the available templates and recipes', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
-  assert.deepEqual(parsed.templates.map((item) => item.id), ['field-standard']);
+  assert.deepEqual(parsed.templates.map((item) => item.id), ['dataset-standard', 'dataset-virtual', 'field-standard', 'field-virtual']);
   assert.deepEqual(parsed.recipes, []);
 });
 

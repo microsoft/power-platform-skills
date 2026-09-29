@@ -1,0 +1,86 @@
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockDataSet } from "../test/pcf-context";
+
+function mount(dataSet: IInputs["sampleDataSet"]) {
+    const control = new {{name}}();
+    const container = document.createElement("div");
+    const context = mockContext<IInputs>({ sampleDataSet: dataSet });
+
+    control.init(context, jest.fn(), {}, container);
+
+    return {
+        control,
+        container,
+        dataSet,
+        buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
+        rows: () => Array.from(container.querySelectorAll("tbody tr")),
+    };
+}
+
+function dataSet(options = {}) {
+    return mockDataSet({
+        first: { sampleProperty: "First" },
+        second: { sampleProperty: "Second" },
+    }, [{ name: "sampleProperty", displayName: "Value" }], options) as IInputs["sampleDataSet"];
+}
+
+test("loading state renders a message", () => {
+    const { container } = mount(dataSet({ loading: true }));
+
+    expect(container.textContent).toContain("Loading records");
+});
+
+test("empty state renders a message", () => {
+    const empty = mockDataSet({}, [{ name: "sampleProperty" }]) as IInputs["sampleDataSet"];
+    const { container } = mount(empty);
+
+    expect(container.textContent).toContain("No records");
+});
+
+test("error state renders the dataset error message", () => {
+    const { container } = mount(dataSet({ error: true, errorMessage: "Access denied" }));
+
+    expect(container.textContent).toContain("Access denied");
+});
+
+test("renders records in sortedRecordIds order", () => {
+    const ds = dataSet();
+    ds.sortedRecordIds = ["second", "first"];
+    const { rows } = mount(ds);
+
+    expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
+});
+
+test("next and previous paging call one request at a time", () => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { buttons } = mount(ds);
+
+    const nextButton = buttons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+    const previousButton = buttons().find((button) => button.textContent === "Previous") as HTMLButtonElement;
+
+    nextButton.click();
+    nextButton.click();
+    previousButton.click();
+
+    expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
+});
+
+test("updateView does not refresh the dataset", () => {
+    const ds = dataSet();
+    const { control } = mount(ds);
+
+    control.updateView(mockContext<IInputs>({ sampleDataSet: ds }));
+
+    expect(ds.refresh).not.toHaveBeenCalled();
+});
+
+test("opens records through openDatasetItem", () => {
+    const ds = dataSet();
+    const { buttons } = mount(ds);
+
+    buttons()[0].click();
+
+    expect(ds.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "first" }));
+    });

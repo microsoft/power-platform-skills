@@ -1,0 +1,94 @@
+import * as React from "react";
+import * as ReactDOM from "react-dom";
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockDataSet } from "../test/pcf-context";
+
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+interface DatasetElementProps {
+    onNextPage: () => void;
+    onPreviousPage: () => void;
+    onOpenRecord: (record: DataSetRecord) => void;
+}
+
+function render(dataSet: IInputs["sampleDataSet"]) {
+    const control = new {{name}}();
+    const context = mockContext<IInputs>({ sampleDataSet: dataSet });
+    const container = document.createElement("div");
+    control.init();
+    ReactDOM.render(control.updateView(context), container);
+
+    return {
+        control,
+        container,
+        dataSet,
+        element: control.updateView(context) as React.ReactElement<DatasetElementProps>,
+        buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
+        rows: () => Array.from(container.querySelectorAll("tbody tr")),
+    };
+}
+
+function dataSet(options = {}) {
+    return mockDataSet({
+        first: { sampleProperty: "First" },
+        second: { sampleProperty: "Second" },
+    }, [{ name: "sampleProperty", displayName: "Value" }], options) as IInputs["sampleDataSet"];
+}
+
+test("loading state renders a message", () => {
+    const { container } = render(dataSet({ loading: true }));
+
+    expect(container.textContent).toContain("Loading records");
+});
+
+test("empty state renders a message", () => {
+    const empty = mockDataSet({}, [{ name: "sampleProperty" }]) as IInputs["sampleDataSet"];
+    const { container } = render(empty);
+
+    expect(container.textContent).toContain("No records");
+});
+
+test("error state renders the dataset error message", () => {
+    const { container } = render(dataSet({ error: true, errorMessage: "Access denied" }));
+
+    expect(container.textContent).toContain("Access denied");
+});
+
+test("renders records in sortedRecordIds order", () => {
+    const ds = dataSet();
+    ds.sortedRecordIds = ["second", "first"];
+    const { rows } = render(ds);
+
+    expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
+});
+
+test("next and previous paging call one request at a time", () => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { element } = render(ds);
+
+    element.props.onNextPage();
+    element.props.onNextPage();
+    element.props.onPreviousPage();
+
+    expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
+});
+
+test("updateView does not refresh the dataset", () => {
+    const ds = dataSet();
+    const { control } = render(ds);
+
+    control.updateView(mockContext<IInputs>({ sampleDataSet: ds }));
+
+    expect(ds.refresh).not.toHaveBeenCalled();
+});
+
+test("opens records through openDatasetItem", () => {
+    const ds = dataSet();
+    const { element } = render(ds);
+
+    element.props.onOpenRecord(ds.records.first);
+
+    expect(ds.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "first" }));
+});

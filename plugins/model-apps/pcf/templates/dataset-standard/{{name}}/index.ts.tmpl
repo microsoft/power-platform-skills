@@ -1,0 +1,164 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import "./css/{{name}}.css";
+
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private container: HTMLDivElement | null = null;
+    private table: HTMLTableElement | null = null;
+    private message: HTMLDivElement | null = null;
+    private previousButton: HTMLButtonElement | null = null;
+    private nextButton: HTMLButtonElement | null = null;
+    private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
+    private pagingRequest: Promise<void> | null = null;
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        _notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.container = container;
+
+        const root = document.createElement("div");
+        root.className = "{{cssClass}}";
+
+        this.message = document.createElement("div");
+        this.message.className = "{{cssMessageClass}}";
+
+        this.table = document.createElement("table");
+        this.table.className = "{{nameLower}}-table";
+
+        const pager = document.createElement("div");
+        pager.className = "{{nameLower}}-pager";
+        this.previousButton = document.createElement("button");
+        this.previousButton.type = "button";
+        this.previousButton.textContent = "Previous";
+        this.previousButton.addEventListener("click", this.loadPreviousPage);
+        this.nextButton = document.createElement("button");
+        this.nextButton.type = "button";
+        this.nextButton.textContent = "Next";
+        this.nextButton.addEventListener("click", this.loadNextPage);
+        pager.append(this.previousButton, this.nextButton);
+
+        root.append(this.message, this.table, pager);
+        container.append(root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.dataSet = context.parameters.sampleDataSet;
+        this.render();
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        this.previousButton?.removeEventListener("click", this.loadPreviousPage);
+        this.nextButton?.removeEventListener("click", this.loadNextPage);
+        this.container?.replaceChildren();
+        this.container = null;
+        this.table = null;
+        this.message = null;
+        this.previousButton = null;
+        this.nextButton = null;
+        this.dataSet = null;
+    }
+
+    private readonly loadNextPage = (): void => {
+        this.requestPage("next");
+    };
+
+    private readonly loadPreviousPage = (): void => {
+        this.requestPage("previous");
+    };
+
+    private requestPage(direction: "next" | "previous"): void {
+        if (!this.dataSet || this.pagingRequest) return;
+        const paging = this.dataSet.paging;
+        const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
+        if (!canLoad) return;
+
+        // Dataset paging APIs ask the framework to load a page asynchronously; keep one request in
+        // flight so repeated clicks cannot queue duplicate page loads.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/paging
+        this.pagingRequest = Promise.resolve(direction === "next" ? paging.loadNextPage() : paging.loadPreviousPage())
+            .finally(() => {
+                this.pagingRequest = null;
+                this.render();
+            });
+        this.render();
+    }
+
+    private render(): void {
+        if (!this.table || !this.message || !this.previousButton || !this.nextButton) return;
+        const dataSet = this.dataSet;
+        this.table.replaceChildren();
+
+        if (!dataSet) {
+            this.showMessage("No dataset parameter was provided.");
+            return;
+        }
+        if (dataSet.loading) {
+            this.showMessage("Loading records...");
+            return;
+        }
+        if (dataSet.error) {
+            this.showMessage(dataSet.errorMessage || "The dataset could not be loaded.");
+            return;
+        }
+        if (dataSet.sortedRecordIds.length === 0) {
+            this.showMessage("No records to show.");
+            this.updatePaging(dataSet);
+            return;
+        }
+
+        this.message.hidden = true;
+        const tbody = document.createElement("tbody");
+        for (const id of dataSet.sortedRecordIds) {
+            const record = dataSet.records[id];
+            if (!record) continue;
+            const row = document.createElement("tr");
+            row.append(this.cell(record, "sampleProperty"));
+            const action = document.createElement("button");
+            action.type = "button";
+            action.textContent = "Open";
+            action.addEventListener("click", () => this.openRecord(record));
+            const actionCell = document.createElement("td");
+            actionCell.append(action);
+            row.append(actionCell);
+            tbody.append(row);
+        }
+        this.table.append(tbody);
+        this.updatePaging(dataSet);
+    }
+
+    private cell(record: DataSetRecord, columnName: string): HTMLTableCellElement {
+        const cell = document.createElement("td");
+        cell.textContent = record.getFormattedValue(columnName) || String(record.getValue(columnName) ?? "");
+        return cell;
+    }
+
+    private openRecord(record: DataSetRecord): void {
+        // Model-driven dataset controls should let the host open the row so navigation matches the
+        // app shell instead of constructing URLs in the control.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/opendatasetitem
+        this.dataSet?.openDatasetItem(record.getNamedReference());
+    }
+
+    private showMessage(text: string): void {
+        if (!this.message) return;
+        this.message.hidden = false;
+        this.message.textContent = text;
+        if (this.previousButton) this.previousButton.disabled = true;
+        if (this.nextButton) this.nextButton.disabled = true;
+    }
+
+    private updatePaging(dataSet: ComponentFramework.PropertyTypes.DataSet): void {
+        const busy = this.pagingRequest !== null;
+        if (this.previousButton) this.previousButton.disabled = busy || !dataSet.paging.hasPreviousPage;
+        if (this.nextButton) this.nextButton.disabled = busy || !dataSet.paging.hasNextPage;
+    }
+}
