@@ -16,13 +16,13 @@ function finding(code, severity, message, fix) {
   return { code, severity, message, fix };
 }
 
-function validateIntent(intent) {
+function validateIntent(intent, deps = {}) {
   const errors = [];
   const root = asObject(intent, 'intent', errors);
   if (!root) return errors;
 
   if (root.schemaVersion !== 1) errors.push('schemaVersion must be 1.');
-  validateControl(root.control, errors);
+  validateControl(root.control, errors, deps);
   validateStringArray(root.hosts, 'hosts', HOSTS, errors);
   if (!CONNECTIVITY.has(root.connectivity)) errors.push('connectivity must be online.');
   validateProperties(root.properties, errors);
@@ -41,7 +41,7 @@ function asObject(value, pathName, errors) {
   return value;
 }
 
-function validateControl(control, errors) {
+function validateControl(control, errors, deps = {}) {
   const c = asObject(control, 'control', errors);
   if (!c) return;
   if (typeof c.namespace !== 'string' || !c.namespace) {
@@ -60,7 +60,7 @@ function validateControl(control, errors) {
     if (typeof c[key] !== 'string' || !c[key].trim()) errors.push(`control.${key} is required.`);
   }
 
-  const templates = safeListTemplates();
+  const templates = safeListTemplates(deps);
   if (typeof c.template !== 'string' || !c.template) {
     errors.push('control.template is required.');
   } else if (!templates.some((item) => item.id === c.template)) {
@@ -71,27 +71,33 @@ function validateControl(control, errors) {
     if (typeof c.recipe !== 'string' || !c.recipe) {
       errors.push('control.recipe must be a non-empty string when supplied.');
     } else {
-      const recipes = safeListRecipes();
+      const recipes = safeListRecipes(deps);
+      const availableRecipes = recipes.filter((item) => item.status === 'available');
       if (recipes.length === 0) {
         errors.push('control.recipe is not supported: no recipes are available in this release; omit `recipe`.');
-      } else if (!recipes.some((item) => item.id === c.recipe)) {
-        errors.push(`control.recipe '${c.recipe}' is unknown; choose one of: ${recipes.map((item) => item.id).join(', ')}.`);
+      } else {
+        const recipe = recipes.find((item) => item.id === c.recipe);
+        if (!recipe) {
+          errors.push(`control.recipe '${c.recipe}' is unknown; choose one of: ${availableRecipes.map((item) => item.id).join(', ')}.`);
+        } else if (recipe.status === 'planned') {
+          errors.push(`control.recipe '${c.recipe}' is planned and not available in this release; choose an available recipe or omit \`recipe\`.`);
+        }
       }
     }
   }
 }
 
-function safeListTemplates() {
+function safeListTemplates(deps = {}) {
   try {
-    return listTemplates();
+    return listTemplates(deps);
   } catch {
     return [];
   }
 }
 
-function safeListRecipes() {
+function safeListRecipes(deps = {}) {
   try {
-    return listRecipes();
+    return listRecipes(deps);
   } catch {
     return [];
   }

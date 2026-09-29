@@ -15,6 +15,7 @@ const {
 } = require('../lib/pcf-intent.js');
 
 const scriptPath = path.join(__dirname, '..', 'write-pcf-plan.js');
+const pluginRoot = path.join(__dirname, '..', '..');
 
 function exampleIntent(overrides = {}) {
   return {
@@ -82,6 +83,39 @@ function assertFinding(findings, code, severity) {
   assert.equal(finding.severity, severity);
   assert.match(finding.message, /.+/);
   assert.match(finding.fix, /add|bind|change|choose|remove|set|target|use|verify|map|include|keep/i);
+}
+
+function withRecipeCatalog(recipes, callback) {
+  const recipesRoot = fs.mkdtempSync(path.join(pluginRoot, '.pcf-intent-test-recipes-'));
+  try {
+    for (const recipe of recipes) {
+      const recipeDir = path.join(recipesRoot, recipe.id);
+      fs.mkdirSync(recipeDir, { recursive: true });
+      fs.writeFileSync(path.join(recipeDir, 'recipe.json'), JSON.stringify(recipeFixture(recipe), null, 2));
+    }
+    return callback({ recipesRoot });
+  } finally {
+    fs.rmSync(recipesRoot, { recursive: true, force: true });
+  }
+}
+
+function recipeFixture(overrides = {}) {
+  const status = overrides.status || 'available';
+  const recipe = {
+    id: overrides.id,
+    title: overrides.title || `${overrides.id} recipe`,
+    summary: overrides.summary || `${overrides.id} summary`,
+    template: overrides.template || 'field-standard',
+    hosts: overrides.hosts || ['model', 'pages'],
+    whyWanted: overrides.whyWanted || 'Covers the fixture catalog path.',
+    certified: overrides.certified || { model: {}, pages: {} },
+    status,
+    ...overrides,
+  };
+  if (status !== 'planned' && recipe.configuration === undefined) {
+    recipe.configuration = 'Configure the control using fixture defaults.';
+  }
+  return recipe;
 }
 
 async function runCli(argv) {
@@ -163,11 +197,45 @@ test('validateIntent requires every binding to declare kind', () => {
 });
 
 test('validateIntent rejects supplied recipes when no recipes are available', () => {
-  const errors = validateIntent(exampleIntent({
+  const errors = withRecipeCatalog([], (deps) => validateIntent(exampleIntent({
     control: { ...exampleIntent().control, recipe: 'star-rating' },
-  }));
+  }), deps));
 
   assert.ok(errors.some((error) => error.includes('no recipes are available in this release') && error.includes('omit `recipe`')), errors.join('\n'));
+});
+
+test('validateIntent reports unknown recipes and lists only available recipe ids', () => {
+  const errors = withRecipeCatalog([
+    { id: 'available-rating' },
+    { id: 'planned-lookup', status: 'planned' },
+  ], (deps) => validateIntent(exampleIntent({
+    control: { ...exampleIntent().control, recipe: 'missing-recipe' },
+  }), deps));
+
+  const error = errors.find((item) => item.includes("control.recipe 'missing-recipe' is unknown"));
+  assert.ok(error, errors.join('\n'));
+  assert.match(error, /choose one of: available-rating/);
+  assert.doesNotMatch(error, /planned-lookup/);
+});
+
+test('validateIntent rejects planned recipes because they cannot be scaffolded', () => {
+  const errors = withRecipeCatalog([
+    { id: 'planned-lookup', status: 'planned' },
+  ], (deps) => validateIntent(exampleIntent({
+    control: { ...exampleIntent().control, recipe: 'planned-lookup' },
+  }), deps));
+
+  assert.ok(errors.some((error) => error.includes("control.recipe 'planned-lookup' is planned") && error.includes('not available in this release')), errors.join('\n'));
+});
+
+test('validateIntent accepts available recipes from the injected catalog', () => {
+  const errors = withRecipeCatalog([
+    { id: 'available-rating' },
+  ], (deps) => validateIntent(exampleIntent({
+    control: { ...exampleIntent().control, recipe: 'available-rating' },
+  }), deps));
+
+  assert.deepEqual(errors, []);
 });
 
 test('lintBindingIntent reports PCF_INTENT_QC_SUBGRID', () => {
