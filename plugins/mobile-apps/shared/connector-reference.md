@@ -6,7 +6,7 @@ Does NOT apply to `/add-dataverse` — Dataverse uses the runtime's built-in exe
 
 ## Connection ID or reference (required)
 
-All non-Dataverse connectors require either a **connection ID** (`--connection-id` / `-c`) or a **connection reference** (`--connection-ref` / `-cr`) when adding via `npx power-apps add-data-source`. Without one, the command fails with:
+All non-Dataverse connectors require either a **connection ID** (`--connection-id` / `-c`) or a **connection reference** (`--connection-ref`) when adding via `pa app add data-source`. Without one, the command fails with:
 
 ```
 CONNECTION_ID argument is required for connector data sources
@@ -17,43 +17,43 @@ CONNECTION_ID argument is required for connector data sources
 Use one of these supported paths:
 
 - If the caller already has an existing connection ID, use it directly with `--connection-id`.
-- If the app is solution-aware and the caller has a solution ID, run `list-connection-references` and use the returned connection reference name with `--connection-ref`.
-- Otherwise create a connection with `create-connection` and use the returned `connectionId`.
+- If the app is solution-aware and the caller has a solution ID, run `pa connection list-references` and use the returned connection reference name with `--connection-ref`.
+- Otherwise create a connection with `pa connection create` and use the returned `connectionId`.
 
 ```bash
-npx --no-install power-apps create-connection --api-id <apiId> --json
-npx --no-install power-apps list-connection-references --solution-id <solutionId> --json
+$PA connection create --connector <apiId> --json
+$PA connection list-references --solution-id <solutionId> --json
 ```
 
-With `--json`, `create-connection` prints `{ "connectionId": "...", "displayName": "..." }` on success. Browser-based connection creation is disabled by default in the CLI; if a connector is not SSO-eligible and interactive browser creation is required, set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` before running the command, or create the connection in the maker portal.
+With `--json`, `pa connection create` prints `{ "connectionId": "...", "displayName": "..." }` on success. Browser-based connection creation is disabled by default in the CLI; if a connector is not SSO-eligible and interactive browser creation is required, set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` before running the command, or create the connection in the maker portal.
 
 ### Step 2 — If no connection exists
 
-If `create-connection` fails because browser-based connection creation is disabled or the connector needs interactive auth, use the maker portal:
+If `pa connection create` fails because browser-based connection creation is disabled or the connector needs interactive auth, use the maker portal:
 
 1. Construct the URL using the active environment ID from `power.config.json`:
    `https://make.powerapps.com/environments/<environment-id>/connections`
 2. Direct the user to **+ New connection** → search for the connector → sign in / consent.
-3. Capture the connection ID from the portal or rerun `npx --no-install power-apps create-connection --api-id <apiId> --json` if the connector can now complete.
+3. Capture the connection ID from the portal or rerun `$PA connection create --connector <apiId> --json` if the connector can now complete.
 
 ### Step 3 — Add the data source
 
-Use long-form flags. Run from the app root after `power.config.json` exists, and use the exact `apiId` plus either a `connectionId` from `create-connection`/the portal or a `connectionRef` from `list-connection-references`:
+Use long-form flags. Run from the app root after `power.config.json` exists, and use the exact `apiId` plus either a `connectionId` from `pa connection create`/the portal or a `connectionRef` from `pa connection list-references`:
 
 ```bash
 # Non-tabular connectors (Teams, Office 365 Users, Azure DevOps, etc.)
-npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
+$PA app add data-source --connector <apiId> --connection-id <connectionId>
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) — also need dataset and resource name
-npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
+$PA app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>'
 
 # SQL stored procedures
-npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
+$PA app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>'
 ```
 
 **Dataverse is different** — never needs a connection ID:
 ```bash
-npx --no-install power-apps add-data-source --api-id dataverse --org-url <environmentUrl> --resource-name <table-logical-name>
+$PA app add data-source --connector dataverse --org-url <environmentUrl> --table <table-logical-name>
 ```
 
 ## Common connector apiId values
@@ -75,9 +75,9 @@ These are common connector API IDs you may see in connection output:
 ## Discovering datasets and tables (tabular connectors)
 
 ```bash
-npx --no-install power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json
-npx --no-install power-apps list-tables --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
-npx --no-install power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
+$PA connection list-datasets --connector <apiId> --connection-id <connectionId> --json
+$PA connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
+$PA connection list-procedures --connection-id <connectionId> --dataset '<database>' --json
 ```
 
 For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoint.com/sites/sales`). The **table** is the list display name.
@@ -87,18 +87,18 @@ For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoi
 Use these instead of hand-rolled discovery when they match the user's goal:
 
 ```bash
-npx --no-install power-apps list-connection-references --solution-id <solutionId> --json
-npx --no-install power-apps list-environment-variables --json
-npx --no-install power-apps list-flows --search '<flow-name-or-keyword>' --json
-npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
-npx --no-install power-apps create-connection --api-id <apiId> --json
+$PA connection list-references --solution-id <solutionId> --json
+$PA app list-environment-variables --json
+$PA app list-flows --search '<flow-name-or-keyword>' --json
+$PA app find-dataverse-api --search '<operation-name>' --json
+$PA connection create --connector <apiId> --json
 ```
 
-Cloud flows are added with `add-flow`, not `add-data-source`:
+Cloud flows are added with `pa app add flow`, not `pa app add data-source`:
 
 ```bash
-npx --no-install power-apps add-flow --flow-id <flow-guid> --non-interactive
-npx --no-install power-apps remove-flow --flow-id <flow-guid> --non-interactive
+$PA app add flow --flow-id <flow-guid> --non-interactive
+$PA app remove flow --flow-id <flow-guid> --non-interactive
 ```
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
