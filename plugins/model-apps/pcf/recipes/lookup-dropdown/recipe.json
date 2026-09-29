@@ -1,0 +1,34 @@
+{
+  "id": "lookup-dropdown",
+  "title": "Lookup dropdown",
+  "summary": "Replace a lookup field with an accessible dropdown of active target rows.",
+  "template": "field-standard",
+  "hosts": ["model"],
+  "whyWanted": "Lookup UX is the top community ask for PCF.",
+  "status": "available",
+  "certified": {
+    "model": {},
+    "pages": {}
+  },
+  "properties": [
+    {
+      "name": "lookupValue",
+      "displayNameKey": "LookupValue_Display_Key",
+      "descriptionKey": "LookupValue_Desc_Key",
+      "ofType": "Lookup.Simple",
+      "usage": "bound",
+      "required": true
+    }
+  ],
+  "features": [
+    {
+      "name": "WebAPI",
+      "required": true
+    },
+    {
+      "name": "Utility",
+      "required": true
+    }
+  ],
+  "configuration": "Bind lookupValue to a single-table lookup column, then add this component from the modern form designer Components pane or the classic Controls tab."
+}
