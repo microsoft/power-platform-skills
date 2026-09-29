@@ -84,14 +84,24 @@ export function mockWebApi(handlers: WebApiHandlers): ComponentFramework.WebApi 
 
 export type MockDataSetRecord = Record<string, string | number | boolean | Date | null | undefined>;
 
+export type MockDataSetOptions = {
+  loading?: boolean;
+  error?: boolean;
+  errorMessage?: string;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+};
+
 export function mockDataSet(
   records: Record<string, MockDataSetRecord>,
   columns: Array<{ name: string; displayName?: string }>,
+  options: MockDataSetOptions = {},
 ): ComponentFramework.PropertyTypes.DataSet {
   const ids = Object.keys(records);
   return {
-    loading: false,
-    error: false,
+    loading: options.loading ?? false,
+    error: options.error ?? false,
+    errorMessage: options.errorMessage,
     sortedRecordIds: ids,
     columns: columns.map((column) => ({ ...column, displayName: column.displayName ?? column.name })),
     records: Object.fromEntries(ids.map((id) => {
@@ -105,8 +115,8 @@ export function mockDataSet(
       }];
     })),
     paging: {
-      hasNextPage: false,
-      hasPreviousPage: false,
+      hasNextPage: options.hasNextPage ?? false,
+      hasPreviousPage: options.hasPreviousPage ?? false,
       loadNextPage: jest.fn(),
       loadPreviousPage: jest.fn(),
     },

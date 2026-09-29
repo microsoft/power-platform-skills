@@ -2,7 +2,7 @@
 
 module.exports = {
   clearMocks: true,
-  testEnvironment: "jsdom",
+  testEnvironment: "<rootDir>/test/pcf-jest-environment.cjs",
   testMatch: ["<rootDir>/__tests__/**/*.test.ts"],
   moduleNameMapper: {
     "\\.(css|scss)$": "<rootDir>/test/styleMock.js",

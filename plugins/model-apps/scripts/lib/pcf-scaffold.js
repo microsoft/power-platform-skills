@@ -153,6 +153,28 @@ function renderedTemplateFiles(dir, baseDir, replacements, deps = {}) {
   return out;
 }
 
+function unsafeRelPathReason(relPath, outDir, pathDep = path) {
+  const value = String(relPath || '');
+  if (!value) return 'path is empty';
+  if (pathDep.isAbsolute(value) || path.win32.isAbsolute(value) || /^[\\/]/.test(value)) {
+    return 'path is absolute';
+  }
+  if (value.split(/[\\/]+/).includes('..')) return 'path contains ..';
+  const root = pathDep.resolve(outDir);
+  const target = pathDep.resolve(root, value);
+  const rootWithSep = root.endsWith(pathDep.sep) ? root : `${root}${pathDep.sep}`;
+  const comparableRoot = process.platform === 'win32' ? rootWithSep.toLowerCase() : rootWithSep;
+  const comparableTarget = process.platform === 'win32' ? target.toLowerCase() : target;
+  if (target !== root && !comparableTarget.startsWith(comparableRoot)) return 'path resolves outside the output directory';
+  return null;
+}
+
+function assertSafeRelPath(relPath, outDir, deps = {}) {
+  const pathDep = deps.path || path;
+  const reason = unsafeRelPathReason(relPath, outDir, pathDep);
+  if (reason) throw new Error(`unsafe scaffold path '${relPath}': ${reason}`);
+}
+
 function normalizeHosts(hosts) {
   const values = Array.isArray(hosts) ? hosts : String(hosts || 'model').split(',');
   const normalized = values.map((host) => String(host).trim()).filter(Boolean);
@@ -221,6 +243,7 @@ function planScaffold(request, deps = {}) {
     cssClass: `${packageName(request.name)}-control`,
     cssInputClass: `${packageName(request.name)}-input`,
     cssMessageClass: `${packageName(request.name)}-message`,
+    template: template.id,
     displayName,
     displayNameJson: JSON.stringify(displayName),
     displayNameXml: escapeXml(displayName),
@@ -264,12 +287,15 @@ function hasProjectMarkers(dir, deps = {}) {
 function writeScaffold(plan, outDir, deps = {}) {
   const fsDep = deps.fs || fs;
   const pathDep = deps.path || path;
+  for (const file of plan.files) {
+    assertSafeRelPath(file.relPath, outDir, deps);
+  }
   if (fsDep.existsSync(outDir)) {
-    if (safeReaddir(outDir, deps).length > 0) {
-      throw new Error(`Output directory '${outDir}' exists and is not empty.`);
-    }
     if (hasProjectMarkers(outDir, deps)) {
       throw new Error(`Output directory '${outDir}' already contains a PCF project.`);
+    }
+    if (safeReaddir(outDir, deps).length > 0) {
+      throw new Error(`Output directory '${outDir}' exists and is not empty.`);
     }
   } else {
     fsDep.mkdirSync(outDir, { recursive: true });

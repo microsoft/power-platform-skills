@@ -36,6 +36,10 @@ function renderFieldPlan(overrides = {}) {
   });
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 test('listTemplates exposes the data-only template catalog', () => {
   const { listTemplates } = loadScaffold();
 
@@ -85,6 +89,16 @@ test('planScaffold renders field-standard without leftover placeholders and with
   assert.deepEqual(parsed.errors, []);
   assert.deepEqual(lintManifest(parsed.model, { hosts: ['model'], matrix: MATRIX }), { ok: true, errors: [], warnings: [] });
   assert.deepEqual(lintManifest(parsed.model, { hosts: ['pages'], matrix: MATRIX }), { ok: true, errors: [], warnings: [] });
+  assert.doesNotMatch(manifestXml, /<uses-feature\b/);
+  assert.doesNotMatch(manifestXml, /<feature-usage\b/);
+  assert.match(manifestXml, /Features are declared only when this control's code uses them\./);
+});
+
+test('planScaffold renders the template id into shared README content', () => {
+  const readme = findFile(renderFieldPlan(), 'README.md');
+
+  assert.match(readme, /from the `field-standard` template/);
+  assert.doesNotMatch(readme, /\{\{template\}\}/);
 });
 
 test('planScaffold escapes display text for TypeScript and resx XML contexts', () => {
@@ -140,7 +154,31 @@ test('planScaffold puts production PcfBuildMode after Microsoft.Common.props', (
   assert.notEqual(modeOffset, -1);
   assert.ok(modeOffset > importOffset, 'PcfBuildMode must be after Microsoft.Common.props so NuGet props cannot overwrite it');
   assert.match(proj, /pac pcf push otherwise builds a development bundle/);
-  assert.match(proj, /Microsoft\.PowerApps\.MSBuild\.Pcf" Version="1\.52\.1"/);
+  assert.match(proj, new RegExp(`Microsoft\\.PowerApps\\.MSBuild\\.Pcf" Version="${escapeRegExp(MATRIX.toolchain.msbuildPcf.version)}"`));
+  assert.doesNotMatch(fs.readFileSync(__filename, 'utf8'), new RegExp(escapeRegExp(MATRIX.toolchain.msbuildPcf.version)));
+});
+
+test('rendered Jest setup suppresses only the pinned jsdom punycode deprecation', () => {
+  const setup = findFile(renderFieldPlan(), path.join('test', 'jest-setup.js'));
+  const config = findFile(renderFieldPlan(), 'jest.config.cjs');
+
+  assert.match(setup, /DEP0040/);
+  assert.doesNotMatch(setup, /process\.noDeprecation/);
+  assert.deepEqual([...new Set([...setup.matchAll(/DEP\d{4}/g)].map((match) => match[0]))], ['DEP0040']);
+  assert.match(setup, /transitive jsdom dependency/);
+  assert.match(setup, /when the compatibility matrix moves to a jsdom chain that no longer requires the core `punycode` module/);
+  assert.match(config, /test\/pcf-jest-environment\.cjs/);
+});
+
+test('mockDataSet renders first-class loading, error and paging options', () => {
+  const kit = findFile(renderFieldPlan(), path.join('test', 'pcf-context.ts'));
+
+  assert.match(kit, /export type MockDataSetOptions/);
+  assert.match(kit, /options: MockDataSetOptions = \{\}/);
+  assert.match(kit, /loading: options\.loading \?\? false/);
+  assert.match(kit, /error: options\.error \?\? false/);
+  assert.match(kit, /errorMessage: options\.errorMessage/);
+  assert.match(kit, /hasNextPage: options\.hasNextPage \?\? false/);
 });
 
 test('planScaffold rejects Power Pages for virtual templates before rendering', () => {
@@ -171,6 +209,43 @@ test('writeScaffold refuses a non-empty output directory', () => {
   try {
     fs.writeFileSync(path.join(dir, 'keep.txt'), 'existing');
     assert.throws(() => writeScaffold(renderFieldPlan(), dir), /exists and is not empty/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeScaffold reports an existing PCF project before the generic non-empty error', () => {
+  const { writeScaffold } = loadScaffold();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-project-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    assert.throws(() => writeScaffold(renderFieldPlan(), dir), /already contains a PCF project/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeScaffold rejects unsafe planned relative paths', () => {
+  const { writeScaffold } = loadScaffold();
+  const cases = ['..\\escape.txt', '/abs.txt', 'C:\\abs.txt'];
+  for (const relPath of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-path-'));
+    try {
+      assert.throws(() => writeScaffold({ files: [{ relPath, content: 'bad' }], warnings: [] }, dir), /unsafe scaffold path/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('writeScaffold allows safe nested planned relative paths', () => {
+  const { writeScaffold } = loadScaffold();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-path-ok-'));
+  try {
+    const result = writeScaffold({ files: [{ relPath: path.join('nested', 'ok.txt'), content: 'ok' }], warnings: [] }, dir);
+
+    assert.deepEqual(result.written, [path.join(dir, 'nested', 'ok.txt')]);
+    assert.equal(fs.readFileSync(path.join(dir, 'nested', 'ok.txt'), 'utf8'), 'ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
