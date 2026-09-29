@@ -29,7 +29,7 @@ intent/request
   -> scripts/pcf-scaffold.js writes a matrix-pinned template/recipe
   -> implementation uses references/pcf-*.md + recipe README
   -> scripts/pcf-gates.js runs manifest/source/lint/test/build gates
-  -> scripts/pcf-push.js wraps pac pcf push with explicit --env
+  -> scripts/pcf-push.js --env <url> runs pac pcf push --environment <url>
   -> scripts/verify-pcf.js checks registration and FormXML binding evidence
   -> scripts/pcf-inventory.js lists registered controls and where-used dependencies
 ```
