@@ -64,7 +64,7 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Fix**: Correct the manifest against the [manifest schema](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/). For Pages, also apply the host rules in `pcf-hosts.md`.
 
-**Verify**: `node "${PLUGIN_ROOT}/scripts/lint-pcf.js"` and `npm run build -- --buildMode production` both pass.
+**Verify**: `node "${PLUGIN_ROOT}/scripts/lint-pcf.js" --project <dir>` passes. Then run a production build through the project build command and confirm it passes.
 
 ### Production build mode is set but ineffective
 
@@ -74,7 +74,7 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Discriminating checks**: Inspect the `.pcfproj`. The effective `<PcfBuildMode>production</PcfBuildMode>` must appear after the `Microsoft.Common.props` import.
 
-**Fix**: Let `node "${PLUGIN_ROOT}/scripts/pcf-build.js" --fix-buildmode` or the `BUILDMODE_PRODUCTION` repair place the property after the import.
+**Fix**: Let the `BUILDMODE_PRODUCTION` repair from `node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" --project <dir> --apply` place the property after the import, or make the same edit manually.
 
 **Verify**: Re-run the project gate; then build and confirm the bundle size and mode match a production build.
 

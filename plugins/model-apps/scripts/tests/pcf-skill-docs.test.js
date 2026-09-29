@@ -9,11 +9,22 @@ const { loadMatrix, renderHostsTable, renderPlatformLibrariesTable } = require('
 const ROOT = path.join(__dirname, '..', '..');
 const PCF_REFERENCE_FILES = [
   'references/pcf-best-practices.md',
+  'references/pcf-deploy.md',
   'references/pcf-troubleshooting.md',
   'references/pcf-hosts.md',
   'references/pcf-power-pages.md',
+  'references/pcf-recipes.md',
   'references/pcf-testing.md',
 ];
+const PCF_FLOW_FILES = [
+  'skills/pcf/create-flow.md',
+  'skills/pcf/deploy-flow.md',
+  'skills/pcf/bind-flow.md',
+  'skills/pcf/pages-flow.md',
+  'skills/pcf/upgrade-flow.md',
+];
+const PCF_DOC_FILES = ['skills/pcf/SKILL.md', ...PCF_FLOW_FILES, ...PCF_REFERENCE_FILES];
+const PLUGIN_CHECK_LINE = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.';
 const ALLOWED_PLATFORM_ERROR_MESSAGES = [
   // Observed in probe P11 on 2026-09-29 when the stock React template declared the excluded Fluent version.
   'platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.',
@@ -96,6 +107,85 @@ test('all PCF reference docs exist', () => {
   }
 });
 
+test('/pcf skill frontmatter and size stay installable', () => {
+  const text = readPluginFile('skills/pcf/SKILL.md');
+  const lines = text.split(/\r?\n/);
+  const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+
+  assert.ok(frontmatter, 'SKILL.md must start with YAML frontmatter');
+  assert.ok(lines.length < 500, `SKILL.md must stay under 500 lines; found ${lines.length}`);
+  assert.match(frontmatter[1], /^name: pcf$/m, 'SKILL.md frontmatter must declare name: pcf');
+
+  const description = frontmatter[1].match(/^description:\s*(.*)$/m);
+  assert.ok(description, 'SKILL.md frontmatter must declare a description');
+  assert.ok(description[1].length <= 1024, `description must be <= 1024 chars; found ${description[1].length}`);
+
+  const allowedTools = frontmatter[1].match(/^allowed-tools:\s*(.*)$/m);
+  assert.ok(allowedTools, 'SKILL.md frontmatter must declare allowed-tools');
+  assert.doesNotMatch(allowedTools[1], /^\s*\[/, 'allowed-tools must be a comma-separated list, not JSON array syntax');
+  assert.match(allowedTools[1], /,\s*/, 'allowed-tools must contain comma-separated tool names');
+
+  const afterFrontmatter = text.slice(frontmatter[0].length).split(/\r?\n/)[0];
+  assert.equal(afterFrontmatter, PLUGIN_CHECK_LINE, 'the plugin version-check line must immediately follow the frontmatter');
+});
+
+test('/pcf flow files are linked from SKILL.md', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+
+  for (const relativePath of PCF_FLOW_FILES) {
+    assert.ok(fs.existsSync(path.join(ROOT, relativePath)), `${relativePath} is missing`);
+    const name = path.basename(relativePath);
+    assert.match(skill, new RegExp(`\\(${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`), `SKILL.md must link ${name}`);
+  }
+});
+
+function scriptUsage(scriptPath) {
+  const source = fs.readFileSync(scriptPath, 'utf8');
+  const usageConst = source.match(/const USAGE\s*=\s*(?:`([\s\S]*?)`|'([^']*)'|"([^"]*)")/);
+  if (usageConst) return usageConst[1] || usageConst[2] || usageConst[3] || '';
+  const commentUsage = source.match(/\/\/ Usage:\r?\n((?:\/\/.*\r?\n)+)/);
+  if (commentUsage) return commentUsage[1].replace(/^\/\/\s?/gm, '');
+  return source;
+}
+
+function flagsFromUsage(scriptPath) {
+  const usage = scriptUsage(scriptPath);
+  return new Set(Array.from(usage.matchAll(/--[A-Za-z][A-Za-z0-9-]*/g), (match) => match[0]));
+}
+
+function docScriptFlagMentions(text) {
+  const mentions = [];
+  const scriptLine = /scripts\/([A-Za-z0-9_-]+\.js)([^\r\n]*)/g;
+  for (const match of text.matchAll(scriptLine)) {
+    const flags = Array.from(match[2].matchAll(/--[A-Za-z][A-Za-z0-9-]*/g), (flag) => flag[0]);
+    mentions.push({ script: match[1], flags });
+  }
+  return mentions;
+}
+
+test('/pcf docs mention only shipped script paths and flags', () => {
+  const missing = [];
+  const unknownFlags = [];
+
+  for (const relativePath of PCF_DOC_FILES) {
+    const text = readPluginFile(relativePath);
+    for (const mention of docScriptFlagMentions(text)) {
+      const scriptPath = path.join(ROOT, 'scripts', mention.script);
+      if (!fs.existsSync(scriptPath)) {
+        missing.push(`${relativePath}: scripts/${mention.script}`);
+        continue;
+      }
+      const knownFlags = flagsFromUsage(scriptPath);
+      for (const flag of mention.flags) {
+        if (!knownFlags.has(flag)) unknownFlags.push(`${relativePath}: scripts/${mention.script} mentions ${flag}, but its usage omits it`);
+      }
+    }
+  }
+
+  assert.deepEqual(missing, []);
+  assert.deepEqual(unknownFlags, []);
+});
+
 test('pcf-hosts.md contains the rendered compatibility matrix block verbatim', () => {
   const text = readPluginFile('references/pcf-hosts.md');
   const expected = renderHostsTable(loadMatrix());
@@ -120,14 +210,52 @@ test('pcf-hosts.md contains the rendered platform-library block verbatim', () =>
   );
 });
 
+test('pcf-recipes.md contains the rendered recipe catalog block verbatim', () => {
+  const { renderRecipesTable } = require('../lib/pcf-scaffold.js');
+  const text = readPluginFile('references/pcf-recipes.md');
+  const expected = renderRecipesTable();
+
+  assert.ok(text.includes(expected), 'pcf-recipes.md must include renderRecipesTable() output verbatim');
+  assert.match(
+    text,
+    /renderRecipesTable\(\)[^\n]*\n<!-- pcf-recipes:begin -->/,
+    'the recipe markers need a maintainer comment naming renderRecipesTable()',
+  );
+});
+
+test('recipe directories and pcf-recipes catalog rows stay in sync', () => {
+  const recipesRoot = path.join(ROOT, 'pcf', 'recipes');
+  const recipeDirs = fs.readdirSync(recipesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const text = readPluginFile('references/pcf-recipes.md');
+  const rowIds = Array.from(text.matchAll(/\(`([^`]+)`\)/g), (match) => match[1]).sort();
+
+  assert.deepEqual(rowIds, recipeDirs);
+});
+
 test('PCF reference docs do not link to GitHub issue trackers', () => {
-  for (const relativePath of PCF_REFERENCE_FILES) {
+  for (const relativePath of PCF_DOC_FILES) {
     const text = readPluginFile(relativePath);
     assert.doesNotMatch(
       text,
       /https?:\/\/github\.com\/[^\s)]+\/(?:issues|discussions)\//i,
       `${relativePath} must not contain GitHub issue or discussion links`,
     );
+  }
+});
+
+test('every pcf-upgrade manual note has a guide heading', () => {
+  const source = readPluginFile('scripts/lib/pcf-upgrade.js');
+  const manualNoteIds = Array.from(source.matchAll(/\bid:\s*'([A-Z0-9_]+)'/g), (match) => match[1])
+    .filter((id) => ['STANDARD_TO_VIRTUAL', 'FLUENT_8_TO_9', 'PAGES_VIRTUAL_TO_STANDARD', 'ESLINT_FLAT_CONFIG', 'DECLARE_FEATURES'].includes(id))
+    .sort();
+  const uniqueManualNoteIds = Array.from(new Set(manualNoteIds));
+  const upgradeFlow = readPluginFile('skills/pcf/upgrade-flow.md');
+
+  for (const id of uniqueManualNoteIds) {
+    assert.match(upgradeFlow, new RegExp(`^#{2,4}\\s+${id}\\b`, 'm'), `upgrade-flow.md needs a heading for ${id}`);
   }
 });
 
