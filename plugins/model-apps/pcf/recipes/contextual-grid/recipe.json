@@ -1,0 +1,52 @@
+{
+  "id": "contextual-grid",
+  "title": "Contextual grid",
+  "summary": "Render related rows from a maker-supplied FetchXML template filtered by the current record id.",
+  "template": "field-standard",
+  "hosts": ["model"],
+  "status": "available",
+  "certified": { "model": {}, "pages": {} },
+  "whyWanted": "Makers commonly ask for a sub-grid filtered by their own FetchXML instead of only view relationships.",
+  "properties": [
+    {
+      "name": "entityId",
+      "displayNameKey": "EntityId_Display_Key",
+      "descriptionKey": "EntityId_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "entityName",
+      "displayNameKey": "EntityName_Display_Key",
+      "descriptionKey": "EntityName_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "fetchXmlTemplate",
+      "displayNameKey": "FetchXmlTemplate_Display_Key",
+      "descriptionKey": "FetchXmlTemplate_Desc_Key",
+      "ofType": "Multiple",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "pageSize",
+      "displayNameKey": "PageSize_Display_Key",
+      "descriptionKey": "PageSize_Desc_Key",
+      "ofType": "Whole.None",
+      "usage": "input",
+      "required": false,
+      "defaultValue": "25"
+    }
+  ],
+  "features": [
+    {
+      "name": "WebAPI",
+      "required": true
+    }
+  ],
+  "configuration": "Bind entityId to the current table primary key column, set entityName to the current table logical name, and paste FetchXML that contains a {recordId} token."
+}

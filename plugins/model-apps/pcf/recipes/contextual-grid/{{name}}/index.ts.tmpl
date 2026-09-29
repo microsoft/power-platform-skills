@@ -1,0 +1,265 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { loadGridPage, normalizeGuid, GridRow } from "./fetchXmlData";
+import "./css/{{name}}.css";
+
+const DEFAULT_PAGE_SIZE = 25;
+const MIN_PAGE_SIZE = 1;
+const MAX_PAGE_SIZE = 100;
+
+const STRINGS = {
+    caption: "ContextualGrid_Caption",
+    loading: "ContextualGrid_Loading",
+    unsaved: "ContextualGrid_Unsaved",
+    configure: "ContextualGrid_Configure",
+    permission: "ContextualGrid_Permission",
+    invalidRecord: "ContextualGrid_InvalidRecord",
+    missingToken: "ContextualGrid_MissingToken",
+    empty: "ContextualGrid_Empty",
+    error: "ContextualGrid_Error",
+    loadMore: "ContextualGrid_LoadMore",
+} as const;
+
+const FALLBACKS: Record<string, string> = {
+    [STRINGS.caption]: "Related rows",
+    [STRINGS.loading]: "Loading related rows...",
+    [STRINGS.unsaved]: "Save this {0} record before related rows can be shown.",
+    [STRINGS.configure]: "Configure entityId, entityName and FetchXML before using this grid.",
+    [STRINGS.permission]: "You do not have permission to read this contextual grid configuration.",
+    [STRINGS.invalidRecord]: "The current record id is not a valid GUID.",
+    [STRINGS.missingToken]: "FetchXML must contain the {recordId} token.",
+    [STRINGS.empty]: "No related rows were found.",
+    [STRINGS.error]: "Unable to load related rows.",
+    [STRINGS.loadMore]: "Load more rows",
+};
+
+type State = "idle" | "loading" | "ready" | "empty" | "message" | "error";
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private root: HTMLDivElement | null = null;
+    private status: HTMLDivElement | null = null;
+    private tableHost: HTMLDivElement | null = null;
+    private loadMoreButton: HTMLButtonElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private rows: GridRow[] = [];
+    private nextOptions: string | undefined;
+    private loadToken = 0;
+    private state: State = "idle";
+    private message = "";
+    private strings = FALLBACKS;
+
+    private readonly onLoadMore = (): void => {
+        if (!this.context || !this.nextOptions || this.state === "loading") return;
+        this.startLoad(this.context, this.nextOptions, false);
+    };
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        _notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.context = context;
+        this.strings = Object.fromEntries(
+            Object.entries(FALLBACKS).map(([key, fallback]) => [key, stringResource(context, key, fallback)]),
+        );
+
+        context.mode.trackContainerResize(true);
+
+        this.root = document.createElement("div");
+        this.root.className = "{{cssClass}}";
+
+        this.status = document.createElement("div");
+        this.status.className = "{{cssMessageClass}}";
+        this.status.setAttribute("role", "status");
+
+        this.tableHost = document.createElement("div");
+        this.tableHost.className = "{{cssClass}}-tableWrap";
+
+        this.loadMoreButton = document.createElement("button");
+        this.loadMoreButton.type = "button";
+        this.loadMoreButton.className = "{{cssClass}}-loadMore";
+        this.loadMoreButton.textContent = this.strings[STRINGS.loadMore];
+        this.loadMoreButton.addEventListener("click", this.onLoadMore);
+
+        this.root.append(this.status, this.tableHost, this.loadMoreButton);
+        container.append(this.root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
+        const config = this.readConfiguration(context);
+        if (!config.ok) {
+            this.rows = [];
+            this.nextOptions = undefined;
+            this.loadToken += 1;
+            this.render(config.state, config.message);
+            return;
+        }
+
+        this.rows = [];
+        this.nextOptions = undefined;
+        this.startLoad(context, undefined, true);
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        this.loadToken += 1;
+        this.loadMoreButton?.removeEventListener("click", this.onLoadMore);
+        this.root?.remove();
+        this.root = null;
+        this.status = null;
+        this.tableHost = null;
+        this.loadMoreButton = null;
+        this.context = null;
+    }
+
+    private startLoad(context: ComponentFramework.Context<IInputs>, nextOptions: string | undefined, replaceRows: boolean): void {
+        const config = this.readConfiguration(context);
+        if (!config.ok) {
+            this.rows = [];
+            this.nextOptions = undefined;
+            this.render(config.state, config.message);
+            return;
+        }
+
+        const token = ++this.loadToken;
+        this.render("loading", this.strings[STRINGS.loading]);
+        void loadGridPage(context, { ...config, nextOptions })
+            .then((page) => {
+                if (token !== this.loadToken) return undefined;
+                this.rows = replaceRows ? page.rows : [...this.rows, ...page.rows];
+                this.nextOptions = page.nextOptions;
+                this.render(this.rows.length ? "ready" : "empty", this.rows.length ? "" : this.strings[STRINGS.empty]);
+                return undefined;
+            })
+            .catch(() => {
+                if (token !== this.loadToken) return undefined;
+                this.nextOptions = undefined;
+                this.render("error", this.strings[STRINGS.error]);
+                return undefined;
+            });
+    }
+
+    private readConfiguration(context: ComponentFramework.Context<IInputs>):
+        | { ok: true; entityName: string; fetchXmlTemplate: string; recordId: string; pageSize: number }
+        | { ok: false; state: State; message: string } {
+        const entityId = context.parameters.entityId;
+        const entityName = context.parameters.entityName;
+        const fetchXmlTemplate = context.parameters.fetchXmlTemplate;
+        if (!entityId || !entityName || !fetchXmlTemplate) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.configure] };
+        }
+
+        if (entityId.security?.readable === false || entityName.security?.readable === false || fetchXmlTemplate.security?.readable === false) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.permission] };
+        }
+
+        const rawEntityName = String(entityName.raw ?? "").trim();
+        const rawFetchXml = String(fetchXmlTemplate.raw ?? "").trim();
+        const rawRecordId = String(entityId.raw ?? "").trim();
+        if (!rawEntityName || !rawFetchXml) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.configure] };
+        }
+
+        if (!rawRecordId) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.unsaved].replace("{0}", rawEntityName) };
+        }
+
+        if (!normalizeGuid(rawRecordId)) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.invalidRecord] };
+        }
+
+        if (!rawFetchXml.includes("{recordId}")) {
+            return { ok: false, state: "message", message: this.strings[STRINGS.missingToken] };
+        }
+
+        return {
+            ok: true,
+            entityName: rawEntityName,
+            fetchXmlTemplate: rawFetchXml,
+            recordId: rawRecordId,
+            pageSize: readPageSize(context.parameters.pageSize?.raw),
+        };
+    }
+
+    private render(state: State, message: string): void {
+        if (!this.status || !this.tableHost || !this.loadMoreButton || !this.context) return;
+        this.state = state;
+        this.message = message;
+        this.status.textContent = message;
+        this.status.hidden = !message;
+        this.tableHost.replaceChildren();
+
+        if (this.rows.length) {
+            this.tableHost.append(renderTable(this.rows, this.strings[STRINGS.caption], this.context.mode.isControlDisabled));
+        }
+
+        this.loadMoreButton.hidden = !this.nextOptions;
+        this.loadMoreButton.disabled = this.context.mode.isControlDisabled || state === "loading";
+    }
+}
+
+function stringResource(context: ComponentFramework.Context<IInputs>, key: string, fallback: string): string {
+    if (typeof context.resources?.getString !== "function") return fallback;
+    return context.resources.getString(key) || fallback;
+}
+
+function readPageSize(raw: unknown): number {
+    const numeric = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_PAGE_SIZE;
+    return Math.min(MAX_PAGE_SIZE, Math.max(MIN_PAGE_SIZE, numeric));
+}
+
+function renderTable(rows: GridRow[], captionText: string, disabled: boolean): HTMLTableElement {
+    const table = document.createElement("table");
+    table.className = "{{cssClass}}-table";
+    table.setAttribute("aria-disabled", disabled ? "true" : "false");
+    const caption = document.createElement("caption");
+    caption.textContent = captionText;
+    table.append(caption);
+
+    const columns = visibleColumns(rows);
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const column of columns) {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = column;
+        headRow.append(th);
+    }
+    thead.append(headRow);
+    table.append(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const row of rows) {
+        const tr = document.createElement("tr");
+        for (const column of columns) {
+            const cell = document.createElement("td");
+            cell.textContent = formatCell(row[column]);
+            tr.append(cell);
+        }
+        tbody.append(tr);
+    }
+    table.append(tbody);
+    return table;
+}
+
+function visibleColumns(rows: GridRow[]): string[] {
+    const columns: string[] = [];
+    for (const row of rows) {
+        for (const key of Object.keys(row)) {
+            if (key.startsWith("@") || key.includes("@OData") || key.includes("@odata")) continue;
+            if (!columns.includes(key)) columns.push(key);
+        }
+    }
+    return columns.length ? columns : ["id"];
+}
+
+function formatCell(value: unknown): string {
+    if (value == null) return "";
+    if (value instanceof Date) return value.toLocaleString();
+    return String(value);
+}
