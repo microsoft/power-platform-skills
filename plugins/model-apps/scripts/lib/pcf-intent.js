@@ -1,7 +1,6 @@
 'use strict';
 
 const { validateNamespace, validateControlName, validatePublisherPrefix } = require('./pcf-names.js');
-const { loadMatrix } = require('./pcf-matrix.js');
 const { listTemplates, listRecipes } = require('./pcf-scaffold.js');
 
 const HOSTS = new Set(['model', 'pages']);
@@ -73,7 +72,9 @@ function validateControl(control, errors) {
       errors.push('control.recipe must be a non-empty string when supplied.');
     } else {
       const recipes = safeListRecipes();
-      if (recipes.length > 0 && !recipes.some((item) => item.id === c.recipe)) {
+      if (recipes.length === 0) {
+        errors.push('control.recipe is not supported: no recipes are available in this release; omit `recipe`.');
+      } else if (!recipes.some((item) => item.id === c.recipe)) {
         errors.push(`control.recipe '${c.recipe}' is unknown; choose one of: ${recipes.map((item) => item.id).join(', ')}.`);
       }
     }
@@ -162,8 +163,11 @@ function validateBindings(bindings, errors) {
 function validateBinding(binding, index, errors) {
   const b = asObject(binding, `bindings[${index}]`, errors);
   if (!b) return;
-  const kind = b.kind || 'field';
-  if (!BINDING_KINDS.has(kind)) errors.push(`bindings[${index}].kind must be one of: ${Array.from(BINDING_KINDS).join(', ')}.`);
+  if (b.kind === undefined) {
+    errors.push(`bindings[${index}].kind is required and must be one of: ${Array.from(BINDING_KINDS).join(', ')}.`);
+  } else if (!BINDING_KINDS.has(b.kind)) {
+    errors.push(`bindings[${index}].kind must be one of: ${Array.from(BINDING_KINDS).join(', ')}.`);
+  }
   for (const key of ['table', 'form']) {
     if (typeof b[key] !== 'string' || !b[key].trim()) errors.push(`bindings[${index}].${key} is required.`);
   }
@@ -224,7 +228,6 @@ function validatePages(pages, errors) {
 }
 
 function lintBindingIntent(intent, options = {}) {
-  const matrix = options.matrix || loadMatrix();
   const manifestModel = options.manifestModel || null;
   const findings = [];
   const hosts = Array.isArray(intent.hosts) ? intent.hosts : [];
@@ -234,7 +237,7 @@ function lintBindingIntent(intent, options = {}) {
   const propNames = new Set(props.map((prop) => prop.name));
 
   for (const [index, binding] of bindings.entries()) {
-    const kind = binding.kind || 'field';
+    const kind = binding.kind;
     const clients = clientsFor(binding);
     if (binding.formType === 'quick-create' && kind === 'dataset-subgrid') {
       findings.push(finding(
@@ -353,13 +356,13 @@ function renderPlanMarkdown(intent, { lint = [] } = {}) {
   const hosts = Array.isArray(intent.hosts) ? intent.hosts : [];
   const pages = intent.pages || {};
 
-  lines.push(`# ${control.displayName || control.name || 'PCF control'} plan`, '');
+  lines.push(`# ${markdownHeading(control.displayName || control.name || 'PCF control')} plan`, '');
   lines.push('## Summary', '');
-  lines.push(`- **Control:** ${control.namespace || '(namespace missing)'}.${control.name || '(name missing)'}`);
-  lines.push(`- **Description:** ${control.description || '(none)'}`);
-  lines.push(`- **Template:** ${control.template || '(none)'}`);
-  lines.push(`- **Recipe:** ${control.recipe || 'none'}`);
-  lines.push(`- **Connectivity:** ${intent.connectivity || 'online'}`, '');
+  lines.push(`- **Control:** ${markdownInline(control.namespace || '(namespace missing)')}.${markdownInline(control.name || '(name missing)')}`);
+  lines.push(`- **Description:** ${markdownInline(control.description || '(none)')}`);
+  lines.push(`- **Template:** ${markdownInline(control.template || '(none)')}`);
+  lines.push(`- **Recipe:** ${markdownInline(control.recipe || 'none')}`);
+  lines.push(`- **Connectivity:** ${markdownInline(intent.connectivity || 'online')}`, '');
 
   lines.push('## Hosts', '');
   lines.push(hosts.length ? hosts.map((host) => `- ${host === 'model' ? 'Model-driven apps' : 'Power Pages'}`).join('\n') : '- (none)');
@@ -369,7 +372,7 @@ function renderPlanMarkdown(intent, { lint = [] } = {}) {
   lines.push('| Name | Usage | Type | Required | Default |');
   lines.push('| --- | --- | --- | --- | --- |');
   for (const prop of Array.isArray(intent.properties) ? intent.properties : []) {
-    lines.push(`| ${prop.name || ''} | ${prop.usage || ''} | ${prop.type || ''} | ${prop.required ? 'yes' : 'no'} | ${prop.default || ''} |`);
+    lines.push(`| ${markdownCell(prop.name || '')} | ${markdownCell(prop.usage || '')} | ${markdownCell(prop.type || '')} | ${prop.required ? 'yes' : 'no'} | ${markdownCell(prop.default || '')} |`);
   }
   if (!Array.isArray(intent.properties) || intent.properties.length === 0) lines.push('| _No properties declared._ |  |  |  |  |');
   lines.push('');
@@ -382,15 +385,15 @@ function renderPlanMarkdown(intent, { lint = [] } = {}) {
   } else {
     for (const [index, binding] of bindings.entries()) {
       const clients = clientsFor(binding);
-      lines.push(`| ${index + 1} | ${binding.kind || 'field'} | ${binding.table || ''} | ${binding.form || ''} (${binding.formType || 'main'}) | ${renderTarget(binding.target)} | ${markClient(clients, 'web')} | ${markClient(clients, 'phone')} | ${markClient(clients, 'tablet')} | ${renderParameters(binding.parameters)} |`);
+      lines.push(`| ${index + 1} | ${markdownCell(binding.kind || '')} | ${markdownCell(binding.table || '')} | ${markdownCell(binding.form || '')} (${markdownCell(binding.formType || 'main')}) | ${markdownCell(renderTarget(binding.target))} | ${markClient(clients, 'web')} | ${markClient(clients, 'phone')} | ${markClient(clients, 'tablet')} | ${markdownCell(renderParameters(binding.parameters))} |`);
     }
   }
   lines.push('');
 
   lines.push('## Deploy target', '');
-  lines.push(`- **Solution:** ${deploy.solution || '(none)'}`);
-  lines.push(`- **Publisher prefix:** ${deploy.publisherPrefix || 'use solution publisher'}`);
-  if (deploy.environment) lines.push(`- **Environment:** ${deploy.environment}`);
+  lines.push(`- **Solution:** ${markdownInline(deploy.solution || '(none)')}`);
+  lines.push(`- **Publisher prefix:** ${markdownInline(deploy.publisherPrefix || 'use solution publisher')}`);
+  if (deploy.environment) lines.push(`- **Environment:** ${markdownInline(deploy.environment)}`);
   lines.push('- **Registration:** `pac pcf push --environment <environment>` after skill-level consent.');
   lines.push('');
 
@@ -408,7 +411,7 @@ function renderPlanMarkdown(intent, { lint = [] } = {}) {
     lines.push('- No blocking or advisory findings.');
   } else {
     for (const item of findings) {
-      lines.push(`- **${item.severity.toUpperCase()} ${item.code}:** ${item.message} **Fix:** ${item.fix}`);
+      lines.push(`- **${markdownInline(item.severity.toUpperCase())} ${markdownInline(item.code)}:** ${markdownInline(item.message)} **Fix:** ${markdownInline(item.fix)}`);
     }
   }
   lines.push('');
@@ -432,6 +435,22 @@ function renderTarget(target) {
   if (target.view) parts.push(`view ${target.view}`);
   if (target.relationship) parts.push(`relationship ${target.relationship}`);
   return parts.join('; ');
+}
+
+function markdownHeading(value) {
+  return escapeMarkdown(value).replace(/\s+/g, ' ').trim();
+}
+
+function markdownInline(value) {
+  return escapeMarkdown(value).replace(/\r\n|\r|\n/g, '<br>');
+}
+
+function markdownCell(value) {
+  return markdownInline(value);
+}
+
+function escapeMarkdown(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 }
 
 function markClient(clients, client) {

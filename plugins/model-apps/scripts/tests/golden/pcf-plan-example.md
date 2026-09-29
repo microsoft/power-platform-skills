@@ -5,7 +5,7 @@
 - **Control:** Contoso.Controls.StarRating
 - **Description:** Shows a whole number as 0-5 stars
 - **Template:** field-standard
-- **Recipe:** star-rating
+- **Recipe:** none
 - **Connectivity:** online
 
 ## Hosts

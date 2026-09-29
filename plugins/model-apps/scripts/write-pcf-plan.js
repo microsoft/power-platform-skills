@@ -3,17 +3,16 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
-const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { validateIntent, lintBindingIntent, renderPlanMarkdown } = require('./lib/pcf-intent.js');
 
 const USAGE = 'Usage: node scripts/write-pcf-plan.js --intent @pcf-intent.json [--manifest ControlManifest.Input.xml] [--out pcf-plan.md]';
 
 function emitPlanResult(ok, payload) {
-  if (payload instanceof Error) {
-    process.stderr.write(`${payload.message}\n`);
-    process.exit(1);
+  if (process === global.process) {
+    emitResult(ok, payload);
+    return;
   }
   process.stdout.write(`${JSON.stringify(payload)}\n`);
   if (!ok) process.stderr.write(`${payload.error || 'PCF plan has blocking finding(s); see stdout JSON'}\n`);
@@ -22,7 +21,7 @@ function emitPlanResult(ok, payload) {
 
 function main() {
   const argv = process.argv.slice(2);
-  const { positional, flags } = parseArgs(argv);
+  const { flags } = parseArgs(argv);
   const flagError = validateFlags(argv, {
     known: ['intent', 'manifest', 'out'],
     needValue: ['intent', 'manifest', 'out'],
@@ -32,7 +31,7 @@ function main() {
     process.exit(1);
   }
 
-  const intentArg = flags.intent || positional[0];
+  const intentArg = flags.intent;
   if (!intentArg) {
     process.stderr.write(`${USAGE}\n`);
     process.exit(1);
@@ -44,7 +43,7 @@ function main() {
     intentPath = path.resolve(intentArg.startsWith('@') ? intentArg.slice(1) : intentArg);
     intent = readJsonArg(`@${intentPath}`);
   } catch (err) {
-    emitPlanResult(false, new Error(`cannot read PCF intent: ${err.message}`));
+    emitPlanResult(false, { ok: false, error: `cannot read PCF intent: ${err.message}` });
     return;
   }
 
@@ -60,12 +59,11 @@ function main() {
       }
       manifestModel = parsed.model;
     } catch (err) {
-      emitPlanResult(false, new Error(`cannot read PCF manifest: ${err.message}`));
+      emitPlanResult(false, { ok: false, error: `cannot read PCF manifest: ${err.message}` });
       return;
     }
   }
 
-  const matrix = loadMatrix();
   const lint = schemaErrors.map((message) => ({
     code: 'PCF_INTENT_SCHEMA',
     severity: 'error',
@@ -73,7 +71,7 @@ function main() {
     fix: 'Fix pcf-intent.json so it matches schemaVersion 1 before rendering the plan.',
   }));
   if (schemaErrors.length === 0) {
-    lint.push(...lintBindingIntent(intent, { manifestModel, matrix }));
+    lint.push(...lintBindingIntent(intent, { manifestModel }));
   }
 
   const markdown = renderPlanMarkdown(intent, { lint });

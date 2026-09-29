@@ -25,7 +25,6 @@ function exampleIntent(overrides = {}) {
       displayName: 'Star rating',
       description: 'Shows a whole number as 0-5 stars',
       template: 'field-standard',
-      recipe: 'star-rating',
     },
     hosts: ['model', 'pages'],
     connectivity: 'online',
@@ -96,11 +95,11 @@ async function runCli(argv) {
   return cli;
 }
 
-test('validateIntent accepts the v1 example shape with Task 15 binding amendments', () => {
+test('validateIntent accepts the v1 shape with Task 15 binding amendments', () => {
   assert.deepEqual(validateIntent(exampleIntent()), []);
 });
 
-test('validateIntent reports schema, name, enum, template, and binding shape fixes', () => {
+test('validateIntent reports schema, name, enum, template, recipe, and binding shape fixes', () => {
   const errors = validateIntent(exampleIntent({
     schemaVersion: 2,
     control: {
@@ -133,6 +132,7 @@ test('validateIntent reports schema, name, enum, template, and binding shape fix
     'control.namespace',
     'control.name',
     'control.template',
+    'control.recipe',
     'hosts[1]',
     'connectivity must be online',
     'properties[0].usage',
@@ -145,6 +145,29 @@ test('validateIntent reports schema, name, enum, template, and binding shape fix
   ]) {
     assert.ok(errors.some((error) => error.includes(text)), `${text} missing from ${errors.join('\n')}`);
   }
+});
+
+test('validateIntent requires every binding to declare kind', () => {
+  const { kind, ...bindingWithoutKind } = {
+    ...exampleIntent().bindings[0],
+    target: { controlId: 'Contacts', table: 'contact', view: 'Active Contacts', relationship: 'account_contact' },
+    parameters: { records: { dataset: { name: 'records', propertySets: [{ name: 'email', column: 'emailaddress1' }] } } },
+  };
+  assert.equal(kind, 'field');
+
+  const errors = validateIntent(exampleIntent({
+    bindings: [bindingWithoutKind],
+  }));
+
+  assert.ok(errors.some((error) => error.includes('bindings[0].kind') && error.includes('required')), errors.join('\n'));
+});
+
+test('validateIntent rejects supplied recipes when no recipes are available', () => {
+  const errors = validateIntent(exampleIntent({
+    control: { ...exampleIntent().control, recipe: 'star-rating' },
+  }));
+
+  assert.ok(errors.some((error) => error.includes('no recipes are available in this release') && error.includes('omit `recipe`')), errors.join('\n'));
 });
 
 test('lintBindingIntent reports PCF_INTENT_QC_SUBGRID', () => {
@@ -278,9 +301,26 @@ test('lintBindingIntent reports PCF_INTENT_LIST_NEEDS_VIEW_CONFIG', () => {
 
 test('renderPlanMarkdown matches the reviewed golden output', () => {
   const intent = exampleIntent();
-  const lint = lintBindingIntent(intent, { manifestModel: manifestModel(), matrix: matrix() });
+  const lint = lintBindingIntent(intent, { manifestModel: manifestModel() });
 
   assertGolden('pcf-plan-example.md', renderPlanMarkdown(intent, { lint }));
+});
+
+test('renderPlanMarkdown escapes markdown headings and table cells', () => {
+  const markdown = renderPlanMarkdown(exampleIntent({
+    control: {
+      ...exampleIntent().control,
+      displayName: 'Star | rating\ncontrol',
+      description: 'Shows a value | with newline\nsafely',
+    },
+    properties: [
+      { name: 'value|score', usage: 'bound', type: 'Whole.None', required: true, default: '1\n2' },
+    ],
+  }), { lint: [] });
+
+  assert.match(markdown, /^# Star \\| rating control plan/m);
+  assert.match(markdown, /\*\*Description:\*\* Shows a value \\| with newline<br>safely/);
+  assert.match(markdown, /\| value\\\|score \| bound \| Whole\.None \| yes \| 1<br>2 \|/);
 });
 
 test('write-pcf-plan writes markdown, emits JSON, and exits 1 when lint has errors', async () => {
@@ -300,6 +340,50 @@ test('write-pcf-plan writes markdown, emits JSON, and exits 1 when lint has erro
     assert.equal(payload.out, outPath);
     assert.ok(payload.findings.some((finding) => finding.code === 'PCF_INTENT_PAGES_NEEDS_WEB'));
     assert.match(fs.readFileSync(outPath, 'utf8'), /PCF_INTENT_PAGES_NEEDS_WEB/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write-pcf-plan emits JSON and exits 1 when the intent file is missing', async () => {
+  const cli = await runCli(['--intent', '@D:\\missing\\pcf-intent.json']);
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText().trim(), /^cannot read PCF intent/);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /cannot read PCF intent/);
+});
+
+test('write-pcf-plan emits JSON and exits 1 when the intent JSON is invalid', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-invalid-json-'));
+  try {
+    const intentPath = path.join(dir, 'pcf-intent.json');
+    fs.writeFileSync(intentPath, '{ nope');
+
+    const cli = await runCli(['--intent', `@${intentPath}`]);
+
+    assert.equal(cli.exitCode, 1);
+    assert.match(cli.stderrText().trim(), /^cannot read PCF intent/);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /cannot read PCF intent/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write-pcf-plan rejects a positional intent path without --intent', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-positional-'));
+  try {
+    const intentPath = path.join(dir, 'pcf-intent.json');
+    fs.writeFileSync(intentPath, JSON.stringify(exampleIntent()));
+
+    const cli = await runCli([intentPath]);
+
+    assert.equal(cli.exitCode, 1);
+    assert.match(cli.stderrText(), /Usage:/);
+    assert.equal(cli.stdoutText(), '');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
