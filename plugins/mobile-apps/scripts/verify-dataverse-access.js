@@ -42,7 +42,7 @@ async function main() {
 
   const data = JSON.parse(res.body);
   try {
-    require('./lib/app-identity')
+    require('./emit-telemetry-checkpoint')
       .captureSuccessfulDataverseRequest(envUrl, token, data);
   } catch {
     // Telemetry enrichment cannot change verified Dataverse access.

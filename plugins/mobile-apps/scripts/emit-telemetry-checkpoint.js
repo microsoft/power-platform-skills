@@ -10,6 +10,10 @@ const {
   isKnownTelemetryEvent,
   isTelemetryStaticInfo,
 } = require('./lib/mobileapp-hook-utils');
+const {
+  GUID,
+  recordVerifiedDataverseOrganization,
+} = require('./lib/mobile-telemetry-context');
 const telemetry = require('./lib/mobile-telemetry');
 
 const CHECKPOINT_STATES = new Set(TELEMETRY_STATES);
@@ -67,6 +71,32 @@ function emitCheckpoint(payload, opts = {}) {
     return emit(context, invocation, { cwd });
   } catch {
     return null;
+  }
+}
+
+function captureSuccessfulDataverseRequest(environmentUrl, token, whoAmI, env = process.env) {
+  try {
+    const runId = env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID;
+    if (!GUID.test(runId || '')) return false;
+    const projectRoot = process.cwd();
+    const context = telemetry.createTelemetryContext({}, {
+      cwd: projectRoot,
+      env,
+      readProcessScope: () => '',
+    });
+    if (!context) return false;
+    return recordVerifiedDataverseOrganization({
+      projectRoot,
+      configDir: context.configDir,
+      runId,
+      environmentUrl,
+      lifecycle: telemetry.lifecycle,
+      token,
+      whoAmI,
+    });
+  } catch {
+    // Verification enrichment is observational and cannot alter the request.
+    return false;
   }
 }
 
@@ -332,6 +362,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  captureSuccessfulDataverseRequest,
   emitCheckpoint,
   executeCommand,
   parseCheckpointPayload,

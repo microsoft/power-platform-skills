@@ -90,6 +90,14 @@ function readCachedResolution(target, projectRoot) {
   return null;
 }
 
+function readProjectEnvironment(projectRoot) {
+  const powerConfig = readJsonFile(path.join(projectRoot, 'power.config.json'));
+  const configuredEnvironmentId = powerConfig && powerConfig.environmentId;
+  if (configuredEnvironmentId && !GUID_RE.test(configuredEnvironmentId)) return null;
+  const cached = readCachedResolution(configuredEnvironmentId || null, projectRoot);
+  return cached ? toEnvironmentResult(cached, 'cache') : null;
+}
+
 function hasCachedEnvironmentDetails(value) {
   return Boolean(value && value.environmentUrl && value.tenantId);
 }
@@ -361,6 +369,7 @@ module.exports = {
   describeResponseShape,
   formatRequestFailure,
   redactDiagnostic,
+  readProjectEnvironment,
   resolveEnvironment,
   shouldWriteCache,
   writeCacheIfProject,

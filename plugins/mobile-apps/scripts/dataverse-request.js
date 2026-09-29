@@ -192,7 +192,7 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
   ) {
     try {
       const whoAmI = JSON.parse(res.body);
-      require('./lib/app-identity')
+      require('./emit-telemetry-checkpoint')
         .captureSuccessfulDataverseRequest(envUrl, token, whoAmI);
     } catch {
       // Telemetry enrichment cannot change a successful Dataverse response.

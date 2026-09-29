@@ -11,9 +11,7 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const DEFAULT_LOCK_TIMEOUT_MS = 5000;
 const DEFAULT_LOCK_RETRY_MS = 10;
-const DEFAULT_LOCK_INITIALIZATION_GRACE_MS = 1000;
 const LOCK_DIRECTORY = '.lifecycle.lock';
-const LOCK_OWNER_FILE = 'owner.json';
 const LOCK_RECOVERY_DIRECTORY = '.lifecycle.lock.recovery';
 
 function normalizePolicy(input) {
@@ -93,7 +91,7 @@ function processIsAlive(pid, options) {
 
 function readLockOwner(lockPath) {
   try {
-    const owner = readJson(path.join(lockPath, LOCK_OWNER_FILE));
+    const owner = readJson(lockPath);
     if (
       Number.isSafeInteger(owner.pid) &&
       owner.pid > 0 &&
@@ -109,72 +107,80 @@ function readLockOwner(lockPath) {
   return null;
 }
 
-function writeLockOwner(lockPath, token) {
-  fs.writeFileSync(path.join(lockPath, LOCK_OWNER_FILE), JSON.stringify({
+function lockOwner(token) {
+  return {
     pid: process.pid,
     token,
     acquiredAtMs: Date.now(),
-  }), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  };
 }
 
 function releaseOwnedLock(lockPath, token) {
   try {
     const owner = readLockOwner(lockPath);
-    if (owner?.token === token) fs.rmSync(lockPath, { recursive: true });
+    if (owner?.token === token) fs.rmSync(lockPath, { force: true });
   } catch {
     // A release failure is recovered when the owner process is no longer live.
   }
 }
 
-function initializationGraceElapsed(lockPath, options) {
-  const graceMs = Number.isSafeInteger(options.lockInitializationGraceMs) &&
-    options.lockInitializationGraceMs >= 0
-    ? options.lockInitializationGraceMs
-    : DEFAULT_LOCK_INITIALIZATION_GRACE_MS;
-  return Date.now() - fs.statSync(lockPath).mtimeMs >= graceMs;
-}
-
-function acquireRecoveryLock(recoveryPath, options) {
-  const token = crypto.randomUUID();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+function publishOwnedLock(lockPath, token) {
+  const temporaryPath = `${lockPath}.${process.pid}.${token}.pending`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(lockOwner(token)), {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    fs.linkSync(temporaryPath, lockPath);
+    return true;
+  } catch (error) {
+    if (fs.existsSync(lockPath)) return false;
+    throw error;
+  } finally {
     try {
-      fs.mkdirSync(recoveryPath, { mode: 0o700 });
-      try {
-        writeLockOwner(recoveryPath, token);
-      } catch (error) {
-        fs.rmSync(recoveryPath, { recursive: true, force: true });
-        throw error;
-      }
-      return () => releaseOwnedLock(recoveryPath, token);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const owner = readLockOwner(recoveryPath);
-      if (owner && processIsAlive(owner.pid, options)) return null;
-      if (!owner && !initializationGraceElapsed(recoveryPath, options)) return null;
-      fs.rmSync(recoveryPath, { recursive: true, force: true });
+      fs.rmSync(temporaryPath, { force: true });
+    } catch {
+      // A pending file is never treated as the stable lock.
     }
   }
-  return null;
+}
+
+function sameFile(leftPath, rightPath) {
+  try {
+    const left = fs.statSync(leftPath);
+    const right = fs.statSync(rightPath);
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
 }
 
 function tryRecoverRunLock(directory, options) {
   const lockPath = path.join(directory, LOCK_DIRECTORY);
   const recoveryPath = path.join(directory, LOCK_RECOVERY_DIRECTORY);
-  const releaseRecovery = acquireRecoveryLock(recoveryPath, options);
-  if (!releaseRecovery) return false;
+  try {
+    // This hard link is an atomic claim on the exact lock inode. Even if the
+    // stable path is later replaced, recovery can only unlink the inode claimed
+    // here and therefore cannot delete a newly acquired live lock.
+    fs.linkSync(lockPath, recoveryPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return true;
+    if (error.code !== 'EEXIST') throw error;
+    const claimedOwner = readLockOwner(recoveryPath);
+    if (claimedOwner && !processIsAlive(claimedOwner.pid, options)) {
+      fs.rmSync(recoveryPath, { force: true });
+    }
+    return false;
+  }
 
   try {
-    if (!fs.existsSync(lockPath)) return true;
-    const owner = readLockOwner(lockPath);
-    if (owner && processIsAlive(owner.pid, options)) return false;
-    if (!owner && !initializationGraceElapsed(lockPath, options)) return false;
-
-    // Only one process can hold the recovery directory, and no new owner can
-    // acquire the stable lock path until this stale directory is removed.
-    fs.rmSync(lockPath, { recursive: true, force: true });
+    const owner = readLockOwner(recoveryPath);
+    if (!owner || processIsAlive(owner.pid, options)) return false;
+    if (sameFile(lockPath, recoveryPath)) fs.rmSync(lockPath, { force: true });
     return true;
   } finally {
-    releaseRecovery();
+    fs.rmSync(recoveryPath, { force: true });
   }
 }
 
@@ -190,21 +196,12 @@ function acquireRunLock(directory, options = {}) {
   const startedAt = Date.now();
 
   while (true) {
-    try {
-      fs.mkdirSync(lockPath, { mode: 0o700 });
-      try {
-        writeLockOwner(lockPath, token);
-      } catch (error) {
-        fs.rmSync(lockPath, { recursive: true, force: true });
-        throw error;
-      }
+    if (publishOwnedLock(lockPath, token)) {
       return () => releaseOwnedLock(lockPath, token);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (tryRecoverRunLock(directory, options)) continue;
-      if (Date.now() - startedAt >= timeoutMs) throw new Error('lock_timeout');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
     }
+    if (tryRecoverRunLock(directory, options)) continue;
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('lock_timeout');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
   }
 }
 
@@ -235,6 +232,7 @@ function readSpan(policy, options) {
       !['skill', 'checkpoint'].includes(record.spanType) ||
       !GUID.test(record.eventId || '') || record.sessionId !== run.sessionId ||
       (record.parentSpanId !== null && !GUID.test(record.parentSpanId || '')) ||
+      (record.retryOfSpanId != null && !GUID.test(record.retryOfSpanId)) ||
       !Number.isSafeInteger(record.attempt) || record.attempt < 1 ||
       !Number.isSafeInteger(record.startedAtMs)) throw new Error('invalid_context');
   if (record.spanType === 'checkpoint' && !checkpointNames(policy, record.skillName).has(record.checkpointName)) {
@@ -264,6 +262,7 @@ function persistSpan(policy, options, context) {
     spanType: options.checkpointName ? 'checkpoint' : 'skill',
     skillName: options.skillName, checkpointName: options.checkpointName || null,
     additionalInfo: options.additionalInfo || null,
+    retryOfSpanId: options.retryOf || null,
     sessionId: run.sessionId, attempt, eventId: crypto.randomUUID(),
     startedMonotonicMs: clock.monotonicMs, startedUptimeMs: clock.uptimeMs,
     startedAtMs: clock.wallMs, time: new Date(clock.wallMs).toISOString(), state: 'started' };
@@ -356,8 +355,17 @@ function finishSpan(policy, options) {
     if (options.state === 'completed') {
       const spans = listSpans(policy, options);
       const byId = new Map(spans.map((span) => [span.spanId, span]));
+      const resumedSpanIds = new Set(
+        spans.map((span) => span.retryOfSpanId).filter(Boolean),
+      );
       for (const candidate of spans) {
-        if (candidate.spanId === record.spanId || candidate.state !== 'started') continue;
+        if (
+          candidate.spanId === record.spanId ||
+          (candidate.state !== 'started' &&
+            !(candidate.state === 'needs_context' && !resumedSpanIds.has(candidate.spanId)))
+        ) {
+          continue;
+        }
         let parent = candidate.parentSpanId;
         const visited = new Set();
         while (parent && !visited.has(parent)) {
@@ -460,7 +468,7 @@ function readJsonIfPresent(filename) {
 }
 
 function validateEnd(policy, start, end) {
-  for (const field of ['runId', 'spanId', 'parentSpanId', 'skillName', 'checkpointName', 'additionalInfo', 'spanType', 'sessionId', 'attempt', 'startedAtMs', 'startedMonotonicMs', 'startedUptimeMs']) {
+  for (const field of ['runId', 'spanId', 'parentSpanId', 'skillName', 'checkpointName', 'additionalInfo', 'retryOfSpanId', 'spanType', 'sessionId', 'attempt', 'startedAtMs', 'startedMonotonicMs', 'startedUptimeMs']) {
     if (start[field] !== end[field]) throw new Error('invalid_context');
   }
   if (!policy.terminalStates.has(end.state) || !GUID.test(end.eventId || '') ||
@@ -503,6 +511,7 @@ function reportRun(policy, options) {
   const spans = rawSpans.map((span) => ({
     spanId: span.spanId, parentSpanId: span.parentSpanId, skill: span.skillName,
     step: span.checkpointName, type: span.spanType, attempt: span.attempt,
+    ...(GUID.test(span.retryOfSpanId || '') ? { retryOfSpanId: span.retryOfSpanId } : {}),
     state: span.state === 'started' ? 'incomplete' : span.state,
     startedAt: new Date(span.startedAtMs).toISOString(),
     ...(span.state === 'started' ? {} : { finishedAt: new Date(span.time).toISOString() }),

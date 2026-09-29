@@ -14,7 +14,8 @@ const { createLifecycle } = require('./mobile-lifecycle');
 const { fireAndForget, sanitizeData } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
-const { ensureAppInstanceId, readProjectTelemetryContext } = require('./app-identity');
+const { ensureAppInstanceId } = require('./app-identity');
+const { readProjectTelemetryContext } = require('./mobile-telemetry-context');
 const { resolveProcessSessionId } = require('./mobile-telemetry-session');
 const {
   TELEMETRY_ERROR_CLASSES,

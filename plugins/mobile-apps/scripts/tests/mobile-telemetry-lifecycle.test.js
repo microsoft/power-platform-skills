@@ -16,7 +16,7 @@ const { sanitizeData } = require('../lib/mobile-telemetry-dispatcher');
 const {
   readProjectTelemetryContext,
   recordVerifiedDataverseOrganization,
-} = require('../lib/app-identity');
+} = require('../lib/mobile-telemetry-context');
 const { runCommand } = require('../emit-telemetry-checkpoint');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
@@ -474,6 +474,58 @@ test('successful parent completion requires every child to finish', (context) =>
   assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
 });
 
+test('nested needs-context attempts keep their parent open until resumed', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    skillName: 'create-mobile-app',
+  });
+  const child = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'add-dataverse',
+  });
+  lifecycle.finishSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: child.spanId,
+    state: 'needs_context',
+  });
+  const finishRoot = {
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: root.spanId,
+    state: 'completed',
+  };
+  assert.throws(() => lifecycle.finishSpan(finishRoot), /children_pending/);
+
+  const resumed = lifecycle.resumeSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: child.spanId,
+  });
+  assert.equal(resumed.parentSpanId, root.spanId);
+  assert.equal(resumed.retryOfSpanId, child.spanId);
+  assert.equal(resumed.attempt, 2);
+  assert.throws(() => lifecycle.finishSpan(finishRoot), /children_pending/);
+
+  lifecycle.finishSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    spanId: resumed.spanId,
+    state: 'completed',
+  });
+  assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
+});
+
 test('run lock serializes child creation with parent completion across processes', async (context) => {
   const projectRoot = tempProject(context);
   const configDir = path.join(projectRoot, 'config');
@@ -551,7 +603,11 @@ test('run lock times out instead of writing through another process lock', (cont
     lifecycle.runDirectory(configDir, root.runId),
     '.lifecycle.lock',
   );
-  fs.mkdirSync(lockPath);
+  fs.writeFileSync(lockPath, JSON.stringify({
+    pid: process.pid,
+    token: '11111111-1111-4111-8111-111111111111',
+    acquiredAtMs: Date.now(),
+  }));
   try {
     assert.throws(() => lifecycle.beginSpan({
       projectRoot,
@@ -563,7 +619,7 @@ test('run lock times out instead of writing through another process lock', (cont
       lockTimeoutMs: 0,
     }), /lock_timeout/);
   } finally {
-    fs.rmdirSync(lockPath);
+    fs.rmSync(lockPath, { force: true });
   }
 });
 
@@ -578,18 +634,12 @@ test('run lock recovers when its recorded owner process is dead', (context) => {
   const runDirectory = lifecycle.runDirectory(configDir, root.runId);
   const lockPath = path.join(runDirectory, '.lifecycle.lock');
   const recoveryPath = path.join(runDirectory, '.lifecycle.lock.recovery');
-  fs.mkdirSync(lockPath);
-  fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+  fs.writeFileSync(lockPath, JSON.stringify({
     pid: 424242,
     token: '11111111-1111-4111-8111-111111111111',
     acquiredAtMs: Date.now() - 5000,
   }));
-  fs.mkdirSync(recoveryPath);
-  fs.writeFileSync(path.join(recoveryPath, 'owner.json'), JSON.stringify({
-    pid: 434343,
-    token: '22222222-2222-4222-8222-222222222222',
-    acquiredAtMs: Date.now() - 5000,
-  }));
+  fs.linkSync(lockPath, recoveryPath);
 
   const child = lifecycle.beginSpan({
     projectRoot,
