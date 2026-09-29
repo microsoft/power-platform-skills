@@ -204,11 +204,18 @@ test('audited exception schema requires a review reason', () => {
   );
 });
 
-test('repository-wide audit is clean, and the only audited exceptions are the model-apps process runner', () => {
+test('repository-wide audit is clean, and the only audited exceptions are the process runner and the telemetry library', () => {
   const result = auditRepository(REPOSITORY_ROOT);
   assert.deepEqual(result.findings, []);
-  assert.equal(AUDITED_EXCEPTIONS.length, 8, 'four child_process calls, two rules each');
-  assert.ok(AUDITED_EXCEPTIONS.every((e) => e.path === 'plugins/model-apps/scripts/lib/process-runner.js'));
+  const runner = AUDITED_EXCEPTIONS.filter((e) => e.path === 'plugins/model-apps/scripts/lib/process-runner.js');
+  assert.equal(runner.length, 8, 'the runner: four child_process calls, two rules each');
+  const telemetry = AUDITED_EXCEPTIONS.filter((e) => /\/scripts\/lib\/telemetry\/lib\/native-exec\.js$/.test(e.path));
+  assert.deepEqual(telemetry.map((e) => e.path).sort(), [
+    'plugins/model-apps/scripts/lib/telemetry/lib/native-exec.js',
+    'plugins/power-pages/scripts/lib/telemetry/lib/native-exec.js',
+  ], 'the shared telemetry library: its one resolved-path call, in each scanned copy');
+  assert.ok(telemetry.every((e) => e.rule === 'nonconstant-executable'), 'the telemetry call keeps shell:false provable');
+  assert.equal(AUDITED_EXCEPTIONS.length, runner.length + telemetry.length, 'nothing else is excepted');
   assert.deepEqual(result.audited, AUDITED_EXCEPTIONS);
   assert.ok(result.files.includes('plugins/model-apps/scripts/lib/dataverse-auth.js'), 'model-apps scripts are in scope');
   assert.ok(result.files.length > 100, 'expected a repository-wide production scan');
@@ -221,5 +228,6 @@ test('CLI audit emits actionable diagnostics and succeeds for the repository', (
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal((result.stdout.match(/^AUDITED plugins\/model-apps\/scripts\/lib\/process-runner\.js /gm) || []).length, 8);
-  assert.match(result.stdout, /validation passed \(\d+ production files, 8 audited exceptions\)/);
+  assert.equal((result.stdout.match(/^AUDITED plugins\/[a-z-]+\/scripts\/lib\/telemetry\/lib\/native-exec\.js /gm) || []).length, 2);
+  assert.match(result.stdout, /validation passed \(\d+ production files, 10 audited exceptions\)/);
 });

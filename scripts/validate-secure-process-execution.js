@@ -69,26 +69,45 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 // Exceptions must remain rare, exact, and removable. Drift behavior stays covered
 // by synthetic tests.
 //
-// model-apps starts every external CLI through one module, scripts/lib/process-runner.js,
-// which resolves the executable to an absolute path at run time and merges the
-// caller's options under its own shell:false (and, for a Windows batch shim, a
-// checked cmd.exe command line). Neither can be proven statically, so its four
-// child_process calls are the audited exceptions: each one, and nothing else.
+// model-apps' own scripts start every external CLI through one module,
+// scripts/lib/process-runner.js, which resolves the executable to an absolute path at
+// run time and merges the caller's options under its own shell:false (and, for a
+// Windows batch shim, a checked cmd.exe command line). Neither can be proven
+// statically, so its four child_process calls are audited exceptions: each one.
+//
+// The shared telemetry library (shared/telemetry/lib, copied into each adopting
+// plugin as scripts/lib/telemetry/lib) cannot use one plugin's runner. It starts pac
+// through its own native-exec.js, which resolves the name to an absolute native
+// executable on PATH, never the working directory, and runs it with shell:false. That
+// resolved path is its one non-literal executable, audited once per scanned copy.
 const RUNNER_PATH = `${MODEL_APPS_ROOT}/scripts/lib/process-runner.js`;
 const RUNNER_REASON = 'model-apps process runner: absolute executable resolved at run time; '
   + 'options merged under shell:false, batch-shim arguments checked before spawning.';
+const TELEMETRY_EXEC_CALL = 'execFileSync ( file , args , { encoding : options . encoding , '
+  + 'timeout : options . timeout , stdio : options . stdio , windowsHide : true , shell : false , } )';
+const TELEMETRY_EXEC_REASON = 'shared telemetry library: pac resolved to an absolute native '
+  + 'executable on PATH, run with shell:false.';
 const AUDITED_EXCEPTIONS = Object.freeze([
-  ['execFileSync', 'childProcess . execFileSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
-  ['spawnSync', 'childProcess . spawnSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
-  ['execFile', 'childProcess . execFile ( inv . file , inv . args , withOptions ( inv , options ) , callback )'],
-  ['spawn', 'childProcess . spawn ( inv . file , inv . args , withOptions ( inv , options ) )'],
-].flatMap(([callee, call]) => ['nonconstant-executable', 'ambiguous-shell-option'].map((rule) => Object.freeze({
-  path: RUNNER_PATH,
-  rule,
-  callee,
-  call,
-  reason: RUNNER_REASON,
-}))));
+  ...[
+    ['execFileSync', 'childProcess . execFileSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
+    ['spawnSync', 'childProcess . spawnSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
+    ['execFile', 'childProcess . execFile ( inv . file , inv . args , withOptions ( inv , options ) , callback )'],
+    ['spawn', 'childProcess . spawn ( inv . file , inv . args , withOptions ( inv , options ) )'],
+  ].flatMap(([callee, call]) => ['nonconstant-executable', 'ambiguous-shell-option'].map((rule) => Object.freeze({
+    path: RUNNER_PATH,
+    rule,
+    callee,
+    call,
+    reason: RUNNER_REASON,
+  }))),
+  ...[POWER_PAGES_ROOT, MODEL_APPS_ROOT].map((root) => Object.freeze({
+    path: `${root}/scripts/lib/telemetry/lib/native-exec.js`,
+    rule: 'nonconstant-executable',
+    callee: 'execFileSync',
+    call: TELEMETRY_EXEC_CALL,
+    reason: TELEMETRY_EXEC_REASON,
+  })),
+]);
 
 function decodeStringLiteral(raw) {
   if (typeof raw !== 'string' || raw.length < 2) return null;
