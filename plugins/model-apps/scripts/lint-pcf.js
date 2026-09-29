@@ -12,6 +12,15 @@ const USAGE = `Usage: node scripts\\lint-pcf.js (--manifest <file> | --project <
 Lints PCF ControlManifest.Input.xml files and optionally compares one manifest against an older version.`;
 
 async function main() {
+  try {
+    return runMain();
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitJson(false, { ok: false, error: String(err && err.message ? err.message : err) });
+  }
+}
+
+function runMain() {
   const argv = process.argv.slice(2);
   const { flags } = parseArgs(argv);
   const flagError = validateFlags(argv, {
@@ -75,13 +84,15 @@ function usage(message) {
 
 function emitJson(ok, payload) {
   process.stdout.write(JSON.stringify(payload) + '\n');
-  if (!ok) process.stderr.write('PCF manifest lint failed; see stdout JSON\n');
+  if (!ok) process.stderr.write(`${payload.error || 'PCF manifest lint failed; see stdout JSON'}\n`);
   process.exit(ok ? 0 : 1);
 }
 
 if (require.main === module) {
   main().catch((err) => {
-    process.stderr.write(`${err && err.message ? err.message : err}\n`);
+    const payload = { ok: false, error: String(err && err.message ? err.message : err) };
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    process.stderr.write(`${payload.error}\n`);
     process.exit(1);
   });
 }

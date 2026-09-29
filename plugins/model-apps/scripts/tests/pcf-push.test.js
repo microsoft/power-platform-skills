@@ -3,11 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
 const scriptPath = path.join(__dirname, '..', 'pcf-push.js');
-const workspaceRoot = path.join(__dirname, '.pcf-push-workspace');
+const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-push-workspace-'));
 
 function resetWorkspace() {
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
@@ -227,6 +228,29 @@ test('push failure emits hints and appends the last 40 build log lines', async (
   assert.equal(payload.logTail[39], 'line-45');
 });
 
+test('push failure scrubs build log tails before JSON output', async () => {
+  const projectDir = makeProject('push-log-secret');
+  fs.mkdirSync(path.join(projectDir, 'obj'), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'obj', 'pcf-push-build.log'), [
+    'ordinary line',
+    'client_secret=notasecret',
+    'token eyJheader.eyJpayload.signature',
+  ].join('\n'), 'utf8');
+
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: () => ({ status: 1, stdout: '', stderr: '' }),
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.deepEqual(payload.logTail, ['ordinary line', 'client_secret=<redacted>', 'token <redacted-jwt>']);
+  assert.doesNotMatch(JSON.stringify(payload), /notasecret|eyJheader/);
+});
+
 test('timeout reports best-effort state and log path without claiming the push was aborted', async () => {
   const projectDir = makeProject('timeout');
   const cli = await run([
@@ -362,7 +386,7 @@ test('push failure scrubs common secret shapes while preserving surrounding text
     ['clientSecret json', 'prefix "clientSecret": "client-secret" suffix', /client-secret/, /prefix "clientSecret": "<redacted>" suffix/],
     ['pwd query', 'prefix https://example.test/callback?pwd=pwd-secret suffix', /pwd-secret|\/callback|\?pwd/, /prefix https:\/\/example\.test\/… suffix/],
     ['sig query', 'prefix https://storage.test/file.zip?sig=sig-secret suffix', /sig-secret|file\.zip|\?sig/, /prefix https:\/\/storage\.test\/… suffix/],
-    ['code equals', 'prefix code=auth-code suffix', /auth-code/, /prefix code=<redacted> suffix/],
+    ['diagnostic code equals', 'prefix error code=0x80040217 suffix', /auth-code-never-present/, /prefix error code=0x80040217 suffix/],
     ['authorization bearer', 'prefix Authorization: Bearer bearer-secret, suffix', /bearer-secret/, /prefix Authorization: Bearer <redacted>, suffix/],
     ['bare bearer', 'prefix Bearer bare-secret; suffix', /bare-secret/, /prefix Bearer <redacted>; suffix/],
     ['jwt', 'prefix eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature suffix', /eyJhbGci|eyJzdWIi|signature/, /prefix <redacted-jwt> suffix/],
@@ -385,6 +409,52 @@ test('push failure scrubs common secret shapes while preserving surrounding text
     assert.ok(line, `missing preserved surrounding text for ${name}: ${JSON.stringify(payload.stdout)}`);
     assert.doesNotMatch(line, secretPattern, name);
   }
+});
+
+test('push diagnostics preserve non-OAuth code text and URL schemes while redacting OAuth code contexts', async () => {
+  const projectDir = makeProject('code-redaction-context');
+  const stdout = [
+    'error code=0x80040217',
+    'exit code=1',
+    'redirect http://localhost/callback?code=oauth-code&state=1',
+    'authorization_code=form-code',
+    'device_code=device-code',
+  ].join('\n');
+
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: () => ({ status: 1, stdout, stderr: '' }),
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const text = JSON.stringify(JSON.parse(cli.stdoutText()).stdout);
+  assert.match(text, /error code=0x80040217/);
+  assert.match(text, /exit code=1/);
+  assert.match(text, /http:\/\/localhost\/…/);
+  assert.match(text, /authorization_code=<redacted>/);
+  assert.match(text, /device_code=<redacted>/);
+  assert.doesNotMatch(text, /oauth-code|form-code|device-code/);
+});
+
+test('read-back exception text is scrubbed in stdout and receipt', async () => {
+  const projectDir = makeProject('readback-secret');
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--solution', 'ContosoPcf',
+  ], {
+    solutionPrefix: async () => { throw new Error('client_secret=notasecret eyJheader.eyJpayload.signature'); },
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.registered.reason, 'client_secret=<redacted> <redacted-jwt>');
+  const receipt = JSON.parse(fs.readFileSync(path.join(projectDir, 'pcf-receipt.json'), 'utf8'));
+  assert.equal(receipt.registered.reason, 'client_secret=<redacted> <redacted-jwt>');
+  assert.doesNotMatch(JSON.stringify(payload) + JSON.stringify(receipt), /notasecret|eyJheader/);
 });
 
 test('failed receipt write emits receipt-stage JSON and leaves no partial receipt behind', async () => {

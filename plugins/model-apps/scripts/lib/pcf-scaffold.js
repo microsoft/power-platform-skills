@@ -397,8 +397,9 @@ function validateRequest(request, templates) {
 
   const template = templates.find((item) => item.id === request.template);
   if (!template) {
-    // Part A ships only field-standard. This still preserves the public contract that any virtual
-    // template must fail before Pages scaffolding can proceed, even while those templates land later.
+    // Power Pages documents standard PCF support and does not support the model-driven
+    // platform-library path required by virtual React controls, so even an unknown virtual template
+    // is rejected before Pages scaffolding can proceed.
     if (hosts.includes('pages') && String(request.template).includes('virtual')) {
       throw new Error('Power Pages does not support virtual PCF controls.');
     }

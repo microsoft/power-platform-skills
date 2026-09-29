@@ -143,6 +143,21 @@ test('DEPS_TO_MATRIX preserves UTF-8 BOM and dominant CRLF newlines', () => {
   assert.equal(JSON.parse(after.slice(1)).devDependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
 });
 
+test('DEPS_TO_MATRIX repairs matrix packages in their existing package.json section', () => {
+  const { rewritePackageJson } = require('../lib/pcf-upgrade.js');
+  const before = `${JSON.stringify({
+    name: 'star-rating',
+    version: '1.0.0',
+    dependencies: { 'pcf-scripts': '^0.0.1' },
+    devDependencies: { 'pcf-start': '^0.0.2' },
+  }, null, 2)}\n`;
+  const after = JSON.parse(rewritePackageJson(before, dependencySet(MATRIX, 'standard')));
+
+  assert.equal(after.dependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
+  assert.equal(Object.hasOwn(after.devDependencies, 'pcf-scripts'), false);
+  assert.equal(after.devDependencies['pcf-start'], dependencySet(MATRIX, 'standard').devDependencies['pcf-start']);
+});
+
 test('BUILDMODE_PRODUCTION moves an ineffective property below Microsoft.Common.props', () => {
   const { planUpgrade } = require('../lib/pcf-upgrade.js');
   const before = renderedPcfproj()
@@ -180,6 +195,22 @@ test('BUILDMODE_PRODUCTION removes conditioned overrides and leaves commented ex
   assert.equal((after.match(/<PcfBuildMode>production<\/PcfBuildMode>/g) || []).length, 1);
   assert.match(after, /<!-- <PcfBuildMode>development<\/PcfBuildMode> -->/);
   assert.doesNotMatch(after, /<PropertyGroup\b[^>]*Condition=[\s\S]*?<PcfBuildMode>/);
+});
+
+test('BUILDMODE_PRODUCTION removes Choose/Target conditioned values and inserts an unconditioned production setting', () => {
+  const { rewritePcfBuildMode } = require('../lib/pcf-upgrade.js');
+  const before = renderedPcfproj()
+    .replace(/\s*    <!-- pac pcf push otherwise builds[\s\S]*?<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /<\/Project>/,
+      '  <Choose>\n    <When Condition="\'$(Configuration)\'==\'Release\'">\n      <PropertyGroup>\n        <PcfBuildMode>production</PcfBuildMode>\n      </PropertyGroup>\n    </When>\n    <Otherwise>\n      <PropertyGroup>\n        <PcfBuildMode>development</PcfBuildMode>\n      </PropertyGroup>\n    </Otherwise>\n  </Choose>\n  <Target Name="AfterBuild">\n    <PropertyGroup>\n      <PcfBuildMode>production</PcfBuildMode>\n    </PropertyGroup>\n  </Target>\n</Project>',
+    );
+
+  const after = rewritePcfBuildMode(before);
+
+  assert.equal(pcfprojBuildMode(after).status, 'production');
+  assert.equal((after.match(/<PcfBuildMode>production<\/PcfBuildMode>/g) || []).length, 1);
+  assert.equal((after.match(/<PcfBuildMode>development<\/PcfBuildMode>/g) || []).length, 0);
 });
 
 test('BUILDMODE_PRODUCTION uses doctor occurrences so comments between real values are untouched', () => {
@@ -280,6 +311,76 @@ test('CLI refuses to apply when the project has git changes', async () => {
   assert.match(emitted.stdout, /Refusing to apply/);
 });
 
+test('CLI passes --steps to runUpgrade and rejects a value on boolean --apply', async () => {
+  const realAuth = require('../lib/dataverse-auth.js');
+  const calls = [];
+  const runWithSteps = loadCli(cliPath, {
+    argv: ['--project', 'D:\\Projects\\controls\\StarRating', '--apply', '--allow-dirty', '--steps', 'PLATFORM_LIB_VERSION'],
+    requires: {
+      './lib/dataverse-auth': {
+        parseArgs: realAuth.parseArgs,
+        validateFlags: realAuth.validateFlags,
+        emitResult: (ok, payload) => {
+          calls.push(['emit', ok, payload]);
+          const err = new Error(`process.exit(${ok ? 0 : 1})`);
+          err.exitCode = ok ? 0 : 1;
+          throw err;
+        },
+      },
+      './lib/pcf-upgrade': {
+        runUpgrade: (options) => {
+          calls.push(['runUpgrade', options]);
+          return { ok: true };
+        },
+      },
+    },
+  });
+  try {
+    await runWithSteps.main();
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+  assert.deepEqual(calls.find((call) => call[0] === 'runUpgrade')[1].steps, ['PLATFORM_LIB_VERSION']);
+
+  const applyValue = loadCli(cliPath, {
+    argv: ['--project', 'D:\\Projects\\controls\\StarRating', '--apply=PLATFORM_LIB_VERSION'],
+    requires: {
+      './lib/dataverse-auth': realAuth,
+      './lib/pcf-upgrade': { runUpgrade: () => { throw new Error('runUpgrade should not run'); } },
+    },
+  });
+  try {
+    await applyValue.main();
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+  assert.equal(applyValue.exitCode, 1);
+  assert.match(applyValue.stderrText(), /--apply does not take a value/);
+});
+
+test('runUpgrade limits apply to selected steps and rejects unknown step ids', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-steps-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+    fs.writeFileSync(path.join(projectDir, 'StarRating.pcfproj'), renderedPcfproj().replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>'));
+
+    const limited = runUpgrade({ project: projectDir, apply: true, allowDirty: true, steps: ['BUILDMODE_PRODUCTION'], noInstall: true });
+    assert.equal(limited.ok, false);
+    assert.deepEqual(limited.applied, ['BUILDMODE_PRODUCTION']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8')).devDependencies['pcf-scripts'], '^0.0.1');
+    assert.equal(pcfprojBuildMode(fs.readFileSync(path.join(projectDir, 'StarRating.pcfproj'), 'utf8')).status, 'production');
+
+    const unknown = runUpgrade({ project: projectDir, apply: true, allowDirty: true, steps: ['UNKNOWN_STEP'] });
+    assert.equal(unknown.ok, false);
+    assert.match(unknown.error, /Unknown --steps value 'UNKNOWN_STEP'/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('runUpgrade refuses a dirty git tree before applying changes', () => {
   const { runUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-dirty-'));
@@ -371,6 +472,33 @@ test('applyUpgrade computes all transforms before writing any file', () => {
 
     assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
     assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyUpgrade refuses a project file symlink that resolves outside the project', () => {
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-link-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    const outsideDir = path.join(tmp, 'outside');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const outsidePackage = path.join(outsideDir, 'package.json');
+    fs.writeFileSync(outsidePackage, '{"name":"outside"}\n');
+    const linkedPackage = path.join(projectDir, 'package.json');
+    try {
+      fs.symlinkSync(outsidePackage, linkedPackage, 'file');
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+
+    assert.throws(() => applyUpgrade({
+      steps: [{ id: 'DEPS_TO_MATRIX', file: linkedPackage, apply: () => '{"name":"changed"}\n' }],
+    }, projectDir), /outside the PCF project/);
+    assert.equal(fs.readFileSync(outsidePackage, 'utf8'), '{"name":"outside"}\n');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -54,7 +54,7 @@
       "historicalMinimum": {
         "version": "6.0.0",
         "why": "pac pcf push builds a temporary solution with MSBuild, but .NET 6 is EOL.",
-        "source": "model-apps /pcf task brief",
+        "source": "https://learn.microsoft.com/dotnet/core/versions/",
         "date": "2026-09-28"
       },
       "tested": null,

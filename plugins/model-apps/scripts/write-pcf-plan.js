@@ -78,8 +78,13 @@ function main() {
   const outPath = flags.out
     ? path.resolve(flags.out)
     : path.join(path.dirname(intentPath), 'pcf-plan.md');
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, markdown, 'utf8');
+  try {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, markdown, 'utf8');
+  } catch (err) {
+    emitPlanResult(false, { ok: false, error: `cannot write PCF plan: ${err.message}` });
+    return;
+  }
 
   const ok = !lint.some((finding) => finding.severity === 'error');
   emitPlanResult(ok, { ok, out: outPath, findings: lint });

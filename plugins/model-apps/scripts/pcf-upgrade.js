@@ -6,10 +6,10 @@ const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.j
 const { runUpgrade } = require('./lib/pcf-upgrade.js');
 
 const USAGE = `Usage:
-  node scripts/pcf-upgrade.js [--project <dir>] [--hosts model,pages] [--apply] [--allow-dirty] [--no-install] [--npm-cli <path>]`;
+  node scripts/pcf-upgrade.js [--project <dir>] [--hosts model,pages] [--apply] [--steps <id,...>] [--allow-dirty] [--no-install] [--npm-cli <path>]`;
 
-const KNOWN = ['project', 'hosts', 'apply', 'allow-dirty', 'no-install', 'npm-cli'];
-const NEED_VALUE = ['project', 'hosts', 'npm-cli'];
+const KNOWN = ['project', 'hosts', 'apply', 'steps', 'allow-dirty', 'no-install', 'npm-cli'];
+const NEED_VALUE = ['project', 'hosts', 'steps', 'npm-cli'];
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -22,6 +22,15 @@ function splitList(value, fallback) {
 }
 
 function main(argv = process.argv.slice(2)) {
+  try {
+    return runMain(argv);
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitResult(false, err);
+  }
+}
+
+function runMain(argv = process.argv.slice(2)) {
   const parsed = parseArgs(argv);
   const flagError = validateFlags(argv, {
     known: KNOWN,
@@ -34,10 +43,14 @@ function main(argv = process.argv.slice(2)) {
   if (flagError) usageError(flagError);
 
   const flags = parsed.flags;
+  for (const booleanFlag of ['apply', 'allow-dirty', 'no-install']) {
+    if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
+  }
   const result = runUpgrade({
     project: flags.project ? path.resolve(String(flags.project)) : process.cwd(),
     hosts: splitList(flags.hosts, ['model']),
     apply: Boolean(flags.apply),
+    steps: splitList(flags.steps, []),
     allowDirty: Boolean(flags['allow-dirty']),
     noInstall: Boolean(flags['no-install']),
     npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined,

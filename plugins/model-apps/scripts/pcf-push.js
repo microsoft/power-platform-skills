@@ -51,7 +51,7 @@ const HINTS = [
   {
     // Observed text: "platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.".
     match: 'is not supported by the platform',
-    hint: 'The target platform rejected a platform-library version. Run pcf-doctor.js and pcf-upgrade.js --apply PLATFORM_LIB_VERSION, then see references/pcf-troubleshooting.md.',
+    hint: 'The target platform rejected a platform-library version. Run pcf-doctor.js and pcf-upgrade.js --apply --steps PLATFORM_LIB_VERSION, then see references/pcf-troubleshooting.md.',
   },
 ];
 
@@ -250,7 +250,7 @@ function readBuildLogTail(projectDir) {
   const file = buildLogPath(projectDir);
   try {
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-    return lines.slice(-40);
+    return lines.slice(-40).map(scrubSecrets);
   } catch {
     return [];
   }
@@ -264,9 +264,9 @@ function scrubbedTail(text, maxLines) {
 }
 
 function scrubSecrets(line) {
-  const key = '(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|code|authorization)';
+  const key = '(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|authorization|authorization_code|device_code)';
   const keyValue = new RegExp(`(\\b${key}\\b\\s*=\\s*)[^\\s&;,]+`, 'gi');
-  const keyColon = new RegExp('(\\b(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|code)\\b\\s*:\\s*)[^\\s,;]+', 'gi');
+  const keyColon = new RegExp('(\\b(?:access_token|refresh_token|id_token|client_secret|clientSecret|password|pwd|sig|authorization_code|device_code)\\b\\s*:\\s*)[^\\s,;]+', 'gi');
   const quotedJson = new RegExp(`(["'])(${key})(\\1\\s*:\\s*)(["'])[^"']*\\4`, 'gi');
   const authValue = /\bauthorization\b(\s*[:=]\s*)(?!Bearer\b)[^\s&;,]+/gi;
   return String(line || '')
@@ -283,7 +283,7 @@ function scrubSecrets(line) {
 function redactUrl(raw) {
   try {
     const url = new URL(raw);
-    return `https://${url.host}/…`;
+    return `${url.protocol}//${url.host}/…`;
   } catch {
     return 'https://<redacted>/…';
   }
@@ -300,24 +300,34 @@ async function readRegistration({ envOrigin, projectDir, solution, publisherPref
     const expectedName = orgControlName(prefix, manifest.model.control.namespace, manifest.model.control.constructor);
     const expectedVersion = manifest.model.control.version || null;
     const row = await findCustomControl(sdk, expectedName);
-    if (!row) return { ok: false, version: null, expected: expectedVersion, reason: `Custom control '${expectedName}' was not found after push.`, prefix };
+    if (!row) return { ok: false, version: null, expected: expectedVersion, reason: scrubSecrets(`Custom control '${expectedName}' was not found after push.`), prefix };
     const ok = !expectedVersion || row.version === expectedVersion;
     return {
       ok,
       version: row.version || null,
       expected: expectedVersion,
-      ...(ok ? {} : { reason: 'Registered version does not match the manifest; Dataverse caching or the push/publish may not have taken effect yet.' }),
+      ...(ok ? {} : { reason: scrubSecrets('Registered version does not match the manifest; Dataverse caching or the push/publish may not have taken effect yet.') }),
       prefix,
     };
   } catch (err) {
-    return { ok: false, reason: err && err.message ? String(err.message) : String(err) };
+    return { ok: false, reason: scrubSecrets(err && err.message ? String(err.message) : String(err)) };
   }
 }
 
 function stripPrivateRegistration(registered) {
-  const copy = { ...registered };
+  const copy = sanitizeRegistration(registered);
   delete copy.prefix;
   return copy;
+}
+
+function sanitizeRegistration(registered) {
+  const clean = {};
+  for (const [key, value] of Object.entries(registered || {})) {
+    if (['ok', 'version', 'expected', 'componentState', 'reason', 'prefix'].includes(key)) {
+      clean[key] = typeof value === 'string' ? scrubSecrets(value) : value;
+    }
+  }
+  return clean;
 }
 
 function writeReceipt(projectDir, data) {

@@ -32,6 +32,15 @@ function splitList(value, fallback) {
 }
 
 function main(argv = process.argv.slice(2)) {
+  try {
+    return runMain(argv);
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitResult(false, err);
+  }
+}
+
+function runMain(argv = process.argv.slice(2)) {
   const parsed = parseArgs(argv);
   const flagError = validateFlags(argv, {
     known: KNOWN,

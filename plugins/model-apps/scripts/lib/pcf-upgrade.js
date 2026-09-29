@@ -78,9 +78,12 @@ function rewritePackageJson(text, expected) {
   const style = textStyle(text);
   const parsed = JSON.parse(style.body);
   let changed = false;
+  const wanted = {
+    ...((expected && expected.dependencies) || {}),
+    ...((expected && expected.devDependencies) || {}),
+  };
   for (const section of ['dependencies', 'devDependencies']) {
     if (!parsed[section] || typeof parsed[section] !== 'object' || Array.isArray(parsed[section])) continue;
-    const wanted = expected[section] || {};
     for (const name of Object.keys(parsed[section])) {
       if (!Object.hasOwn(wanted, name)) continue;
       if (parsed[section][name] !== wanted[name]) {
@@ -339,7 +342,7 @@ function prepareUpgradeWrites(plan, safeProject, fsDep) {
       skipped.push(step.id);
       continue;
     }
-    const file = resolveProjectFile(step.file, safeProject);
+    const file = resolveProjectFile(step.file, safeProject, fsDep);
     const before = fsDep.readFileSync(file, 'utf8');
     const after = step.apply(before);
     writes.push({ file, before, after });
@@ -349,11 +352,17 @@ function prepareUpgradeWrites(plan, safeProject, fsDep) {
   return { applied, skipped, writes, reinstall };
 }
 
-function resolveProjectFile(file, projectDir) {
+function resolveProjectFile(file, projectDir, fsDep = fs) {
   const resolved = path.resolve(String(file));
   const project = path.resolve(projectDir);
   const rel = path.relative(project, resolved);
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Refusing to write outside the PCF project: ${file}`);
+  }
+  const realProject = (fsDep.realpathSync.native || fsDep.realpathSync)(project);
+  const realFile = (fsDep.realpathSync.native || fsDep.realpathSync)(resolved);
+  const physicalRel = path.relative(realProject, realFile);
+  if (physicalRel === '' || physicalRel.startsWith('..') || path.isAbsolute(physicalRel)) {
     throw new Error(`Refusing to write outside the PCF project: ${file}`);
   }
   return resolved;
@@ -411,16 +420,23 @@ function runUpgrade(options = {}, deps = {}) {
   let after = null;
   let ok = true;
 
+  let scopedPlan;
+  try {
+    scopedPlan = scopePlan(plan, options.steps);
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err), plan: serializePlan(plan), applied, skipped, manual: plan.manual, before, after };
+  }
+
   if (options.apply) {
     if (!options.allowDirty) {
       const dirty = dirtyTreeStatus(projectDir, deps);
       if (!dirty.ok) {
-        return { ok: false, error: dirty.error, plan: serializePlan(plan), applied, skipped, manual: plan.manual, before, after };
+        return { ok: false, error: dirty.error, plan: serializePlan(scopedPlan), applied, skipped, manual: plan.manual, before, after };
       }
     }
     let result;
     try {
-      result = applyUpgrade(plan, projectDir, {
+      result = applyUpgrade(scopedPlan, projectDir, {
         ...deps,
         noInstall: options.noInstall,
         npmCli: options.npmCli,
@@ -428,7 +444,7 @@ function runUpgrade(options = {}, deps = {}) {
     } catch (err) {
       return {
         ok: false,
-        plan: serializePlan(plan),
+        plan: serializePlan(scopedPlan),
         applied: err.applied || applied,
         skipped: err.skipped || skipped,
         manual: plan.manual,
@@ -446,7 +462,7 @@ function runUpgrade(options = {}, deps = {}) {
     ok = !hasErrors(after);
     return {
       ok,
-      plan: serializePlan(plan),
+      plan: serializePlan(scopedPlan),
       applied,
       skipped,
       manual: plan.manual,
@@ -458,13 +474,32 @@ function runUpgrade(options = {}, deps = {}) {
 
   return {
     ok,
-    plan: serializePlan(plan),
+    plan: serializePlan(scopedPlan),
     applied,
     skipped,
     manual: plan.manual,
     before,
     after,
   };
+}
+
+function scopePlan(plan, steps) {
+  const requested = Array.isArray(steps) ? steps.filter(Boolean) : [];
+  if (requested.length === 0) return plan;
+  const available = new Set((plan.steps || []).map((step) => step.id));
+  const autoIds = new Set([...SAFE_APPLY].filter((id) => id !== 'REINSTALL'));
+  for (const id of requested) {
+    if (!autoIds.has(id) || !available.has(id)) {
+      throw new Error(`Unknown --steps value '${id}'. Choose one of: ${[...new Set((plan.steps || []).map((step) => step.id).filter((id) => autoIds.has(id)))].join(', ') || '(none)'}.`);
+    }
+  }
+  const requestedSet = new Set(requested);
+  const stepsOut = (plan.steps || []).filter((step) => requestedSet.has(step.id));
+  const selectedIds = new Set(stepsOut.map((step) => step.id));
+  if (selectedIds.has('DEPS_TO_MATRIX') && (plan.steps || []).some((step) => step.id === 'REINSTALL')) {
+    stepsOut.push((plan.steps || []).find((step) => step.id === 'REINSTALL'));
+  }
+  return { ...plan, steps: stepsOut };
 }
 
 module.exports = {
@@ -476,4 +511,5 @@ module.exports = {
   rewritePackageJson,
   rewritePcfBuildMode,
   rewritePlatformLibraries,
+  scopePlan,
 };

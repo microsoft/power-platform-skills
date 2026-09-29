@@ -36,6 +36,15 @@ function usageError(message) {
 }
 
 function main(argv) {
+  try {
+    return runMain(argv);
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitResult(false, err);
+  }
+}
+
+function runMain(argv) {
   const parsed = parseArgs(argv);
   const flagError = validateFlags(argv, {
     known: KNOWN,
