@@ -71,7 +71,11 @@ function validateControl(control, errors, deps = {}) {
     if (typeof c.recipe !== 'string' || !c.recipe) {
       errors.push('control.recipe must be a non-empty string when supplied.');
     } else {
-      const recipes = safeListRecipes(deps);
+      const { recipes, error } = safeListRecipes(deps);
+      if (error) {
+        errors.push(`control.recipe is not supported: could not read the recipe catalog: ${errorMessage(error)}.`);
+        return;
+      }
       const availableRecipes = recipes.filter((item) => item.status === 'available');
       if (recipes.length === 0) {
         errors.push('control.recipe is not supported: no recipes are available in this release; omit `recipe`.');
@@ -97,10 +101,14 @@ function safeListTemplates(deps = {}) {
 
 function safeListRecipes(deps = {}) {
   try {
-    return listRecipes(deps);
-  } catch {
-    return [];
+    return { recipes: listRecipes(deps), error: null };
+  } catch (err) {
+    return { recipes: [], error: err };
   }
+}
+
+function errorMessage(err) {
+  return err && err.message ? err.message : String(err);
 }
 
 function validateStringArray(value, pathName, allowed, errors) {

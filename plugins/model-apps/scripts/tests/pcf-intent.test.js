@@ -15,7 +15,6 @@ const {
 } = require('../lib/pcf-intent.js');
 
 const scriptPath = path.join(__dirname, '..', 'write-pcf-plan.js');
-const pluginRoot = path.join(__dirname, '..', '..');
 
 function exampleIntent(overrides = {}) {
   return {
@@ -86,12 +85,13 @@ function assertFinding(findings, code, severity) {
 }
 
 function withRecipeCatalog(recipes, callback) {
-  const recipesRoot = fs.mkdtempSync(path.join(pluginRoot, '.pcf-intent-test-recipes-'));
+  const recipesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-intent-recipes-'));
   try {
     for (const recipe of recipes) {
       const recipeDir = path.join(recipesRoot, recipe.id);
       fs.mkdirSync(recipeDir, { recursive: true });
-      fs.writeFileSync(path.join(recipeDir, 'recipe.json'), JSON.stringify(recipeFixture(recipe), null, 2));
+      const recipeJson = recipe.raw === undefined ? recipeFixture(recipe) : recipe.raw;
+      fs.writeFileSync(path.join(recipeDir, 'recipe.json'), JSON.stringify(recipeJson, null, 2));
     }
     return callback({ recipesRoot });
   } finally {
@@ -202,6 +202,17 @@ test('validateIntent rejects supplied recipes when no recipes are available', ()
   }), deps));
 
   assert.ok(errors.some((error) => error.includes('no recipes are available in this release') && error.includes('omit `recipe`')), errors.join('\n'));
+});
+
+test('validateIntent surfaces recipe catalog read and validation failures', () => {
+  const errors = withRecipeCatalog([
+    { id: 'broken-recipe', raw: { id: 'broken-recipe' } },
+  ], (deps) => validateIntent(exampleIntent({
+    control: { ...exampleIntent().control, recipe: 'broken-recipe' },
+  }), deps));
+
+  assert.ok(errors.some((error) => error.includes('could not read the recipe catalog:') && error.includes('title must be a non-empty string')), errors.join('\n'));
+  assert.ok(!errors.some((error) => error.includes('no recipes are available in this release')), errors.join('\n'));
 });
 
 test('validateIntent reports unknown recipes and lists only available recipe ids', () => {
