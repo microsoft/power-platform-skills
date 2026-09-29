@@ -74,18 +74,21 @@ test('listTemplates exposes the data-only template catalog', () => {
 
 test('listRecipes and renderRecipesTable handle an empty recipe catalog', () => {
   const { listRecipes, renderRecipesTable } = loadScaffold();
-
-  assert.deepEqual(listRecipes(), []);
-  assert.equal(renderRecipesTable(), [
-    '<!-- pcf-recipes:begin -->',
-    '| Recipe | Template | Designed for (hosts) | Certified | Status |',
-    '| --- | --- | --- | --- | --- |',
-    '| _No recipes yet._ |  |  |  |  |',
-    '<!-- pcf-recipes:end -->',
-    '',
-  ].join('\n'));
+  const recipesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-empty-recipes-'));
+  try {
+    assert.deepEqual(listRecipes({ recipesRoot }), []);
+    assert.equal(renderRecipesTable({ recipesRoot }), [
+      '<!-- pcf-recipes:begin -->',
+      '| Recipe | Template | Designed for (hosts) | Certified | Status |',
+      '| --- | --- | --- | --- | --- |',
+      '| _No recipes yet._ |  |  |  |  |',
+      '<!-- pcf-recipes:end -->',
+      '',
+    ].join('\n'));
+  } finally {
+    fs.rmSync(recipesRoot, { recursive: true, force: true });
+  }
 });
-
 
 test('listRecipes and renderRecipesTable expose recipe status and certification', () => {
   const { listRecipes, renderRecipesTable } = loadScaffold();
@@ -750,13 +753,14 @@ test('writeScaffold writes a complete project into an empty directory', () => {
 });
 
 test('CLI --list emits the available templates and recipes', () => {
+  const { listRecipes } = loadScaffold();
   const cli = path.join(ROOT, 'scripts', 'pcf-scaffold.js');
   const result = spawnSync(process.execPath, [cli, '--list'], { cwd: ROOT, encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
   assert.deepEqual(parsed.templates.map((item) => item.id), ['dataset-standard', 'dataset-virtual', 'field-standard', 'field-virtual']);
-  assert.deepEqual(parsed.recipes, []);
+  assert.deepEqual(parsed.recipes, listRecipes());
 });
 
 test('CLI scaffolds and threads --npm-cli into --install', () => {
