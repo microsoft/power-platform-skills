@@ -91,9 +91,10 @@ test('pcf-inventory reports where-used read failures as unknown and emits the sh
 
 test('pcf-inventory --control queries the exact name and fails with a prefixed-name hint when absent', async () => {
   let queried = null;
+  const caveat = 'registered solution dependencies only — not proof of Liquid or text references; an empty result is not \'safe to delete\'';
   const stubs = {
     './lib/pcf-dataverse': {
-      WHERE_USED_CAVEAT: 'caveat',
+      WHERE_USED_CAVEAT: caveat,
       makePcfSdk: async () => ({ tag: 'sdk' }),
       findCustomControl: async (sdk, name) => {
         queried = name;
@@ -104,14 +105,39 @@ test('pcf-inventory --control queries the exact name and fails with a prefixed-n
     },
   };
 
-  const cli = await run(['--env', 'https://contoso.crm.dynamics.com', '--control', 'Contoso.Controls.StarRating'], stubs);
+  const cli = await run(['--env', 'https://contoso.crm.dynamics.com', '--where-used', '--control', 'Contoso.Controls.StarRating'], stubs);
 
   assert.equal(cli.exitCode, 1);
   assert.equal(queried, 'Contoso.Controls.StarRating');
   const payload = JSON.parse(cli.stdoutText());
   assert.equal(payload.ok, false);
+  assert.equal(payload.whereUsedCaveat, caveat);
   assert.match(payload.error, /No PCF custom control named 'Contoso\.Controls\.StarRating'/);
   assert.match(payload.error, /<publisherPrefix>_Contoso\.Controls\.StarRating/);
+});
+
+test('pcf-inventory rejects values on boolean flags before creating an SDK', async () => {
+  let madeSdk = false;
+  const stubs = {
+    './lib/pcf-dataverse': {
+      WHERE_USED_CAVEAT: 'caveat',
+      makePcfSdk: async () => { madeSdk = true; },
+      listCustomControls: async () => [],
+      findCustomControl: async () => null,
+      dependentsOf: async () => ({ ok: true, rows: [] }),
+    },
+  };
+
+  for (const flag of ['--where-used=false', '--include-managed=false']) {
+    madeSdk = false;
+    const cli = await run(['--env', 'https://contoso.crm.dynamics.com', flag], stubs);
+
+    assert.equal(cli.exitCode, 1);
+    assert.equal(madeSdk, false);
+    assert.equal(cli.stdoutText(), '');
+    assert.match(cli.stderrText(), /Usage:/);
+    assert.match(cli.stderrText(), new RegExp(`${flag.split('=')[0]} does not take a value`));
+  }
 });
 
 test('pcf-inventory output includes controls from every SDK-paginated customcontrol page', async () => {

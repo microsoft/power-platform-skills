@@ -39,8 +39,8 @@ async function main(argv = process.argv.slice(2)) {
 
   const env = String(flags.env);
   const workspace = flags.workspace ? String(flags.workspace) : path.resolve('.maker-workspace', 'pcf-inventory');
-  const includeManaged = hasFlag(argv, 'include-managed');
-  const withWhereUsed = hasFlag(argv, 'where-used');
+  const includeManaged = readBooleanFlag(flags, 'include-managed');
+  const withWhereUsed = readBooleanFlag(flags, 'where-used');
   const output = { ok: true, controls: [] };
   if (withWhereUsed) output.whereUsedCaveat = WHERE_USED_CAVEAT;
 
@@ -53,9 +53,9 @@ async function main(argv = process.argv.slice(2)) {
     if (!controls) {
       const controlName = String(flags.control);
       writeResult(false, {
+        ...output,
         ok: false,
         error: missingControlMessage(controlName),
-        controls: [],
       });
       return;
     }
@@ -105,8 +105,12 @@ function isDefaultInventoryControl(control) {
   return control && !control.isManaged && !name.startsWith('MscrmControls.') && !name.startsWith('Microsoft.');
 }
 
-function hasFlag(argv, name) {
-  return argv.some((arg) => arg === `--${name}` || String(arg).startsWith(`--${name}=`));
+function readBooleanFlag(flags, name) {
+  const value = flags[name];
+  if (value === undefined) return false;
+  if (value === true) return true;
+  usageError(`--${name} does not take a value`);
+  return false;
 }
 
 function missingControlMessage(controlName) {
@@ -139,5 +143,4 @@ if (require.main === module) {
 }
 
 module.exports = { main, isDefaultInventoryControl };
-
 
