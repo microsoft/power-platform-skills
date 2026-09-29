@@ -10,6 +10,7 @@ const STRINGS = {
     permission: "Lookup_Permission_Message",
     noOptions: "Lookup_No_Options",
     unavailable: "Lookup_Unavailable_Message",
+    targetMismatch: "Lookup_Target_Mismatch_Message",
 };
 
 const FALLBACKS: Record<string, string> = {
@@ -20,6 +21,7 @@ const FALLBACKS: Record<string, string> = {
     [STRINGS.permission]: "You do not have permission to read this lookup.",
     [STRINGS.noOptions]: "No active lookup rows were found.",
     [STRINGS.unavailable]: "Unable to load lookup options.",
+    [STRINGS.targetMismatch]: "Target table configuration does not match the selected lookup value.",
 };
 
 export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
@@ -95,19 +97,24 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             return;
         }
 
+        if (this.selected && !matchesConfiguredTarget(context, this.selected)) {
+            this.options = [this.selected];
+            this.render(context, this.strings[STRINGS.targetMismatch], true, false);
+            return;
+        }
+
         this.render(context, this.strings[STRINGS.loading], !editable, false);
         const token = ++this.loadToken;
-        void this.refreshOptions(context, lookup, token, !editable);
+        void this.refreshOptions(context, token, !editable);
     }
 
     private async refreshOptions(
         context: ComponentFramework.Context<IInputs>,
-        lookup: ComponentFramework.PropertyTypes.LookupProperty,
         token: number,
         readOnly: boolean,
     ): Promise<void> {
         try {
-            const rows = await loadLookupOptions(context, lookup);
+            const rows = await loadLookupOptions(context);
             if (token !== this.loadToken) return;
             this.options = mergeSelected(rows, this.selected);
             this.render(context, this.options.length ? "" : this.strings[STRINGS.noOptions], readOnly, false);
@@ -192,4 +199,9 @@ function sameId(left: string, right: string): boolean {
 
 function stripBraces(value: string): string {
     return value.replace(/^\{|\}$/g, "");
+}
+
+function matchesConfiguredTarget(context: ComponentFramework.Context<IInputs>, selected: LookupOption): boolean {
+    const configured = typeof context.parameters.targetTable?.raw === "string" ? context.parameters.targetTable.raw.trim() : "";
+    return configured.toLowerCase() === selected.entityType.toLowerCase();
 }

@@ -12,7 +12,7 @@ const accountMetadata = {
 
 function lookupProperty(
     raw: ComponentFramework.LookupValue[] = [],
-    options: { readable?: boolean; editable?: boolean; target?: string } = {},
+    options: { readable?: boolean; editable?: boolean } = {},
 ): LookupParameter {
     return {
         raw,
@@ -23,8 +23,6 @@ function lookupProperty(
             editable: options.editable ?? true,
             secured: options.readable === false || options.editable === false,
         },
-        getTargetEntityType: jest.fn(() => options.target ?? "account"),
-        getViewId: jest.fn(() => "00000000-0000-0000-0000-000000000000"),
     } as unknown as LookupParameter;
 }
 
@@ -54,6 +52,11 @@ function mount(
     const context = mockContext<IInputs>(
         {
             ...(parameter ? { lookupValue: parameter as IInputs["lookupValue"] } : {}),
+            targetTable: {
+                raw: "account",
+                formatted: "account",
+                security: { readable: true, editable: true, secured: false },
+            } as IInputs["targetTable"],
             selectableFilter: {
                 raw: "statecode eq 0",
                 formatted: "statecode eq 0",
@@ -117,6 +120,38 @@ test("loads selectable lookup rows through Learn-shaped metadata and writes a Lo
     expect(mounted.control.getOutputs()).toEqual({
         lookupValue: [{ id: "22222222-2222-4222-8222-222222222222", name: "Beta", entityType: "account" }],
     });
+});
+
+test("target table comes from configuration, not the lookup property object", async () => {
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _query?: string, _maxPageSize?: number) => createResponse([]));
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+    mounted.context.parameters.targetTable.raw = "contact";
+
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenLastCalledWith(
+        "contact",
+        "?$select=accountid,accountname&$filter=statecode%20eq%200&$orderby=accountname%20asc",
+        25,
+    );
+});
+
+test("configured target table mismatch with the selected lookup is a visible configuration error", async () => {
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _query?: string, _maxPageSize?: number) => createResponse([]));
+    const mounted = mount(lookupProperty([
+        { id: "33333333-3333-4333-8333-333333333333", name: "Mismatched contact", entityType: "contact" },
+    ]), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).not.toHaveBeenCalled();
+    expect(mounted.select().disabled).toBe(true);
+    expect(mounted.status().textContent).toContain("Target table configuration");
 });
 
 test("omits the selectable row filter when the maker leaves configuration blank", async () => {

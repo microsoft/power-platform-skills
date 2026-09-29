@@ -20,6 +20,14 @@
       "required": true
     },
     {
+      "name": "targetTable",
+      "displayNameKey": "TargetTable_Display_Key",
+      "descriptionKey": "TargetTable_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
       "name": "selectableFilter",
       "displayNameKey": "SelectableFilter_Display_Key",
       "descriptionKey": "SelectableFilter_Desc_Key",
@@ -39,5 +47,5 @@
       "required": true
     }
   ],
-  "configuration": "Bind lookupValue to a single-table lookup column, optionally set selectableFilter to an OData filter such as the table's active-row predicate, then add this component from the modern form designer Components pane or the classic Controls tab."
+  "configuration": "Bind lookupValue to a single-table lookup column, set targetTable to that lookup target table's logical name, optionally set selectableFilter to an OData filter such as the table's active-row predicate, then add this component from the modern form designer Components pane or the classic Controls tab."
 }

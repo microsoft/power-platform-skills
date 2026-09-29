@@ -15,9 +15,8 @@ const PAGE_SIZE = 25;
 
 export async function loadLookupOptions(
     context: ComponentFramework.Context<IInputs>,
-    lookup: ComponentFramework.PropertyTypes.LookupProperty,
 ): Promise<LookupOption[]> {
-    const metadata = await readLookupMetadata(context, lookup);
+    const metadata = await readLookupMetadata(context);
     const select = `$select=${[metadata.idColumn, metadata.nameColumn].map(encodeURIComponent).join(",")}`;
     const selectableFilter = metadata.selectableFilter.trim();
     const filter = selectableFilter ? `&$filter=${encodeURIComponent(selectableFilter)}` : "";
@@ -44,14 +43,13 @@ export async function loadLookupOptions(
 
 async function readLookupMetadata(
     context: ComponentFramework.Context<IInputs>,
-    lookup: ComponentFramework.PropertyTypes.LookupProperty,
 ): Promise<LookupMetadata> {
     if (typeof context.utils?.getEntityMetadata !== "function") {
         throw new Error("Lookup metadata is unavailable in this host.");
     }
 
-    const tableName = lookup.getTargetEntityType();
-    if (!tableName) throw new Error("This lookup is not bound to a target table.");
+    const tableName = targetTable(context);
+    if (!tableName) throw new Error("Target table configuration is required.");
 
     const metadata = await context.utils.getEntityMetadata(tableName);
     const record = metadata as MetadataObject;
@@ -79,6 +77,11 @@ function stringField(entity: ComponentFramework.WebApi.Entity, key: string): str
 
 function stringParameter(value: unknown): string {
     return typeof value === "string" ? value : "";
+}
+
+function targetTable(context: ComponentFramework.Context<IInputs>): string {
+    const configured = stringParameter(context.parameters.targetTable?.raw).trim();
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(configured) ? configured : "";
 }
 
 function stringMetadata(record: MetadataObject | undefined, key: string): string {

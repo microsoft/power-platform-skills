@@ -11,15 +11,20 @@ configured target rows and writes the chosen lookup value back through the bound
 
 ## Maker configuration
 
-Bind `lookupValue` to a single-table lookup column. Add the component in the modern form designer
-from the Components pane, or in the classic designer from the field's Controls tab.
+Bind `lookupValue` to a single-table lookup column and set `targetTable` to that lookup target
+table's logical name, such as `account`. Add the component in the modern form designer from the
+Components pane, or in the classic designer from the field's Controls tab.
 
-The control discovers the lookup target table, primary id column and primary name column from PCF
-lookup metadata and `context.utils.getEntityMetadata`. Set `selectableFilter` to an OData `$filter`
-fragment for rows the dropdown should show, for example the target table's active-row predicate. If
-you leave it blank, the dropdown lists rows without an active-row filter. The recipe intentionally
-does not hard-code `statecode eq 0` because the active predicate must come from maker configuration
-or documented metadata.
+The control reads the target table from `targetTable`, then discovers the primary id column and
+primary name column from `context.utils.getEntityMetadata`. Set `selectableFilter` to an OData
+`$filter` fragment for rows the dropdown should show, for example the target table's active-row
+predicate. If you leave it blank, the dropdown lists rows without an active-row filter. The recipe
+intentionally does not hard-code `statecode eq 0` because the active predicate must come from maker
+configuration or documented metadata.
+
+If `targetTable` does not match the selected lookup value's `entityType`, the control shows a
+configuration error instead of loading options. This keeps the configured table consistent with the
+bound lookup without relying on undocumented lookup-property methods.
 
 ## Behavior and limits
 
@@ -30,6 +35,8 @@ or documented metadata.
 - Does not notify the host when the selected value is unchanged.
 - Shows disabled, unreadable, non-editable, loading and permission-failure states.
 - Works on unsaved forms because it never reads a current record id.
+- Requires `targetTable`; Learn documents dataset `getTargetEntityType()`, but the PCF Learn lookup
+  property references fetched for this recipe did not document a lookup-property target-table method.
 - Online model-driven app use only; offline behavior is not claimed in this release.
 - Certification is empty until live model-driven app lanes record evidence.
 
