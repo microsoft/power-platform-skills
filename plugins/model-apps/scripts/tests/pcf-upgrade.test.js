@@ -1,0 +1,266 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { loadCli } = require('./helpers/cli-harness.js');
+const { loadMatrix, dependencySet } = require('../lib/pcf-matrix.js');
+const { planScaffold, writeScaffold } = require('../lib/pcf-scaffold.js');
+const { pcfprojBuildMode } = require('../lib/pcf-doctor.js');
+
+const MATRIX = loadMatrix();
+const cliPath = path.join(__dirname, '..', 'pcf-upgrade.js');
+
+function renderedProject() {
+  return planScaffold({
+    template: 'field-standard',
+    namespace: 'Contoso.Controls',
+    name: 'StarRating',
+  });
+}
+
+function renderedPcfproj() {
+  return renderedProject().files.find((file) => file.relPath === 'StarRating.pcfproj').content;
+}
+
+function renderedManifest() {
+  return planScaffold({
+    template: 'field-virtual',
+    namespace: 'Contoso.Controls',
+    name: 'StarRating',
+  }).files.find((file) => file.relPath === path.join('StarRating', 'ControlManifest.Input.xml')).content;
+}
+
+function packageText(kind = 'standard') {
+  const deps = dependencySet(MATRIX, kind);
+  return `${JSON.stringify({
+    name: 'star-rating',
+    version: '1.0.0',
+    dependencies: kind === 'virtual'
+      ? {
+        '@fluentui/react-components': '^9.68.0',
+        react: '^18.2.0',
+        'left-pad': '1.3.0',
+        'react-dom': '~18.2.0',
+      }
+      : {
+        'left-pad': '1.3.0',
+      },
+    devDependencies: {
+      'pcf-scripts': '^0.0.1',
+      'pcf-start': '~0.0.2',
+      '@types/powerapps-component-framework': '0.0.1',
+      'custom-tool': '4.5.6',
+      ...(kind === 'virtual' ? { '@types/react': '0.0.1', 'eslint-plugin-react': '0.0.1' } : {}),
+    },
+    scripts: { build: 'pcf-scripts build' },
+  }, null, 2)}\n`;
+}
+
+function state(overrides = {}) {
+  const packageJsonText = overrides.packageJsonText || packageText('standard');
+  const manifestText = overrides.manifestText || renderedManifest().replace('control-type="virtual"', 'control-type="standard"')
+    .replace(/\s*<platform-library name="React" version="[^"]+" \/>\r?\n/g, '\n')
+    .replace(/\s*<platform-library name="Fluent" version="[^"]+" \/>\r?\n/g, '\n');
+  return {
+    projectPath: 'D:\\Projects\\controls\\StarRating',
+    packageJson: JSON.parse(packageJsonText),
+    packageJsonText,
+    packageJsonPath: 'D:\\Projects\\controls\\StarRating\\package.json',
+    pcfprojText: overrides.pcfprojText || renderedPcfproj(),
+    pcfprojPath: 'D:\\Projects\\controls\\StarRating\\StarRating.pcfproj',
+    manifestModels: [
+      {
+        control: { controlType: /control-type="virtual"/.test(manifestText) ? 'virtual' : 'standard' },
+        resources: {
+          platformLibraries: [...manifestText.matchAll(/<platform-library\b[^>]*\bname="([^"]+)"[^>]*\bversion="([^"]+)"/g)]
+            .map((match) => ({ name: match[1], version: match[2] })),
+        },
+      },
+    ],
+    manifestFiles: [{ path: 'D:\\Projects\\controls\\StarRating\\StarRating\\ControlManifest.Input.xml', text: manifestText }],
+    hasLockfile: true,
+    hasNodeModules: true,
+    eslintFiles: ['eslint.config.mjs'],
+    outStray: [],
+    ...overrides,
+  };
+}
+
+function step(plan, id) {
+  const found = plan.steps.find((item) => item.id === id);
+  assert.ok(found, `expected step ${id}`);
+  return found;
+}
+
+test('planUpgrade returns no steps for a matrix-clean project', () => {
+  const { planUpgrade } = require('../lib/pcf-upgrade.js');
+  const clean = state({ packageJsonText: `${JSON.stringify({
+    name: 'star-rating',
+    version: '1.0.0',
+    dependencies: { 'left-pad': '1.3.0' },
+    devDependencies: { ...dependencySet(MATRIX, 'standard').devDependencies, 'custom-tool': '4.5.6' },
+    scripts: { build: 'pcf-scripts build' },
+  }, null, 2)}\n` });
+
+  assert.deepEqual(planUpgrade(clean, MATRIX, { hosts: ['model'] }), { steps: [], manual: [] });
+});
+
+test('DEPS_TO_MATRIX pins only existing matrix packages in place and preserves user dependencies', () => {
+  const { planUpgrade } = require('../lib/pcf-upgrade.js');
+  const before = packageText('virtual');
+  const after = step(planUpgrade(state({ packageJsonText: before, manifestText: renderedManifest() }), MATRIX, { hosts: ['model'] }), 'DEPS_TO_MATRIX').apply(before);
+
+  const expected = JSON.parse(before);
+  const matrixSet = dependencySet(MATRIX, 'virtual');
+  expected.dependencies['@fluentui/react-components'] = matrixSet.dependencies['@fluentui/react-components'];
+  expected.dependencies.react = matrixSet.dependencies.react;
+  expected.dependencies['react-dom'] = matrixSet.dependencies['react-dom'];
+  expected.devDependencies['pcf-scripts'] = matrixSet.devDependencies['pcf-scripts'];
+  expected.devDependencies['pcf-start'] = matrixSet.devDependencies['pcf-start'];
+  expected.devDependencies['@types/powerapps-component-framework'] = matrixSet.devDependencies['@types/powerapps-component-framework'];
+  expected.devDependencies['@types/react'] = matrixSet.devDependencies['@types/react'];
+  expected.devDependencies['eslint-plugin-react'] = matrixSet.devDependencies['eslint-plugin-react'];
+  assert.equal(after, `${JSON.stringify(expected, null, 2)}\n`);
+  assert.deepEqual(Object.keys(JSON.parse(after).dependencies), ['@fluentui/react-components', 'react', 'left-pad', 'react-dom']);
+  assert.equal(JSON.parse(after).devDependencies['custom-tool'], '4.5.6');
+});
+
+test('BUILDMODE_PRODUCTION moves an ineffective property below Microsoft.Common.props', () => {
+  const { planUpgrade } = require('../lib/pcf-upgrade.js');
+  const before = renderedPcfproj()
+    .replace(/\s*    <!-- pac pcf push otherwise builds[\s\S]*?<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /(\s*<Import Project="\$\(MSBuildExtensionsPath\)\\\$\(MSBuildToolsVersion\)\\Microsoft\.Common\.props" \/>)/,
+      '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n$1',
+    );
+  assert.equal(pcfprojBuildMode(before).status, 'ineffective');
+
+  const after = step(planUpgrade(state({ pcfprojText: before }), MATRIX, { hosts: ['model'] }), 'BUILDMODE_PRODUCTION').apply(before);
+
+  assert.equal(pcfprojBuildMode(after).status, 'production');
+  assert.equal((after.match(/<PcfBuildMode>production<\/PcfBuildMode>/g) || []).length, 1);
+  assert.ok(after.indexOf('<PcfBuildMode>production</PcfBuildMode>') > after.indexOf('Microsoft.Common.props'));
+  assert.match(after, /<Name>StarRating<\/Name>\r?\n    <PcfBuildMode>production<\/PcfBuildMode>\r?\n    <ProjectGuid>/);
+});
+
+test('PLATFORM_LIB_VERSION changes only React and Fluent version attributes', () => {
+  const { planUpgrade } = require('../lib/pcf-upgrade.js');
+  const before = renderedManifest()
+    .replace('name="React" version="16.14.0"', 'name="React" version="18.2.0"')
+    .replace('name="Fluent" version="9.46.2"', 'name="Fluent" version="9.68.0"');
+
+  const after = step(planUpgrade(state({ manifestText: before, packageJsonText: packageText('virtual') }), MATRIX, { hosts: ['model'] }), 'PLATFORM_LIB_VERSION').apply(before);
+
+  const expected = before
+    .replace('name="React" version="18.2.0"', 'name="React" version="16.14.0"')
+    .replace('name="Fluent" version="9.68.0"', 'name="Fluent" version="9.46.2"');
+  assert.equal(after, expected);
+});
+
+test('planUpgrade prints legacy ESLint and feature declarations as manual steps only', () => {
+  const { planUpgrade } = require('../lib/pcf-upgrade.js');
+  const plan = planUpgrade(state({ eslintFiles: ['.eslintrc.json'] }), MATRIX, { hosts: ['model'] });
+
+  assert.equal(plan.steps.some((item) => item.id === 'ESLINT_FLAT_CONFIG'), false);
+  assert.ok(plan.manual.find((item) => item.id === 'ESLINT_FLAT_CONFIG'));
+  assert.match(plan.manual.find((item) => item.id === 'ESLINT_FLAT_CONFIG').why, /never replaces or deletes/i);
+});
+
+test('CLI refuses to apply when the project has git changes', async () => {
+  const realAuth = require('../lib/dataverse-auth.js');
+  const emitted = { stdout: '', stderr: '', exitCode: null };
+  const cli = loadCli(cliPath, {
+    argv: ['--project', 'D:\\Projects\\controls\\StarRating', '--apply'],
+    requires: {
+      './lib/dataverse-auth': {
+        parseArgs: realAuth.parseArgs,
+        validateFlags: realAuth.validateFlags,
+        emitResult: (ok, payload) => {
+          if (payload && typeof payload === 'object') emitted.stdout += `${JSON.stringify(payload)}\n`;
+          else emitted.stderr += `${String(payload)}\n`;
+          emitted.exitCode = ok ? 0 : 1;
+          const err = new Error(`process.exit(${emitted.exitCode})`);
+          err.exitCode = emitted.exitCode;
+          throw err;
+        },
+      },
+      './lib/pcf-upgrade': {
+        runUpgrade: () => ({ ok: false, error: 'Refusing to apply because the project has uncommitted changes. Commit, stash, or pass --allow-dirty.' }),
+      },
+    },
+  });
+
+  try {
+    await cli.main(['--project', 'D:\\Projects\\controls\\StarRating', '--apply']);
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+
+  assert.equal(emitted.exitCode, 1);
+  assert.match(emitted.stdout, /Refusing to apply/);
+});
+
+test('runUpgrade refuses a dirty git tree before applying changes', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-dirty-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+    assert.equal(require('node:child_process').spawnSync('git', ['init'], { cwd: projectDir, shell: false }).status, 0);
+    assert.equal(require('node:child_process').spawnSync('git', ['config', 'user.email', 'maker@example.com'], { cwd: projectDir, shell: false }).status, 0);
+    assert.equal(require('node:child_process').spawnSync('git', ['config', 'user.name', 'PCF Maker'], { cwd: projectDir, shell: false }).status, 0);
+    assert.equal(require('node:child_process').spawnSync('git', ['add', '.'], { cwd: projectDir, shell: false }).status, 0);
+    assert.equal(require('node:child_process').spawnSync('git', ['commit', '-m', 'baseline'], { cwd: projectDir, shell: false }).status, 0);
+    fs.appendFileSync(path.join(projectDir, 'README.md'), '\nlocal note\n');
+
+    const result = runUpgrade({ project: projectDir, apply: true }, { runNpm: () => { throw new Error('npm install should not run on a dirty tree'); } });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /uncommitted changes/);
+    assert.deepEqual(result.applied, []);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyUpgrade writes safe files, runs npm install, and skips install when requested', () => {
+  const { planUpgrade, applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-test-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    const pkg = path.join(projectDir, 'package.json');
+    const proj = path.join(projectDir, 'StarRating.pcfproj');
+    fs.writeFileSync(pkg, packageText('standard'));
+    fs.writeFileSync(proj, renderedPcfproj().replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>'));
+    const plan = planUpgrade({
+      ...state({ packageJsonText: fs.readFileSync(pkg, 'utf8'), pcfprojText: fs.readFileSync(proj, 'utf8') }),
+      projectPath: projectDir,
+      packageJsonPath: pkg,
+      pcfprojPath: proj,
+    }, MATRIX, { hosts: ['model'] });
+    const calls = [];
+
+    const result = applyUpgrade(plan, projectDir, {
+      runNpm: (args, opts) => {
+        calls.push({ args, cwd: opts.cwd, npmCli: opts.npmCli });
+        return { status: 0, stdout: 'installed', stderr: '' };
+      },
+      npmCli: 'C:\\node\\npm-cli.js',
+    });
+
+    assert.deepEqual(result.skipped, []);
+    assert.ok(result.applied.includes('DEPS_TO_MATRIX'));
+    assert.ok(result.applied.includes('BUILDMODE_PRODUCTION'));
+    assert.deepEqual(calls, [{ args: ['install'], cwd: projectDir, npmCli: 'C:\\node\\npm-cli.js' }]);
+
+    const skipped = applyUpgrade({ steps: [{ id: 'REINSTALL' }] }, projectDir, { noInstall: true });
+    assert.deepEqual(skipped.skipped, ['REINSTALL: run npm install in the PCF project']);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
