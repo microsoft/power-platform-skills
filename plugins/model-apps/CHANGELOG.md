@@ -12,10 +12,10 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
 
 ### Changed
 
-- **The `connectors` feature flag is removed.** Connector authoring shipped GA and on by default for a
-  release with no rollback needed, so the flag, `GENPAGE_ENABLE_CONNECTORS` and every probe of it are
-  gone. `custom-api` and `custom-telemetry` are unchanged, and an unknown flag now stays off even when
-  a matching env var is set.
+- **The `connectors` feature flag is removed.** It has been on by default for a release with no
+  rollback needed, so the flag, `GENPAGE_ENABLE_CONNECTORS` and every probe of it are gone. Connector
+  authoring itself stays in public preview. `custom-api` and `custom-telemetry` are unchanged, and an
+  unknown flag now stays off even when a matching env var is set.
 - **The auth preflight overlaps its CLI cold starts.** `check-auth` runs `pac org who` alongside the
   `az` probes (every probe is asynchronous, and a pending pac probe is cancelled on an early exit), calls `az --version` only to explain a failed `az account show`, and fetches the WhoAmI
   token while pac runs (measured on Windows: 24–32 s before, 16–19 s after). Scripts also reuse one
@@ -39,7 +39,7 @@ was shown, and the findings of a deep retest that still reproduced are fixed.
   survives failures, retries and partial (`--stage data`) runs, and an unreadable record, or a failed
   preflight read while one exists, stops the run instead of widening the authority. An approved run
   records its list even when it removes nothing, and two builds sharing a workspace no longer consume
-  or overwrite each other's record.
+  each other's record.
 - **`prune: false` forms are no longer reported as removing fields**, and no longer make an apply
   demand `--allow-destructive` for removals that never happen.
 - **Switching a table's default Main form clears the old default.** Both forms used to stay default
@@ -437,15 +437,15 @@ downloads that round-trip Choice columns.
 
 - **`/app-builder` is GA.** The App Spec shape, the CLI flags and the build phases are now a stable
   contract. `--changed-only` remains experimental and off by default.
-- **Connector authoring is GA and on by default.** The `connectors` flag is flipped to `true` and
-  kept for one release as a rollback switch (`GENPAGE_ENABLE_CONNECTORS=0`), then removed.
+- **Connector authoring is on by default** (it is in public preview). The `connectors` flag is flipped
+  to `true` and kept for one release as a rollback switch (`GENPAGE_ENABLE_CONNECTORS=0`), then removed.
   `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
 - **The Phase 4.5 dispatch value is the binding count, not the flag state**, so the dispatch stays
   stable when the flag is removed.
 - **The App Spec schema is split** so the always-read half is smaller: 105 KB → 82 KB.
 - **The CLI flag contract is shared** rather than per-script, so the rules and the "did you mean"
   suggestion cannot drift between commands.
-- **Deeper tests on the paths connectors GA made live**, including a connector *edit* eval.
+- **Deeper tests on the connector paths that turning the flag on made live**, including a connector *edit* eval.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544

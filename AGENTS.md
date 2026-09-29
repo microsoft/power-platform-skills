@@ -150,7 +150,7 @@ Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next t
 
 ### CI must opt out of telemetry transmission
 
-An adopting plugin's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream.
+A transmitting adopter's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream. An adopter that still ships `disabled: true` (model-apps today) sets the opt-out too, so enabling it later cannot turn its CI into a leak.
 
 **Therefore: every GitHub Actions job that runs the test suite — or any step that could execute a telemetry-emitting hook/script for an adopting plugin — MUST set the plugin's opt-out env var at the job (or workflow) level.** For `power-pages`:
 

@@ -347,9 +347,9 @@ the model-driven shell today. Scope honestly:
 Consent is mode-aware; **autopilot mode is also eval mode** (both non-interactive).
 
 **The problem the first draft missed:** `--allow-destructive` was not tied to any real diff, and
-`--non-interactive` on the CLI cannot gate main-loop questions. Meanwhile updates already remove
-content — collision is warning-only (`build-model-app.js:111-119`), explicit-form fields are
-pruned (`sdk-build.js:690-725`), and the sitemap is fully replaced (`:995-1007`); teardown is
+`--non-interactive` on the CLI cannot gate main-loop questions. Meanwhile updates already removed
+content — collision was warning-only (`build-model-app.js:111-119`), explicit-form fields were
+pruned (`sdk-build.js:690-725`), and the sitemap was fully replaced (`:995-1007`); teardown was
 gated by `--apply` alone (`teardown-model-app.js:62-95`).
 
 **The fix — a read-only operation-diff planner (`op-diff.js`, new pure module):**
@@ -370,8 +370,12 @@ gated by `--apply` alone (`teardown-model-app.js:62-95`).
 - **Hard gate + TOCTOU:** any destructive op without `--allow-destructive` **halts before writes**
   (incl. teardown). Recompute the diff **immediately before apply** so a state change between plan
   and apply can't slip through.
-- **Approval binding:** bound to **env/app identity + spec hash + op hash**; not replayable against a
-  different target.
+- **Approval binding:** a refused apply records the exact removals it listed in
+  `.maker-workspace/destructive-approval.json` (each form's fields, the sitemap targets, and the run
+  that wrote it). The approved re-run removes only those and halts, naming the new ones, if anything
+  else would now be removed. An approved run rewrites or consumes the record only if it found it at
+  its start or wrote it, so a concurrent build cannot consume it; a new refusal replaces it with the list
+  that refusal showed, and a halt naming new removals refreshes it with the full current list.
 - **Env var suppresses questions only** — never grants destructive authority; `--allow-destructive`
   is always explicit, even in autopilot.
 

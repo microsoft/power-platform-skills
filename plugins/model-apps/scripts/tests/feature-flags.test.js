@@ -31,7 +31,7 @@ test('connectors flag is retired and unknown fail-closed', () => {
   assert.match(validateFlags({ connectors: true })[0], /unknown flag/i);
   const lib = require(libPath);
   for (const removed of ['isConnectorsEnabled', 'exitIfConnectorsDisabled', 'connectorsDisabledMessage']) {
-    assert.equal(lib[removed], undefined, `${removed} must stay removed after connector GA`);
+    assert.equal(lib[removed], undefined, `${removed} must stay removed now that connectors have no flag`);
   }
 });
 test('custom-api flag is OFF by default (no env override)', () => {

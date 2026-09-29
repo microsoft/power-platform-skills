@@ -406,7 +406,9 @@ Omit `--actions` when Custom API bindings are unchanged.
 An update without `--name`/`--name-file` gives the page its **sitemap title** as its name (measured:
 a page renamed with `--name-file` reverted to the title on the next update that omitted it). An edit
 that does not rename the page can omit it. To rename a page, pass `--name-file` on this update, and
-tell the user its navigation title is the app's sitemap entry and is not changed by the upload.
+tell the user its navigation title is the app's sitemap entry and is not changed by the upload. Where
+pac is installed as a `pac.cmd` shim (Windows), a name containing a double quote or `%` is refused
+before anything is uploaded.
 
 ## Edit Phase 7: Verify (Optional)
 

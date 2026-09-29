@@ -8,10 +8,11 @@ Deployment, runtime, and environment issues. For generation-time anti-patterns
 
 ## User Wants to Create a New Model-Driven App
 
-This plugin creates **pages within existing** model-driven apps — it cannot create a new app. If the user asks to create a new model-driven app:
+Both skills can create one:
 
-- Direct them to [Power Apps maker portal](https://make.powerapps.com) to create the app: **New App → Start with Design → Blank page with Navigation**
-- Once the app exists, they can use `/genpage` to add pages to it
+- `/genpage` creates an app to host its pages when the plan chooses a new app (Phase 3 runs `pac model create`), then adds the pages to it.
+- `/app-builder` builds a whole app from a description: tables, forms, views, the app and its sitemap.
+- An app created in the [Power Apps maker portal](https://make.powerapps.com) (**New App → Start with Design → Blank page with Navigation**) works too; `/genpage` can then add pages to it.
 
 ---
 

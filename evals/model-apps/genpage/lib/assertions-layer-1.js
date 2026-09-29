@@ -1091,8 +1091,8 @@ PHASE_EXPECTATIONS.set(
 
 // Eval 17: mock-data page — regression guard confirming the planner does NOT run
 // connector discovery for a page with no connector data source, leaving
-// ## Connector Bindings as the exact sentinel. (Connector authoring is GA and
-// always available, so the thing worth pinning is that it stays OFF THE PATH when
+// ## Connector Bindings as the exact sentinel. (Connector authoring has no feature
+// flag and is always available, so the thing worth pinning is that it stays OFF THE PATH when
 // the maker asked for mock data — otherwise every mock page pays for a `pac
 // connection list` round trip and risks inventing a binding nobody asked for.)
 PHASE_EXPECTATIONS.set(

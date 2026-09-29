@@ -10,7 +10,7 @@
 // ahead of GA and flip it on in a one-line follow-up PR (or per-run via env var)
 // once the dependencies are released — instead of carrying an un-merged branch.
 //
-// A GA flag is flipped to `true` FIRST and removed in a later change, not both at once.
+// A flag is flipped to `true` FIRST and removed in a later change, not both at once.
 // Flipping is reversible in one line if the rollout turns out to be incomplete in some
 // tenant; deleting the gate in the same change that enables the feature leaves no way
 // back except a revert. Once a release has shipped with the flag on and no rollback was

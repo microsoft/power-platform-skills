@@ -24,8 +24,10 @@ neither leaves state the other depends on**. Keep it that way — shared **agent
 fine, a skill-to-skill call is not, and neither may write a file the other treats as authoritative
 (this is why `write-page-plan.js` emits `app-builder-page-plan.md`, not `genpage-plan.md`).
 
-Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
-shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
+Plus **`/report-issue`** to file bugs against this repo. Dataverse mutation flows through the
+shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing` — except for
+the few surfaces it does not model, which use `dataverseRequest()` (see `## Dataverse Access From
+Scripts`).
 
 **Requirements:**
 - **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
@@ -146,10 +148,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   includes the removal phases. A later `--allow-destructive` run may
   remove only that recorded set; the record is consumed only after a successful run that included both
   removal phases (`forms` and `app-shell`) and kept no field, and is otherwise kept on failure, partial
-  runs, changed-only runs, or when the fence kept a field. A run consumes or replaces only a record it
+  runs, changed-only runs, or when the fence kept a field. An approved run consumes or rewrites only a record it
   found at its start or wrote itself (each record carries its run id, compared by content fingerprint),
   checked and changed under the workspace lease the apply snapshot uses, so two builds sharing a
-  workspace cannot consume each other's record; an approved run halts before any write if the record
+  workspace cannot consume each other's record. A refusal still replaces the record with the list it
+  just showed, because that is the list the maker is looking at, and a halt naming new removals refreshes
+  it with the full current list (the halt shows only the new ones). An approved
+  run halts before any write if the record
   changed after it was read, or if the lease stays held. The gate fails closed if the record is
   unreadable or if discovery fails while a record exists, because live removals cannot be compared with
   the approved list. If live state contains a new removal, the build halts, lists only that new removal,
@@ -741,6 +746,7 @@ scripts/
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
+    utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
     telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's config) + lib/ (copy of shared/telemetry/lib)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
@@ -809,16 +815,16 @@ is about runtime/deploy output, not that every authoring artifact is byte-for-by
 unchanged. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
 values in `feature-flags.json` at the plugin root.
 
-**A GA flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
+**A flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
 Flipping is reversible in one line if the rollout turns out to be incomplete in some tenant;
 deleting the gate in the same change that enables the feature leaves no way back except a
 revert. Once a release has shipped with the flag on and no rollback was needed, remove it —
 a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
 about at every call site.
 
-Connector authoring is GA and no longer has a feature flag. The remaining flags are
-`custom-api` and `custom-telemetry`; both currently ship **OFF** while their dependencies
-finish rolling out.
+Connector authoring no longer has a feature flag (the feature itself is in public preview). The
+remaining flags are `custom-api` and `custom-telemetry`; both currently ship **OFF** while their
+dependencies finish rolling out.
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
@@ -838,7 +844,7 @@ finish rolling out.
 - **Script backstop:** Custom API entrypoints call the shared
   `exitIfCustomApiDisabled()` helper (DRY — no inlined gate) and fail closed with
   exit 3 when OFF: `list-custom-apis.js`. Connector scripts have no feature-flag
-  backstop because connector authoring is GA.
+  backstop because connector authoring is always on.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
@@ -1119,8 +1125,9 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 ```
 
 - `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
-  **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR touching
-  `plugins/model-apps/**` or `evals/model-apps/**`, across ubuntu × windows × macos and Node 20 × 22.
+  **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR into `main`
+  touching `plugins/model-apps/**`, `evals/model-apps/**`, `shared/telemetry/**`, `shared/skills/**` or the
+  workflow itself, across ubuntu × windows × macos and Node 20 × 22.
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).

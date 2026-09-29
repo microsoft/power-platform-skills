@@ -5,7 +5,7 @@ name. The `connectorLogicalName` string in TSX **MUST** equal a
 `connectorBindings[].logicalName` value in the page `config.json`, and that
 logical name must exist as a connection reference in the target environment.
 
-> **GA.** Connector authoring has no feature flag. Pages emit connector code only when
+> **No feature flag.** Connector authoring is always available. Pages emit connector code only when
 > the plan carries actual connector bindings.
 
 ## Binding shape: `connectors.json` (array) vs page `config.json` (object)

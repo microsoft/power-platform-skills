@@ -466,7 +466,7 @@ It returns a single JSON object:
 ```json
 {
   "ok": true | false,
-  "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
+  "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
                  | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
   "message": "human-readable next step",
   "warnings": ["..."],
@@ -484,6 +484,8 @@ It returns a single JSON object:
 - **`ok: false`** → show the `message` field to the user verbatim and
   **stop the workflow**. The script already includes a fix-it command for every
   blocker (run `az login`, etc.).
+- **`blocker: "usage"`** is the one exception: the `check-auth.js` command line itself was wrong (a
+  mistyped flag or a missing value). Fix the invocation and run it again instead of stopping.
 
 Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 
@@ -901,7 +903,9 @@ foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
 Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
 agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
 trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
-folder, but only after the write.
+folder, but only after the write. The name is the one value passed to pac inline: where pac is installed as a
+`pac.cmd` shim (Windows), a name containing a double quote or `%` is refused before anything is uploaded, so pick
+one without them.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
