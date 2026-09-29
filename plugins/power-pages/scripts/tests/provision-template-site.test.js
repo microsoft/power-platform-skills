@@ -639,9 +639,38 @@ test('removeGenericManifestForRetry rejects a manifest reached through an escapi
 
   assert.throws(
     () => removeGenericManifestForRetry(clone),
-    /resolves outside the cloned project/
+    /resolves through a linked or unexpected path/
   );
   assert.equal(fs.readFileSync(path.join(outside, 'manifest.yml'), 'utf8'), 'outside clone\n');
+});
+
+test('removeGenericManifestForRetry rejects an in-tree parent symlink', (t) => {
+  const dir = tempDir();
+  const clone = path.join(dir, 'clone');
+  const otherState = path.join(clone, 'other-state');
+  const portalConfig = path.join(clone, '.powerpages-site', '.portalconfig');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(clone, '.powerpages-site'), { recursive: true });
+  fs.mkdirSync(otherState);
+  fs.writeFileSync(path.join(otherState, 'manifest.yml'), 'unrelated clone state\n');
+  try {
+    fs.symlinkSync(otherState, portalConfig, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () => removeGenericManifestForRetry(clone),
+    /resolves through a linked or unexpected path/
+  );
+  assert.equal(
+    fs.readFileSync(path.join(otherState, 'manifest.yml'), 'utf8'),
+    'unrelated clone state\n'
+  );
 });
 
 test('removeGenericManifestForRetry uses Windows case-insensitive containment', () => {

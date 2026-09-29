@@ -208,13 +208,19 @@ function canonicalPathForCreation(targetPath, fsImpl = fs) {
   return path.join(canonicalParent, ...missingSegments);
 }
 
+function normalizePathForPlatform(value, platform = process.platform) {
+  const resolved = path.resolve(value);
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function pathEquals(firstPath, secondPath, platform = process.platform) {
+  return normalizePathForPlatform(firstPath, platform) ===
+    normalizePathForPlatform(secondPath, platform);
+}
+
 function pathContains(parentPath, childPath, platform = process.platform) {
-  const normalize = (value) => {
-    const resolved = path.resolve(value);
-    return platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  const parent = normalize(parentPath);
-  const child = normalize(childPath);
+  const parent = normalizePathForPlatform(parentPath, platform);
+  const child = normalizePathForPlatform(childPath, platform);
   return child === parent || child.startsWith(parent + path.sep);
 }
 
@@ -293,8 +299,9 @@ function removeGenericManifestForRetry(clonedPath, deps = {}) {
   } catch (err) {
     throw new Error(`Could not resolve the generic PAC manifest safely: ${err.message}`);
   }
-  if (!pathContains(canonicalClonedPath, canonicalManifestPath, platform)) {
-    throw new Error(`Generic PAC manifest resolves outside the cloned project: ${manifestPath}`);
+  const expectedCanonicalManifestPath = path.join(canonicalClonedPath, GENERIC_MANIFEST_PATH);
+  if (!pathEquals(expectedCanonicalManifestPath, canonicalManifestPath, platform)) {
+    throw new Error(`Generic PAC manifest resolves through a linked or unexpected path: ${manifestPath}`);
   }
 
   try {
@@ -526,6 +533,7 @@ module.exports = {
   isStaleManifestUploadFailure,
   parseArgs,
   pathContains,
+  pathEquals,
   provisionTemplateSite,
   removeGenericManifestForRetry,
   removeScriptCreatedOutputDirectory,
