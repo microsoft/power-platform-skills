@@ -160,6 +160,38 @@ test('buildControl refuses absolute, parent, and project-root outDir values with
   }
 });
 
+test('buildControl refuses an outDir symlink or junction that resolves outside the project', () => {
+  const { dir, bin } = tempProject();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-build-link-outside-'));
+  const sentinel = path.join(outside, 'sentinel.txt');
+  fs.writeFileSync(sentinel, 'outside');
+  const link = path.join(dir, 'linked-out');
+  try {
+    try {
+      fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+    fs.writeFileSync(path.join(dir, 'pcfconfig.json'), JSON.stringify({ outDir: 'linked-out' }));
+
+    const result = buildControl({ projectDir: dir, clean: true }, {
+      fs,
+      resolvePackageBin: () => bin,
+      runNodeScript: () => {
+        throw new Error('build must not run for physically unsafe outDir');
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /inside the PCF project/i);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'outside');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('classifyOutputFiles is reusable without reading a project build directory', () => {
   const resources = {
     code: [{ path: 'bundle.js' }],
@@ -211,6 +243,33 @@ test('pcf-build emits JSON on stdout when a non-usage runtime failure is thrown'
   assert.equal(payload.ok, false);
   assert.match(payload.error, /boom from build/);
   assert.match(cli.stderrText(), /boom from build/);
+});
+
+test('pcf-build reports ok false when bundle findings contain errors even if buildControl returned ok true', async () => {
+  const cli = loadCli(cliPath, {
+    argv: ['--project', 'D:\\tmp\\pcf-project'],
+    requires: {
+      './lib/pcf-build': {
+        findControlProject: () => ({ projectDir: 'D:\\tmp\\pcf-project', pcfproj: 'Control.pcfproj', manifests: ['ControlManifest.Input.xml'], packageJson: 'package.json' }),
+        buildControl: () => ({ ok: true, mode: 'production', controls: [{ bundleBytes: 6 * 1024 * 1024, unexplained: [], manifestPath: 'ControlManifest.xml' }] }),
+        bundleFindings: () => [{ code: 'PCF_BUNDLE_OVER_LIMIT', severity: 'error', message: 'too large', fix: 'reduce' }],
+      },
+      './lib/pcf-matrix': {
+        loadMatrix: () => ({ bundle: { webpackDefaultMaxBytes: 5 * 1024 * 1024, warnAtFraction: 0.8 } }),
+      },
+    },
+  });
+
+  try {
+    await cli.main();
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.equal(payload.findings[0].code, 'PCF_BUNDLE_OVER_LIMIT');
 });
 
 test('bundleFindings reports over-limit and near-limit bundles with both upload limits named', () => {

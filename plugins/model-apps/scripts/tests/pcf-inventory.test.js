@@ -89,6 +89,33 @@ test('pcf-inventory reports where-used read failures as unknown and emits the sh
   assert.equal(Object.prototype.hasOwnProperty.call(payload.controls[0], 'whereUsedCaveat'), false);
 });
 
+test('pcf-inventory surfaces documented RetrieveDependentComponents dependency rows', async () => {
+  const caveat = 'registered solution dependencies only — not proof of Liquid or text references; an empty result is not \'safe to delete\'';
+  const stubs = {
+    './lib/pcf-dataverse': {
+      WHERE_USED_CAVEAT: caveat,
+      makePcfSdk: async () => ({ tag: 'sdk' }),
+      listCustomControls: async () => [{
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'new_Contoso.Controls.StarRating',
+        version: '1.0.0',
+        componentState: 0,
+        isManaged: false,
+      }],
+      dependentsOf: async () => ({
+        ok: true,
+        rows: [{ type: 60, objectId: '22222222-2222-4222-8222-222222222222' }],
+      }),
+    },
+  };
+
+  const cli = await run(['--env', 'https://contoso.crm.dynamics.com', '--where-used'], stubs);
+
+  assert.equal(cli.exitCode, 0);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.deepEqual(payload.controls[0].whereUsed.rows, [{ type: 60, objectId: '22222222-2222-4222-8222-222222222222' }]);
+});
+
 test('pcf-inventory --control queries the exact name and fails with a prefixed-name hint when absent', async () => {
   let queried = null;
   const caveat = 'registered solution dependencies only — not proof of Liquid or text references; an empty result is not \'safe to delete\'';

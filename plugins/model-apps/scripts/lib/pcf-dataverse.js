@@ -104,17 +104,25 @@ async function dependentsOf(sdk, customControlId) {
     // raw read when the SDK adds one so PCF where-used can use the modeled surface.
     const res = await sdk.dataverse.get(path);
     if (!isSuccess(res)) return { ok: false, reason: responseReason(res) };
-    // RetrieveDependentComponents returns:
-    // { status: 200, body: { value: [{ ComponentType, ObjectId, ... }] } }.
+    // RetrieveDependentComponents returns `dependency` entities, for example:
+    // { value: [{ dependentcomponenttype: 60, dependentcomponentobjectid: '<systemformid>',
+    //             requiredcomponenttype: 66, requiredcomponentobjectid: '<customcontrolid>' }] }.
+    // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/dependency
+    // Older tests used ComponentType/ObjectId, so those aliases remain as a compatibility fallback
+    // for any SDK/proxy that projects the response with legacy casing.
     return {
       ok: true,
       rows: (((res && res.body && res.body.value) || []).map((r) => ({
-        type: r.ComponentType == null ? r.componentType : r.ComponentType,
-        objectId: r.ObjectId == null ? r.objectId : r.ObjectId,
+        type: firstDefined(r.dependentcomponenttype, r.ComponentType, r.componentType),
+        objectId: firstDefined(r.dependentcomponentobjectid, r.ObjectId, r.objectId),
       }))).filter((r) => r.type != null || r.objectId),
     };
   } catch (err) {
     return { ok: false, reason: errorReason(err) };
+  }
+
+  function firstDefined(...values) {
+    return values.find((value) => value !== undefined && value !== null);
   }
 }
 

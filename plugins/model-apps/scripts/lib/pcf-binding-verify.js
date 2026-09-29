@@ -108,6 +108,7 @@ function verifyBinding(formxml, expected) {
 
   const controlEntries = described.entries.filter((entry) => entry.name === expect.controlName);
   const entriesByFactor = new Map(controlEntries.map((entry) => [entry.formFactor, entry]));
+  const declaredFactors = new Set(described.entries.map((entry) => entry.formFactor).filter(Boolean));
   if (described.entries.length > 0) {
     const fallback = described.entries.some((entry) => entry.id && !entry.name);
     if (!fallback) {
@@ -115,7 +116,10 @@ function verifyBinding(formxml, expected) {
     }
 
     for (const factor of ALL_FACTORS) {
-      if (!entriesByFactor.has(factor)) {
+      // Dataverse's completeness rule is about declaring a customControl entry for each formFactor,
+      // not about every factor using the requested PCF. A normal maker choice is web = PCF while
+      // phone/tablet stay on the default control; identity is checked only for requested clients.
+      if (!declaredFactors.has(factor)) {
         issues.push(finding(
           'PCF_BIND_FACTOR_UNDECLARED',
           'error',

@@ -176,6 +176,24 @@ test('pcfprojBuildMode treats conditioned PcfBuildMode attributes as ineffective
   );
 });
 
+test('pcfprojBuildMode treats Choose and Target ancestors as conditioned execution paths', () => {
+  const choose = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /<\/Project>/,
+      '  <Choose>\n    <When Condition="\'$(Configuration)\'==\'Release\'">\n      <PropertyGroup>\n        <PcfBuildMode>production</PcfBuildMode>\n      </PropertyGroup>\n    </When>\n    <Otherwise>\n      <PropertyGroup>\n        <PcfBuildMode>development</PcfBuildMode>\n      </PropertyGroup>\n    </Otherwise>\n  </Choose>\n</Project>',
+    );
+  const target = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /<\/Project>/,
+      '  <Target Name="AfterBuild">\n    <PropertyGroup>\n      <PcfBuildMode>production</PcfBuildMode>\n    </PropertyGroup>\n  </Target>\n</Project>',
+    );
+
+  assert.deepEqual(pickMode(pcfprojBuildMode(choose)), { status: 'ineffective', reason: 'conditioned', value: 'development' });
+  assert.deepEqual(pickMode(pcfprojBuildMode(target)), { status: 'ineffective', reason: 'conditioned', value: 'production' });
+});
+
 test('pcfprojBuildMode ignores commented-out production before reporting missing', () => {
   const commented = renderedPcfproj().replace(
     /\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/,
@@ -223,6 +241,34 @@ test('pcfprojBuildMode keeps conditioned findings when there is no unconditioned
 function pickMode(result) {
   return { status: result.status, reason: result.reason, value: result.value };
 }
+
+test('collectProject does not flag complete processed PCF output as stale', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-doctor-output-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    const controlDir = path.join(projectDir, 'StarRating');
+    const outDir = path.join(projectDir, 'out', 'controls', 'StarRating');
+    fs.mkdirSync(controlDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'package.json'), JSON.stringify({
+      dependencies: {},
+      devDependencies: dependencySet(MATRIX, 'standard').devDependencies,
+    }));
+    fs.writeFileSync(path.join(projectDir, 'StarRating.pcfproj'), renderedPcfproj());
+    const manifest = `<manifest><control namespace="Contoso.Controls" constructor="StarRating" version="1.0.0" display-name-key="Star" description-key="Star"><resources><code path="bundle.js" order="1" /><css path="css/control.css" order="1" /></resources></control></manifest>`;
+    fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), manifest);
+    fs.writeFileSync(path.join(outDir, 'ControlManifest.xml'), manifest);
+    fs.mkdirSync(path.join(outDir, 'css'), { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'bundle.js'), 'bundle');
+    fs.writeFileSync(path.join(outDir, 'css', 'control.css'), 'css');
+
+    const findings = checkProject(collectProject(projectDir), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+    assert.equal(ids(findings).includes('PROJ_OUT_STALE'), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test('checkToolchain uses matrix thresholds and downgrades optional push tools when only build is needed', () => {
   const buildOnly = checkToolchain({

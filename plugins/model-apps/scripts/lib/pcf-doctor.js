@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync: defaultSpawnSync } = require('node:child_process');
 const { loadMatrix, dependencySet, compareVersions, platformLibraryFindings } = require('./pcf-matrix.js');
 const { parseManifest } = require('./pcf-manifest.js');
-const { findControlProject, resolveOutRoot, classifyOutputDirectory } = require('./pcf-build.js');
+const { findControlProject, resolveOutRoot, classifyOutputDirectory, isProcessedManifestOutput } = require('./pcf-build.js');
 
 const FLOATING_DEP_PACKAGES = new Set(['pcf-scripts', 'pcf-start']);
 const MSBUILD_PCF = 'Microsoft.PowerApps.MSBuild.Pcf';
@@ -200,7 +200,7 @@ function dependencyFindings(state, matrix, family) {
         'PROJ_FLOATING_RANGE',
         'warning',
         `${name} uses floating range '${actualSpec}', so PCF tooling can drift between restores.`,
-        'Run pcf-upgrade.js --apply DEPS_TO_MATRIX to pin PCF tooling to the compatibility matrix.',
+        'Run pcf-upgrade.js --apply --steps DEPS_TO_MATRIX to pin PCF tooling to the compatibility matrix.',
       ));
     }
     if (normalizeVersionSpec(actualSpec) !== normalizeVersionSpec(expectedAll[name])) {
@@ -208,7 +208,7 @@ function dependencyFindings(state, matrix, family) {
         'PROJ_DEP_DRIFT',
         'warning',
         `${name} is declared as '${actualSpec}' but the ${family} compatibility matrix pins '${expectedAll[name]}'.`,
-        'Run pcf-upgrade.js --apply DEPS_TO_MATRIX to align package.json and package-lock.json.',
+        'Run pcf-upgrade.js --apply --steps DEPS_TO_MATRIX to align package.json and package-lock.json.',
       ));
     }
   }
@@ -239,7 +239,7 @@ function pcfprojFindings(state, matrix) {
       'PROJ_BUILDMODE_NOT_PRODUCTION',
       'warning',
       detail,
-      `Run pcf-upgrade.js --apply BUILDMODE_PRODUCTION, or edit the .pcfproj so <PcfBuildMode>production</PcfBuildMode> appears after Microsoft.Common.props. See ${MSBUILD_REFERENCE}`,
+      `Run pcf-upgrade.js --apply --steps BUILDMODE_PRODUCTION, or edit the .pcfproj so <PcfBuildMode>production</PcfBuildMode> appears after Microsoft.Common.props. See ${MSBUILD_REFERENCE}`,
     ));
   }
 
@@ -369,26 +369,38 @@ function pcfBuildModeOccurrences(text) {
   const modeRe = /<PcfBuildMode\b([^>]*)>([\s\S]*?)<\/PcfBuildMode>/gi;
   for (const match of text.matchAll(modeRe)) {
     const tagAttrs = xmlAttrs(match[1] || '');
-    const groupAttrs = enclosingPropertyGroupAttrs(text, match.index);
+    const ancestors = xmlAncestors(text, match.index);
     occurrences.push({
       value: match[2].trim(),
       offset: match.index,
       endOffset: match.index + match[0].length,
-      conditioned: Object.hasOwn(tagAttrs, 'Condition') || Object.hasOwn(groupAttrs, 'Condition'),
+      conditioned: Object.hasOwn(tagAttrs, 'Condition') || ancestors.some((ancestor) => Object.hasOwn(ancestor.attrs, 'Condition') || ['Choose', 'When', 'Otherwise', 'Target'].includes(ancestor.name)),
     });
   }
   return occurrences;
 }
 
-function enclosingPropertyGroupAttrs(text, offset) {
-  const before = text.slice(0, offset);
-  const open = before.lastIndexOf('<PropertyGroup');
-  const close = before.lastIndexOf('</PropertyGroup>');
-  if (open === -1 || close > open) return {};
-  const end = text.indexOf('>', open);
-  const groupClose = text.indexOf('</PropertyGroup>', end);
-  if (end === -1 || groupClose === -1 || groupClose < offset) return {};
-  return xmlAttrs(text.slice(open, end + 1));
+function xmlAncestors(text, offset) {
+  const stack = [];
+  const tagRe = /<\s*(\/?)([A-Za-z_][-A-Za-z0-9_:.]*)([^>]*)>/g;
+  let match;
+  while ((match = tagRe.exec(text)) && match.index < offset) {
+    if (match[0].startsWith('<?') || match[0].startsWith('<!')) continue;
+    const closing = !!match[1];
+    const name = match[2];
+    const selfClosing = /\/\s*>$/.test(match[0]);
+    if (closing) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].name === name) {
+          stack.splice(i);
+          break;
+        }
+      }
+    } else if (!selfClosing) {
+      stack.push({ name, attrs: xmlAttrs(match[3] || '') });
+    }
+  }
+  return stack;
 }
 
 function msbuildPcfReference(pcfprojText) {
@@ -461,7 +473,7 @@ function platformFindings(state, matrix, hosts) {
 
 function platformFix(item) {
   if (/Power Pages/.test(item.message)) return `Remove platform-library declarations for Power Pages targets. See ${PLATFORM_REFERENCE}`;
-  return `Run pcf-upgrade.js --apply PLATFORM_LIB_VERSION to align platform-library declarations${item.fix ? ` (${item.fix})` : ''}.`;
+  return `Run pcf-upgrade.js --apply --steps PLATFORM_LIB_VERSION to align platform-library declarations${item.fix ? ` (${item.fix})` : ''}.`;
 }
 
 function hostFindings(state, hosts) {
@@ -563,6 +575,7 @@ function outputStrays(outRoot, deps = {}) {
     if (!fileExists(fsDep, manifest)) continue;
     const parsed = parseManifest(fsDep.readFileSync(manifest, 'utf8'));
     for (const item of classifyOutputDirectory(controlDir, parsed.model.resources, deps)) {
+      if (isProcessedManifestOutput(item.path)) continue;
       if (item.classification === 'unexplained') strays.push(pathDep.join(controlDir, item.path));
     }
   }

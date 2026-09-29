@@ -189,7 +189,7 @@ test('dependentsOf returns rows on 2xx and ok:false on failures', async () => {
   const path = `/RetrieveDependentComponents(ObjectId=@o,ComponentType=@t)?@o=${controlId}&@t=66`;
   const sdk = fakeSdk({
     gets: {
-      [path]: { status: 200, body: { value: [{ ComponentType: 60, ObjectId: '44444444-4444-4444-4444-444444444444' }] } },
+      [path]: { status: 200, body: { value: [{ dependentcomponenttype: 60, dependentcomponentobjectid: '44444444-4444-4444-4444-444444444444', dependencytype: 2 }] } },
     },
   });
 

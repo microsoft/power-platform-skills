@@ -162,19 +162,22 @@ function resolveOutRoot(projectDir, deps = {}) {
     }
   }
   const resolvedOutRoot = pathDep.resolve(resolvedProjectDir, rawOutDir);
-  assertInsideProject(resolvedProjectDir, resolvedOutRoot, rawOutDir, pathDep);
+  assertInsideProject(resolvedProjectDir, resolvedOutRoot, rawOutDir, { fs: fsDep, path: pathDep });
   return resolvedOutRoot;
 }
 
-function assertInsideProject(projectDir, targetDir, rawOutDir, pathDep = path) {
+function assertInsideProject(projectDir, targetDir, rawOutDir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
   // `pcfconfig.json` is user-controlled and has the raw shape `{ "outDir": "../somewhere" }`.
   // Clean builds delete the resolved outDir before invoking pcf-scripts, so require a STRICT child
   // of the project (not the project itself and not an ancestor/sibling) before any caller can read
-  // or remove it. Windows file systems are usually case-insensitive, so compare canonical strings
-  // case-insensitively when using win32-style paths.
-  const project = comparablePath(pathDep.resolve(projectDir), pathDep);
-  const target = comparablePath(pathDep.resolve(targetDir), pathDep);
-  const relative = pathDep.relative(project, target);
+  // or remove it. The lexical check catches `..` before any filesystem calls; the physical check
+  // below catches junction/symlink escapes such as `{ "outDir": "linked-out" }` where `linked-out`
+  // resolves to a sibling directory.
+  const lexicalProject = pathDep.resolve(projectDir);
+  const lexicalTarget = pathDep.resolve(targetDir);
+  const relative = pathDep.relative(lexicalProject, lexicalTarget);
   const comparableRelative = comparablePath(relative, pathDep);
   if (
     !relative
@@ -184,6 +187,32 @@ function assertInsideProject(projectDir, targetDir, rawOutDir, pathDep = path) {
   ) {
     throw new Error(`pcfconfig.json outDir '${rawOutDir}' must resolve inside the PCF project as a strict child folder. Set outDir to a child folder such as '${DEFAULT_OUT_DIR}' before running build clean or output classification.`);
   }
+
+  const physicalProject = safeRealpath(fsDep, lexicalProject);
+  const physicalTarget = safeRealpathOrDeepestAncestor(fsDep, pathDep, lexicalTarget);
+  const physicalRelative = pathDep.relative(physicalProject, physicalTarget);
+  const comparablePhysicalRelative = comparablePath(physicalRelative, pathDep);
+  if (
+    comparablePhysicalRelative === '..'
+    || comparablePhysicalRelative.startsWith(`..${pathDep.sep}`)
+    || pathDep.isAbsolute(physicalRelative)
+  ) {
+    throw new Error(`pcfconfig.json outDir '${rawOutDir}' must resolve physically inside the PCF project. Remove symlinks or junctions that point outside the project before running build clean or output classification.`);
+  }
+}
+
+function safeRealpath(fsDep, value) {
+  return (fsDep.realpathSync.native || fsDep.realpathSync)(value);
+}
+
+function safeRealpathOrDeepestAncestor(fsDep, pathDep, target) {
+  let current = target;
+  while (!fsDep.existsSync(current)) {
+    const parent = pathDep.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return safeRealpath(fsDep, current);
 }
 
 function comparablePath(value, pathDep) {
@@ -216,7 +245,7 @@ function readBuiltControl(controlDir, deps = {}) {
   const parsed = parseManifest(fsDep.readFileSync(manifestPath, 'utf8'));
   const referenced = manifestReferences(parsed.model);
   const files = classifyOutputDirectory(controlDir, parsed.model.resources, deps)
-    .filter((file) => normalizeRel(file.path) !== 'ControlManifest.xml')
+    .filter((file) => !isProcessedManifestOutput(file.path))
     .map((file) => ({ ...file, path: pathDep.resolve(controlDir, file.path) }));
   const unexplained = files.filter((item) => item.classification === 'unexplained');
   const bundleBytes = referenced
@@ -241,7 +270,7 @@ function manifestReferences(model) {
 }
 
 /**
- * Classifies processed PCF output files using the A28 packer categories.
+ * Classifies processed PCF output files using the packaging categories shared by build and doctor.
  *
  * @param {object} manifestResources parseManifest(...).model.resources, with code/css/resx/img
  *        arrays whose items carry `path`.
@@ -298,6 +327,10 @@ function classifyOutputFile(rel, referenceSet, declaredResx) {
   if (/preview\.(?:png|jpg|jpeg|gif|svg)$/i.test(path.posix.basename(normalized))) return 'previewImage';
   if (/\.LICENSE\.txt$/i.test(normalized)) return 'legalSidecar';
   return 'unexplained';
+}
+
+function isProcessedManifestOutput(rel) {
+  return normalizeRel(rel) === 'ControlManifest.xml';
 }
 
 function isLocalizedResxSibling(rel, declaredResx) {
@@ -375,5 +408,6 @@ module.exports = {
   classifyOutputFiles,
   classifyOutputDirectory,
   classifyOutputFile,
+  isProcessedManifestOutput,
   pcfScriptsFailed,
 };

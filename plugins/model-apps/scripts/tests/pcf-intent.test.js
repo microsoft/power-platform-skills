@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { assertGolden } = require('./helpers/golden.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { parseManifest } = require('../lib/pcf-manifest.js');
+const { planScaffold } = require('../lib/pcf-scaffold.js');
 
 const {
   validateIntent,
@@ -129,7 +131,7 @@ async function runCli(argv) {
   return cli;
 }
 
-test('validateIntent accepts the v1 shape with Task 15 binding amendments', () => {
+test('validateIntent accepts the v1 shape with canonical binding targets', () => {
   assert.deepEqual(validateIntent(exampleIntent()), []);
 });
 
@@ -194,6 +196,70 @@ test('validateIntent requires every binding to declare kind', () => {
   }));
 
   assert.ok(errors.some((error) => error.includes('bindings[0].kind') && error.includes('required')), errors.join('\n'));
+});
+
+test('lintBindingIntent accepts dataset parameters declared by the manifest data-set', () => {
+  const plan = planScaffold({
+    template: 'dataset-standard',
+    namespace: 'Contoso.Controls',
+    name: 'DatasetStd',
+  });
+  const manifestText = plan.files.find((file) => file.relPath.endsWith('ControlManifest.Input.xml')).content;
+  const manifest = parseManifest(manifestText).model;
+  const intent = exampleIntent({
+    control: { ...exampleIntent().control, template: 'dataset-standard' },
+    hosts: ['model'],
+    properties: [],
+    bindings: [{
+      kind: 'dataset-subgrid',
+      table: 'account',
+      form: 'Account',
+      formType: 'main',
+      target: { controlId: 'Contacts' },
+      parameters: {
+        sampleDataSet: {
+          dataset: {
+            name: 'sampleDataSet',
+            propertySets: [{ name: 'sampleProperty', column: 'name' }],
+          },
+        },
+      },
+    }],
+  });
+
+  assert.equal(codes(lintBindingIntent(intent, { manifestModel: manifest })).includes('PCF_INTENT_PARAM_UNKNOWN'), false);
+});
+
+test('lintBindingIntent rejects unknown dataset property-set names', () => {
+  const plan = planScaffold({
+    template: 'dataset-standard',
+    namespace: 'Contoso.Controls',
+    name: 'DatasetStd',
+  });
+  const manifestText = plan.files.find((file) => file.relPath.endsWith('ControlManifest.Input.xml')).content;
+  const manifest = parseManifest(manifestText).model;
+  const intent = exampleIntent({
+    control: { ...exampleIntent().control, template: 'dataset-standard' },
+    hosts: ['model'],
+    properties: [],
+    bindings: [{
+      kind: 'dataset-subgrid',
+      table: 'account',
+      form: 'Account',
+      formType: 'main',
+      target: { controlId: 'Contacts' },
+      parameters: {
+        sampleDataSet: {
+          dataset: {
+            name: 'sampleDataSet',
+            propertySets: [{ name: 'missingPropertySet', column: 'name' }],
+          },
+        },
+      },
+    }],
+  });
+
+  assertFinding(lintBindingIntent(intent, { manifestModel: manifest }), 'PCF_INTENT_PARAM_UNKNOWN', 'error');
 });
 
 test('validateIntent rejects supplied recipes when no recipes are available', () => {

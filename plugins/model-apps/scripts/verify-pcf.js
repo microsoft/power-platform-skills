@@ -71,7 +71,7 @@ async function main(argv = process.argv.slice(2)) {
   for (const binding of bindings) {
     if (!binding.table) usageError('--table is required');
     if (!binding.form) usageError('--form is required');
-    if (!binding.column && !binding.controlId) usageError('--column or --control-id is required');
+    if (!binding.target.column && !binding.target.controlId) usageError('--column or --control-id is required');
   }
   const cliParameters = parseRepeatedParams(argv);
 
@@ -89,8 +89,8 @@ async function main(argv = process.argv.slice(2)) {
       const expected = {
         kind: binding.kind || 'field',
         controlName: String(flags.control),
-        column: binding.column,
-        controlId: binding.controlId,
+        column: binding.target.column,
+        controlId: binding.target.controlId,
         clients: binding.clients || parseClients(flags.clients),
         parameters: binding.parameters || cliParameters,
       };
@@ -101,7 +101,7 @@ async function main(argv = process.argv.slice(2)) {
       const entry = {
         table: binding.table,
         form: { id: form.formid, name: form.name || binding.form },
-        target: binding.column ? { column: binding.column } : { controlId: binding.controlId },
+        target: binding.target.column ? { column: binding.target.column } : { controlId: binding.target.controlId },
         draft,
         published,
       };
@@ -159,14 +159,26 @@ function readBindings(flags) {
 }
 
 function normalizeBinding(binding) {
+  const target = normalizeBindingTarget(binding);
   return {
     kind: binding.kind || 'field',
     table: binding.table,
     form: binding.form,
-    column: binding.column,
-    controlId: binding.controlId || binding['control-id'],
+    target,
     clients: Array.isArray(binding.clients) ? binding.clients : parseClients(binding.clients),
     parameters: binding.parameters,
+  };
+}
+
+function normalizeBindingTarget(binding) {
+  const canonical = binding && binding.target && typeof binding.target === 'object' && !Array.isArray(binding.target)
+    ? binding.target
+    : {};
+  return {
+    // The intent contract uses `binding.target.column/controlId`. The flat fields are accepted only
+    // for direct CLI normalization and any older hand-authored JSON that copied the CLI flag names.
+    column: canonical.column || (binding && binding.column),
+    controlId: canonical.controlId || (binding && (binding.controlId || binding['control-id'])),
   };
 }
 
@@ -238,7 +250,9 @@ function writeResult(ok, payload) {
     process.exit(0);
   }
   if (payload instanceof Error) {
-    process.stderr.write(payload.message + '\n');
+    const errorPayload = { ok: false, error: payload.message || String(payload) };
+    process.stdout.write(JSON.stringify(errorPayload) + '\n');
+    process.stderr.write(errorPayload.error + '\n');
   } else if (payload && typeof payload === 'object') {
     process.stdout.write(JSON.stringify(payload) + '\n');
     if (typeof payload.error === 'string') process.stderr.write(payload.error.trim() + '\n');

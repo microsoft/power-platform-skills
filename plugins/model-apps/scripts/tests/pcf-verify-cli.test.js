@@ -6,6 +6,7 @@ const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
 const scriptPath = path.join(__dirname, '..', 'verify-pcf.js');
+const evalFixtureRoot = path.join(__dirname, '..', '..', '..', '..', 'evals', 'model-apps', 'pcf', 'fixtures');
 
 async function run(argv, stubs) {
   const cli = loadCli(scriptPath, { argv, requires: stubs });
@@ -177,4 +178,69 @@ test('verify-pcf emits JSON on operational form-read failures', async () => {
   assert.equal(payload.error, 'No form matched');
   assert.deepEqual(payload.bindings, []);
   assert.equal(payload.runtime, 'not-checked');
+});
+
+test('verify-pcf reads canonical intent target.column bindings and reaches FormXML verification', async () => {
+  const calls = [];
+  const stubs = {
+    './lib/pcf-dataverse': {
+      makePcfSdk: async () => ({ tag: 'sdk' }),
+      findCustomControl: async (sdk, name) => ({ name, version: '1.0.0', componentState: 0 }),
+      findForm: async (sdk, query) => {
+        calls.push(['findForm', query]);
+        return { formid: '22222222-2222-4222-8222-222222222222', name: query.form };
+      },
+      readFormXml: async (sdk, formId, opts) => `<${opts.layer} />`,
+    },
+    './lib/pcf-binding-verify': {
+      verifyBinding: (formxml, expected) => {
+        calls.push(['verifyBinding', formxml, expected]);
+        return { ok: true, status: 'bound', issues: [], cells: [] };
+      },
+    },
+  };
+
+  const cli = await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--intent', `@${path.join(evalFixtureRoot, '001-intent-field-clean', 'pcf-intent.json')}`,
+  ], stubs);
+
+  assert.equal(cli.exitCode, 0);
+  assert.deepEqual(calls.find((call) => call[0] === 'findForm')[1], { table: 'account', form: 'Account' });
+  assert.equal(calls.find((call) => call[0] === 'verifyBinding')[2].column, 'new_rating');
+  assert.deepEqual(JSON.parse(cli.stdoutText()).bindings[0].target, { column: 'new_rating' });
+});
+
+test('verify-pcf reads canonical intent target.controlId dataset-subgrid bindings', async () => {
+  const calls = [];
+  const stubs = {
+    './lib/pcf-dataverse': {
+      makePcfSdk: async () => ({ tag: 'sdk' }),
+      findCustomControl: async (sdk, name) => ({ name, version: '1.0.0', componentState: 0 }),
+      findForm: async (sdk, query) => {
+        calls.push(['findForm', query]);
+        return { formid: '33333333-3333-4333-8333-333333333333', name: query.form };
+      },
+      readFormXml: async (sdk, formId, opts) => `<${opts.layer} />`,
+    },
+    './lib/pcf-binding-verify': {
+      verifyBinding: (formxml, expected) => {
+        calls.push(['verifyBinding', formxml, expected]);
+        return { ok: true, status: 'bound', issues: [], cells: [] };
+      },
+    },
+  };
+
+  const cli = await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--intent', `@${path.join(evalFixtureRoot, '003-intent-quickcreate-subgrid', 'pcf-intent.json')}`,
+  ], stubs);
+
+  assert.equal(cli.exitCode, 0);
+  const verifyExpected = calls.find((call) => call[0] === 'verifyBinding')[2];
+  assert.equal(verifyExpected.kind, 'dataset-subgrid');
+  assert.equal(verifyExpected.controlId, 'Contacts');
+  assert.deepEqual(JSON.parse(cli.stdoutText()).bindings[0].target, { controlId: 'Contacts' });
 });

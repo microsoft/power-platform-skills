@@ -124,7 +124,9 @@ function writeResult(ok, payload) {
     process.exit(0);
   }
   if (payload instanceof Error) {
-    process.stderr.write(payload.message + '\n');
+    const errorPayload = { ok: false, error: payload.message || String(payload) };
+    process.stdout.write(JSON.stringify(errorPayload) + '\n');
+    process.stderr.write(errorPayload.error + '\n');
   } else if (payload !== null && typeof payload === 'object') {
     process.stdout.write(JSON.stringify(payload) + '\n');
     if (typeof payload.error === 'string' && payload.error.trim()) process.stderr.write(payload.error.trim() + '\n');
@@ -143,4 +145,3 @@ if (require.main === module) {
 }
 
 module.exports = { main, isDefaultInventoryControl };
-

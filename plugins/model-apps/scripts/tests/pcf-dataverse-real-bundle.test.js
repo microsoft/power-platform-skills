@@ -46,7 +46,7 @@ async function sdkWithCapture() {
         return { status: 200, headers: {}, body: { formxml: '<draft />' } };
       }
       if (/RetrieveDependentComponents/i.test(text)) {
-        return { status: 200, headers: {}, body: { value: [{ ComponentType: 60, ObjectId: '22222222-2222-2222-2222-222222222222' }] } };
+        return { status: 200, headers: {}, body: { value: [{ dependentcomponenttype: 60, dependentcomponentobjectid: '22222222-2222-2222-2222-222222222222', dependencytype: 2 }] } };
       }
       return { status: 200, headers: {}, body: {} };
     },

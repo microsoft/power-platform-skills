@@ -59,7 +59,7 @@ function runMain(argv) {
   const result = buildControl({ projectDir: found.projectDir, mode, clean: !flags['no-clean'] });
   const findings = bundleFindings(result, loadMatrix());
   const ok = Boolean(result.ok) && !findings.some((finding) => finding.severity === 'error');
-  emitPcfResult(ok, { ok, ...result, findings });
+  emitPcfResult(ok, { ...result, findings, ok });
 }
 
 if (require.main === module) {

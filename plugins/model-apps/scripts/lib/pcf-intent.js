@@ -249,6 +249,7 @@ function lintBindingIntent(intent, options = {}) {
   const bindings = Array.isArray(intent.bindings) ? intent.bindings : [];
   const props = manifestProperties(intent, manifestModel);
   const propNames = new Set(props.map((prop) => prop.name));
+  const datasetNames = manifestDatasetNames(manifestModel);
 
   for (const [index, binding] of bindings.entries()) {
     const kind = binding.kind;
@@ -282,13 +283,39 @@ function lintBindingIntent(intent, options = {}) {
     }
 
     for (const name of Object.keys(binding.parameters || {})) {
-      if (!propNames.has(name)) {
+      if (!propNames.has(name) && !datasetNames.has(name)) {
         findings.push(finding(
           'PCF_INTENT_PARAM_UNKNOWN',
           'error',
           `Binding ${index + 1} maps parameter '${name}', but the manifest has no matching property.`,
           `Remove '${name}' from the binding or add a '${name}' property to the manifest.`,
         ));
+      }
+    }
+
+    for (const [name, param] of Object.entries(binding.parameters || {})) {
+      const dataset = param && param.dataset;
+      if (!dataset) continue;
+      const declared = manifestDataset(manifestModel, dataset.name || name);
+      if (!declared) {
+        findings.push(finding(
+          'PCF_INTENT_PARAM_UNKNOWN',
+          'error',
+          `Binding ${index + 1} maps dataset '${dataset.name || name}', but the manifest has no matching data-set.`,
+          `Remove '${name}' from the binding or add a '${dataset.name || name}' data-set to the manifest.`,
+        ));
+        continue;
+      }
+      const propertySets = new Set((declared.propertySets || []).map((set) => set.name));
+      for (const set of dataset.propertySets || []) {
+        if (!propertySets.has(set.name)) {
+          findings.push(finding(
+            'PCF_INTENT_PARAM_UNKNOWN',
+            'error',
+            `Binding ${index + 1} maps dataset property-set '${set.name}', but data-set '${declared.name}' does not declare it.`,
+            `Remove '${set.name}' from the binding or add that property-set to data-set '${declared.name}' in the manifest.`,
+          ));
+        }
       }
     }
 
@@ -336,6 +363,14 @@ function isVirtualControlIntent(intent, manifestModel) {
 function manifestProperties(intent, manifestModel) {
   if (manifestModel && Array.isArray(manifestModel.properties)) return manifestModel.properties;
   return Array.isArray(intent.properties) ? intent.properties : [];
+}
+
+function manifestDatasetNames(manifestModel) {
+  return new Set(((manifestModel && manifestModel.dataSets) || []).map((set) => set.name));
+}
+
+function manifestDataset(manifestModel, name) {
+  return ((manifestModel && manifestModel.dataSets) || []).find((set) => set.name === name) || null;
 }
 
 function clientsFor(binding) {
