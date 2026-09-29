@@ -30,6 +30,14 @@ function createResponse(entities: ComponentFramework.WebApi.Entity[], nextLink?:
     return { entities, nextLink } as ComponentFramework.WebApi.RetrieveMultipleResponse;
 }
 
+function deferredResponse() {
+    let resolve!: (value: ComponentFramework.WebApi.RetrieveMultipleResponse) => void;
+    const promise = new Promise<ComponentFramework.WebApi.RetrieveMultipleResponse>((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
+
 async function flushPromises() {
     await Promise.resolve();
     await Promise.resolve();
@@ -152,6 +160,46 @@ test("configured target table mismatch with the selected lookup is a visible con
     expect(retrieveMultipleRecords).not.toHaveBeenCalled();
     expect(mounted.select().disabled).toBe(true);
     expect(mounted.status().textContent).toContain("Target table configuration");
+});
+
+test("stale lookup loads cannot overwrite a later target mismatch error", async () => {
+    const pending = deferredResponse();
+    const retrieveMultipleRecords = jest.fn((_entityLogicalName: string, _query?: string, _maxPageSize?: number) => pending.promise);
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+    await flushPromises();
+
+    mounted.context.parameters.lookupValue = lookupProperty([
+        { id: "33333333-3333-4333-8333-333333333333", name: "Mismatched contact", entityType: "contact" },
+    ]) as IInputs["lookupValue"];
+    mounted.control.updateView(mounted.context);
+    expect(mounted.status().textContent).toContain("Target table configuration");
+
+    pending.resolve(createResponse([
+        { accountid: "11111111-1111-4111-8111-111111111111", accountname: "Stale account" },
+    ]));
+    await flushPromises();
+
+    expect(mounted.status().textContent).toContain("Target table configuration");
+    expect(Array.from(mounted.select().options).map((option) => option.textContent)).not.toContain("Stale account");
+});
+
+test("destroy drops a stale lookup load without rendering", async () => {
+    const pending = deferredResponse();
+    const retrieveMultipleRecords = jest.fn((_entityLogicalName: string, _query?: string, _maxPageSize?: number) => pending.promise);
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+    await flushPromises();
+
+    mounted.control.destroy();
+    pending.resolve(createResponse([
+        { accountid: "11111111-1111-4111-8111-111111111111", accountname: "Stale account" },
+    ]));
+    await flushPromises();
+
+    expect(mounted.container.childElementCount).toBe(0);
 });
 
 test("omits the selectable row filter when the maker leaves configuration blank", async () => {
