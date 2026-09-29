@@ -6,6 +6,9 @@ const path = require('node:path');
 const DEFAULT_ROOT = path.join(__dirname, '..', '..');
 const MATRIX_RELATIVE_PATH = path.join('pcf', 'compatibility-matrix.json');
 const KNOWN_HOSTS = new Set(['model', 'pages']);
+// `observed-rejection` upgrades an exclusion to a blocking lint error; other scopes
+// must be explicit so typos cannot silently weaken a measured platform rejection.
+const BASELINE_EXCLUSION_SCOPES = new Set(['observed-rejection', 'reported']);
 
 function normalizeVersion(version) {
   const [core, suffix] = String(version).split('-', 2);
@@ -80,6 +83,9 @@ function validateLibrary(errors, name, library) {
     return;
   }
   validateVersionSelector(errors, library.recommendedBaseline, `platformLibraries.${name}.recommendedBaseline`);
+  if (typeof library.recommendedBaseline.version !== 'string') {
+    errors.push(`platformLibraries.${name}.recommendedBaseline.version must be a string`);
+  }
   for (const section of ['documentedDeclarations', 'toolingAccepted', 'testedRuntime']) {
     if (!Array.isArray(library[section])) {
       errors.push(`platformLibraries.${name}.${section} must be an array`);
@@ -190,6 +196,9 @@ function validateMatrix(matrix) {
       if (!addRequiredObject(errors, exclusion, exclusionPath)) continue;
       for (const key of ['library', 'version', 'reason', 'evidence', 'scope']) {
         if (typeof exclusion[key] !== 'string' || !exclusion[key]) errors.push(`${exclusionPath}.${key} must be a string`);
+      }
+      if (typeof exclusion.scope === 'string' && !BASELINE_EXCLUSION_SCOPES.has(exclusion.scope)) {
+        errors.push(`${exclusionPath}.scope must be one of: ${Array.from(BASELINE_EXCLUSION_SCOPES).join(', ')}`);
       }
     }
   }

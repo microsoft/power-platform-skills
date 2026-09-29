@@ -44,6 +44,28 @@ test('loadMatrix reports schema errors with the compatibility-matrix prefix', ()
   );
 });
 
+test('recommended baselines require exact versions, not only ranges', () => {
+  const mx = clone(m.loadMatrix());
+  delete mx.platformLibraries.Fluent.recommendedBaseline.version;
+  mx.platformLibraries.Fluent.recommendedBaseline.min = '9.4.0';
+
+  const errors = m.validateMatrix(mx);
+
+  assert.ok(
+    errors.some((error) => error.includes('platformLibraries.Fluent.recommendedBaseline.version')),
+    errors.join('\n'),
+  );
+  assert.throws(
+    () =>
+      m.loadMatrix({
+        fs: { readFileSync: () => JSON.stringify(mx) },
+        path,
+        root: ROOT,
+      }),
+    /compatibility-matrix\.json: .*platformLibraries\.Fluent\.recommendedBaseline\.version/,
+  );
+});
+
 test('compareVersions / inRange', () => {
   assert.equal(m.compareVersions('9.46.2', '9.68.0'), -1);
   assert.equal(m.compareVersions('1.51', '1.51.0'), 0);
@@ -80,6 +102,15 @@ test('baseline exclusion severity depends on observed-rejection scope', () => {
   assert.equal(severity(mx), 'error');
   mx.baselineExclusions[0].scope = 'documented-range';
   assert.equal(severity(mx), 'warning');
+});
+
+test('baseline exclusion scope is validated against the explicit allow-list', () => {
+  const mx = clone(m.loadMatrix());
+  mx.baselineExclusions[0].scope = 'observed-rejetcion';
+
+  const errors = m.validateMatrix(mx);
+
+  assert.ok(errors.some((error) => error.includes('baselineExclusions[0].scope')), errors.join('\n'));
 });
 
 test('dependency sets expose the committed lock package versions', () => {
