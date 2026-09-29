@@ -1,7 +1,7 @@
 # Lookup dropdown PCF recipe
 
 Lookup dropdown replaces a model-driven app lookup field with an accessible `<select>` that lists
-active target rows and writes the chosen lookup value back through the bound lookup column.
+configured target rows and writes the chosen lookup value back through the bound lookup column.
 
 ## Template and hosts
 
@@ -14,18 +14,22 @@ active target rows and writes the chosen lookup value back through the bound loo
 Bind `lookupValue` to a single-table lookup column. Add the component in the modern form designer
 from the Components pane, or in the classic designer from the field's Controls tab.
 
-The control discovers the lookup target table, primary id column, primary name column and active
-state predicate from PCF lookup metadata and `context.utils.getEntityMetadata`. It does not require
-hard-coded table or column names.
+The control discovers the lookup target table, primary id column and primary name column from PCF
+lookup metadata and `context.utils.getEntityMetadata`. Set `selectableFilter` to an OData `$filter`
+fragment for rows the dropdown should show, for example the target table's active-row predicate. If
+you leave it blank, the dropdown lists rows without an active-row filter. The recipe intentionally
+does not hard-code `statecode eq 0` because the active predicate must come from maker configuration
+or documented metadata.
 
 ## Behavior and limits
 
-- Loads target rows with `context.webAPI.retrieveMultipleRecords` using explicit `$select`, page
-  size, and `nextLink` paging.
+- Loads target rows with `context.webAPI.retrieveMultipleRecords` using explicit `$select`, the
+  optional configured `selectableFilter`, page size, and `nextLink` paging.
 - Keeps an already-selected inactive record visible so users can see and clear the existing value.
 - Returns `LookupValue[]` from `getOutputs()` when selected, or `undefined` to clear the lookup.
 - Does not notify the host when the selected value is unchanged.
-- Shows disabled, unreadable, non-editable, unsaved, loading and permission-failure states.
+- Shows disabled, unreadable, non-editable, loading and permission-failure states.
+- Works on unsaved forms because it never reads a current record id.
 - Online model-driven app use only; offline behavior is not claimed in this release.
 - Certification is empty until live model-driven app lanes record evidence.
 
@@ -42,3 +46,6 @@ hard-coded table or column names.
   `$select`, `$top` and `nextLink` paging.
 - [`getEntityMetadata`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/utility/getentitymetadata):
   documents `context.utils.getEntityMetadata(entityName, attributes)` for model-driven apps.
+- [`EntityMetadata`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/entitymetadata):
+  documents lower-camel metadata properties including `primaryIdAttribute`, `primaryNameAttribute`
+  and `metadata`.

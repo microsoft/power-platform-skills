@@ -1,7 +1,7 @@
 {
   "id": "lookup-dropdown",
   "title": "Lookup dropdown",
-  "summary": "Replace a lookup field with an accessible dropdown of active target rows.",
+  "summary": "Replace a lookup field with an accessible dropdown of configured target rows.",
   "template": "field-standard",
   "hosts": ["model"],
   "whyWanted": "Lookup UX is the top community ask for PCF.",
@@ -18,6 +18,15 @@
       "ofType": "Lookup.Simple",
       "usage": "bound",
       "required": true
+    },
+    {
+      "name": "selectableFilter",
+      "displayNameKey": "SelectableFilter_Display_Key",
+      "descriptionKey": "SelectableFilter_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": false,
+      "defaultValue": ""
     }
   ],
   "features": [
@@ -30,5 +39,5 @@
       "required": true
     }
   ],
-  "configuration": "Bind lookupValue to a single-table lookup column, then add this component from the modern form designer Components pane or the classic Controls tab."
+  "configuration": "Bind lookupValue to a single-table lookup column, optionally set selectableFilter to an OData filter such as the table's active-row predicate, then add this component from the modern form designer Components pane or the classic Controls tab."
 }

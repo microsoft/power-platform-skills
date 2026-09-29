@@ -8,11 +8,10 @@ interface LookupMetadata {
     tableName: string;
     idColumn: string;
     nameColumn: string;
-    activeFilter: string;
+    selectableFilter: string;
 }
 
 const PAGE_SIZE = 25;
-const ACTIVE_LABEL = "active";
 
 export async function loadLookupOptions(
     context: ComponentFramework.Context<IInputs>,
@@ -20,10 +19,11 @@ export async function loadLookupOptions(
 ): Promise<LookupOption[]> {
     const metadata = await readLookupMetadata(context, lookup);
     const select = `$select=${[metadata.idColumn, metadata.nameColumn].map(encodeURIComponent).join(",")}`;
-    const filter = `$filter=${encodeURIComponent(metadata.activeFilter)}`;
+    const selectableFilter = metadata.selectableFilter.trim();
+    const filter = selectableFilter ? `&$filter=${encodeURIComponent(selectableFilter)}` : "";
     const orderBy = `$orderby=${encodeURIComponent(`${metadata.nameColumn} asc`)}`;
     const results: LookupOption[] = [];
-    let options: string | undefined = `?${select}&${filter}&${orderBy}`;
+    let options: string | undefined = `?${select}${filter}&${orderBy}`;
 
     while (options) {
         const page = await context.webAPI.retrieveMultipleRecords(metadata.tableName, options, PAGE_SIZE);
@@ -55,8 +55,8 @@ async function readLookupMetadata(
 
     const metadata = await context.utils.getEntityMetadata(tableName);
     const record = metadata as MetadataObject;
-    const idColumn = stringMetadata(record, "PrimaryIdAttribute");
-    const nameColumn = stringMetadata(record, "PrimaryNameAttribute");
+    const idColumn = stringMetadata(record, "primaryIdAttribute");
+    const nameColumn = stringMetadata(record, "primaryNameAttribute");
     if (!idColumn || !nameColumn) {
         throw new Error("Lookup metadata did not include primary id and primary name columns.");
     }
@@ -65,58 +65,11 @@ async function readLookupMetadata(
         tableName,
         idColumn,
         nameColumn,
-        activeFilter: activePredicate(record),
+        // Learn's PCF EntityMetadata exposes the primary columns but not a documented active-state
+        // predicate, so row eligibility comes from maker configuration rather than a label match or
+        // a hard-coded `statecode eq 0`.
+        selectableFilter: stringParameter(context.parameters.selectableFilter?.raw),
     };
-}
-
-function activePredicate(metadata: MetadataObject): string {
-    const stateAttribute = attributes(metadata).find((attribute) => {
-        const kind = stringMetadata(attribute, "AttributeType").toLowerCase();
-        return kind === "state";
-    });
-    if (!stateAttribute) throw new Error("Lookup metadata did not include a state column.");
-
-    const stateColumn = stringMetadata(stateAttribute, "LogicalName");
-    const activeOption = optionSetOptions(stateAttribute).find((option) => {
-        const label = optionLabel(option).toLowerCase();
-        const invariantName = stringMetadata(option, "InvariantName").toLowerCase();
-        return label === ACTIVE_LABEL || invariantName === ACTIVE_LABEL;
-    });
-    const activeValue = numericMetadata(activeOption, "Value");
-    if (!stateColumn || activeValue === undefined) {
-        throw new Error("Lookup metadata did not include an active state option.");
-    }
-
-    // The state column name and active value are metadata-derived because custom/stateful tables can
-    // expose localized labels while A21 forbids hard-coding `statecode eq 0`.
-    return `${stateColumn} eq ${activeValue}`;
-}
-
-function attributes(metadata: MetadataObject): MetadataObject[] {
-    const raw = metadata.Attributes;
-    if (Array.isArray(raw)) return raw.filter(isMetadataObject);
-    if (isMetadataObject(raw)) return Object.values(raw).filter(isMetadataObject);
-    return [];
-}
-
-function optionSetOptions(attribute: MetadataObject): MetadataObject[] {
-    const optionSet = attribute.OptionSet;
-    if (!isMetadataObject(optionSet)) return [];
-    const options = optionSet.Options;
-    return Array.isArray(options) ? options.filter(isMetadataObject) : [];
-}
-
-function optionLabel(option: MetadataObject): string {
-    const label = option.Label;
-    if (!isMetadataObject(label)) return "";
-    const userLabel = label.UserLocalizedLabel;
-    if (isMetadataObject(userLabel)) return stringMetadata(userLabel, "Label");
-    const localized = label.LocalizedLabels;
-    if (Array.isArray(localized)) {
-        const first = localized.find(isMetadataObject);
-        if (first) return stringMetadata(first, "Label");
-    }
-    return "";
 }
 
 function stringField(entity: ComponentFramework.WebApi.Entity, key: string): string {
@@ -124,20 +77,14 @@ function stringField(entity: ComponentFramework.WebApi.Entity, key: string): str
     return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+function stringParameter(value: unknown): string {
+    return typeof value === "string" ? value : "";
+}
+
 function stringMetadata(record: MetadataObject | undefined, key: string): string {
     if (!record) return "";
     const value = record[key];
     return typeof value === "string" ? value : "";
-}
-
-function numericMetadata(record: MetadataObject | undefined, key: string): number | undefined {
-    if (!record) return undefined;
-    const value = record[key];
-    return typeof value === "number" ? value : undefined;
-}
-
-function isMetadataObject(value: unknown): value is MetadataObject {
-    return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function nextLinkOptions(nextLink: string | undefined): string | undefined {
