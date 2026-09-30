@@ -212,6 +212,58 @@ test('verifySpec: an icon the build kept from the designer passes only in the ca
   assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec: baseline })).present, false, 'an edit the spec made is still verified');
 });
 
+// The exemption is for a value the build KEPT on an entry that is there — never for a missing entry,
+// whose icon check is the one thing that fails when a URL entry is gone (there is no separate check).
+test('verifySpec: a nav entry missing from the sitemap fails its icon check, baseline or not', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  for (const xml of ['<SiteMap />', '', null]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, JSON.stringify(xml));
+  }
+  // The same entry present with a designer icon IS kept — its URL matched after the XML escaping is read.
+  const read = { findTable: async () => null, findColumns: async () => [],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, true);
+  // Two live entries for the same target: which one the build kept cannot be told, so nothing is.
+  const twice = { ...read, sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /><SubArea Id="h2" Url="https://contoso.example/help?a=1&amp;b=2" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, twice, { baselineSpec })).present, false);
+});
+
+// Verify must line the baseline up the way the build does: by the id each dashboard and page resolves
+// to here. A pin the author dropped, while the name still finds the same dashboard, is the same entry.
+test('verifySpec: an icon kept on a dashboard or page entry is judged by the ids resolved here', async () => {
+  const A = 'aaaa1111-2222-3333-4444-555566667777';
+  const P = 'bbbb1111-2222-3333-4444-555566667777';
+  const spec = { schemaVersion: 2, entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    pages: [{ key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'home.tsx' } }],
+    appShell: { areas: [{ groups: [{ subAreas: [
+      { dashboard: 'Ops', title: 'Ops', vectorIcon: '$webresource:new_old.svg' },
+      { page: 'home', title: 'Home', vectorIcon: '$webresource:new_oldpage.svg' },
+    ] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  baselineSpec.dashboards[0].dashboardId = A; // downloaded pinned; the author has since dropped the pin
+  baselineSpec.__deployedIds = { dashboards: { Ops: A }, pages: { home: P } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: A, name: 'Ops' }] : []),
+    manifest: async () => ({ pages: [{ key: 'home', pageId: P }] }),
+    sitemapPageIds: async () => [P], existenceIds: async () => [P],
+    sitemapXml: async () => '<SiteMap><Area><Group>'
+      + `<SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${A.toUpperCase()}}" VectorIcon="$webresource:new_designer.svg" />`
+      + `<SubArea Id="home" GenPageId="${P}" VectorIcon="$webresource:new_designerpage.svg" />`
+      + '</Group></Area></SiteMap>',
+  };
+  const icons = (r) => r.checks.filter((c) => c.kind === 'subarea-vectorIcon').map((c) => [c.name, c.present]);
+  assert.deepStrictEqual(icons(await verifySpec(spec, read, { baselineSpec })), [['Ops', true], ['Home', true]]);
+  // Without the ids a dashboard or page resolves to here, nothing lines up and both are required again.
+  const unresolved = { ...read, queryRecords: async () => [], manifest: async () => ({ pages: [] }) };
+  assert.deepStrictEqual(icons(await verifySpec(spec, unresolved, { baselineSpec })), [['Ops', false], ['Home', false]]);
+});
+
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
   const sdk = {
     queryRecords: async (set) => {

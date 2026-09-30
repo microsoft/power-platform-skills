@@ -1057,8 +1057,10 @@ async function main() {
   if (effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
     // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
     // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
-    // actually deployed by THIS apply, stamped with the environment and app it was deployed to.
-    try { writeBaseline(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity }); } catch { /* non-fatal */ }
+    // actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
+    // dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
+    // them, and a spec downloaded elsewhere carries another environment's).
+    try { writeBaseline(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec }); } catch { /* non-fatal */ }
   }
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
   // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists

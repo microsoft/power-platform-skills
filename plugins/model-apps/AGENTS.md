@@ -256,8 +256,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **baseline** — `.maker-workspace/last-applied.json`, written by a successful apply and by download,
   stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
   title/icon that the spec has not changed since, but the designer has, is kept and reported rather
-  than reverted, and verify accepts a kept icon by the same rule (`keptFromBaseline`); without one the
-  spec wins and every change to an existing entry is reported. A downloaded dashboard carries
+  than reverted (`keepsLiveValue`); without one the spec wins and every change to an existing entry is
+  reported. Baseline entries are lined up with live ones by the ids the baseline RECORDED for its
+  environment (`__deployedIds`: what the apply resolved, or what the download read), never by the
+  spec's own `dashboardId`/`pageId`, which may be another environment's. Verify accepts a kept icon by
+  the same rule and identities, and only on a live entry that exists. A downloaded dashboard carries
   `dashboards[].dashboardId`, which build, verify and teardown resolve before the name
   (`findPinnedDashboard`) — when it resolves it is the only candidate, and teardown still requires
   solution membership — so a dashboard renamed in the designer is reused, with a warning since a build
@@ -757,7 +760,7 @@ scripts/
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
-    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app
+    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)

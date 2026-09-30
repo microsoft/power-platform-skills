@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const { appDef } = require('../lib/sdk-build.js');
 const { adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('../lib/sitemap-merge.js');
 const { subareaDashboardHasLauncher, subareaHasDashboard } = require('../lib/verify-spec.js');
+const { deployedIdsFor } = require('../lib/deployed-baseline.js');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const APP_ID = '11111111-1111-1111-1111-111111111111';
@@ -196,9 +197,10 @@ test('REAL BUNDLE: a title added to an entry that had none is written; a removed
 test('REAL BUNDLE: renaming the dashboard in the spec, as the build asks, keeps the baseline lined up', async () => {
   // Downloaded (pinned) as 'Command Center - Event operations'; renamed in the designer; the author then
   // follows the build's warning and renames it in the spec too. The baseline still names it by the old
-  // name, so only the id it recorded can line its nav entry up with the live one.
+  // name, so only the id the download recorded can line its nav entry up with the live one.
   const PINNED = (s) => { s.dashboards = [{ name: s.appShell.areas[0].groups[0].subAreas[0].dashboard, dashboardId: DASH, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }]; return s; };
-  const baseline = PINNED(specFor({ dashTitle: 'Command Center - Event operations' }));
+  const downloaded = PINNED(specFor({ dashTitle: 'Command Center - Event operations' }));
+  const baseline = { ...downloaded, __deployedIds: deployedIdsFor(downloaded, { fromSpec: true }) };
   const renamed = PINNED(specFor({ dashTitle: 'Command Center - Event operations' }));
   renamed.appShell.areas[0].groups[0].subAreas[0].dashboard = 'Event operations';
   renamed.dashboards[0].name = 'Event operations';
@@ -211,4 +213,39 @@ test('REAL BUNDLE: renaming the dashboard in the spec, as the build asks, keeps 
   await sdk.pushArtifact('app', APP_ID);
   assert.match(lastXml(), /<Title LCID="1033" Title="Event operations" \/>/, 'the designer\u2019s nav title is kept');
   assert.doesNotMatch(lastXml(), /Command Center - Event operations/);
+});
+
+test('REAL BUNDLE: a spec downloaded from another environment lines up by the ids the build resolved HERE', async () => {
+  // Its pin names the other environment's dashboard, which does not exist here, so the build fell back
+  // to the name and resolved DASH — and the baseline it wrote records DASH, not the pin. Recording the
+  // pin would line the entry up with nothing, and the next build would revert the designer's rename.
+  const FOREIGN = 'ffffffff-1111-2222-3333-444444444444';
+  const pinned = () => {
+    const s = specFor({ dashTitle: 'Command Center - Event operations' });
+    s.dashboards = [{ name: 'Command Center - Event operations', dashboardId: FOREIGN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }];
+    return s;
+  };
+  const applied = pinned();
+  const baseline = { ...applied, __deployedIds: deployedIdsFor(applied, { created: CREATED }) };
+  assert.deepStrictEqual(baseline.__deployedIds.dashboards, { 'Command Center - Event operations': DASH });
+  const { xml, notes } = await rebuild(deployedXml({ dashTitle: 'Event operations' }), pinned(), { baseChrome: chromeByTargetKey(baseline, CREATED) });
+  assert.match(xml, /<Title LCID="1033" Title="Event operations" \/>/, 'the designer\u2019s rename is kept');
+  assert.ok(describeSitemapNotes(notes).some((l) => /kept the environment's title 'Event operations'/.test(l)));
+});
+
+test('REAL BUNDLE: removing a group\u2019s title leaves its description ahead of its entries', async () => {
+  // A group an earlier build created (so it corresponds by its id) that the designer gave a description.
+  // Its label is then removed from the spec: the title goes, and the description must stay before the
+  // subareas, where the sitemap schema requires it.
+  const xml = '<SiteMap IntroducedVersion="7.0.0.0"><Area Id="area_0" ShowGroups="true"><Titles><Title LCID="1033" Title="Operations" /></Titles>'
+    + '<Group Id="group_0_0"><Titles><Title LCID="1033" Title="Main" /></Titles><Descriptions><Description LCID="1033" Description="Day-to-day work" /></Descriptions>'
+    + `${LEGACY_DASHBOARD_TAG}<Titles><Title LCID="1033" Title="Event operations" /></Titles></SubArea>`
+    + '<SubArea Id="feedback_sub" Entity="new_feedback" Client="All,Web"><Titles><Title LCID="1033" Title="Feedback" /></Titles></SubArea>'
+    + '</Group></Area></SiteMap>';
+  const spec = specFor();
+  delete spec.appShell.areas[0].groups[0].label;
+  const out = await rebuild(xml, spec);
+  const group = out.xml.slice(out.xml.indexOf('<Group'), out.xml.indexOf('</Group>'));
+  assert.match(group, /^<Group Id="group_0_0"><Descriptions><Description LCID="1033" Description="Day-to-day work" \/><\/Descriptions><SubArea Id="ops_dashboard"/, group);
+  assert.doesNotMatch(group, /<Titles><Title LCID="1033" Title="Main"/, 'the removed title is gone');
 });

@@ -3,7 +3,7 @@
 // sitemap-adopt-real-bundle.test.js; these pin the correspondence rules one at a time.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes, subAreaTargetKey, isDashboardLauncherUrl, DASHBOARD_LAUNCHER_URL } = require('../lib/sitemap-merge.js');
+const { adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes, subAreaTargetKey, specSubAreaTargetKey, keepsLiveValue, isDashboardLauncherUrl, DASHBOARD_LAUNCHER_URL } = require('../lib/sitemap-merge.js');
 
 const bag = (id, extra = []) => ({ a: [['Id', id], ...extra], c: [] });
 const entitySub = (id, entity, title, b) => ({ id, type: 'Entity', entity, title, ...(b ? { bag: b } : {}) });
@@ -144,6 +144,74 @@ test('chromeByTargetKey resolves dashboards and pages through this build\u2019s 
   const map = chromeByTargetKey(spec, { dashboards: { Ops: '{AAAAAAAA-0000-0000-0000-000000000001}' }, pages: { home: 'BBBBBBBB-0000-0000-0000-000000000002' } });
   assert.deepStrictEqual([...map.keys()].sort(), ['DashBoard:aaaaaaaa-0000-0000-0000-000000000001', 'GenPage:bbbbbbbb-0000-0000-0000-000000000002', 'URL:https://contoso.example/help']);
   assert.strictEqual(chromeByTargetKey(null).size, 0);
+});
+
+test('chromeByTargetKey takes the ids the baseline recorded here first, and never the spec\u2019s own', () => {
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const B = 'bbbbbbbb-0000-0000-0000-000000000002';
+  const F = 'ffffffff-0000-0000-0000-00000000000f';
+  // Downloaded elsewhere: the spec's pins are ANOTHER environment's (F). Built here by name, it resolved
+  // A, which the baseline recorded; the author then renamed the dashboard in the spec.
+  const baseline = {
+    dashboards: [{ name: 'Ops', dashboardId: F }],
+    pages: [{ key: 'home', name: 'Overview', pageId: F }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }, { page: 'home', title: 'Home' }] }] }] },
+    __deployedIds: { dashboards: { Ops: A }, pages: {} },
+  };
+  const map = chromeByTargetKey(baseline, { dashboards: { Operations: A }, pages: { home: B } });
+  assert.deepStrictEqual([...map.keys()].sort(), [`DashBoard:${A}`, `GenPage:${B}`], 'recorded first, then this run\u2019s; the spec\u2019s pins never');
+  // Recorded ids win over this run's for the same name.
+  assert.ok(chromeByTargetKey(baseline, { dashboards: { Ops: B } }).has(`DashBoard:${A}`));
+  // A name that is also an Object.prototype member resolves to nothing, not to a function.
+  const odd = { appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'constructor', title: 'X' }] }] }] } };
+  assert.strictEqual(chromeByTargetKey(odd, {}).size, 0);
+});
+
+test('a page is referenced by its key; a page NAMED like another page\u2019s key does not capture it', () => {
+  // Valid v2: "home" is one page's key and the other page's name. A reference is a key.
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const B = 'bbbbbbbb-0000-0000-0000-000000000002';
+  const baseline = {
+    schemaVersion: 2,
+    pages: [{ key: 'home', name: 'Overview' }, { key: 'reports', name: 'home' }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ page: 'home', title: 'Start' }, { page: 'reports', title: 'Reports' }] }] }] },
+    __deployedIds: { dashboards: {}, pages: { home: A, reports: B } },
+  };
+  const map = chromeByTargetKey(baseline);
+  assert.strictEqual(map.get(`GenPage:${A}`).title, 'Start');
+  assert.strictEqual(map.get(`GenPage:${B}`).title, 'Reports');
+  assert.strictEqual(specSubAreaTargetKey({ page: 'home' }, { pages: { home: A } }), `GenPage:${A}`);
+});
+
+test('keepsLiveValue is the keep rule: spec unchanged since the baseline, environment changed', () => {
+  const base = { title: 'T', icon: 'old.png' };
+  assert.strictEqual(keepsLiveValue('icon', 'old.png', 'designer.png', base), true);
+  assert.strictEqual(keepsLiveValue('icon', 'OLD.PNG', 'designer.png', base), true, 'icons compare case-insensitively');
+  assert.strictEqual(keepsLiveValue('icon', 'new.png', 'designer.png', base), false, 'the spec changed it: written');
+  assert.strictEqual(keepsLiveValue('icon', 'old.png', 'old.png', base), false, 'nothing differs');
+  assert.strictEqual(keepsLiveValue('icon', 'old.png', 'designer.png', undefined), false, 'no baseline: the spec wins');
+  assert.strictEqual(keepsLiveValue('title', 'T', 't', base), true, 'a changed capital is a real rename');
+  assert.strictEqual(keepsLiveValue('nope', 'a', 'b', base), false);
+});
+
+test('removing a node\u2019s last title keeps its other children ahead of the nodes the spec models', () => {
+  // A group titled only at the SDK's language, with a description: <Titles/><Descriptions/><SubArea/>.
+  // Its title is removed. The Descriptions child must move up to the vacated first slot — the sitemap
+  // schema puts Titles and Descriptions before the SubAreas — rather than a SubArea filling it.
+  const groupBag = { a: [['Id', 'group_0_0']], c: [
+    { i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Main']] }] } },
+    { i: 1, node: { n: 'Descriptions', a: [], c: [{ n: 'Description', a: [['LCID', '1033'], ['Description', 'D']] }] } },
+  ] };
+  const live = tree([{ id: 'area_0', title: 'M', bag: bag('area_0'), groups: [{ id: 'group_0_0', title: 'Main', bag: groupBag, subAreas: [entitySub('s', 'new_x', 'X', bag('s'))] }] }]);
+  const desired = tree([{ id: 'area_0', title: 'M', groups: [{ id: 'group_0_0', title: undefined, subAreas: [entitySub('sub_0_0_0', 'new_x', 'X')] }] }]);
+  const group = adoptLiveSitemap(desired, live).siteMap.areas[0].groups[0];
+  assert.deepStrictEqual(group.bag.c.map((e) => [e.i, e.node.n]), [[0, 'Descriptions']]);
+  assert.deepStrictEqual(groupBag.c.map((e) => e.i), [0, 1], 'the live bag is not touched');
+  // A title in another language keeps the wrapper, and every index with it.
+  groupBag.c[0].node.c.push({ n: 'Title', a: [['LCID', '1036'], ['Title', 'Principal']] });
+  const kept = adoptLiveSitemap(desired, live).siteMap.areas[0].groups[0];
+  assert.deepStrictEqual(kept.bag.c.map((e) => [e.i, e.node.n]), [[0, 'Titles'], [1, 'Descriptions']]);
+  assert.deepStrictEqual(kept.bag.c[0].node.c.map((t) => t.a[0][1]), ['1036']);
 });
 
 test('nothing live (a first write, or an unreadable copy) leaves the desired tree as it is', () => {

@@ -102,7 +102,9 @@ const rawAttr = (node, key) => {
  *   - no title where the live node has one at this language: that `<Title>` is dropped, and the other
  *     languages' titles are kept — the bag-less write this replaces dropped every language.
  * Bag children are `{ i, node }` with absolute child indices (modeled children fill the gaps), so an
- * insertion shifts every index after it.
+ * insertion shifts every index after it up, and a removal shifts every index after it down — or a
+ * modeled child would fill the vacated slot ahead of the kept ones, e.g. a `<SubArea>` written before
+ * the group's `<Descriptions>`, which the sitemap schema does not allow.
  */
 function reconcileTitleChild(bag, title, liveTitle, lcid) {
   if (!bag || !Array.isArray(bag.c)) return;
@@ -117,7 +119,10 @@ function reconcileTitleChild(bag, title, liveTitle, lcid) {
   if (!text(liveTitle) || at < 0) return;
   const titles = bag.c[at].node;
   titles.c = (titles.c || []).filter((n) => !(n && n.n === 'Title' && rawAttr(n, 'LCID') === lang));
-  if (!titles.c.some((n) => n && n.n === 'Title')) bag.c = bag.c.filter((_, k) => k !== at);
+  if (!titles.c.some((n) => n && n.n === 'Title')) {
+    const gone = bag.c[at].i;
+    bag.c = bag.c.filter((_, k) => k !== at).map((e) => (e.i > gone ? { ...e, i: e.i - 1 } : e));
+  }
 }
 
 // Icons compare case-insensitively: appDef lower-cases a bare web-resource name (the icon lookup is
@@ -128,6 +133,19 @@ const CHROME = [
   { field: 'icon', same: (a, b) => text(a).toLowerCase() === text(b).toLowerCase() },
   { field: 'vectorIcon', same: (a, b) => text(a).toLowerCase() === text(b).toLowerCase() },
 ];
+
+/**
+ * Whether a rebuild KEEPS a live nav entry's `field` rather than writing the spec's value: the spec
+ * still has the value its baseline (`base`, from chromeByTargetKey) recorded for the entry and the
+ * environment no longer does — so the change was made there, after the baseline, and the spec is
+ * stale for that field rather than asking for it. (The spec and live values then differ, too.) The one
+ * rule both the build and `--verify` apply, so verify accepts exactly what the build kept.
+ */
+function keepsLiveValue(field, specValue, liveValue, base) {
+  const rule = CHROME.find((c) => c.field === field);
+  if (!rule || !base) return false;
+  return rule.same(specValue, base[field]) && !rule.same(liveValue, base[field]);
+}
 
 /**
  * Re-attach `desired` (appDef's `siteMap`) to the `live` sitemap the SDK fetched for the same app.
@@ -249,7 +267,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               continue;
             }
-            if (base && same(sub[f], base[f]) && !same(liveSub[f], base[f])) {
+            if (keepsLiveValue(f, sub[f], liveSub[f], base)) {
               // Changed in the environment since the baseline, untouched in the spec: keep it.
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               else delete nextSub[f];
@@ -297,89 +315,65 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   return { siteMap: { ...(desired || {}), areas: out }, notes };
 }
 
+// The id a plain `{ <name or key>: id }` map holds for `name` — only as the map's OWN entry, so a
+// dashboard named `constructor` never resolves to Object.prototype's.
+const ownId = (map, name) => (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined);
+const idMap = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+
+// Every subarea of an App Spec, in document order.
+function specSubAreas(spec) {
+  const out = [];
+  const list = (v) => (Array.isArray(v) ? v : []);
+  for (const a of list(spec && spec.appShell && spec.appShell.areas)) {
+    for (const g of list(a && a.groups)) for (const s of list(g && g.subAreas)) if (s && typeof s === 'object') out.push(s);
+  }
+  return out;
+}
+
 /**
- * The chrome (`title`, `icon`, `vectorIcon`) a spec gives each subarea, keyed by the SAME target key
- * `adoptLiveSitemap` uses — so a baseline spec can be lined up against the live sitemap.
- *
- * A subarea names a dashboard or page, not its id. The id comes from the spec's own record of it —
- * `dashboards[].dashboardId` / `pages[].pageId`, which a download writes — or else from `ids`, the ids
- * THIS build resolved: `{ dashboards: { name: id }, pages: { key: id } }` (the build's
- * `result.created`). An entry with no id either way is left out: with no identity there is nothing to
- * line it up with, and the spec then simply wins.
+ * The target key (see subAreaTargetKey) an App Spec subarea navigates to in one environment. A table
+ * or URL target is in the spec itself; a dashboard (named) or a page (by key — schemaVersion 2, which
+ * every loaded spec and every baseline is migrated to) takes its id from `ids`:
+ * `{ dashboards: { <name>: id }, pages: { <key>: id } }`. Undefined without a target or an id.
  */
-function chromeByTargetKey(spec, ids = {}) {
+function specSubAreaTargetKey(s, ids = {}) {
+  if (!s || typeof s !== 'object') return undefined;
+  if (s.entity) return subAreaTargetKey({ type: 'Entity', entity: s.entity });
+  if (s.dashboard) return subAreaTargetKey({ type: 'DashBoard', dashboardId: ownId(idMap(ids.dashboards), s.dashboard) });
+  if (s.page) return subAreaTargetKey({ type: 'GenPage', genPageId: ownId(idMap(ids.pages), s.page) });
+  if (s.url) return subAreaTargetKey({ type: 'URL', url: s.url });
+  return undefined;
+}
+
+/**
+ * The chrome (`title`, `icon`, `vectorIcon`) a BASELINE spec gives each nav entry, keyed by the target
+ * key the entry has in this environment — the key `adoptLiveSitemap` matches live entries by.
+ *
+ * A dashboard or page takes its id from the ids the baseline RECORDED for this environment
+ * (`__deployedIds`, written with it — see deployed-baseline.js) before `ids`, the ids this build (its
+ * `result.created`) or verify resolved: after the author renames a dashboard in the spec, as the
+ * build's warning asks, the baseline still names it by the old name, and only the recorded id still
+ * connects it to the live entry. The spec's own `dashboardId` / `pageId` are never read: a spec
+ * downloaded from one environment and built into another carries the first one's ids. An entry with
+ * no id either way is left out, and the spec then simply wins.
+ */
+function chromeByTargetKey(baseline, ids = {}) {
   const map = new Map();
-  const areas = spec && spec.appShell && Array.isArray(spec.appShell.areas) ? spec.appShell.areas : [];
-  // The ids the spec itself RECORDED win over this build's lookups by name: after the author renames a
-  // dashboard (as the build's own warning asks), the baseline still names it by the old name, which
-  // this build no longer resolves — but the id it recorded still identifies the same live entry.
-  const own = (list, idKey, names) => new Map((Array.isArray(list) ? list : [])
-    .filter((x) => x && typeof x === 'object' && x[idKey])
-    .flatMap((x) => names.map((n) => x[n]).filter(Boolean).map((n) => [n, x[idKey]])));
-  const pinnedDashboards = own(spec && spec.dashboards, 'dashboardId', ['name']);
-  const pinnedPages = own(spec && spec.pages, 'pageId', ['key', 'name']);
-  for (const a of areas) {
-    for (const g of (a && Array.isArray(a.groups) ? a.groups : [])) {
-      for (const s of (g && Array.isArray(g.subAreas) ? g.subAreas : [])) {
-        if (!s || typeof s !== 'object') continue;
-        let key;
-        if (s.entity) key = subAreaTargetKey({ type: 'Entity', entity: s.entity });
-        else if (s.dashboard) key = subAreaTargetKey({ type: 'DashBoard', dashboardId: pinnedDashboards.get(s.dashboard) || (ids.dashboards || {})[s.dashboard] });
-        else if (s.page) key = subAreaTargetKey({ type: 'GenPage', genPageId: pinnedPages.get(s.page) || (ids.pages || {})[s.page] });
-        else if (s.url) key = subAreaTargetKey({ type: 'URL', url: s.url });
-        // A target listed twice is ambiguous, so neither occurrence is used as a baseline.
-        if (!key) continue;
-        map.set(key, map.has(key) ? null : { title: s.title, icon: s.icon, vectorIcon: s.vectorIcon });
-      }
-    }
+  const recorded = idMap(baseline && baseline.__deployedIds);
+  // Spread copies own keys as data properties (never through the __proto__ setter), recorded ids last.
+  const resolved = {
+    dashboards: { ...idMap(ids.dashboards), ...idMap(recorded.dashboards) },
+    pages: { ...idMap(ids.pages), ...idMap(recorded.pages) },
+  };
+  for (const s of specSubAreas(baseline)) {
+    const key = specSubAreaTargetKey(s, resolved);
+    if (!key) continue;
+    // A target listed twice is ambiguous, so neither occurrence is used as a baseline.
+    map.set(key, map.has(key) ? null : { title: s.title, icon: s.icon, vectorIcon: s.vectorIcon });
   }
   for (const [k, v] of map) if (v === null) map.delete(k);
   return map;
 }
-
-/**
- * Whether the environment's value of a subarea icon is one the BUILD keeps rather than a failure:
- * `spec` still has the value `baseline` (the spec last applied to, or downloaded from, this
- * environment) gave the same entry, so any other live value was set in the designer since — the
- * exact case `adoptLiveSitemap` keeps. Verify asks this of an icon check that fails, so the build's
- * own `--verify` does not fail on a value it deliberately left alone.
- *
- * Entries are matched between the two specs by the target they name — a dashboard or page by the id
- * the spec recorded for it when it has one, so an entry whose dashboard was renamed in the spec
- * still matches — and ambiguous targets (listed twice) never match.
- */
-function keptFromBaseline(spec, baseline, sa, field) {
-  if (!baseline || !sa) return false;
-  const keyed = (s) => {
-    const byId = (list, idKey, names) => {
-      const m = new Map();
-      for (const x of Array.isArray(list) ? list : []) if (x && x[idKey]) for (const n of names) if (x[n]) m.set(x[n], bareGuid(x[idKey]));
-      return m;
-    };
-    const dash = byId(s && s.dashboards, 'dashboardId', ['name']);
-    const pages = byId(s && s.pages, 'pageId', ['key', 'name']);
-    return (x) => {
-      if (!x || typeof x !== 'object') return undefined;
-      if (x.entity) return `entity:${text(x.entity).toLowerCase()}`;
-      if (x.dashboard) return dash.has(x.dashboard) ? `dashboard-id:${dash.get(x.dashboard)}` : `dashboard:${text(x.dashboard).toLowerCase()}`;
-      if (x.page) return pages.has(x.page) ? `page-id:${pages.get(x.page)}` : `page:${text(x.page)}`;
-      if (x.url) return `url:${urlIdentity(x.url)}`;
-      return undefined;
-    };
-  };
-  const want = keyed(spec)(sa);
-  if (!want) return false;
-  const keyOf = keyed(baseline);
-  const matches = [];
-  for (const a of (baseline.appShell && Array.isArray(baseline.appShell.areas)) ? baseline.appShell.areas : []) {
-    for (const g of (a && Array.isArray(a.groups)) ? a.groups : []) {
-      for (const b of (g && Array.isArray(g.subAreas)) ? g.subAreas : []) if (keyOf(b) === want) matches.push(b);
-    }
-  }
-  const same = CHROME.find((c) => c.field === field);
-  return matches.length === 1 && !!same && same.same(matches[0][field], sa[field]);
-}
-
 /**
  * One warning line per note worth reporting. A `changed` subarea note the baseline explains (the spec
  * itself changed the value) is the edit the author asked for, so it is not repeated back.
@@ -399,4 +393,4 @@ function describeSitemapNotes(notes) {
   return lines;
 }
 
-module.exports = { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, adoptLiveSitemap, chromeByTargetKey, keptFromBaseline, describeSitemapNotes };
+module.exports = { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, adoptLiveSitemap, chromeByTargetKey, keepsLiveValue, describeSitemapNotes };

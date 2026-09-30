@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
+const { baselinePath, confinedReader, deployedIdsFor, writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const spec = () => ({ solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A', uniqueName: 'new_a' }, pages: [{ key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'pages/home.tsx' } }] });
@@ -56,6 +56,55 @@ test('the content reader stays inside the app folder', () => {
     assert.strictEqual(read('../outside.txt'), null);
     assert.strictEqual(read(path.resolve(dir, '..', 'x.txt')), null);
     assert.strictEqual(read('missing.txt'), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// AB#6726727: the sitemap baseline lines nav entries up by the ids a dashboard and page have in THIS
+// environment. A spec downloaded from another one keeps that one's ids, so an apply records what IT
+// resolved, and a download what it read.
+const A = 'aaaaaaaa-0000-0000-0000-000000000001';
+const B = 'bbbbbbbb-0000-0000-0000-000000000002';
+const F = 'ffffffff-0000-0000-0000-00000000000f';
+const withIds = () => ({ ...spec(), dashboards: [{ name: 'Ops', dashboardId: F }, { name: 'Sales' }], pages: [{ key: 'home', name: 'Home', pageId: F, source: { kind: 'tsx', codeFile: 'pages/home.tsx' } }, { key: 'about', name: 'About' }] });
+
+test('an apply records the ids it resolved, then the prior baseline\u2019s, and never the spec\u2019s own', () => {
+  const ids = deployedIdsFor(withIds(), {
+    created: { dashboards: { Ops: A }, pages: { home: B } },
+    previous: { __deployedIds: { dashboards: { Sales: B, Ops: F }, pages: { about: A } } },
+  });
+  assert.deepStrictEqual(ids, { dashboards: { Ops: A, Sales: B }, pages: { home: B, about: A } });
+  // Nothing resolved it and no prior baseline had it: left out, for the next build to resolve.
+  assert.deepStrictEqual(deployedIdsFor(withIds(), {}), { dashboards: {}, pages: {} });
+});
+
+test('a download records the ids it read from the environment', () => {
+  assert.deepStrictEqual(deployedIdsFor(withIds(), { fromSpec: true }), { dashboards: { Ops: F }, pages: { home: F } });
+});
+
+test('a name that is also an Object.prototype member is recorded as data, not as the prototype', () => {
+  const s = { dashboards: [{ name: '__proto__' }, { name: 'constructor' }] };
+  const ids = deployedIdsFor(s, { created: { dashboards: JSON.parse(`{"__proto__":"${A}"}`) } });
+  assert.deepStrictEqual(Object.keys(ids.dashboards), ['__proto__']);
+  assert.strictEqual(Object.getPrototypeOf(ids.dashboards), Object.prototype);
+  assert.strictEqual(JSON.parse(JSON.stringify(ids)).dashboards.__proto__, A);
+});
+
+test('the baseline is written with its deployed ids and read back as schemaVersion 2', () => {
+  const dir = tmp();
+  try {
+    const ws = path.join(dir, '.maker-workspace');
+    // A legacy (v1) download: the page is referenced from the nav by NAME, and has no key yet.
+    const legacy = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A', uniqueName: 'new_a' },
+      pages: [{ name: 'Home Page', pageId: A, codeFile: 'pages/home.tsx' }],
+      appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ page: 'Home Page', title: 'Home' }] }] }] } };
+    writeBaseline(ws, legacy, { appDir: dir, environment: ENV, appUniqueName: 'new_a', fromSpec: true });
+    const got = readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' });
+    const key = got.pages[0].key;
+    assert.ok(key, 'migrated: the page has a key');
+    assert.strictEqual(got.appShell.areas[0].groups[0].subAreas[0].page, key, 'and the nav references it by that key');
+    assert.deepStrictEqual(got.__deployedIds, { dashboards: {}, pages: { [key]: A } });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -2381,10 +2381,11 @@ async function main() {
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
   // lines the live sitemap up against — a nav change made in the designer after this download is then
-  // kept, not reverted by the now-stale spec. Best-effort: a spec with no baseline still builds, and
-  // the build then reports each nav change it makes.
+  // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
+  // environment, so they are recorded as its deployed ids. Best-effort: a spec with no baseline still
+  // builds, and the build then reports each nav change it makes.
   try {
-    writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique });
+    writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique, fromSpec: true });
   } catch { /* non-fatal */ }
   emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
 }

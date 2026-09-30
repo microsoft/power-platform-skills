@@ -13,16 +13,25 @@
 //
 // Written after a successful full apply and by download, whose output IS the deployed state. Nothing
 // here may fail a build or a download: without a baseline the spec wins, and the build says so.
+//
+// The snapshot is stored as schemaVersion 2 (migrateAppSpec), the shape every loaded spec has, so a
+// page is always referenced by its key. Beside it, `__deployedIds` records the id each dashboard (by
+// name) and page (by key) has in THIS environment, which the sitemap baseline lines entries up by
+// (chromeByTargetKey, sitemap-merge.js). The spec's own `dashboardId` / `pageId` cannot serve: a spec
+// downloaded from one environment keeps that environment's ids when it is built into another, where
+// the build falls back to the name and resolves different ones.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { annotateContentHashes } = require('./content-hash.js');
+const { migrateAppSpec } = require('./app-spec.js');
 
 const FILE = 'last-applied.json';
 // Stored beside the spec's own top-level keys. phase-diff.js compares only its per-phase slices, so
-// neither stamp can make the advisory diff report a change.
+// no stamp can make the advisory diff report a change.
 const ENVIRONMENT_KEY = '__environment';
 const APP_KEY = '__appUniqueName';
+const IDS_KEY = '__deployedIds';
 
 function baselinePath(workspaceDir) {
   return path.join(workspaceDir, FILE);
@@ -51,14 +60,43 @@ function confinedReader(appDir) {
 }
 
 /**
- * Record `spec` as the state of `appUniqueName` in `environment` (a canonical origin, e.g.
- * `https://contoso.crm.dynamics.com`). Throws on a write error; callers treat it as non-fatal.
+ * The id each dashboard (by name) and page (by key) of the migrated `spec` has in this environment,
+ * as `{ dashboards: { <name>: id }, pages: { <key>: id } }`, from the first source that has it:
+ *   - `fromSpec`: the spec's own `dashboardId` / `pageId` — a download's, read from this environment;
+ *   - `created`: what this build resolved (its `result.created`);
+ *   - `previous`: the ids the prior baseline recorded — a changed-only apply resolves only the pages
+ *     it uploads, and an id it did not re-resolve is still the one it had.
+ * An entry no source has is left out, so the next build resolves it itself.
  */
-function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName }) {
+function deployedIdsFor(spec, { created, previous, fromSpec = false } = {}) {
+  const own = (map, name) => (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined);
+  const prior = (previous && previous[IDS_KEY]) || {};
+  const list = (v) => (Array.isArray(v) ? v : []);
+  // Object.fromEntries defines each name as an own data property — a dashboard named `__proto__` is
+  // recorded, not turned into the object's prototype.
+  const dashboards = Object.fromEntries(list(spec && spec.dashboards)
+    .filter((d) => d && typeof d.name === 'string' && d.name)
+    .map((d) => [d.name, (fromSpec && d.dashboardId) || own(created && created.dashboards, d.name) || own(prior.dashboards, d.name)])
+    .filter(([, id]) => typeof id === 'string' && id));
+  const pages = Object.fromEntries(list(spec && spec.pages)
+    .filter((p) => p && typeof p.key === 'string' && p.key)
+    .map((p) => [p.key, (fromSpec && p.pageId) || own(created && created.pages, p.key) || own(prior.pages, p.key)])
+    .filter(([, id]) => typeof id === 'string' && id));
+  return { dashboards, pages };
+}
+
+/**
+ * Record `spec` as the state of `appUniqueName` in `environment` (a canonical origin, e.g.
+ * `https://contoso.crm.dynamics.com`), with the deployed ids `deployedIdsFor` finds from `created`,
+ * `previous` and — for a download — `fromSpec`. Throws on a write error; callers treat it as non-fatal.
+ */
+function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName, created, previous, fromSpec } = {}) {
+  const v2 = migrateAppSpec(spec);
   const snapshot = {
-    ...annotateContentHashes(spec, confinedReader(appDir)),
+    ...annotateContentHashes(v2, confinedReader(appDir)),
     [ENVIRONMENT_KEY]: environment || null,
     [APP_KEY]: appUniqueName || null,
+    [IDS_KEY]: deployedIdsFor(v2, { created, previous, fromSpec }),
   };
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.writeFileSync(baselinePath(workspaceDir), JSON.stringify(snapshot));
@@ -66,7 +104,8 @@ function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName 
 
 /**
  * The snapshot, when it describes `appUniqueName` in `environment`; otherwise null (missing,
- * unreadable, another app or environment, or written before the stamps existed).
+ * unreadable, another app or environment, or written before the stamps existed). Returned as
+ * schemaVersion 2 whatever shape it was stored in.
  */
 function readBaseline(workspaceDir, { environment, appUniqueName }) {
   let snapshot;
@@ -80,7 +119,11 @@ function readBaseline(workspaceDir, { environment, appUniqueName }) {
   // App unique names are case-insensitive in Dataverse.
   const app = typeof snapshot[APP_KEY] === 'string' ? snapshot[APP_KEY].toLowerCase() : '';
   if (!appUniqueName || app !== String(appUniqueName).toLowerCase()) return null;
-  return snapshot;
+  try {
+    return migrateAppSpec(snapshot);
+  } catch {
+    return null;
+  }
 }
 
-module.exports = { baselinePath, confinedReader, writeBaseline, readBaseline };
+module.exports = { baselinePath, confinedReader, deployedIdsFor, writeBaseline, readBaseline };
