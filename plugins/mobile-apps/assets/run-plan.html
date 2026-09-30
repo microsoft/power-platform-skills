@@ -162,6 +162,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   color:var(--warn);cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;}
 .input-banner-close:hover{background:rgba(202,80,16,.22);}
 @keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+.plan-doc{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 14px;
+  background:var(--surface);border:1px solid var(--border);border-radius:999px;
+  font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
+.plan-doc:hover{border-color:var(--accent-border);background:var(--accent-bg);}
+.plan-doc span{font-family:var(--mono);font-size:12px;color:var(--text-dim);}
 .bullets{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
 .bullets li{line-height:1.55;}
 .bullets li::marker{color:var(--text-dim);}
@@ -305,6 +310,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <h3>Architecture</h3>
       <div id="approval-architecture"></div>
       <div class="facts" id="architectureFacts"></div>
+      <div id="overviewPlanDoc"></div>
     </div>
 
     <div class="section" id="tab-steps">
@@ -368,6 +374,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <h2>Screens</h2>
       <div class="section-desc">The screen graph approved at Gate 3 and the per-screen specs from Gate 4.</div>
       <div id="approval-screens"></div>
+      <div id="screensPlanDoc"></div>
       <div id="graphContainer"></div>
       <h3>Screen specs</h3>
       <div id="screensContainer"></div>
@@ -749,6 +756,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       ['App registration', (sections.auth || {}).status]
     ]);
 
+    planDocLink('overviewPlanDoc', 'Read the full plan');
+
     var arch = sections.architecture || {};
     facts('architectureFacts', [
       ['Data platform', arch.dataPlatform],
@@ -1119,8 +1128,26 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     container.appendChild(card);
   }
 
+  /**
+   * Link the planner's own markdown. The tabs summarise it; the file has the full per-screen
+   * specs, and it is the artifact `/edit-app` reads on a later run. The href is code-owned
+   * ('../native-app-plan.md'), and the renderer leaves it empty until the file exists.
+   */
+  function planDocLink(containerId, label) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.textContent = '';
+    if (!summary.planDocHref) return;
+    var link = el('a', 'plan-doc');
+    link.setAttribute('href', summary.planDocHref);
+    link.textContent = label;
+    link.appendChild(el('span', null, 'native-app-plan.md'));
+    container.appendChild(link);
+  }
+
   function renderScreens() {
     approvalBanner('approval-screens', 'screens');
+    planDocLink('screensPlanDoc', 'Full screen specs');
     var screens = sections.screens || {};
     var items = screens.list || [];
     renderMermaid('graphContainer',

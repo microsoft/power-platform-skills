@@ -253,8 +253,19 @@ function capabilityLabels(state) {
   return ['Dataverse', 'Works offline', 'Camera', 'Location', 'Push', 'Biometrics'];
 }
 
+// The full planner output, with the per-screen specs the tabs only summarise. It sits beside
+// the app root and the plan is written into `docs/`, so one level up is the whole path.
+const PLAN_DOC = 'native-app-plan.md';
+
+function planDocHref(projectRoot) {
+  // Linked only when it is really there: the planner writes it at Step 3, so a plan rendered
+  // before then would otherwise carry a link that 404s in the user's browser.
+  return fs.existsSync(path.join(path.resolve(projectRoot), PLAN_DOC)) ? `../${PLAN_DOC}` : '';
+}
+
 function render(projectRoot, state) {
   const summary = summarize(state);
+  summary.planDocHref = planDocHref(projectRoot);
   return renderTemplate({
     templatePath: TEMPLATE_PATH,
     outputPath: outputPath(projectRoot),

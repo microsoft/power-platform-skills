@@ -556,6 +556,34 @@ test('the topbar pills say what their numbers mean', () => {
   assert.match(template, /pill-platform">Data: __HTML_DATA_PLATFORM__/);
 });
 
+test('the planner markdown is linked only once it exists on disk', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-doc-'));
+  const state = initState(root, { appName: 'Linked', dataPlatform: 'dataverse' });
+  save(root, state);
+
+  const links = (page) => {
+    const found = [];
+    for (const [, element] of page.elements) {
+      (function walk(node) {
+        if (String(node.className).split(' ').includes('plan-doc')) found.push(node);
+        node.children.forEach(walk);
+      })(element);
+    }
+    return found;
+  };
+
+  // The planner writes native-app-plan.md at Step 3. Before that a link would 404 in the
+  // user's browser, so it is not emitted at all.
+  assert.deepEqual(links(runPage(outputPath(root))), [], 'no link before the file exists');
+
+  // The plan is written into docs/, so the file sits one level up.
+  fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# Plan\n');
+  save(root, state);
+  const shown = links(runPage(outputPath(root)));
+  assert.ok(shown.length >= 1, 'the link appears once the planner has written its output');
+  assert.match(shown[0].textContent, /Full screen specs|Read the full plan/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.
