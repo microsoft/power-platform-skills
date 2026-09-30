@@ -388,6 +388,47 @@ test('PCF reference prose does not hand-copy matrix-owned versions outside rende
   assert.deepEqual(leaks, []);
 });
 
+test('unattended guidance keeps session files out of the scaffold output directory', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+  const create = readPluginFile('skills/pcf/create-flow.md');
+  for (const text of [skill, create]) {
+    assert.match(text, /pcf-intent\.json/);
+    assert.match(text, /pcf-plan\.md/);
+    assert.match(text, /workflow-log\.md/);
+    assert.match(text, /working directory/);
+    assert.match(text, /new, empty subdirectory/);
+    assert.match(text, /before scaffold runs/);
+  }
+  assert.match(skill, /pcf-intent\.json` or `pcf-plan\.md`/);
+  assert.match(skill, /workflow-log\.md` is not a session marker/);
+});
+
+test('scaffold guidance reports resolvedOutDir when a redirect warning appears', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+  assert.match(skill, /resolvedOutDir/);
+  assert.match(skill, /PCF_SCAFFOLD_OUT_REDIRECTED/);
+});
+
+test('create flow reads a recipe README only when a recipe was selected', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+  const create = readPluginFile('skills/pcf/create-flow.md');
+  assert.match(skill, /selected recipe's README, if a recipe was selected/);
+  assert.match(create, /selected recipe's README, if a recipe was selected/);
+});
+
+test('create flow documents connectivity as the host connection mode', () => {
+  const create = readPluginFile('skills/pcf/create-flow.md');
+  assert.match(create, /offline \(mobile offline\) hosts are not supported in this release/);
+  assert.match(create, /makes no network calls still uses "online"/);
+});
+
+test('upgrade flow documents REINSTALL as selectable and required by DEPS_TO_MATRIX', () => {
+  const text = readPluginFile('skills/pcf/upgrade-flow.md');
+  assert.match(text, /REINSTALL is a selectable step when the plan contains it/);
+  assert.match(text, /requiresStep/);
+  assert.match(text, /Selecting `DEPS_TO_MATRIX` includes that required step/);
+});
+
 test('Microsoft Learn links in PCF references use the en-us canonical prefix', () => {
   for (const relativePath of PCF_REFERENCE_FILES) {
     const text = readPluginFile(relativePath);

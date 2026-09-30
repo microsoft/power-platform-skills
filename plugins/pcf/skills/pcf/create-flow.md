@@ -50,6 +50,8 @@ Read `scripts/lib/pcf-intent.js` as the contract. Minimal valid example:
 
 Defaults: binding `clients` means clients that must use this control; omitted means web. FormXML factors are still all three, as described in `bind-flow.md`.
 
+`connectivity` describes the host's connection mode, not whether the control calls the network. This release accepts only `"online"`: offline (mobile offline) hosts are not supported in this release. A control that makes no network calls still uses "online".
+
 ## 3. Render and approve the plan
 
 ```powershell
@@ -64,11 +66,13 @@ Show the plan. In attended runs use plan mode; in unattended runs log the approv
 node "${PLUGIN_ROOT}/scripts/pcf-scaffold.js" --template <id> --namespace <Namespace> --name <ControlName> --out <dir> [--hosts model,pages] [--recipe <id>] [--display-name <text>] [--description <text>] [--install] [--npm-cli <path>]
 ```
 
-Continue only on JSON `ok:true`. Do not edit generated lockfiles to chase unrelated versions; versions come from `compatibility-matrix.json` and committed lockfiles.
+`pcf-intent.json`, `pcf-plan.md` and `workflow-log.md` live in the session working directory. `--out` must be a new, empty subdirectory. Never write those session files into `--out` before scaffold runs — scaffold refuses a non-empty directory. `hooks/validate-write-safety.js` detects a pcf session from `pcf-intent.json` or `pcf-plan.md` at or one level under the cwd; `workflow-log.md` is not a session marker.
+
+Continue only on JSON `ok:true`. If the result includes a `PCF_SCAFFOLD_OUT_REDIRECTED` warning, report `resolvedOutDir` to the user. Do not edit generated lockfiles to chase unrelated versions; versions come from `compatibility-matrix.json` and committed lockfiles.
 
 ## 5. Implement
 
-Read `../../references/pcf-best-practices.md`, `../../references/pcf-testing.md`, and the recipe README. Implement through small adapters for network, file picking and navigation. Handle missing parameter objects, `security.readable=false`, `security.editable=false`, permission failures and two instances on one page. Dataset controls also cover loading, empty, error, next/previous page, sort/search/filter and refresh.
+Read `../../references/pcf-best-practices.md`, `../../references/pcf-testing.md`, and the selected recipe's README, if a recipe was selected. Implement through small adapters for network, file picking and navigation. Handle missing parameter objects, `security.readable=false`, `security.editable=false`, permission failures and two instances on one page. Dataset controls also cover loading, empty, error, next/previous page, sort/search/filter and refresh.
 
 Current-record controls must use maker-configured `entityId` and `entityName` inputs. Missing id means an unsaved-record disabled state, never a crash. Do not use internal context or host DOM shortcuts.
 

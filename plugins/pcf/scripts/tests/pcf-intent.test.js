@@ -170,7 +170,7 @@ test('validateIntent reports schema, name, enum, template, recipe, and binding s
     'control.template',
     'control.recipe',
     'hosts[1]',
-    'connectivity must be online',
+    'offline (mobile offline) hosts are not supported',
     'properties[0].usage',
     'deploy.solution',
     'deploy.publisherPrefix',
@@ -558,4 +558,10 @@ test('write-pcf-plan rejects a positional intent path without --intent', async (
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('validateIntent explains that offline describes an unsupported host mode', () => {
+  const errors = validateIntent(exampleIntent({ connectivity: 'offline' }));
+  const expected = 'connectivity must be "online": it describes the host\'s connection mode, and offline (mobile offline) hosts are not supported in this release. A control that makes no network calls still uses "online".';
+  assert.ok(errors.includes(expected), errors.join('\n'));
 });

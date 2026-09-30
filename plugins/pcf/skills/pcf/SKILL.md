@@ -21,7 +21,7 @@ Build, repair, upgrade, deploy, bind, verify and inventory Power Apps component 
    node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js"
    # Optional for automation: --non-interactive
    ```
-3. In unattended mode, do not call `AskUserQuestion`, `EnterPlanMode` or `ExitPlanMode`. Use explicit request details and documented non-destructive defaults only; write `Unattended default: <question> → <answer> (<reason>)` to `workflow-log.md`; halt on ambiguous environment, app/form/control identity or destructive choices.
+3. In unattended mode, do not call `AskUserQuestion`, `EnterPlanMode` or `ExitPlanMode`. Use explicit request details and documented non-destructive defaults only; write `Unattended default: <question> → <answer> (<reason>)` to `workflow-log.md` in the session working directory; halt on ambiguous environment, app/form/control identity or destructive choices. `pcf-intent.json`, `pcf-plan.md` and `workflow-log.md` live in that working directory. `hooks/validate-write-safety.js` detects a pcf session only from `pcf-intent.json` or `pcf-plan.md` at or one level under the cwd; `workflow-log.md` is not a session marker. `--out` must be a new, empty subdirectory. Never write those session files into `--out` before scaffold runs — a non-empty directory is refused.
 4. Suppressing a prompt never authorizes an environment write. `pcf-push.js` still requires an explicit `--env` and prior consent recorded by the user or automation.
 
 ## Routing
@@ -88,11 +88,13 @@ Then scaffold exactly what the approved intent names:
 node "${PLUGIN_ROOT}/scripts/pcf-scaffold.js" --template <id> --namespace <Namespace> --name <ControlName> --out <dir> [--hosts model,pages] [--recipe <id>] [--display-name <text>] [--description <text>] [--install] [--npm-cli <path>]
 ```
 
+If the JSON includes a `PCF_SCAFFOLD_OUT_REDIRECTED` warning, report `resolvedOutDir` to the user. Checks and writes used that physical path; `outDir` is only the path that was requested.
+
 Do not hand-copy template files. Recipes are routing aids; each current recipe is designed for its listed hosts but **not certified in this release** unless `pcf-recipes.md` shows a certification date.
 
 ## Phase 3 — implement
 
-Read [../../references/pcf-best-practices.md](../../references/pcf-best-practices.md), [../../references/pcf-hosts.md](../../references/pcf-hosts.md), [../../references/pcf-testing.md](../../references/pcf-testing.md), and the selected recipe README under `recipes/<id>/README.md`. Keep versions from the matrix and lockfiles only. Add or preserve tests for null-first rendering, missing parameters, field security, permission failures, two instances and dataset paging where applicable.
+Read [../../references/pcf-best-practices.md](../../references/pcf-best-practices.md), [../../references/pcf-hosts.md](../../references/pcf-hosts.md), [../../references/pcf-testing.md](../../references/pcf-testing.md), and the selected recipe's README, if a recipe was selected (`recipes/<id>/README.md`). Keep versions from the matrix and lockfiles only. Add or preserve tests for null-first rendering, missing parameters, field security, permission failures, two instances and dataset paging where applicable.
 
 ## Phase 4 — gates loop
 

@@ -24,7 +24,13 @@ function validateIntent(intent, deps = {}) {
   if (root.schemaVersion !== 1) errors.push('schemaVersion must be 1.');
   validateControl(root.control, errors, deps);
   validateStringArray(root.hosts, 'hosts', HOSTS, errors);
-  if (!CONNECTIVITY.has(root.connectivity)) errors.push('connectivity must be online.');
+  // connectivity is the host connection mode, not whether this control calls the network.
+  // Schema version 1 only accepts online hosts; mobile offline is out of scope this release,
+  // so a no-network control still declares "online". Say that in the error — "must be online"
+  // alone reads like a demand that the control make network calls.
+  if (!CONNECTIVITY.has(root.connectivity)) {
+    errors.push('connectivity must be "online": it describes the host\'s connection mode, and offline (mobile offline) hosts are not supported in this release. A control that makes no network calls still uses "online".');
+  }
   validateProperties(root.properties, errors);
   validateDeploy(root.deploy, errors);
   validateBindings(root.bindings, errors);
