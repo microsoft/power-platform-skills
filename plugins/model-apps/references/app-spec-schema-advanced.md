@@ -241,8 +241,8 @@ works through.
   plot a different table's data over this view.
 - **Dashboard names must be unique**, compared the way Dataverse compares them: ignoring case,
   accents, full/half width and trailing spaces (`Overview`, `OVERVIEW `, `Café`/`Cafe`) — but not a
-  leading space, and not a vowel sign in scripts where it is a letter. A dashboard has no other
-  identity in the spec — a sitemap subarea names it and a rebuild finds it by name — so two that
+  leading space, and not a vowel sign in scripts where it is a letter. A sitemap subarea names a
+  dashboard, and a rebuild finds it by name unless the spec pins its id (below), so two names that
   compare equal would collapse into one. A download **withholds** such a pair and says why, rather
   than emit a spec that cannot be rebuilt: rename one in Maker and download again. Because a name can
   also match **another app's** dashboard, ownership comes from the app's solution, which holds every
@@ -255,6 +255,14 @@ works through.
 - Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.
+- **`dashboardId` (optional — what a download writes).** A downloaded spec carries each dashboard's
+  deployed id (bare GUID, environment-specific, like `pages[].pageId`); leave it out of an authored
+  spec. A rebuild binds to that dashboard **before** trying the name, so one renamed in the designer
+  since the download is reused — a build never renames an existing dashboard, so it warns and names
+  the new name to put in the spec — instead of a second dashboard being created under the old name
+  and the nav entry pointed at it. In an environment without that id (the spec was downloaded
+  elsewhere) the name is used as usual. Verify and teardown resolve the pin the same way; teardown
+  still deletes only a dashboard the app's solution holds.
 - **ID-passthrough tiles (what a download emits).** A tile may instead carry the *deployed* ids —
   `viewId` (+ `visualizationId` for a chart) and the target `entity` — with no `chart`/`view` name.
   That form binds to artifacts that **already exist**, which is what a downloaded app needs: its

@@ -53,7 +53,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -354,6 +354,22 @@ const KIND_HANDLERS = {
         const e = new Error(`could not look up dashboards named '${target.name}' (${errMsg(err)}) — none is deleted; re-run the teardown`);
         e.failClosed = true;
         throw e;
+      }
+      // A downloaded spec also pins the dashboard it was read from (dashboards[].dashboardId), which the
+      // build binds by id — so one renamed in the designer since is still this spec's dashboard, found
+      // here by that id. It is a CANDIDATE only: the solution-membership rule below decides, as it does
+      // for a name match. Fails closed like the name lookup.
+      if (target.dashboardId) {
+        let pinned;
+        try {
+          pinned = await findPinnedDashboard(sdk, target.dashboardId);
+        } catch (err) {
+          const e = new Error(`could not look up the dashboard pinned as '${target.name}' (${errMsg(err)}) — none is deleted; re-run the teardown`);
+          e.failClosed = true;
+          throw e;
+        }
+        const bareId = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
+        if (pinned && !items.some((x) => bareId(x.id) === bareId(pinned.id))) items = [...items, pinned];
       }
       if (!items.length) return [];
       // Found by NAME, and Dataverse neither keeps names unique nor compares them exactly (it ignores
@@ -920,7 +936,7 @@ function planTeardown(spec) {
   for (const d of spec.dashboards || []) {
     // The solution travels with the step so the resolver can tell this app's dashboards from other
     // apps' that share the name (see KIND_HANDLERS.dashboard).
-    steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name, solutionUniqueName: spec.solution && spec.solution.uniqueName } });
+    steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name, solutionUniqueName: spec.solution && spec.solution.uniqueName, ...(d.dashboardId ? { dashboardId: d.dashboardId } : {}) } });
   }
   // Command bars: FAIL-CLOSED (data-loss guard, PR #229 review). Only tear down the bar for a table
   // THIS spec CREATES (existing !== true) — a brand-new table has no pre-existing foreign buttons, and

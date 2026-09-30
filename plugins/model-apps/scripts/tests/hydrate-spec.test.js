@@ -161,7 +161,13 @@ test('hydrateSpec preserves entity + URL subareas and icons; omits a DashBoard w
 
 test('hydrateSpec round-trips a DashBoard subarea + dashboards[] (id-passthrough tiles) when a dashboards reader is present', async () => {
   const read = deployedRead();
-  read.dashboards = async () => [{ id: 'D-1', name: 'Ops Overview', tiles: [
+  // The sitemap stores the id braced and upper-cased, and the dashboards reader hands it back as read
+  // (lower-cased, braces kept); the pin is written bare and lower-case.
+  const DASH = '280948EC-7BBB-5279-B106-2BDD09451A3A';
+  const app = await read.app();
+  app.siteMap.areas[0].groups[0].subAreas.find((s) => s.type === 'DashBoard').dashboardId = `{${DASH}}`;
+  read.app = async () => app;
+  read.dashboards = async () => [{ id: `{${DASH}}`.toLowerCase(), name: 'Ops Overview', tiles: [
     { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' },
     { type: 'list', name: 'Active Orders', entity: 'new_order', viewId: 'v1' },
   ] }];
@@ -172,6 +178,9 @@ test('hydrateSpec round-trips a DashBoard subarea + dashboards[] (id-passthrough
   // dashboards[] reconstructed with the id-passthrough tiles
   assert.strictEqual(spec.dashboards.length, 1);
   assert.strictEqual(spec.dashboards[0].name, 'Ops Overview');
+  // AB#6726727: pinned to the dashboard it was read from, so a rename in the designer cannot turn a
+  // rebuild into a second, stale-named dashboard.
+  assert.strictEqual(spec.dashboards[0].dashboardId, DASH.toLowerCase());
   assert.deepStrictEqual(spec.dashboards[0].tiles[0], { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' });
   // and the whole spec still validates (id-based tiles need no declared views[]/charts[])
   const r = validateAppSpec(spec);

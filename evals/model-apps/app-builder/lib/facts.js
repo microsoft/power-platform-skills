@@ -425,8 +425,9 @@ function makeAllPresentReader(spec) {
         if (sa.entity) attrs.push(`Entity="${lc(sa.entity)}"`);
         if (sa.page) attrs.push(`Type="GenPage" GenPageId="gp-${sa.page}"`);
         // Dashboard subarea: verifySpec resolves the dashboard id via queryRecords (which returns
-        // formid 'x' below) and then confirms a SubArea points at THAT id via DefaultDashboard.
-        if (sa.dashboard) attrs.push(`Type="Dashboard" DefaultDashboard="x"`);
+        // formid 'x' below) and then confirms a SubArea points at THAT id via DefaultDashboard — and
+        // carries the dashboard launcher Url, as every dashboard entry the build writes does.
+        if (sa.dashboard) attrs.push(`Type="Dashboard" DefaultDashboard="x" Url="/workplace/home_dashboards.aspx"`);
         if (sa.icon) attrs.push(`Icon="${lc(sa.icon)}"`);
         tags.push(`<SubArea ${attrs.join(' ')}/>`);
       }

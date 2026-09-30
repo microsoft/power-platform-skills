@@ -7,10 +7,20 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.11.0
 
-AI features are written with each setting's own values.
+AI features are written with each setting's own values, and rebuilding an existing app no longer
+rewrites its navigation.
 
 ### Fixed
 
+- **Rebuilding an existing app keeps its navigation as it is** (AB#6726727). Every nav entry was
+  rewritten as a new one, so an unrelated edit turned a designer-made dashboard entry's icon into a
+  placeholder and dropped its other settings. Entries now keep their id and everything the spec does
+  not describe; dashboard entries carry the designer's launcher Url, and `--verify` fails one without
+  it.
+- **A nav title or icon changed in the designer after a download is kept**, with a warning, instead of
+  being reverted by the stale spec. Download records the spec as a baseline for that environment.
+- **A dashboard renamed in the designer** is reused by the id a download now records
+  (`dashboards[].dashboardId`); it used to be recreated under the old name.
 - **AI feature values** (AB#6714731). `true` wrote `1` outside the form-fill family: *Off* for
   natural-language grid search and M365 Copilot, *Auto* for NL charts, and `--verify` expected the
   same. `true` now writes `2` (*On*) for every feature, so the next build of an AI-enabled app turns

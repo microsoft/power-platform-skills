@@ -138,6 +138,53 @@ test('verifySpec: dashboard subarea resolves the dashboard id and matches the si
   assert.ok(bad.missing.some((m) => m.kind === 'subarea'), 'a different dashboard id does not satisfy the check');
 });
 
+// AB#6726727: an entry wired to the dashboard but without the launcher Url shows a placeholder icon, and
+// the designer does not treat it as a dashboard entry. That is the shape earlier builds wrote over
+// designer-made entries, and the wiring check alone passed it.
+test('verifySpec: a dashboard nav entry must carry the launcher Url', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const reader = (tag) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => `<SiteMap><Area><Group>${tag}</Group></Area></SiteMap>`,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const damaged = await verifySpec(spec, reader(`<SubArea Id="sub_0_0_0" DefaultDashboard="${DASH}" ResourceId="SitemapDesigner.NewSubArea" />`));
+  assert.strictEqual(launcher(damaged).present, false);
+  assert.match(launcher(damaged).detail, /placeholder icon/);
+  // Attribute order and GUID spelling are Dataverse's to choose.
+  const designer = await verifySpec(spec, reader(`<SubArea DefaultDashboard="{${DASH.toUpperCase()}}" Id="ops" Url="/workplace/home_dashboards.aspx" Client="All,Web" />`));
+  assert.strictEqual(launcher(designer).present, true);
+  // Only the entry for THIS dashboard counts: another entry's launcher Url proves nothing.
+  const elsewhere = await verifySpec(spec, reader(`<SubArea Id="x" DefaultDashboard="${DASH}" /><SubArea Id="y" Url="/workplace/home_dashboards.aspx" DefaultDashboard="99999999-0000-0000-0000-000000000000" />`));
+  assert.strictEqual(launcher(elsewhere).present, false);
+  // Not wired at all: the wiring check fails, and there is no second check to double-count it.
+  const unwired = await verifySpec(spec, reader('<SubArea Id="x" Entity="account" />'));
+  assert.strictEqual(launcher(unwired), undefined);
+});
+
+test('verifySpec: a pinned dashboardId verifies a dashboard renamed since the download', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Command Center - Event operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Command Center - Event operations', title: 'Event operations' }] }] }] } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) return [{ formid: PIN, name: 'Event operations', type: 0 }];
+      return []; // the stale name finds nothing
+    },
+    sitemapXml: async () => `<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${PIN.toUpperCase()}}" /></Group></Area></SiteMap>`,
+  };
+  const r = await verifySpec(spec, read);
+  for (const kind of ['dashboard', 'subarea', 'subarea-dashboard-launcher']) {
+    const chk = r.checks.find((c) => c.kind === kind);
+    assert.ok(chk && chk.present, `${kind}: ${JSON.stringify(chk)}`);
+  }
+});
+
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
   const sdk = {
     queryRecords: async (set) => {

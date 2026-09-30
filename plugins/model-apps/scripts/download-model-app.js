@@ -9,7 +9,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, validateFlags, emitResult, preflightAuth } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
+const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
@@ -2378,6 +2379,13 @@ async function main() {
   const specPath = path.join(outDir, 'app-spec.json');
   preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
+  // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
+  // lines the live sitemap up against — a nav change made in the designer after this download is then
+  // kept, not reverted by the now-stale spec. Best-effort: a spec with no baseline still builds, and
+  // the build then reports each nav change it makes.
+  try {
+    writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique });
+  } catch { /* non-fatal */ }
   emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
 }
 

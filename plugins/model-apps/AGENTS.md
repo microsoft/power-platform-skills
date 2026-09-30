@@ -239,6 +239,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
   nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
   run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
+  **An existing app's sitemap is rewritten ONTO its live nodes (AB#6726727).** The App Spec describes a
+  node's label/title, target and icons only, and the SDK serializes a node without its fetched `bag` from
+  scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,
+  `AvailableOffline="true"`). Both existing-app writers (the app-shell write and the pages finalizer)
+  therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
+  subarea corresponds by navigation target, an area or group by label, then by the id an earlier build
+  gave it; the live `id` and `bag` are kept, and only what the spec sets is overlaid — chrome it does not
+  name is still removed, as before. Every dashboard entry carries the designer's launcher
+  `Url="/workplace/home_dashboards.aspx"`, which the designer writes on every dashboard entry, uses to
+  recognize one, and the runtime keys the dashboard glyph on; verify fails an entry without it
+  (`subarea-dashboard-launcher`). With a **baseline** — `.maker-workspace/last-applied.json`, written
+  by a successful apply and by download, stamped with its environment and app
+  (`scripts/lib/deployed-baseline.js`) — a nav entry's title/icon that the spec has not changed since,
+  but the designer has, is kept and reported rather than reverted; without one the spec wins and every
+  change to an existing entry is reported. A downloaded dashboard carries `dashboards[].dashboardId`,
+  which build, verify and teardown resolve before the name (`findPinnedDashboard`), so a dashboard
+  renamed in the designer is reused — with a warning, since a build never renames one — instead of a
+  second being created under the stale name.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -733,6 +751,8 @@ scripts/
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
+    sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
+    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)

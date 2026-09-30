@@ -9,7 +9,8 @@ const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuth
 const { authoredSectionNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
+const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl } = require('./sitemap-merge.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
@@ -211,7 +212,18 @@ async function verifySpec(spec, read, opts = {}) {
   // same-named dashboard of another app sorted first and failed a correctly wired app. Memoized per
   // name, so each name is read once.
   const ownDashboards = new Map();
+  // A downloaded dashboard's pinned id (dashboards[].dashboardId) is what the build binds first, so it
+  // is what verify checks first — after a rename in the designer the name alone finds nothing.
+  const pinByName = new Map((spec.dashboards || []).filter((d) => d && d.name && d.dashboardId).map((d) => [d.name, d.dashboardId]));
   const identifyDashboard = async (name) => {
+    if (pinByName.has(name)) {
+      try {
+        const pinned = await findPinnedDashboard(read, pinByName.get(name));
+        if (pinned) return { id: pinned.id };
+      } catch (e) {
+        return { id: null, detail: `its dashboardId could not be resolved (${(e && e.message) || e}) — unverified, not proven correct` };
+      }
+    }
     let rows = null;
     try {
       rows = await findDashboardsByName(read, name);
@@ -697,7 +709,16 @@ async function verifySpec(spec, read, opts = {}) {
           // some dashboard subarea exists, and not at another app's same-named dashboard, which the
           // name lookup returns too (see ownDashboard above). Absent or unidentifiable => not present.
           const own = await ownDashboard(sa.dashboard);
-          add('subarea', sa.title || sa.dashboard, own.id ? subareaHasDashboard(xml, own.id) : false, own.id ? '' : own.detail);
+          const wired = own.id ? subareaHasDashboard(xml, own.id) : false;
+          add('subarea', sa.title || sa.dashboard, wired, own.id ? '' : own.detail);
+          // AB#6726727: pointing at the dashboard is not enough. An entry without the launcher Url shows
+          // a placeholder icon and is not a dashboard entry to the designer — the shape earlier builds
+          // wrote over designer-made entries, which the check above passed.
+          if (wired) {
+            const launcher = subareaDashboardHasLauncher(xml, own.id);
+            add('subarea-dashboard-launcher', sa.title || sa.dashboard, launcher,
+              launcher ? '' : `its nav entry has no Url="${DASHBOARD_LAUNCHER_URL}", so the app shows a placeholder icon for it and the designer does not treat it as a dashboard entry — a rebuild restores it`);
+          }
         }
         if (sa.icon) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
@@ -1564,6 +1585,23 @@ function subareaHasDashboard(xml, dashId) {
   return false;
 }
 
+// True when a SubArea pointing at `dashId` also carries the dashboard launcher Url, e.g.
+//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" …>
+// Attributes can come in any order, so each start tag is matched whole and then read attribute by
+// attribute; the Url test is the runtime's own (the launcher path anywhere in the Url).
+function subareaDashboardHasLauncher(xml, dashId) {
+  const norm = (s) => String(s).replace(/[{}]/g, '').toLowerCase();
+  const target = norm(dashId);
+  const tags = String(xml || '').match(/<SubArea\b[^>]*>/gi) || [];
+  for (const tag of tags) {
+    const dash = /\bDefaultDashboard="([^"]*)"/i.exec(tag);
+    if (!dash || norm(dash[1]) !== target) continue;
+    const url = /\bUrl="([^"]*)"/i.exec(tag);
+    if (url && isDashboardLauncherUrl(url[1])) return true;
+  }
+  return false;
+}
+
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the
@@ -1587,4 +1625,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };

@@ -38,6 +38,7 @@ const {
   labelText,
   choiceValueMap,
   BPF_ROLE_ACCESS,
+  dashboardNameKey,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -89,6 +90,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('./sitemap-merge.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
@@ -169,6 +171,23 @@ async function findDashboardsByName(sdk, name) {
   }
   const rows = (await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `type eq 0 and name eq '${odataLit(name)}'`, paginate: true })) || [];
   return rows.map((r) => ({ id: String(r.formid), name: String(r.name) }));
+}
+
+// The dashboard a downloaded spec's `dashboards[].dashboardId` pins — the one it was read from — as
+// `{ id, name }`, or null when this environment has no row with that id (a spec downloaded from another
+// environment, or a dashboard deleted since). A row that exists but is not a dashboard (systemform
+// `type` 0) is a wrong pin and throws: pointing a nav entry at a form would break it. Shared by build,
+// verify and teardown, so all three bind the same dashboard.
+async function findPinnedDashboard(sdk, pin) {
+  const id = String(pin === undefined || pin === null ? '' : pin).trim().replace(/^\{|\}$/g, '').toLowerCase();
+  if (!FORM_GUID_RE.test(id)) return null;
+  const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name', 'type'], filter: `formid eq ${id}`, top: 1 });
+  const row = rows && rows[0];
+  if (!row) return null;
+  if (row.type !== undefined && row.type !== null && Number(row.type) !== 0) {
+    throw new Error(`dashboardId ${id} is a type-${row.type} form, not a dashboard — correct the id, or remove it to find the dashboard by name`);
+  }
+  return { id: String(row.formid), name: String(row.name === undefined || row.name === null ? '' : row.name) };
 }
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
@@ -947,7 +966,10 @@ function appDef(spec, result, opts = {}) {
     if (s.dashboard) {
       const dashboardId = (result.dashboards || {})[s.dashboard];
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
-      return { ...withVector, type: 'DashBoard', dashboardId };
+      // The designer gives every dashboard entry it creates this launcher Url, recognizes a dashboard
+      // entry by it, and the runtime shows the dashboard glyph only for it — without it the entry
+      // renders a placeholder icon (AB#6726727). The SDK's from-scratch node omits it.
+      return { ...withVector, type: 'DashBoard', dashboardId, dashboardUrl: DASHBOARD_LAUNCHER_URL };
     }
     if (s.page) {
       const genPageId = (result.pages || {})[s.page];
@@ -1675,6 +1697,20 @@ async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, aut
   if (unauthorized.length) {
     throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true });
   }
+}
+
+// The sitemap to write over an EXISTING app: `desired` re-attached to the live nodes it corresponds
+// to, so each keeps its live id and everything the App Spec cannot describe (AB#6726727; see
+// sitemap-merge.js). The live tree is the workspace copy, which the caller has just fetched — and
+// the removal fence may have re-fetched with overwrite — so it is exactly what this write replaces.
+// `opts.baselineSpec` is the spec last applied to, or downloaded from, this environment; with it a
+// nav-entry change made in the designer since then is kept rather than reverted by a stale spec.
+async function siteMapOverLive(provision, appId, desired, opts, created) {
+  const live = await provision.getArtifact('app', appId) || {};
+  const baseChrome = opts.baselineSpec ? chromeByTargetKey(opts.baselineSpec, created) : undefined;
+  const { siteMap, notes } = adoptLiveSitemap(desired, live.siteMap, { baseChrome });
+  if (typeof opts.warn === 'function') for (const line of describeSitemapNotes(notes)) opts.warn(line);
+  return siteMap;
 }
 
 async function runSdkBuild(spec, opts = {}) {
@@ -3757,6 +3793,18 @@ async function runSdkBuild(spec, opts = {}) {
   //     Global (no entity); placement in the app sitemap is manual for now.
   if (has('dashboards')) {
     for (const dash of spec.dashboards || []) {
+      // AB#6726727: a DOWNLOADED dashboard is bound by the id it was read from before anything is tried
+      // by name. Renamed in the designer since, its spec name finds nothing — and the name path below
+      // would then create a second dashboard under the old name and point the nav entry at that.
+      const pinned = dash.dashboardId ? await findPinnedDashboard(provision, dash.dashboardId) : null;
+      if (pinned) {
+        if (dashboardNameKey(pinned.name) !== dashboardNameKey(dash.name) && typeof opts.warn === 'function') {
+          opts.warn(`dashboard "${dash.name}": the dashboard this spec was downloaded from (${pinned.id}) is now named '${pinned.name}'. It is reused under that name — a build does not rename an existing dashboard — so set the spec's name to '${pinned.name}' to match.`);
+        }
+        runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse by its dashboardId; tile edits aren't applied on rebuild, recreate to change)`);
+        result.created.dashboards[dash.name] = pinned.id;
+        continue;
+      }
       // Additive discover-reconcile (design §14): a dashboard is global (identity = name), so a rebuild
       // or retry must REUSE the existing one instead of createArtifact-ing a duplicate every run (the old
       // behavior). Discovery is `resolveArtifact('dashboard', { name })` — findArtifact does NOT support
@@ -3939,7 +3987,7 @@ async function runSdkBuild(spec, opts = {}) {
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
-          await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+          await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
           requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
@@ -4224,7 +4272,7 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
           await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
-          await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
+          await provision.updateElement('app', result.created.app, '/siteMap', await siteMapOverLive(provision, result.created.app, full.siteMap, opts, result.created));
           // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
           // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
           const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
@@ -4946,4 +4994,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

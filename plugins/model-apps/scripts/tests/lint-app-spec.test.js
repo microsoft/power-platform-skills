@@ -444,3 +444,24 @@ test('#631: the other likely mix-ups name their fix, and every key the build rea
   const clean = lintSpec(ok);
   assert.ok(!clean.errors.some((e) => /unknown key/.test(e)), JSON.stringify(clean.errors));
 });
+
+// AB#6726727: a downloaded dashboard carries the id it was read from (edit-snapshot, like pages[].pageId).
+// It must be a GUID, and two entries cannot pin one dashboard — both nav entries would bind to it.
+test('dashboards[].dashboardId must be a distinct GUID; a braced one is accepted', () => {
+  const withDashboards = (dashboards) => {
+    const s = good();
+    s.views = [{ entity: 'c_order', name: 'All Orders', columns: ['c_name'] }];
+    s.dashboards = dashboards;
+    return lintSpec(s);
+  };
+  const tile = [{ type: 'list', view: 'All Orders' }];
+  const bad = withDashboards([{ name: 'Ops', dashboardId: 'd-1', tiles: tile }]);
+  assert.ok(bad.errors.some((e) => /dashboard 'Ops': dashboardId must be a GUID/.test(e)), JSON.stringify(bad.errors));
+  const dup = withDashboards([
+    { name: 'Ops', dashboardId: 'aaaa1111-2222-3333-4444-555566667777', tiles: tile },
+    { name: 'Other', dashboardId: '{AAAA1111-2222-3333-4444-555566667777}', tiles: tile },
+  ]);
+  assert.ok(dup.errors.some((e) => /dashboard 'Other': has the same dashboardId as dashboard 'Ops'/.test(e)), JSON.stringify(dup.errors));
+  const ok = withDashboards([{ name: 'Ops', dashboardId: '{AAAA1111-2222-3333-4444-555566667777}', tiles: tile }]);
+  assert.ok(!ok.errors.some((e) => /dashboardId/.test(e)), JSON.stringify(ok.errors));
+});

@@ -2566,6 +2566,7 @@ function validateAppSpec(spec, opts = {}) {
   const viewTables = entitiesByName(spec.views);
   const chartTables = entitiesByName(spec.charts);
   const seenDashboardNames = new Map(); // dashboardNameKey → the first dashboard's name as written
+  const seenDashboardIds = new Map(); // pinned dashboardId (bare, lower) → the dashboard's name as written
   // The table a name-based chart/list tile shows, or null when it cannot be determined (reported).
   const tileTable = (d, t) => {
     const tables = viewTables.get(t.view);
@@ -2586,6 +2587,19 @@ function validateAppSpec(spec, opts = {}) {
   };
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    // A DOWNLOADED dashboard carries its deployed id (edit-snapshot only, like pages[].pageId), which a
+    // rebuild binds to before trying the name. Two entries pinning one id would bind two nav targets
+    // to one dashboard, so each must be a distinct GUID.
+    if (d.dashboardId !== undefined) {
+      const pin = typeof d.dashboardId === 'string' ? d.dashboardId.trim().replace(/^\{|\}$/g, '').toLowerCase() : '';
+      if (!FORM_GUID_RE.test(pin)) {
+        errors.push(`dashboard '${d.name}': dashboardId must be a GUID (got ${JSON.stringify(d.dashboardId)}) — it is the deployed dashboard's id, which a download writes; leave it out of an authored spec`);
+      } else if (seenDashboardIds.has(pin)) {
+        errors.push(`dashboard '${d.name}': has the same dashboardId as dashboard '${seenDashboardIds.get(pin)}' — each entry must pin a different dashboard`);
+      } else {
+        seenDashboardIds.set(pin, d.name);
+      }
+    }
     // A sitemap subarea and the build both find a dashboard BY NAME, the build through a server-side
     // filter that ignores case (and usually accents), so two names that compare equal there cannot be
     // told apart: both subareas resolve to one dashboard and the other silently leaves the nav

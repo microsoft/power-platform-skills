@@ -1021,6 +1021,19 @@ custom control), but the spec validator emits a warning.
   `iconDescription`, `subAreas`; subarea: `title`, one target, `icon`, `vectorIcon`, `iconDescription` —
   and anything else is a validation error, so a `title` on an area says "did you mean `label`?" rather
   than deploying an untitled area.
+- **Rebuilding an existing app keeps what the spec cannot describe.** Each nav entry the spec keeps is
+  written onto the live entry it corresponds to (a subarea by its target; an area or group by its
+  label), so the live entry's id, its other attributes (`Client`, `Sku`, `AvailableOffline`, …) and its
+  titles in other languages survive; only the label, title, target and icons the spec sets are applied.
+  A `dashboard` entry is written the way the designer writes one, with
+  `Url="/workplace/home_dashboards.aspx"` — without it the app shows a placeholder icon for the entry,
+  and `--verify` fails it.
+- **A nav change made in the designer after a download is kept, not reverted.** Download and every
+  successful apply record the spec as a baseline in `.maker-workspace/last-applied.json`, for that
+  environment and app. When the spec still has the baseline's title or icon for an entry and the
+  environment has something else, the build keeps the environment's value and says so — change the spec
+  to change it. With no baseline for the environment, the spec wins and the build reports each change it
+  makes to an existing entry.
 - **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
   the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
   `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon
