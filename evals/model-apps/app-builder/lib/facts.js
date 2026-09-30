@@ -15,6 +15,7 @@ const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formField
 const { subgridSectionIntent } = pluginLib('artifact-intent.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
+const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
 // no I/O, and hydrateSpec takes an injected `read`, so we can grade the download→rebuild round-trip
 // and the reverse-of-build teardown plan fully offline (no live env). See EVAL_GUIDE.md.
@@ -458,28 +459,49 @@ function makeAllPresentReader(spec) {
     return [{ workflowid: `wf-${wanted}`, statecode: (hit.status || 'Active') === 'Active' ? 1 : 0 }];
   };
 
+  // A table's Main form order is part of the spec too (AB#6736948), so each Main form resolves to its
+  // OWN id (`form:<name>`) and its formxml carries the <DisplayConditions Order> the build writes, in
+  // the build's order (lib/form-order.js). Every other lookup keeps the shared 'x' — dashboards resolve
+  // through it in the sitemap above. A Main form is named as verify names it: its `name`, else
+  // "<entity> form".
+  const mainFormName = (f) => f.name || `${f.entity} form`;
+  const withOrder = (xml, entityLogical, form) => {
+    const at = (plannedMainFormSequence(spec, entityLogical) || []).indexOf(form);
+    return xml.replace(/<\/form>$/, `<DisplayConditions Order="${at < 0 ? 0 : at}" FallbackForm="true"><Everyone /></DisplayConditions></form>`);
+  };
+
   return {
     findTable: async (logical) => (entities.has(logical) ? { logicalName: logical } : null),
     findColumns: async (logical) => columnsByEntity[logical] || [],
     // All view/chart/form/dashboard existence checks pass — the reader always reports present. A
     // `role` query (verifySpec's persona-role check) returns an SDK-authored (marker) role, and a
     // `businessunit` query returns a root BU so the BU-scoped, fail-closed role check resolves offline.
-    queryRecords: async (set, opts) => (set === 'role'
-      ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
-      : set === 'businessunit'
-      ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
-      : set === 'workflow'
-      ? workflowRow(opts && opts.filter)
-      : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }]),
+    queryRecords: async (set, opts) => {
+      const filter = String((opts && opts.filter) || '');
+      const mainForm = set === 'systemform' && / type eq 2\b/.test(filter) && /\bname eq '((?:[^']|'')*)'/.exec(filter);
+      if (mainForm) return [{ formid: `form:${mainForm[1].replace(/''/g, "'")}` }];
+      return set === 'role'
+        ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
+        : set === 'businessunit'
+        ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+        : set === 'workflow'
+        ? workflowRow(opts && opts.filter)
+        : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }];
+    },
     sitemapXml: async () => xml,
     // The layout oracle. An "all present" reader that cannot read layouts would make verify report
     // every explicit form as UNVERIFIED — correct behaviour, but a fixture gap rather than a finding
     // about the spec. Rendering the AUTHORED layout is the honest synthesis here: the reader's whole
-    // premise is "the environment already matches the spec".
-    formTopology: async (entityLogical, _formId) => {
-      const form = (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical)
-        && Array.isArray(f.tabs) && f.tabs.length);
-      return form ? formXmlForAuthoredLayout(form) : null;
+    // premise is "the environment already matches the spec". A Main form with an auto layout has no
+    // authored tabs to render, so it answers with its form order alone.
+    formTopology: async (entityLogical, formId) => {
+      const named = /^form:([\s\S]*)$/.exec(String(formId || ''));
+      const form = named
+        ? (spec.forms || []).find((f) => isMainForm(f) && lc(f.entity) === lc(entityLogical) && mainFormName(f) === named[1])
+        : (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && Array.isArray(f.tabs) && f.tabs.length);
+      if (!form) return null;
+      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(form) : '<form><tabs></tabs></form>';
+      return isMainForm(form) ? withOrder(layout, lc(entityLogical), form) : layout;
     },
   };
 }

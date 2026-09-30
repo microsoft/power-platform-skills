@@ -660,7 +660,9 @@ child view id. Each step emits `[n/total]`.
   (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the
   `personas[]` this form is offered to, or `everyone: true`; applied after the roles exist. A form
   with no assignment is visible to **every** role, so this **restricts** a form rather than granting
-  it); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
+  it); **which form a table opens with** (`forms[].isDefault` / `entities[].mainFormOrder` set the
+  table's Main Form Set order, on existing tables too — a user's remembered form still opens first for
+  that user; see app-spec-schema.md); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
   object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap

@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { normalizeSpecShape } = require('./spec-shape.js');
+const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -652,7 +653,7 @@ const ENTITY_KEYS = new Set([
   'schemaName', 'displayName', 'pluralName', 'description', 'primaryAttribute', 'columns',
   'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
   'vectorIcon', 'iconDescription', 'icon',
-  'statusReasons', 'alternateKeys',
+  'statusReasons', 'alternateKeys', 'mainFormOrder',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -2090,6 +2091,69 @@ function validateAppSpec(spec, opts = {}) {
   for (const [ent, names] of Object.entries(defaultByEntity)) {
     if (names.length > 1) {
       errors.push(`entity '${ent}': ${names.length} Main forms set isDefault (${names.join(', ')}) — exactly one form can be the table's default`);
+    }
+  }
+
+  // AB#6736948: `entities[].mainFormOrder` — the table's Main Form Set order, first to last. The first
+  // form is the one the table opens with; lib/form-order.js has the platform's model of it and what
+  // was measured. Every name must address exactly one Main form of the table in forms[], because the
+  // build writes the order onto the forms it resolves, and a name it cannot resolve would silently
+  // leave a different form first.
+  for (const e of spec.entities || []) {
+    if (!e || typeof e !== 'object' || e.mainFormOrder === undefined) continue;
+    const label = `entity '${e.schemaName}'`;
+    const list = e.mainFormOrder;
+    if (!Array.isArray(list) || !list.length || list.some((n) => typeof n !== 'string' || !n.trim())) {
+      errors.push(`${label}: mainFormOrder must be a non-empty array of Main form names from forms[] (got ${describeSpecValue(list)})`);
+      continue;
+    }
+    const key = String(e.schemaName || '').toLowerCase();
+    const formsOfEntity = (spec.forms || []).filter((f) => f && typeof f === 'object' && String(f.entity || '').toLowerCase() === key);
+    const mains = formsOfEntity.filter(isMainForm);
+    const seen = new Set();
+    for (const name of list) {
+      // Repeats are compared case-insensitively: Dataverse matches a form name that way, so two
+      // spellings of one name would still be one form.
+      const k = name.trim().toLowerCase();
+      if (seen.has(k)) { errors.push(`${label}: mainFormOrder lists '${name}' more than once`); continue; }
+      seen.add(k);
+      const matches = mains.filter((f) => f.name === name);
+      if (matches.length > 1) {
+        errors.push(`${label}: mainFormOrder names '${name}', but ${matches.length} Main forms of this table share that name — rename one so the order can address it`);
+      } else if (!matches.length) {
+        const other = formsOfEntity.find((f) => f.name === name);
+        errors.push(other
+          ? `${label}: mainFormOrder names '${name}', a ${other.formType} form — only Main forms are in the Main Form Set`
+          : `${label}: mainFormOrder names '${name}', which is not a Main form of this table in forms[] (its Main forms: ${mains.map((f) => `'${f.name || '(unnamed)'}'`).join(', ') || 'none'})`);
+      }
+    }
+    const flagged = mains.find((f) => f.isDefault === true);
+    if (flagged && list[0] !== flagged.name) {
+      errors.push(`${label}: form '${flagged.name}' sets isDefault, so it must come first in mainFormOrder (which starts with '${list[0]}') — the first form in the order is the one the table opens with`);
+    }
+    const byHand = mains.filter((f) => f.securityRoles && typeof f.securityRoles === 'object' && f.securityRoles.order !== undefined);
+    if (byHand.length) {
+      errors.push(`${label}: mainFormOrder and forms[].securityRoles.order (on ${byHand.map((f) => `'${f.name || f.entity}'`).join(', ')}) both set this table's form order — keep one of them`);
+    }
+  }
+  // `securityRoles.order` writes the same attribute, so a table ordered that way is ordered by hand and
+  // the build leaves it alone — which means the default form opens first only when ITS order is the
+  // lowest. Warned, not rejected: the combination is legal and can be exactly what the author meant.
+  const orderedByHandSeen = new Set();
+  for (const f of spec.forms || []) {
+    if (!isMainForm(f)) continue;
+    const key = String(f.entity || '').toLowerCase();
+    if (orderedByHandSeen.has(key)) continue;
+    orderedByHandSeen.add(key);
+    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === key);
+    if (!ordersByHand(spec, key) || (entSpec && entSpec.mainFormOrder !== undefined)) continue;
+    const chosen = selectDefaultForm(spec, key);
+    if (!chosen) continue;
+    const mine = chosen.form.securityRoles && chosen.form.securityRoles.order;
+    const rivals = (spec.forms || []).filter((o) => o !== chosen.form && isMainForm(o) && String(o.entity || '').toLowerCase() === key
+      && o.securityRoles && Number.isInteger(o.securityRoles.order) && (!Number.isInteger(mine) || o.securityRoles.order <= mine));
+    if (!Number.isInteger(mine) || rivals.length) {
+      warnings.push(`entity '${key}': forms[].securityRoles.order sets this table's form order, so the build does not reorder its Main forms — '${chosen.form.name || key}' opens first only if its securityRoles.order is lower than every other Main form's${rivals.length ? ` (${rivals.map((o) => `'${o.name || key}': ${o.securityRoles.order}`).join(', ')})` : ''}. Or declare entities[].mainFormOrder instead.`);
     }
   }
 

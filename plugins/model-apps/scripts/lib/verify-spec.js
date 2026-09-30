@@ -21,6 +21,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
 const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
 const { rowOccupancy } = require('./form-occupancy.js');
+const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -61,24 +62,20 @@ async function verifySpec(spec, read, opts = {}) {
   const selectedDefaultForms = new Map();
   const declaredMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
-    const formType = f.formType || 'Main';
-    if (formType !== 'Main') continue;
+    if (!isMainForm(f)) continue;
     const entity = String(f.entity || '').toLowerCase();
     if (!entity) continue;
-    // Mirror the BUILD's promotion guard exactly (sdk-build.js `isOwnCustomTable`): the build
-    // refuses to re-point the default form of a reused or stock table, because that is an
-    // environment-wide side effect on a table the spec does not own. Asserting `isdefault` for a
-    // table the build deliberately never promotes makes `--verify` permanently unsatisfiable for any
-    // spec that puts a Main form on `account`, `contact`, or an `existing: true` table.
-    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entity);
-    const prefix = spec.solution && spec.solution.publisherPrefix;
-    const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-      String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-    if (!isOwnCustomTable) continue;
     if (!declaredMainFormsByEntity.has(entity)) declaredMainFormsByEntity.set(entity, []);
     declaredMainFormsByEntity.get(entity).push(f);
-    const current = selectedDefaultForms.get(entity);
-    if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
+  }
+  // Mirror the BUILD's choice exactly (lib/form-order.js `selectDefaultForm`, which sdk-build.js
+  // promotes): an explicit `isDefault` or `mainFormOrder` on any table, the first-Main-form fallback
+  // only on a table the spec owns. Asserting `isdefault` for a table the build deliberately never
+  // promotes would make `--verify` permanently unsatisfiable for any spec that puts a Main form on
+  // `account`, `contact`, or an `existing: true` table without choosing its default.
+  for (const entity of declaredMainFormsByEntity.keys()) {
+    const chosen = selectDefaultForm(spec, entity);
+    if (chosen) selectedDefaultForms.set(entity, chosen.form);
   }
 
   // Entities + their declared columns.
@@ -329,6 +326,74 @@ async function verifySpec(spec, read, opts = {}) {
             : state && state.isDefault === true
               ? `another spec-declared Main form is also default; expected only '${selectedName}' to be default`
               : 'could not prove this spec-declared Main form is not also default');
+      }
+    }
+  }
+
+  // AB#6736948 — the Main Form Set order, for every table the build orders (lib/form-order.js). Two
+  // checks, because they answer different questions:
+  //   form-order         what is STORED: each form's published <DisplayConditions Order>, which must
+  //                      rise along the build's order. Independent of who runs verify.
+  //   form-order-served  what the platform SERVES: the public RetrieveFilteredForms answer for the user
+  //                      running verify. It sees what the stored check cannot — a form this spec does
+  //                      not declare whose order puts it first — but only through that user's security
+  //                      roles, so a form they may not open cannot be placed from their answer: that is
+  //                      reported as not verifiable here, never as a pass.
+  // Neither sees a user's remembered form (the one they last switched to), which opens first for them
+  // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
+  if (typeof read.formTopology === 'function') {
+    for (const [entityLogical, declared] of declaredMainFormsByEntity) {
+      if (!plannedMainFormSequence(spec, entityLogical)) continue;
+      const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
+      const idOf = new Map(resolved.map((r) => [r.form, r.id]));
+      const nameOf = new Map(resolved.map((r) => [r.form, r.name]));
+      // A form that did not resolve is already reported missing by its own check; its place cannot be.
+      if (declared.some((f) => !idOf.get(f))) continue;
+      const current = new Map();
+      let readError = null;
+      for (const f of declared) {
+        try {
+          current.set(f, displayConditionsOrder(await read.formTopology(entityLogical, idOf.get(f))).order);
+        } catch (e) {
+          readError = `'${nameOf.get(f)}': ${(e && e.message) || e}`;
+          break;
+        }
+      }
+      const sequence = plannedMainFormSequence(spec, entityLogical, current);
+      const label = `${entityLogical}: ${sequence.map((f) => nameOf.get(f)).join(' > ')}`;
+      if (readError) {
+        add('form-order', label, false, `could not read the deployed form order (${readError})`);
+        continue;
+      }
+      let problem = '';
+      for (let i = 0; i < sequence.length && !problem; i += 1) {
+        const o = current.get(sequence[i]);
+        const prev = i > 0 ? current.get(sequence[i - 1]) : undefined;
+        if (!Number.isFinite(o)) problem = `'${nameOf.get(sequence[i])}' has no form order in its published formxml`;
+        else if (i > 0 && !(o > prev)) problem = `'${nameOf.get(sequence[i])}' (order ${o}) is not after '${nameOf.get(sequence[i - 1])}' (order ${prev})`;
+      }
+      add('form-order', label, !problem, problem ? `${problem} — build the spec again with --publish to put them in this order` : '');
+      if (problem || typeof read.servedMainForms !== 'function') continue;
+
+      let served = null;
+      try { served = await read.servedMainForms(entityLogical); } catch (e) {
+        add('form-order-served', entityLogical, false, `could not read the order the platform serves (RetrieveFilteredForms): ${(e && e.message) || e}`);
+        continue;
+      }
+      const planned = sequence.map((f) => ({ name: nameOf.get(f), id: idOf.get(f) }));
+      const cmp = compareServedOrder(planned, (served || []).map((s) => s.id));
+      const first = planned[0].name;
+      if (cmp.ok === null) {
+        environmentSkipped.push(`form-order-served:${entityLogical} (the user running verify may not open '${first}' — check it as a user with that form's security roles)`);
+      } else if (cmp.reason === 'order') {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false, `'${cmp.before}' is served before '${cmp.after}' — build the spec again with --publish`);
+      } else if (cmp.reason === 'ahead') {
+        const ahead = (served || []).find((s) => String(s.id).replace(/[{}]/g, '').toLowerCase() === cmp.aheadId);
+        const aheadName = (ahead && ahead.name) || cmp.aheadId;
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false,
+          `users without a remembered form open '${aheadName}' first: a Main form this spec does not declare, whose form order is not after '${first}'. Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder`);
+      } else {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, true);
       }
     }
   }

@@ -177,6 +177,15 @@ function readerFor(sdk, appUnique, opts) {
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
   // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
   const appComponentsP = new Map();
+  // The user running verify, read once: servedMainForms asks the platform what THIS user is served. The id
+  // is interpolated into the function's `User` alias, so only a canonical GUID is accepted.
+  let callerIdP;
+  const callerId = () => (callerIdP || (callerIdP = (async () => {
+    const who = await sdk.dataverse.get('/WhoAmI');
+    const id = who && who.status >= 200 && who.status < 300 && who.body ? String(who.body.UserId || '').replace(/[{}]/g, '').toLowerCase() : '';
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) throw new Error(`WhoAmI returned no user id (HTTP ${who && who.status})`);
+    return id;
+  })()));
 
   // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
@@ -270,6 +279,27 @@ function readerFor(sdk, appUnique, opts) {
       });
       const row = rows && rows[0];
       return (row && row.formxml) || null;
+    },
+    // servedMainForms(entity): the Main forms the platform serves the user running verify for a table,
+    // first to last — the order a user without a remembered form opens them in (AB#6736948). The public
+    // RetrieveFilteredForms function is the platform's own answer to "which forms may this user open,
+    // in which order": it applies each form's security roles and <DisplayConditions Order>. It returns
+    // ids only, e.g.
+    //   { "value": [ { "@odata.type": "#Microsoft.Dynamics.CRM.systemform", "formid": "<guid>" }, … ] }
+    // so the names come from one systemform read. Each entry is { id, name }. Errors propagate: verify
+    // reports an order it could not read as not verified.
+    // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
+    servedMainForms: async (entity) => {
+      const logical = String(entity).toLowerCase();
+      const userId = await callerId();
+      const res = await sdk.dataverse.get(`/systemforms/Microsoft.Dynamics.CRM.RetrieveFilteredForms(EntityLogicalName=@e,FormType=@t,User=@u)?@e='${odataLit(logical)}'&@t=2&@u={'@odata.id':'systemusers(${userId})'}`);
+      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`RetrieveFilteredForms returned HTTP ${res && res.status}`);
+      const bare = (id) => String(id || '').replace(/[{}]/g, '').toLowerCase();
+      const ids = ((res.body && res.body.value) || []).map((r) => bare(r && r.formid)).filter(Boolean);
+      const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `objecttypecode eq '${odataLit(logical)}' and type eq 2`, top: 250 });
+      const nameOf = new Map((rows || []).map((r) => [bare(r.formid), String(r.name || '')]));
+      return ids.map((id) => ({ id, name: nameOf.get(id) || id }));
     },
     // dashboardComponents(dashboardId): the deployed dashboard's tiles, parsed by the SDK's own
     // dashboard deserializer — the path download already reads them through — so verify sees each

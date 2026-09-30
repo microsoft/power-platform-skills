@@ -1402,4 +1402,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

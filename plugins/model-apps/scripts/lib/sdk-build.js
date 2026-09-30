@@ -43,7 +43,17 @@ const {
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
+  isMainForm,
+  isOwnCustomTable,
+  declaredMainForms,
+  listedMainForms,
+  selectDefaultForm,
+  ordersByHand,
+  plannedMainFormSequence,
+} = require('./form-order.js');
+const {
   makeRunner,
+  runBestEffort,
   requireSuccessfulPush,
   pushFailed,
   reportPartialPush,
@@ -496,6 +506,18 @@ function planFor(spec, opts) {
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}`, ...(formKey ? { key: formKey } : {}) });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
+  }
+  // AB#6736948: one step per table with Main forms, after all of them exist — it sets the table's Main
+  // Form Set order, or keeps it (a form new on a table the spec orders nothing on goes after the others).
+  // None where the author orders the forms by hand (`securityRoles.order`).
+  if (has('forms')) {
+    const orderSteps = new Set();
+    for (const f of (spec.forms || []).filter(isMainForm)) {
+      const key = String(f.entity || '').toLowerCase();
+      if (!key || orderSteps.has(key)) continue;
+      orderSteps.add(key);
+      if (!ordersByHand(spec, key)) items.push({ phase: 'forms', label: `form order for ${f.entity}` });
+    }
   }
   if (has('business-rules')) for (const r of spec.businessRules || []) items.push({ phase: 'business-rules', label: `business rule "${r.name}" on ${r.entity}` });
   if (has('business-process-flows')) for (const p of spec.businessProcessFlows || []) {
@@ -3056,7 +3078,173 @@ async function runSdkBuild(spec, opts = {}) {
     return promoted;
   };
 
-  // helper: create an artifact — or UPDATE it in place if it already exists — then add to the solution.
+  // AB#6736948 — write one table's Main Form Set order (lib/form-order.js has the platform model and
+  // the measurements behind it).
+  //
+  // Only forms the spec declares are ever written. Where the spec orders the table — `mainFormOrder`,
+  // an explicit `isDefault`, or any table the spec owns — its Main forms get Order 0..n-1 in the
+  // planned order, skipping any already in place. Elsewhere the order belongs to the environment, and
+  // the build touches it only to put a Main form it CREATED in this run after the table's other Main
+  // forms: a new form carries Order 0, so it would otherwise tie with the form everyone opens today —
+  // or, on a table whose forms carry no order at all, displace it. A table the author orders by hand
+  // (`securityRoles.order`) is left alone entirely.
+  //
+  // Best-effort like the promotion above: a failed read or write is reported (✗ and a warning) and
+  // `--verify` fails on the order it reads back, but the build goes on.
+  const canOrderForms = () => typeof provision.getFormSecurityRoles === 'function'
+    && typeof provision.setFormSecurityRoles === 'function' && typeof provision.queryRecords === 'function';
+  const writeFormOrder = async (formId, order, stored) => {
+    // The SDK re-attaches an existing <DisplayConditions> and changes only the attributes it is given,
+    // so the form's roles and fallback setting are kept. A form with no <DisplayConditions> has nothing
+    // to attach an order to (the SDK refuses), so it gets the element a new form is created with —
+    // offered to everyone, eligible as a fallback — which is what having none means.
+    await provision.setFormSecurityRoles(formId, stored ? { order } : { everyone: true, fallbackForm: true, order });
+  };
+  // The table's ACTIVE Main forms other than `exceptIds`, each with its stored order (undefined: none).
+  const otherMainForms = async (entityLogical, exceptIds) => {
+    const rows = await provision.queryRecords('systemform', {
+      select: ['formid', 'name'],
+      filter: `objecttypecode eq '${odataLit(entityLogical)}' and type eq 2 and formactivationstate eq 1`,
+      top: 250,
+    });
+    const out = [];
+    for (const r of rows || []) {
+      const id = normalizeFormId(r && r.formid);
+      if (!id || exceptIds.has(id)) continue;
+      const stored = await provision.getFormSecurityRoles(id);
+      out.push({ id, name: String((r && r.name) || id), order: stored ? stored.order : undefined });
+    }
+    return out;
+  };
+  const applyMainFormOrder = async (entityLogical, idOfForm) => {
+    const mains = declaredMainForms(spec, entityLogical);
+    if (!mains.length || ordersByHand(spec, entityLogical)) return;
+    const entityName = mains[0].entity;
+    const q = (f) => `'${f.name || `${entityName} form`}'`;
+    const warn = (m) => { if (typeof opts.warn === 'function') opts.warn(m); };
+    const planned = plannedMainFormSequence(spec, entityLogical);
+    if (!canOrderForms()) {
+      runner.skip('forms', `form order for ${entityName} (this SDK cannot read or write a form's order)`);
+      return;
+    }
+    if (planned) {
+      const notBuilt = mains.filter((f) => !idOfForm.get(f));
+      if (notBuilt.length) {
+        runner.skip('forms', `form order for ${entityName} (${notBuilt.map(q).join(', ')} not built in this run)`);
+        return;
+      }
+      const listed = listedMainForms(spec, entityLogical);
+      const head = listed && listed.length ? listed : planned.slice(0, 1);
+      const more = mains.length - head.length;
+      await runBestEffort(runner, 'forms', `form order for ${entityName}: ${head.map(q).join(' > ')}${more ? `, then ${more} more` : ''}`, async () => {
+        const stored = new Map();
+        for (const f of mains) stored.set(f, await provision.getFormSecurityRoles(idOfForm.get(f)));
+        const current = new Map(mains.map((f) => [f, stored.get(f) ? stored.get(f).order : undefined]));
+        const sequence = plannedMainFormSequence(spec, entityLogical, current);
+        for (let i = 0; i < sequence.length; i += 1) {
+          if (current.get(sequence[i]) === i) continue;
+          await writeFormOrder(idOfForm.get(sequence[i]), i, stored.get(sequence[i]));
+        }
+        // A form this spec does not declare is never written — but one whose order does not put it
+        // after the first form can still be what the table opens with. Say so now; `--verify` checks
+        // the order the platform actually serves. The order above is already written, so a table form
+        // that cannot be read here (another publisher's, say) costs this warning, not the step.
+        let others = [];
+        try {
+          others = await otherMainForms(entityLogical, new Set(mains.map((f) => normalizeFormId(idOfForm.get(f)))));
+        } catch (err) {
+          warn(`'${entityName}': could not read its other Main forms to check that none comes before ${q(sequence[0])} (${(err && err.message) || err}); \`--verify\` checks the order the platform serves.`);
+        }
+        for (const o of others.filter((x) => Number.isFinite(x.order) && x.order <= 0)) {
+          warn(`'${entityName}': Main form '${o.name}', which this spec does not declare, has form order ${o.order} — not after ${q(sequence[0])} (0) — so the platform may open the table with it. Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder.`);
+        }
+      }, opts.warn, `could not set the Main Form Set order of '${entityName}'`);
+      return;
+    }
+    // A Main form this run CREATED on this table was created already after the table's other Main forms
+    // (createInPlace, below): its order was part of the create. What is left is to say what that means.
+    const created = mains.filter((f) => idOfForm.get(f) && createdFormsThisRun.has(normalizeFormId(idOfForm.get(f))));
+    if (!created.length) {
+      runner.skip('forms', `form order for ${entityName} (no new Main form — its order is left as it is)`);
+      return;
+    }
+    await runBestEffort(runner, 'forms', `form order for ${entityName} (${created.map(q).join(', ')} after its other Main forms)`, async () => {
+      const list = created.map(q).join(', ');
+      const plural = created.length > 1;
+      const snapshot = await appendSnapshotFor(entityLogical);
+      if (snapshot.error) {
+        warn(`'${entityName}': could not read its other Main forms (${(snapshot.error && snapshot.error.message) || snapshot.error}), so ${list} ${plural ? 'were' : 'was'} created at the end of the form order (order ${APPEND_FALLBACK_ORDER} and up). Check the order in Maker (Form settings > Form order).`);
+        return;
+      }
+      const unplaced = created.filter((f) => !createdInPlace.has(f));
+      if (unplaced.length) {
+        warn(`'${entityName}': ${unplaced.map(q).join(', ')} ${unplaced.length > 1 ? 'were' : 'was'} created without a form order the build could set, so ${unplaced.length > 1 ? 'they' : 'it'} may come first. Set the order in Maker (Form settings > Form order), or declare the table's order with entities[].mainFormOrder.`);
+      }
+      if (snapshot.base < 0) {
+        warn(`'${entityName}': none of its other Main forms has a form order, so ${list} now come${plural ? '' : 's'} first — users without a remembered form open the table with ${q(created[0])}. To keep the form it opened with, set forms[].isDefault or entities[].mainFormOrder, or set the order in Maker (Form settings > Form order).`);
+        return;
+      }
+      // A form with no order at all is served after every form that has one, so the new form(s) come before
+      // it — and a user whose roles do not offer them an ordered form, and who therefore opened that one,
+      // now opens the new form instead.
+      const unranked = snapshot.others.filter((o) => !Number.isFinite(o.order));
+      if (unranked.length) {
+        warn(`'${entityName}': ${list} now come${plural ? '' : 's'} before ${unranked.map((o) => `'${o.name}'`).join(', ')}, which ${unranked.length > 1 ? 'have' : 'has'} no form order (a form without one is served after every form that has one) — so a user who opened ${unranked.length > 1 ? 'one of them' : 'it'} may now open ${q(created[0])}. To keep ${unranked.length > 1 ? 'their' : 'its'} place, give ${unranked.length > 1 ? 'them' : 'it'} an order in Maker (Form settings > Form order), or declare the table's order with entities[].mainFormOrder.`);
+      }
+    }, opts.warn, `could not check the place of the new Main form(s) of '${entityName}'`);
+  };
+
+  // AB#6736948 — a Main form the build CREATES on a table whose order it does not set is created already
+  // after the table's other Main forms. Its order is written into the new form's own <DisplayConditions>
+  // (the SDK gives every new form one, at Order 0, in its root bag) BEFORE the first push, so the order is
+  // part of the create: no interrupted run and no later failure can leave the form at Order 0, which can
+  // put it ahead of the form the table opens with. A separate write after the create, as first tried,
+  // left exactly that on any failure between the two — and a later build cannot tell the form is new.
+  //
+  // The place is (highest order among the table's other Main forms) + 1 + (the form's index among the
+  // spec's Main forms of that table), so several new forms keep spec order without coordinating (the
+  // gaps are harmless: the order only sorts). The other forms are read ONCE per table, and every creator
+  // awaits that one read before its own push, so no form this run creates is in it.
+  const APPEND_FALLBACK_ORDER = 100000;
+  const appendSnapshots = new Map(); // entity -> Promise<{ others, base } | { error }>
+  const appendSnapshotFor = (entityLogical) => {
+    if (!appendSnapshots.has(entityLogical)) {
+      appendSnapshots.set(entityLogical, otherMainForms(entityLogical, new Set()).then(
+        (others) => {
+          const orders = others.map((o) => o.order).filter(Number.isFinite);
+          return { others, base: orders.length ? Math.max(...orders) : -1 };
+        },
+        (error) => ({ error })
+      ));
+    }
+    return appendSnapshots.get(entityLogical);
+  };
+  const createdInPlace = new Set(); // spec form entries whose create carried their order
+  const createInPlace = async (formId, specForm) => {
+    if (!specForm || !isMainForm(specForm) || !canOrderForms()) return;
+    const entityLogical = String(specForm.entity || '').toLowerCase();
+    if (plannedMainFormSequence(spec, entityLogical) || ordersByHand(spec, entityLogical)) return;
+    const snapshot = await appendSnapshotFor(entityLogical);
+    const idx = Math.max(0, declaredMainForms(spec, entityLogical).indexOf(specForm));
+    // Unreadable neighbours: put it past any order Maker assigns (the step says so).
+    const order = snapshot.error ? APPEND_FALLBACK_ORDER + idx : snapshot.base + 1 + idx;
+    // The root bag of a new form, as the SDK builds it (abridged):
+    //   { "c": [ { "i": 1, "node": { "n": "header", … } }, { "i": 2, "node": { "n": "footer", … } },
+    //            { "i": 3, "node": { "n": "DisplayConditions", "a": [["Order", "0"], ["FallbackForm", "true"]],
+    //                                "c": [{ "n": "Everyone", "a": [], "c": [] }] } } ] }
+    // Only the Order attribute changes; the node is replaced whole through the generic surface, as the
+    // form-events region is (wireFormEvents).
+    const art = await provision.getArtifact('form', formId);
+    const bag = (art && art.bag && Array.isArray(art.bag.c)) ? art.bag.c : [];
+    const at = bag.findIndex((e) => e && e.node && e.node.n === 'DisplayConditions');
+    if (at < 0) return;
+    const entry = JSON.parse(JSON.stringify(bag[at]));
+    const attrs = Array.isArray(entry.node.a) ? entry.node.a : [];
+    const has = attrs.some((p) => Array.isArray(p) && p[0] === 'Order');
+    entry.node.a = has ? attrs.map((p) => (Array.isArray(p) && p[0] === 'Order' ? ['Order', String(order)] : p)) : [['Order', String(order)], ...attrs];
+    await provision.updateElement('form', formId, `/bag/c/${at}`, entry);
+    createdInPlace.add(specForm);
+  };
   const buildArtifact = (type, def, meta) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
     // Update-in-place: editing a deployed spec must land, so a form is reconciled (fields +
     // sub-grids) and a view has its columns reconciled, instead of the artifact being reused
@@ -3081,6 +3269,8 @@ async function runSdkBuild(spec, opts = {}) {
     if (type === 'form') {
       id = await createFormShell(def);
       createdFormsThisRun.add(normalizeFormId(id));
+      // AB#6736948: on a table whose order the build does not set, the form is created in its place.
+      await createInPlace(id, meta && meta.specForm);
       await addSubgrids(id, def.__subgrids);
     } else {
       id = (await provision.createArtifact(type, def)).id;
@@ -3247,7 +3437,7 @@ async function runSdkBuild(spec, opts = {}) {
       return { f, def };
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
-      const id = await buildArtifact('form', d.def);
+      const id = await buildArtifact('form', d.def, { specForm: d.f });
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
         await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
@@ -3272,39 +3462,47 @@ async function runSdkBuild(spec, opts = {}) {
     // with therefore depended on completion order — an alternate read-only or OnSave-blocked form
     // could silently become the default, changing normal app behaviour.
     //
-    // Selection is explicit first (`forms[].isDefault`), then a documented stable fallback: the FIRST
-    // Main form in spec order. Both are order-independent, which is the property that was missing.
-    // Still guarded to a table THIS build owns — re-pointing the default form of a system or reused
-    // table is an environment-wide side effect.
+    // Selection is explicit first (`forms[].isDefault`, then the first entry of
+    // `entities[].mainFormOrder`), then a documented stable fallback: the FIRST Main form in spec
+    // order. All are order-independent, which is the property that was missing. The FALLBACK is still
+    // guarded to a table THIS build owns — re-pointing the default form of a system or reused table is
+    // an environment-wide side effect nobody asked for — but an explicit choice is applied on any
+    // table (AB#6736948: an `isDefault` on an existing table used to be dropped without a word).
+    // `lib/form-order.js` holds the rule, shared with the spec gate and verify.
     const promotedEntities = new Set();
     const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
     const mainIdsByEntity = new Map(); // entity -> spec-declared Main form ids for sibling demotion
+    const idOfForm = new Map(); // spec form entry -> the id this run built or reconciled
     defs.forEach((d, i) => {
+      if (ids[i]) idOfForm.set(d.f, ids[i]);
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
       if (!mainIdsByEntity.has(key)) mainIdsByEntity.set(key, []);
       if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
-      const current = mainByEntity.get(key);
-      // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
-      if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
-        mainByEntity.set(key, { id: ids[i], f: d.f });
-      }
     });
-    for (const [entityLogical, chosen] of mainByEntity) {
-      const entSpec = entityByLogical(spec, entityLogical);
-      const prefix = spec.solution && spec.solution.publisherPrefix;
-      const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-        String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-      if (!isOwnCustomTable) continue;
+    for (const entityLogical of mainIdsByEntity.keys()) {
+      const chosen = selectDefaultForm(spec, entityLogical);
+      const chosenId = chosen && idOfForm.get(chosen.form);
+      if (!chosenId) continue;
+      mainByEntity.set(entityLogical, { id: chosenId, f: chosen.form });
       // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
       // bookkeeping below — a build that could not set the flag must not report a default form it
-      // did not set, which is what `result.created.defaultForms` claims.
-      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true, mainIdsByEntity.get(entityLogical) || []);
+      // did not set, which is what `result.created.defaultForms` claims. Deactivating the other Main
+      // forms stays limited to a table this build owns, whatever the spec says: it is destructive.
+      const deactivateOthers = chosen.form.deactivateOtherMainForms === true && isOwnCustomTable(spec, entityLogical);
+      const promoted = await promoteDefaultForm(chosenId, entityLogical, deactivateOthers, mainIdsByEntity.get(entityLogical) || []);
       if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
       [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])
     );
+
+    // AB#6736948 — the Main Form Set order. `isdefault` alone does not decide what a table opens with:
+    // the order does (see lib/form-order.js for the measurements), so the default form is also put
+    // first. Once per table, after every form exists and after the promotion above.
+    for (const entityLogical of mainIdsByEntity.keys()) {
+      await applyMainFormOrder(entityLogical, idOfForm);
+    }
 
     // overwrites the first. That is correct for what the map is for — the app shell wires one form
     // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably

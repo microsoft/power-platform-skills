@@ -8,10 +8,21 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ## [Unreleased] — 2.11.0
 
 AI features are written with each setting's own values, rebuilding an existing app no longer
-rewrites its navigation, and the vendored SDK is refreshed.
+rewrites its navigation, a table opens with the form the spec makes its default, and the vendored
+SDK is refreshed.
+
+### Added
+
+- **`entities[].mainFormOrder`** (AB#6736948) — a table's Main forms in the order they are offered,
+  first to last; the first is the one the table opens with. Works on existing tables.
 
 ### Fixed
 
+- **A table opens with its default form** (AB#6736948). What opens is decided by the order of a
+  table's Main forms, not the default flag, and new forms all share one position — so a table with
+  several Main forms could open with an alternate one. The build now also puts the default form
+  first, and `--verify` checks the order. `isDefault` on an existing table used to be ignored; a form
+  the build adds to an existing table now goes after its other Main forms.
 - **Rebuilding an existing app keeps its navigation as it is** (AB#6726727). Every nav entry was
   rewritten as a new one, so an unrelated edit turned a designer-made dashboard entry's icon into a
   placeholder and dropped its other settings. Entries now keep their id and everything the spec does

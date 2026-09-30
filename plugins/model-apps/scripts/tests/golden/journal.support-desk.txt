@@ -56,6 +56,12 @@ forms	start	form "Comment"
 forms	ok	form "Customer"
 forms	ok	form "Comment"
 forms	ok	form "Ticket"
+forms	start	form order for new_customer: 'Customer'
+forms	ok	form order for new_customer: 'Customer'
+forms	start	form order for new_ticket: 'Ticket'
+forms	ok	form order for new_ticket: 'Ticket'
+forms	start	form order for new_comment: 'Comment'
+forms	ok	form order for new_comment: 'Comment'
 app-shell	start	app icon (generated) new_supportdesk_icon
 app-shell	ok	app icon (generated) new_supportdesk_icon
 app-shell	start	app "Support Desk"

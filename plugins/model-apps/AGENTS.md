@@ -142,7 +142,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
   never duplicates a control. A row that a pruned or moved cell leaves holding nothing is removed too
   (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
-  a row-spanning cell above still reserves is kept, and so is a row that was already empty. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  a row-spanning cell above still reserves is kept, and so is a row that was already empty.
+  **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
+  Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
+  (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
+  were served with the `isdefault` form last). After every form exists, the forms phase promotes the default (an explicit
+  `isDefault` or `entities[].mainFormOrder[0]` on any table; the first Main form only on a table the
+  spec owns) and then writes Order 0..n-1 onto the spec's Main forms, the ones it does not list keeping
+  their stored relative order. On a table it orders nothing on, a Main form it creates is created after the
+  table's others: its order is written into the new form's own `<DisplayConditions>` before the first
+  push (`createInPlace`), so no interrupted run or later failure can leave it at the Order 0 every new
+  form gets — a later build could not tell it is new. Only declared forms are written, order-only through `setFormSecurityRoles` so roles
+  survive; a table ordered by hand (`securityRoles.order`) is left alone; the step is best-effort (✗ and
+  a warning, never a halt). Verify checks the stored order (`form-order`) and what the public
+  `RetrieveFilteredForms` serves the user running it (`form-order-served`). On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
   when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
   retries and later failures stay bound to that gate-time list — an empty list included, when the run
   includes the removal phases. A later `--allow-destructive` run may
@@ -733,6 +746,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
     form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)

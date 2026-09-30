@@ -61,6 +61,11 @@ function makeSimpleMockSdk() {
     updateRecord: async () => undefined,
     addSolutionComponent: async () => undefined,
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
+    // A form's <DisplayConditions> as a new form carries them (Order 0, offered to everyone). The forms
+    // phase reads them to set each table's Main Form Set order (AB#6736948), and writes only the forms
+    // that are not yet in place — so a table with one Main form costs no write.
+    getFormSecurityRoles: async () => ({ everyone: true, fallbackForm: true, order: 0 }),
+    setFormSecurityRoles: async (formId, opts) => { calls.push(['setFormSecurityRoles', formId, opts]); },
     getAiReadiness: async (opts) => { calls.push(['getAiReadiness', opts]); return { enabled: true }; },
     // The real SDK writes every requested value (Off included) and lists each one it proves; the
     // build encodes flags to setting values first, so no feature arrives here as a falsy boolean.

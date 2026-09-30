@@ -356,7 +356,7 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
 }
 ```
 - **Unknown table keys are REJECTED, not ignored.** A table accepts exactly the keys above
-  plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
+  plus `statusReasons` / `alternateKeys` / `mainFormOrder`. Anything else — a misspelled `pluralname`, or a
   `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
   fails validation naming the alternative, rather than validating clean and being dropped from the
   build.
@@ -459,7 +459,8 @@ without needing a business rule or a plug-in to enforce it.
 ### entity sub-sections (optional)
 ```jsonc
 "statusReasons": [ { "label": "In Review", "state": "Active" } ],   // custom status values
-"alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ]
+"alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ],
+"mainFormOrder": ["Work Item", "Work Item — Summary"]   // the Main Form Set order — see forms[] → "Which form a table opens with"
 ```
 
 ## Conditional features — read `app-spec-schema-advanced.md` when you use one
@@ -660,15 +661,18 @@ why they need naming here at all.
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
-- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**.
-  Exactly one Main form per table may set it; the fallback is the first Main form in spec order, so
-  selection is order-independent either way (it is applied once, after every form exists, rather than
-  each form racing to promote itself). A promotion the environment refuses is reported as a warning
-  and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
-  can no longer record a default it did not actually set. Moving the default to another form **clears**
-  it on the table's other spec-declared Main forms (measured: setting the flag on one form does not
-  clear it on another, so both stayed default), and `--verify` fails while any of them still holds
-  it. Forms the spec does not declare, and their activation state, are never touched.
+- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**:
+  the build marks it `systemform.isdefault` **and** puts it first in the table's Main Form Set order —
+  the flag alone does not decide what opens (see *Which form a table opens with* below). Exactly one
+  Main form per table may set it. Set explicitly, it applies on **any** table, `existing: true`
+  included; without it, a table this spec creates opens with its first Main form in spec order. It is
+  applied once, after every form exists, rather than each form racing to promote itself. A promotion
+  the environment refuses is reported as a warning and fails `--verify`, which proves the deployed
+  `systemform.isdefault` independently — so a build can no longer record a default it did not
+  actually set. Moving the default to another form **clears** it on the table's other spec-declared
+  Main forms (measured: setting the flag on one form does not clear it on another, so both stayed
+  default), and `--verify` fails while any of them still holds it. Forms the spec does not declare,
+  and their activation state, are never touched.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -685,6 +689,46 @@ why they need naming here at all.
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Which form a table opens with — `isDefault` and `entities[].mainFormOrder`
+
+A table's Main forms are served in its **Main Form Set order**, and a user opens the **first one
+they may open** — unless they switched forms earlier: the platform remembers the last Main form each
+user opened for a table and opens that one for them while they may still open it. The order is
+stored on each form (its formxml `<DisplayConditions Order="n">`), and `systemform.isdefault` does
+not change it: measured, moving the flag reordered nothing, and a table's three new Main forms — all
+at the same order, as every new form is — were served with the `isdefault` form *last*.
+
+- **`forms[].isDefault: true`** — this form opens first: it becomes the table's default **and** comes
+  first in the order. Applied on any table.
+- **`entities[].mainFormOrder`** — the order itself, first to last, as names of the table's Main forms
+  in `forms[]`:
+  ```jsonc
+  { "schemaName": "contoso_workitem", "existing": true,
+    "mainFormOrder": ["Work Item", "Work Item — Summary", "My Work — Work Item"] }
+  ```
+  The first form is the one the table opens with (an `isDefault` form must be first). A partial list
+  puts the listed forms first; the table's other spec forms follow in their current order.
+- **Neither set:** on a table this spec creates, the first Main form in spec order comes first and
+  the others follow in spec order. On any other table the order is left as it is, and a Main form the
+  build *creates* there is put after the table's other Main forms — adding an alternate form does not
+  change what the table opens with. If none of those forms has an order yet, the new form comes first
+  and the build warns; it also warns when the new form comes before a form that has no order (a form
+  without one is served after every form that has one). The new form's place is part of creating it,
+  so an interrupted build cannot leave it first.
+- **Only forms in `forms[]` are written.** A Main form the spec does not declare keeps its order; if
+  it would still come first, the build warns and `--verify` fails, naming it. Move it down in Maker
+  (**Form settings → Form order**), or declare it and list it in `mainFormOrder`.
+- **`securityRoles.order`** writes the same attribute. A table where a Main form sets it is ordered by
+  hand: the build leaves its order alone, and the spec cannot also give it `mainFormOrder`.
+- **Also deciding what a user sees:** their security roles — a form restricted by `securityRoles` is
+  served only to those roles, and everyone else opens the next form they may open — and their
+  remembered form, which is per user, not configuration (they change it by switching forms). An app
+  offers **every** active Main form of its tables, including forms the spec does not declare (the
+  stock "Information" form among them); a spec cannot leave one out today.
+- **`--verify`** checks the stored order (`form-order`) and the order the platform serves the user
+  running verify (`form-order-served`, read with the public `RetrieveFilteredForms` function). When
+  that user may not open the first form, the check is reported as not applicable, not as a pass.
 
 ### Explicit layout — tabs, form-columns, sections
 
@@ -878,7 +922,9 @@ fail to add anyone. Every malformed shape is a hard error for that reason.
   This direction fails closed (access never silently widens), but it does mean "undo" is an explicit
   `{ "everyone": true }`.
 - **`fallbackForm`** *(optional)* — show this form to users whose roles have no form of their own.
-- **`order`** *(optional, non-negative integer)* — display order among the entity's forms.
+- **`order`** *(optional, non-negative integer)* — this form's place in the table's Main Form Set
+  (the same attribute `isDefault` and `entities[].mainFormOrder` set; see *Which form a table opens
+  with*). A table where a form sets it is ordered by hand, and cannot also have `mainFormOrder`.
 - Both `fallbackForm` and `order` are **preserved** when omitted, so a later build that sets only
   `personas` does not reset them.
 
