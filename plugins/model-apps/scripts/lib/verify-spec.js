@@ -10,7 +10,9 @@ const { authoredSectionNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
-const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl } = require('./sitemap-merge.js');
+const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, keptFromBaseline } = require('./sitemap-merge.js');
+// Recorded on an icon check the build's keep rule satisfies (see keptFromBaseline).
+const KEPT_BY_DESIGNER = 'kept as the environment has it: changed in the designer since the spec\u2019s baseline, which the spec still matches';
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
@@ -724,13 +726,18 @@ async function verifySpec(spec, read, opts = {}) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
           // SubArea carrying the icon when the subarea has no entity identity.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, Icon: sa.icon }) : hasElement(xml, 'SubArea', { Icon: sa.icon });
-          add('subarea-icon', sa.title || '', present);
+          // AB#6726727: an icon changed in the designer since the spec's baseline, which the spec has not
+          // changed, is one the build deliberately KEEPS — accepted here in exactly that case, or the
+          // build's own --verify would fail on it.
+          const kept = !present && keptFromBaseline(spec, opts.baselineSpec, sa, 'icon');
+          add('subarea-icon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
         if (sa.vectorIcon) {
           // VectorIcon serializes as its own sitemap attribute, so check it independently from the
           // raster Icon attribute while keeping the same SubArea scoping rules.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, VectorIcon: sa.vectorIcon }) : hasElement(xml, 'SubArea', { VectorIcon: sa.vectorIcon });
-          add('subarea-vectorIcon', sa.title || '', present);
+          const kept = !present && keptFromBaseline(spec, opts.baselineSpec, sa, 'vectorIcon');
+          add('subarea-vectorIcon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
       }
     }

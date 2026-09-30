@@ -1031,9 +1031,9 @@ custom control), but the spec validator emits a warning.
 - **A nav change made in the designer after a download is kept, not reverted.** Download and every
   successful apply record the spec as a baseline in `.maker-workspace/last-applied.json`, for that
   environment and app. When the spec still has the baseline's title or icon for an entry and the
-  environment has something else, the build keeps the environment's value and says so — change the spec
-  to change it. With no baseline for the environment, the spec wins and the build reports each change it
-  makes to an existing entry.
+  environment has something else, the build keeps the environment's value and says so, and `--verify`
+  accepts it — change the spec to change it. With no baseline for the environment, the spec wins and the
+  build reports each change it makes to an existing entry.
 - **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
   the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
   `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon

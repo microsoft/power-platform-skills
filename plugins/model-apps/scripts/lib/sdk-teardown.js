@@ -347,20 +347,15 @@ const KIND_HANDLERS = {
       // The name lookup fails closed like the membership read below. runTeardown reads an error that says
       // "not found" — a failed paginated read, a proxy's 404 — as an empty resolution, so the dashboard was
       // reported absent and the solution, the only thing a re-run can ask about ownership, then deleted.
-      let items;
-      try {
-        items = await findDashboardsByName(sdk, target.name);
-      } catch (err) {
-        const e = new Error(`could not look up dashboards named '${target.name}' (${errMsg(err)}) — none is deleted; re-run the teardown`);
-        e.failClosed = true;
-        throw e;
-      }
+      //
       // A downloaded spec also pins the dashboard it was read from (dashboards[].dashboardId), which the
-      // build binds by id — so one renamed in the designer since is still this spec's dashboard, found
-      // here by that id. It is a CANDIDATE only: the solution-membership rule below decides, as it does
-      // for a name match. Fails closed like the name lookup.
+      // build and verify resolve BEFORE the name — so when the pin resolves it is the only candidate here
+      // too. Adding it to the name matches instead would also take a dashboard that has since been given
+      // the old name. It still has to pass the solution-membership rule below. When the pin resolves to
+      // nothing (a spec downloaded from another environment), the name decides, as it does for the build.
+      // The pin lookup fails closed like the name lookup.
+      let pinned = null;
       if (target.dashboardId) {
-        let pinned;
         try {
           pinned = await findPinnedDashboard(sdk, target.dashboardId);
         } catch (err) {
@@ -368,8 +363,18 @@ const KIND_HANDLERS = {
           e.failClosed = true;
           throw e;
         }
-        const bareId = (g) => String(g == null ? '' : g).replace(/[{}]/g, '').toLowerCase();
-        if (pinned && !items.some((x) => bareId(x.id) === bareId(pinned.id))) items = [...items, pinned];
+      }
+      let items;
+      if (pinned) {
+        items = [pinned];
+      } else {
+        try {
+          items = await findDashboardsByName(sdk, target.name);
+        } catch (err) {
+          const e = new Error(`could not look up dashboards named '${target.name}' (${errMsg(err)}) — none is deleted; re-run the teardown`);
+          e.failClosed = true;
+          throw e;
+        }
       }
       if (!items.length) return [];
       // Found by NAME, and Dataverse neither keeps names unique nor compares them exactly (it ignores

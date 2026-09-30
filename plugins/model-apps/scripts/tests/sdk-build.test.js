@@ -632,10 +632,10 @@ const appCalls = (calls, name, pred = () => true) => find(calls, name).filter((c
 // tree rebuilt every live node from scratch (new ids, designer defaults for a NEW node), which is how an
 // unrelated edit turned a designer-made dashboard entry into a placeholder-icon one.
 const LIVE_SITEMAP = () => ({
-  areas: [{ id: 'area_live', title: 'Main', bag: { a: [['Id', 'area_live'], ['ResourceId', 'Contoso.Area']], c: [] },
-    groups: [{ id: 'grp_live', title: 'Records', bag: { a: [['Id', 'grp_live'], ['IsProfile', 'false']], c: [] },
+  areas: [{ id: 'area_live', title: 'Main', bag: { a: [['Id', 'area_live'], ['ResourceId', 'Contoso.Area']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Main']], c: [] }] } }] },
+    groups: [{ id: 'grp_live', title: 'Records', bag: { a: [['Id', 'grp_live'], ['IsProfile', 'false']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Records']], c: [] }] } }] },
       subAreas: [{ id: 'cust_live', type: 'Entity', entity: 'new_customer', title: 'Our customers',
-        bag: { a: [['Id', 'cust_live'], ['Entity', 'new_customer'], ['Client', 'All,Web'], ['AvailableOffline', 'false']], c: [] } }] }] }],
+        bag: { a: [['Id', 'cust_live'], ['Entity', 'new_customer'], ['Client', 'All,Web'], ['AvailableOffline', 'false']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Our customers']], c: [] }] } }] } }] }] }],
 });
 const siteMapWrite = (calls) => appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap')[0];
 

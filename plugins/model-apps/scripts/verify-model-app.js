@@ -11,9 +11,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
+const { readBaseline } = require('./lib/deployed-baseline.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { odataLit } = require('./lib/odata.js');
@@ -462,7 +463,10 @@ async function main() {
   const httpClient = createAzHttpClient(env);
   const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }));
+  // The spec's baseline for this environment and app, when the workspace has one: an icon the build
+  // kept because it was changed in the designer since then is not a failure (AB#6726727).
+  const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.

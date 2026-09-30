@@ -33,28 +33,43 @@
 // runtime keys the dashboard glyph on.
 const DASHBOARD_LAUNCHER_URL = '/workplace/home_dashboards.aspx';
 
-// Whether a subarea Url is the dashboard launcher, the way the runtime decides it: it looks for the
-// launcher path anywhere in the Url (case-insensitively here, since Dataverse paths are).
+// Whether a subarea Url is the dashboard launcher to BOTH of its consumers: the designer recognizes a
+// dashboard entry only when the whole Url equals the launcher (compared lower-cased), and the runtime
+// shows the dashboard glyph only when the Url contains it (compared case-SENSITIVELY). Only the exact
+// launcher satisfies both — `/WorkPlace/Home_Dashboards.aspx` passes the designer and fails the
+// runtime; a query suffix passes the runtime and fails the designer.
 function isDashboardLauncherUrl(url) {
-  return typeof url === 'string' && url.toLowerCase().includes(DASHBOARD_LAUNCHER_URL);
+  return url === DASHBOARD_LAUNCHER_URL;
 }
 
 // A GUID as Dataverse may store it in sitemap XML (`{280948EC-…}`, bare, either case) → bare lower.
 const bareGuid = (v) => String(v === undefined || v === null ? '' : v).trim().replace(/^\{|\}$/g, '').toLowerCase();
 const text = (v) => (typeof v === 'string' ? v.trim() : '');
 
+// A URL target compared the way it is resolved. A web-resource reference names a Dataverse web
+// resource, whose names are case-insensitive, so it folds; an http(s) URL folds only its scheme and
+// host — a path or query value can be case-sensitive, and folding it would let an intended change of
+// case look like the live entry and be written back over.
+function urlIdentity(url) {
+  const u = text(url);
+  if (/^\$webresource:/i.test(u) || /^\/webresources\//i.test(u)) return u.toLowerCase();
+  const m = /^([a-z][a-z0-9+.-]*:\/\/[^/?#]*)(.*)$/i.exec(u);
+  return m ? m[1].toLowerCase() + m[2] : u;
+}
+
 /**
  * The comparable identity of a subarea's navigation TARGET, or undefined when it has none.
  *
- * Mirrors the SDK's own `subAreaTargetKey` (its duplicate check): `(type, target)`, GUIDs normalized,
- * logical names and URLs case-folded. Neither the SubArea `Id` nor its title says where an entry
- * navigates, so neither can identify it across a download → edit → build round trip.
+ * Like the SDK's own `subAreaTargetKey` (its duplicate check): `(type, target)`, GUIDs normalized,
+ * logical names case-folded — except a URL, which keeps the case of its path and query (urlIdentity).
+ * Neither the SubArea `Id` nor its title says where an entry navigates, so neither can identify it
+ * across a download → edit → build round trip.
  */
 function subAreaTargetKey(sub) {
   if (!sub || typeof sub !== 'object') return undefined;
   switch (sub.type) {
     case 'Entity': return text(sub.entity) ? `Entity:${text(sub.entity).toLowerCase()}` : undefined;
-    case 'URL': return text(sub.url) ? `URL:${text(sub.url).toLowerCase()}` : undefined;
+    case 'URL': return text(sub.url) ? `URL:${urlIdentity(sub.url)}` : undefined;
     case 'DashBoard': return bareGuid(sub.dashboardId) ? `DashBoard:${bareGuid(sub.dashboardId)}` : undefined;
     case 'CustomPage': return text(sub.page) ? `CustomPage:${text(sub.page).toLowerCase()}` : undefined;
     case 'GenPage': return bareGuid(sub.genPageId) ? `GenPage:${bareGuid(sub.genPageId)}` : undefined;
@@ -64,11 +79,46 @@ function subAreaTargetKey(sub) {
 
 // The target attribute each subarea type carries. When a desired subarea is adopted, its target is
 // taken VERBATIM from the live node: the two compare equal only after normalization, and re-writing
-// `{280948EC-…}` as `280948ec-…` would change the XML for nothing.
-const TARGET_FIELD = { Entity: 'entity', URL: 'url', DashBoard: 'dashboardId', CustomPage: 'page', GenPage: 'genPageId' };
+// `{280948EC-…}` as `280948ec-…` would change the XML for nothing. A URL is not listed: the spec's
+// own spelling is what it asks for, and its identity already differs only where case cannot matter.
+const TARGET_FIELD = { Entity: 'entity', DashBoard: 'dashboardId', CustomPage: 'page', GenPage: 'genPageId' };
 
 // Deep copy of a bag, so the tree handed to the SDK never aliases the workspace copy it was read from.
 const cloneBag = (bag) => (bag === undefined ? undefined : JSON.parse(JSON.stringify(bag)));
+
+// The attribute value of a raw bag node, e.g. `LCID` on `{ n: 'Title', a: [['LCID','1033'], ['Title','Ops']] }`.
+const rawAttr = (node, key) => {
+  const pair = node && Array.isArray(node.a) ? node.a.find(([k]) => k === key) : undefined;
+  return pair ? pair[1] : undefined;
+};
+
+/**
+ * Make an ADOPTED node's bag carry the title the spec asks for at the SDK's language, which the SDK
+ * will not do on its own for a node that has a bag. Its rebuild patches the `<Title LCID="…">` inside
+ * an EXISTING `<Titles>` (adding the entry when missing), but it only synthesizes the wrapper for a
+ * from-scratch node, and it reads an empty typed title as "no edit". So:
+ *   - a title where the live node has no `<Titles>` at all: an empty wrapper is added first in the
+ *     node (where the SDK puts a synthesized one) for the SDK to fill;
+ *   - no title where the live node has one at this language: that `<Title>` is dropped, and the other
+ *     languages' titles are kept — the bag-less write this replaces dropped every language.
+ * Bag children are `{ i, node }` with absolute child indices (modeled children fill the gaps), so an
+ * insertion shifts every index after it.
+ */
+function reconcileTitleChild(bag, title, liveTitle, lcid) {
+  if (!bag || !Array.isArray(bag.c)) return;
+  const lang = String(lcid);
+  const at = bag.c.findIndex((e) => e && e.node && e.node.n === 'Titles');
+  if (text(title)) {
+    if (at < 0) {
+      bag.c = [{ i: 0, node: { n: 'Titles', a: [], c: [] } }, ...bag.c.map((e) => ({ ...e, i: e.i + 1 }))];
+    }
+    return;
+  }
+  if (!text(liveTitle) || at < 0) return;
+  const titles = bag.c[at].node;
+  titles.c = (titles.c || []).filter((n) => !(n && n.n === 'Title' && rawAttr(n, 'LCID') === lang));
+  if (!titles.c.some((n) => n && n.n === 'Title')) bag.c = bag.c.filter((_, k) => k !== at);
+}
 
 // Icons compare case-insensitively: appDef lower-cases a bare web-resource name (the icon lookup is
 // case-insensitive), so a live `new_Icon.svg` and a spec `new_icon.svg` are the same icon. Titles
@@ -98,6 +148,8 @@ const CHROME = [
  */
 function adoptLiveSitemap(desired, live, opts = {}) {
   const baseChrome = opts.baseChrome instanceof Map ? opts.baseChrome : new Map();
+  // The language the SDK reads and writes titles in (its construction-time LCID).
+  const lcid = opts.lcid || 1033;
   const liveAreas = (live && Array.isArray(live.areas)) ? live.areas : [];
   const desiredAreas = (desired && Array.isArray(desired.areas)) ? desired.areas : [];
   const kids = (node, key) => (node && Array.isArray(node[key]) ? node[key] : []);
@@ -159,6 +211,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
     if (liveArea) {
       nextArea.id = liveArea.id;
       nextArea.bag = cloneBag(liveArea.bag);
+      reconcileTitleChild(nextArea.bag, area.title, liveArea.title, lcid);
       if (text(area.title) !== text(liveArea.title)) {
         notes.push({ kind: 'changed', node: 'area', target: `area "${text(liveArea.title) || liveArea.id}"`, field: 'title', live: text(liveArea.title), spec: text(area.title) });
       }
@@ -169,6 +222,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
       if (liveGroup) {
         nextGroup.id = liveGroup.id;
         nextGroup.bag = cloneBag(liveGroup.bag);
+        reconcileTitleChild(nextGroup.bag, group.title, liveGroup.title, lcid);
         if (text(group.title) !== text(liveGroup.title)) {
           notes.push({ kind: 'changed', node: 'group', target: `group "${text(liveGroup.title) || liveGroup.id}"`, field: 'title', live: text(liveGroup.title), spec: text(group.title) });
         }
@@ -182,13 +236,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
           nextSub.bag = cloneBag(liveSub.bag);
           const field = TARGET_FIELD[sub.type];
           if (field && liveSub[field] !== undefined) nextSub[field] = liveSub[field];
-          // A live dashboard entry keeps its own launcher Url (verbatim, whatever its casing or query);
-          // one without it — the shape earlier builds wrote — gets the designer's, which is what brings
-          // its glyph back. The runtime only looks for the launcher path in the Url, so a Url that
-          // lacks it is not worth keeping.
-          if (sub.type === 'DashBoard') {
-            nextSub.dashboardUrl = isDashboardLauncherUrl(liveSub.dashboardUrl) ? liveSub.dashboardUrl : (sub.dashboardUrl || DASHBOARD_LAUNCHER_URL);
-          }
+          // Every dashboard entry gets the exact launcher Url — the shape earlier builds wrote had none,
+          // which is what restores its glyph — since only that exact string satisfies both the designer
+          // and the runtime (isDashboardLauncherUrl). A live entry that already has it is unchanged.
+          if (sub.type === 'DashBoard') nextSub.dashboardUrl = DASHBOARD_LAUNCHER_URL;
           const base = baseChrome.get(pick.key);
           const label = text(liveSub.title) || text(sub.title) || pick.key;
           for (const { field: f, same } of CHROME) {
@@ -207,6 +258,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
               notes.push({ kind: 'changed', node: 'subArea', target: `nav entry "${label}"`, field: f, live: text(liveSub[f]), spec: text(sub[f]), ...(base ? { intended: true } : {}) });
             }
           }
+          reconcileTitleChild(nextSub.bag, nextSub.title, liveSub.title, lcid);
         }
         nextGroup.subAreas.push(nextSub);
       });
@@ -249,22 +301,31 @@ function adoptLiveSitemap(desired, live, opts = {}) {
  * The chrome (`title`, `icon`, `vectorIcon`) a spec gives each subarea, keyed by the SAME target key
  * `adoptLiveSitemap` uses — so a baseline spec can be lined up against the live sitemap.
  *
- * A spec names a dashboard or page, not its id, so `ids` supplies the ids THIS build resolved:
- * `{ dashboards: { name: id }, pages: { key: id } }` (the build's `result.created`). A baseline
- * entry whose dashboard or page this build did not resolve is left out: with no identity there is
- * nothing to line it up with, and the spec then simply wins.
+ * A subarea names a dashboard or page, not its id. The id comes from the spec's own record of it —
+ * `dashboards[].dashboardId` / `pages[].pageId`, which a download writes — or else from `ids`, the ids
+ * THIS build resolved: `{ dashboards: { name: id }, pages: { key: id } }` (the build's
+ * `result.created`). An entry with no id either way is left out: with no identity there is nothing to
+ * line it up with, and the spec then simply wins.
  */
 function chromeByTargetKey(spec, ids = {}) {
   const map = new Map();
   const areas = spec && spec.appShell && Array.isArray(spec.appShell.areas) ? spec.appShell.areas : [];
+  // The ids the spec itself RECORDED win over this build's lookups by name: after the author renames a
+  // dashboard (as the build's own warning asks), the baseline still names it by the old name, which
+  // this build no longer resolves — but the id it recorded still identifies the same live entry.
+  const own = (list, idKey, names) => new Map((Array.isArray(list) ? list : [])
+    .filter((x) => x && typeof x === 'object' && x[idKey])
+    .flatMap((x) => names.map((n) => x[n]).filter(Boolean).map((n) => [n, x[idKey]])));
+  const pinnedDashboards = own(spec && spec.dashboards, 'dashboardId', ['name']);
+  const pinnedPages = own(spec && spec.pages, 'pageId', ['key', 'name']);
   for (const a of areas) {
     for (const g of (a && Array.isArray(a.groups) ? a.groups : [])) {
       for (const s of (g && Array.isArray(g.subAreas) ? g.subAreas : [])) {
         if (!s || typeof s !== 'object') continue;
         let key;
         if (s.entity) key = subAreaTargetKey({ type: 'Entity', entity: s.entity });
-        else if (s.dashboard) key = subAreaTargetKey({ type: 'DashBoard', dashboardId: (ids.dashboards || {})[s.dashboard] });
-        else if (s.page) key = subAreaTargetKey({ type: 'GenPage', genPageId: (ids.pages || {})[s.page] });
+        else if (s.dashboard) key = subAreaTargetKey({ type: 'DashBoard', dashboardId: pinnedDashboards.get(s.dashboard) || (ids.dashboards || {})[s.dashboard] });
+        else if (s.page) key = subAreaTargetKey({ type: 'GenPage', genPageId: pinnedPages.get(s.page) || (ids.pages || {})[s.page] });
         else if (s.url) key = subAreaTargetKey({ type: 'URL', url: s.url });
         // A target listed twice is ambiguous, so neither occurrence is used as a baseline.
         if (!key) continue;
@@ -274,6 +335,49 @@ function chromeByTargetKey(spec, ids = {}) {
   }
   for (const [k, v] of map) if (v === null) map.delete(k);
   return map;
+}
+
+/**
+ * Whether the environment's value of a subarea icon is one the BUILD keeps rather than a failure:
+ * `spec` still has the value `baseline` (the spec last applied to, or downloaded from, this
+ * environment) gave the same entry, so any other live value was set in the designer since — the
+ * exact case `adoptLiveSitemap` keeps. Verify asks this of an icon check that fails, so the build's
+ * own `--verify` does not fail on a value it deliberately left alone.
+ *
+ * Entries are matched between the two specs by the target they name — a dashboard or page by the id
+ * the spec recorded for it when it has one, so an entry whose dashboard was renamed in the spec
+ * still matches — and ambiguous targets (listed twice) never match.
+ */
+function keptFromBaseline(spec, baseline, sa, field) {
+  if (!baseline || !sa) return false;
+  const keyed = (s) => {
+    const byId = (list, idKey, names) => {
+      const m = new Map();
+      for (const x of Array.isArray(list) ? list : []) if (x && x[idKey]) for (const n of names) if (x[n]) m.set(x[n], bareGuid(x[idKey]));
+      return m;
+    };
+    const dash = byId(s && s.dashboards, 'dashboardId', ['name']);
+    const pages = byId(s && s.pages, 'pageId', ['key', 'name']);
+    return (x) => {
+      if (!x || typeof x !== 'object') return undefined;
+      if (x.entity) return `entity:${text(x.entity).toLowerCase()}`;
+      if (x.dashboard) return dash.has(x.dashboard) ? `dashboard-id:${dash.get(x.dashboard)}` : `dashboard:${text(x.dashboard).toLowerCase()}`;
+      if (x.page) return pages.has(x.page) ? `page-id:${pages.get(x.page)}` : `page:${text(x.page)}`;
+      if (x.url) return `url:${urlIdentity(x.url)}`;
+      return undefined;
+    };
+  };
+  const want = keyed(spec)(sa);
+  if (!want) return false;
+  const keyOf = keyed(baseline);
+  const matches = [];
+  for (const a of (baseline.appShell && Array.isArray(baseline.appShell.areas)) ? baseline.appShell.areas : []) {
+    for (const g of (a && Array.isArray(a.groups)) ? a.groups : []) {
+      for (const b of (g && Array.isArray(g.subAreas)) ? g.subAreas : []) if (keyOf(b) === want) matches.push(b);
+    }
+  }
+  const same = CHROME.find((c) => c.field === field);
+  return matches.length === 1 && !!same && same.same(matches[0][field], sa[field]);
 }
 
 /**
@@ -295,4 +399,4 @@ function describeSitemapNotes(notes) {
   return lines;
 }
 
-module.exports = { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes };
+module.exports = { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, adoptLiveSitemap, chromeByTargetKey, keptFromBaseline, describeSitemapNotes };

@@ -794,12 +794,13 @@ test('teardown deletes only the dashboards the app\'s solution holds, never anot
 // spec's. Teardown finds it by the pin too, as a CANDIDATE: the solution still decides.
 test('teardown finds a pinned dashboard renamed since the download, and still asks the solution', async () => {
   const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const OTHER = 'bbbb1111-2222-3333-4444-555566667777';
   const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
     dashboards: [{ name: 'Command Center - Event operations', dashboardId: PIN, tiles: [] }] };
-  const run = async ({ inSolution, pinned = { formid: PIN, name: 'Event operations', type: 0 }, failPin = false }) => {
+  const run = async ({ inSolution, pinned = { formid: PIN, name: 'Event operations', type: 0 }, failPin = false, byName = [] }) => {
     const deleted = [];
     const sdk = {
-      resolveArtifact: async (kind) => (kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : []), // the stale name matches nothing
+      resolveArtifact: async (kind) => (kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : kind === 'dashboard' ? byName : []),
       deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
       deleteAppCascade: async () => {},
       deleteSolution: async () => {},
@@ -815,7 +816,13 @@ test('teardown finds a pinned dashboard renamed since the download, and still as
   };
   assert.deepStrictEqual((await run({ inSolution: [PIN] })).deleted, [PIN], 'found by its pin, deleted because the solution holds it');
   assert.deepStrictEqual((await run({ inSolution: [] })).deleted, [], 'a pin is not proof of ownership on its own');
-  assert.deepStrictEqual((await run({ inSolution: [PIN], pinned: null })).deleted, [], 'a pin this environment does not have finds nothing');
+  // A resolving pin is the ONLY candidate: another dashboard that has since been given the old name —
+  // even one in the same solution — is not this spec's, and build and verify would not pick it either.
+  const reused = await run({ inSolution: [PIN, OTHER], byName: [{ id: OTHER, name: 'Command Center - Event operations' }] });
+  assert.deepStrictEqual(reused.deleted, [PIN]);
+  // A pin this environment does not have: the name decides, as it does for the build.
+  assert.deepStrictEqual((await run({ inSolution: [OTHER], pinned: null, byName: [{ id: OTHER, name: 'Command Center - Event operations' }] })).deleted, [OTHER]);
+  assert.deepStrictEqual((await run({ inSolution: [PIN], pinned: null })).deleted, [], 'no pin row and no name match: nothing');
   const failed = await run({ inSolution: [PIN], failPin: true });
   assert.deepStrictEqual(failed.deleted, []);
   assert.ok(failed.r.errors.some((e) => /could not look up the dashboard pinned as 'Command Center - Event operations'/.test(e.message)), JSON.stringify(failed.r.errors));

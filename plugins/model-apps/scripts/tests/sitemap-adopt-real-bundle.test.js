@@ -172,3 +172,43 @@ test('REAL BUNDLE: a title the spec itself changes is applied, with nothing to r
   assert.match(xml, /<Title LCID="1033" Title="Live operations" \/><Title LCID="1036" Title="Opérations \(FR\)" \/>/, 'patched in place; the French title stays');
   assert.deepStrictEqual(describeSitemapNotes(notes), []);
 });
+
+// The SDK only PATCHES an existing <Titles> on a node that has a bag, and reads an empty typed title as
+// "no edit" — so a title added to an entry that had none, or removed from one that had it, must be
+// reconciled in the adopted bag, or it would silently not happen (it did happen on the bag-less path).
+test('REAL BUNDLE: a title added to an entry that had none is written; a removed one is dropped, other languages kept', async () => {
+  const untitled = '<SiteMap IntroducedVersion="7.0.0.0"><Area Id="area_ops" ResourceId="Contoso.AreaRes"><Titles><Title LCID="1033" Title="Operations" /></Titles>'
+    + '<Group Id="grp_main"><Titles><Title LCID="1033" Title="Main" /></Titles>'
+    + `${LEGACY_DASHBOARD_TAG}<Titles><Title LCID="1033" Title="Event operations" /></Titles></SubArea>`
+    + '<SubArea Id="feedback_sub" Entity="new_feedback" Client="All,Web" /></Group></Area></SiteMap>';
+  const added = await rebuild(untitled, specFor());
+  assert.match(tagOf(added.xml, /Entity="new_feedback"/), /Id="feedback_sub"/);
+  assert.match(added.xml, /<SubArea Id="feedback_sub" Entity="new_feedback" Client="All,Web"><Titles><Title LCID="1033" Title="Feedback" \/><\/Titles><\/SubArea>/, added.xml);
+
+  const spec = specFor();
+  delete spec.appShell.areas[0].groups[0].subAreas[0].title; // the dashboard entry's title removed
+  const removed = await rebuild(deployedXml(), spec);
+  const dash = removed.xml.slice(removed.xml.indexOf(LEGACY_DASHBOARD_TAG), removed.xml.indexOf('</SubArea>', removed.xml.indexOf(LEGACY_DASHBOARD_TAG)));
+  assert.doesNotMatch(dash, /LCID="1033"/, 'the title at the SDK\u2019s language is gone');
+  assert.match(dash, /<Title LCID="1036" Title="Opérations \(FR\)" \/>/, 'another language\u2019s title is not the spec\u2019s to drop');
+});
+
+test('REAL BUNDLE: renaming the dashboard in the spec, as the build asks, keeps the baseline lined up', async () => {
+  // Downloaded (pinned) as 'Command Center - Event operations'; renamed in the designer; the author then
+  // follows the build's warning and renames it in the spec too. The baseline still names it by the old
+  // name, so only the id it recorded can line its nav entry up with the live one.
+  const PINNED = (s) => { s.dashboards = [{ name: s.appShell.areas[0].groups[0].subAreas[0].dashboard, dashboardId: DASH, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }]; return s; };
+  const baseline = PINNED(specFor({ dashTitle: 'Command Center - Event operations' }));
+  const renamed = PINNED(specFor({ dashTitle: 'Command Center - Event operations' }));
+  renamed.appShell.areas[0].groups[0].subAreas[0].dashboard = 'Event operations';
+  renamed.dashboards[0].name = 'Event operations';
+  const created = { dashboards: { 'Event operations': DASH } }; // what this build resolved (by the pin)
+  const { sdk, lastXml } = await freshSdk(deployedXml({ dashTitle: 'Event operations' }));
+  await sdk.fetchArtifact('app', APP_ID);
+  const live = await sdk.getArtifact('app', APP_ID);
+  const { siteMap } = adoptLiveSitemap(appDef(renamed, created).siteMap, live.siteMap, { baseChrome: chromeByTargetKey(baseline, created) });
+  await sdk.updateElement('app', APP_ID, '/siteMap', siteMap);
+  await sdk.pushArtifact('app', APP_ID);
+  assert.match(lastXml(), /<Title LCID="1033" Title="Event operations" \/>/, 'the designer\u2019s nav title is kept');
+  assert.doesNotMatch(lastXml(), /Command Center - Event operations/);
+});

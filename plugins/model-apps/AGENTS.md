@@ -244,19 +244,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,
   `AvailableOffline="true"`). Both existing-app writers (the app-shell write and the pages finalizer)
   therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
-  subarea corresponds by navigation target, an area or group by label, then by the id an earlier build
-  gave it; the live `id` and `bag` are kept, and only what the spec sets is overlaid — chrome it does not
-  name is still removed, as before. Every dashboard entry carries the designer's launcher
-  `Url="/workplace/home_dashboards.aspx"`, which the designer writes on every dashboard entry, uses to
-  recognize one, and the runtime keys the dashboard glyph on; verify fails an entry without it
-  (`subarea-dashboard-launcher`). With a **baseline** — `.maker-workspace/last-applied.json`, written
-  by a successful apply and by download, stamped with its environment and app
-  (`scripts/lib/deployed-baseline.js`) — a nav entry's title/icon that the spec has not changed since,
-  but the designer has, is kept and reported rather than reverted; without one the spec wins and every
-  change to an existing entry is reported. A downloaded dashboard carries `dashboards[].dashboardId`,
-  which build, verify and teardown resolve before the name (`findPinnedDashboard`), so a dashboard
-  renamed in the designer is reused — with a warning, since a build never renames one — instead of a
-  second being created under the stale name.
+  subarea corresponds by navigation target (a URL keeps the case of its path and query), an area or
+  group by label, then by the id an earlier build gave it; the live `id` and `bag` are kept, and only
+  what the spec sets is overlaid — chrome it does not name is still removed, as before. Because the SDK
+  only patches an existing `<Titles>` on a node with a bag, and reads an empty title as "no edit", a
+  title added to an entry that had none, or removed from one, is reconciled in the adopted bag at the
+  SDK's language (other languages' titles are kept). Every dashboard entry carries exactly
+  `Url="/workplace/home_dashboards.aspx"` — the designer writes it on every dashboard entry and
+  recognizes one only by the whole Url, and the runtime keys the dashboard glyph on it with a
+  case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`). With a
+  **baseline** — `.maker-workspace/last-applied.json`, written by a successful apply and by download,
+  stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
+  title/icon that the spec has not changed since, but the designer has, is kept and reported rather
+  than reverted, and verify accepts a kept icon by the same rule (`keptFromBaseline`); without one the
+  spec wins and every change to an existing entry is reported. A downloaded dashboard carries
+  `dashboards[].dashboardId`, which build, verify and teardown resolve before the name
+  (`findPinnedDashboard`) — when it resolves it is the only candidate, and teardown still requires
+  solution membership — so a dashboard renamed in the designer is reused, with a warning since a build
+  never renames one, instead of a second being created under the stale name.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,

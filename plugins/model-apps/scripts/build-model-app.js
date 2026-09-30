@@ -675,7 +675,7 @@ async function buildModelApp(spec, opts, deps) {
           // written and every later run would fall back to a full build. Without the second, the
           // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
           // at all) fails the same way on every run after the first.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as

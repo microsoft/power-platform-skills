@@ -1796,7 +1796,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 

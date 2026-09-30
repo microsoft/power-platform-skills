@@ -1708,7 +1708,9 @@ async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, aut
 async function siteMapOverLive(provision, appId, desired, opts, created) {
   const live = await provision.getArtifact('app', appId) || {};
   const baseChrome = opts.baselineSpec ? chromeByTargetKey(opts.baselineSpec, created) : undefined;
-  const { siteMap, notes } = adoptLiveSitemap(desired, live.siteMap, { baseChrome });
+  // The LCID the SDK was constructed with — the one it reads and writes sitemap titles in.
+  const lcid = opts.preResolvedLanguageCode || opts.languageCode || undefined;
+  const { siteMap, notes } = adoptLiveSitemap(desired, live.siteMap, { baseChrome, lcid });
   if (typeof opts.warn === 'function') for (const line of describeSitemapNotes(notes)) opts.warn(line);
   return siteMap;
 }

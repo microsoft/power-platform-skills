@@ -261,8 +261,9 @@ works through.
   since the download is reused — a build never renames an existing dashboard, so it warns and names
   the new name to put in the spec — instead of a second dashboard being created under the old name
   and the nav entry pointed at it. In an environment without that id (the spec was downloaded
-  elsewhere) the name is used as usual. Verify and teardown resolve the pin the same way; teardown
-  still deletes only a dashboard the app's solution holds.
+  elsewhere) the name is used as usual. Verify and teardown resolve the pin the same way — when it
+  resolves it is the only candidate — and teardown still deletes only a dashboard the app's solution
+  holds.
 - **ID-passthrough tiles (what a download emits).** A tile may instead carry the *deployed* ids —
   `viewId` (+ `visualizationId` for a chart) and the target `entity` — with no `chart`/`view` name.
   That form binds to artifacts that **already exist**, which is what a downloaded app needs: its

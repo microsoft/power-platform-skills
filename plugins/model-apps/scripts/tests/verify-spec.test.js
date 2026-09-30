@@ -159,6 +159,12 @@ test('verifySpec: a dashboard nav entry must carry the launcher Url', async () =
   // Only the entry for THIS dashboard counts: another entry's launcher Url proves nothing.
   const elsewhere = await verifySpec(spec, reader(`<SubArea Id="x" DefaultDashboard="${DASH}" /><SubArea Id="y" Url="/workplace/home_dashboards.aspx" DefaultDashboard="99999999-0000-0000-0000-000000000000" />`));
   assert.strictEqual(launcher(elsewhere).present, false);
+  // Only the exact launcher satisfies both consumers: the runtime's glyph test is case-sensitive, and
+  // the designer compares the whole Url.
+  for (const url of ['/WorkPlace/Home_Dashboards.aspx', '/workplace/home_dashboards.aspx?pagetype=dashboard']) {
+    const near = await verifySpec(spec, reader(`<SubArea Id="ops" Url="${url.replace(/&/g, '&amp;')}" DefaultDashboard="${DASH}" />`));
+    assert.strictEqual(launcher(near).present, false, url);
+  }
   // Not wired at all: the wiring check fails, and there is no second check to double-count it.
   const unwired = await verifySpec(spec, reader('<SubArea Id="x" Entity="account" />'));
   assert.strictEqual(launcher(unwired), undefined);
@@ -183,6 +189,27 @@ test('verifySpec: a pinned dashboardId verifies a dashboard renamed since the do
     const chk = r.checks.find((c) => c.kind === kind);
     assert.ok(chk && chk.present, `${kind}: ${JSON.stringify(chk)}`);
   }
+});
+
+// The build KEEPS a nav entry's icon that was changed in the designer since the spec's baseline when
+// the spec still has the baseline's value (sitemap-merge.js), so verify must accept exactly that case —
+// or the build's own --verify fails on a value it deliberately left alone.
+test('verifySpec: an icon the build kept from the designer passes only in the case the build keeps it', async () => {
+  const spec = { entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'new_order', title: 'Orders', vectorIcon: '$webresource:new_old.svg' }] }] }] } };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_order' }), findColumns: async () => [{ logicalName: 'new_name' }],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="o" Entity="new_order" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>',
+  };
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  assert.strictEqual(vec(await verifySpec(spec, read)).present, false, 'no baseline: the spec value is required');
+  const kept = vec(await verifySpec(spec, read, { baselineSpec: JSON.parse(JSON.stringify(spec)) }));
+  assert.strictEqual(kept.present, true, 'the spec still has the baseline value: the designer\u2019s is kept');
+  assert.match(kept.detail, /changed in the designer since the spec\u2019s baseline/);
+  // The SPEC changed it since the baseline: the build writes it, so it must be there.
+  const baseline = JSON.parse(JSON.stringify(spec));
+  baseline.appShell.areas[0].groups[0].subAreas[0].vectorIcon = '$webresource:new_older.svg';
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec: baseline })).present, false, 'an edit the spec made is still verified');
 });
 
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
