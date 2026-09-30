@@ -27,16 +27,22 @@ function render(parameters: Partial<IInputs>, disabled = false) {
     };
 }
 
+function renderWithStrings(parameters: Partial<IInputs>) {
+    const rendered = render(parameters);
+    (rendered.context as ComponentFramework.Context<IInputs> & { resources: ComponentFramework.Resources }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => key === "{{name}}_PermissionDenied"
+            ? "Localized permission denied"
+            : key,
+    } as ComponentFramework.Resources;
+    ReactDOM.render(rendered.control.updateView(rendered.context), rendered.container);
+    return rendered;
+}
+
 test("null raw value renders an empty field", () => {
     const { input } = render({ sampleProperty: mockProperty<string>(null) as IInputs["sampleProperty"] });
 
     expect(input().value).toBe("");
-});
-
-test("init tracks container resize", () => {
-    const { context } = render({ sampleProperty: mockProperty("Existing") as IInputs["sampleProperty"] });
-
-    expect(context.mode.trackContainerResize).toHaveBeenCalledWith(true);
 });
 
 test("missing parameter object does not crash", () => {
@@ -59,13 +65,21 @@ test("non-editable security renders read-only", () => {
     expect(input().readOnly).toBe(true);
 });
 
-test("unreadable security shows a permission message", () => {
+test("unreadable security hides the field value", () => {
     const { container, input } = render({
         sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
     });
 
     expect(input().hidden).toBe(true);
-    expect(container.textContent).toContain("permission");
+    expect(container.textContent).not.toContain("Hidden");
+});
+
+test("unreadable security uses the localized permission string", () => {
+    const { container } = renderWithStrings({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect(container.textContent).toContain("Localized permission denied");
 });
 
 test("change notifies exactly once and getOutputs returns the edited value", () => {

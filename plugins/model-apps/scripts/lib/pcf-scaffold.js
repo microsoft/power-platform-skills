@@ -330,7 +330,7 @@ function renderedTemplateFiles(dir, baseDir, replacements, deps = {}) {
   const out = [];
   for (const file of walkFiles(dir, deps)) {
     const rel = pathDep.relative(baseDir, file);
-    if (rel === 'template.json' || rel === 'package.json.tmpl') continue;
+    if (rel === 'template.json') continue;
     const renderedRel = applyPlaceholders(rel.replace(/\.tmpl$/, ''), replacements);
     const content = applyPlaceholders(fsDep.readFileSync(file, 'utf8'), replacements);
     out.push({ relPath: renderedRel, content });

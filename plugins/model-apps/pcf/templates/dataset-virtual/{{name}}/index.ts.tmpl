@@ -39,19 +39,19 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
         this.dataSet = null;
     }
 
-    private readonly loadNextPage = (): void => {
-        this.requestPage("next");
+    private readonly loadNextPage = (): Promise<void> => {
+        return this.requestPage("next");
     };
 
-    private readonly loadPreviousPage = (): void => {
-        this.requestPage("previous");
+    private readonly loadPreviousPage = (): Promise<void> => {
+        return this.requestPage("previous");
     };
 
-    private requestPage(direction: "next" | "previous"): void {
-        if (!this.dataSet || this.pagingRequest) return;
+    private requestPage(direction: "next" | "previous"): Promise<void> {
+        if (!this.dataSet || this.pagingRequest) return Promise.resolve();
         const paging = this.dataSet.paging;
         const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
-        if (!canLoad) return;
+        if (!canLoad) return Promise.resolve();
 
         // Dataset paging APIs ask the framework to load a page asynchronously; keep one request in
         // flight so repeated clicks cannot queue duplicate page loads.
@@ -60,6 +60,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
             .finally(() => {
                 this.pagingRequest = null;
             });
+        return this.pagingRequest;
     }
 
     private readonly openRecord = (record: DataSetRecord): void => {

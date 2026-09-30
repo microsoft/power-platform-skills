@@ -510,6 +510,17 @@ test('planScaffold renders every template without leftover placeholders and with
 
     const pkg = JSON.parse(findFile(plan, 'package.json'));
     const expected = dependencySet(MATRIX, item.dependencySet);
+    assert.deepEqual(pkg.scripts, {
+      build: 'pcf-scripts build',
+      clean: 'pcf-scripts clean',
+      lint: 'pcf-scripts lint',
+      'lint:fix': 'pcf-scripts lint fix',
+      rebuild: 'pcf-scripts rebuild',
+      start: 'pcf-scripts start',
+      'start:watch': 'pcf-scripts start watch',
+      refreshTypes: 'pcf-scripts refreshTypes',
+      test: 'jest --runInBand',
+    }, `${item.id} scripts`);
     assert.deepEqual(pkg.dependencies || {}, expected.dependencies, `${item.id} dependencies`);
     assert.deepEqual(pkg.devDependencies || {}, expected.devDependencies, `${item.id} devDependencies`);
   }
@@ -540,6 +551,14 @@ test('template sources do not hard-code React or Fluent platform-library version
       }
     }
   }
+
+  assert.deepEqual(offenders, []);
+});
+
+test('template directories do not carry unused package templates', () => {
+  const offenders = walkFiles(path.join(ROOT, 'pcf', 'templates'))
+    .map((file) => path.relative(ROOT, file))
+    .filter((file) => path.basename(file) === 'package.json.tmpl');
 
   assert.deepEqual(offenders, []);
 });
@@ -617,11 +636,12 @@ test('field-standard CSS classes are scoped to the generated control name', () =
 test('planScaffold uses the standard dependency lock package exactly', () => {
   const plan = renderFieldPlan();
   const pkg = JSON.parse(findFile(plan, 'package.json'));
-  const expected = dependencySet(MATRIX, 'standard');
+  const expected = JSON.parse(fs.readFileSync(path.join(dependencySet(MATRIX, 'standard').lockDir, 'package.json'), 'utf8'));
+  expected.name = 'starrating';
 
-  assert.equal(pkg.name, 'starrating');
-  assert.deepEqual(pkg.dependencies || {}, expected.dependencies);
-  assert.deepEqual(pkg.devDependencies || {}, expected.devDependencies);
+  assert.deepEqual(pkg, expected);
+  assert.equal(pkg.scripts.build, 'pcf-scripts build');
+  assert.equal(pkg.scripts.clean, 'pcf-scripts clean');
 });
 
 test('planScaffold rewrites the package-lock root name', () => {

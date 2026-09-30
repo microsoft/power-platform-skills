@@ -9,12 +9,13 @@ export interface {{name}}ViewProps {
     busy: boolean;
     actionHeader: string;
     openRecordLabel: string;
-    onNextPage: () => void;
-    onPreviousPage: () => void;
+    onNextPage: () => Promise<void>;
+    onPreviousPage: () => Promise<void>;
     onOpenRecord: (record: DataSetRecord) => void;
 }
 
 export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
+    const [localBusy, setLocalBusy] = React.useState(false);
     const dataSet = props.dataSet;
     if (!dataSet) return message(props, "No dataset parameter was provided.");
     if (dataSet.loading) return message(props, "Loading records...");
@@ -22,7 +23,7 @@ export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
     if (dataSet.sortedRecordIds.length === 0) {
         return React.createElement("div", { className: props.cssClass },
             React.createElement("div", { className: props.messageClass }, "No records to show."),
-            pager(props, dataSet),
+            pager(props, dataSet, localBusy, setLocalBusy),
         );
     }
 
@@ -36,7 +37,7 @@ export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
             ),
             React.createElement("tbody", null, dataSet.sortedRecordIds.map((id) => row(dataSet, id, props))),
         ),
-        pager(props, dataSet),
+        pager(props, dataSet, localBusy, setLocalBusy),
     );
 }
 
@@ -73,17 +74,24 @@ function displayColumnName(dataSet: ComponentFramework.PropertyTypes.DataSet): s
 function pager(
     props: {{name}}ViewProps,
     dataSet: ComponentFramework.PropertyTypes.DataSet,
+    localBusy: boolean,
+    setLocalBusy: (busy: boolean) => void,
 ): React.ReactElement {
+    const busy = props.busy || localBusy;
+    const requestPage = (action: () => Promise<void>) => {
+        setLocalBusy(true);
+        void action().finally(() => setLocalBusy(false));
+    };
     return React.createElement("div", { className: "{{nameLower}}-pager" },
         React.createElement("button", {
             type: "button",
-            disabled: props.busy || !dataSet.paging.hasPreviousPage,
-            onClick: props.onPreviousPage,
+            disabled: busy || !dataSet.paging.hasPreviousPage,
+            onClick: () => requestPage(props.onPreviousPage),
         }, "Previous"),
         React.createElement("button", {
             type: "button",
-            disabled: props.busy || !dataSet.paging.hasNextPage,
-            onClick: props.onNextPage,
+            disabled: busy || !dataSet.paging.hasNextPage,
+            onClick: () => requestPage(props.onNextPage),
         }, "Next"),
     );
 }

@@ -5,6 +5,7 @@ import "./css/{{name}}.css";
 
 export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
     private notifyOutputChanged: (() => void) | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
     private value = "";
 
     public init(
@@ -12,14 +13,12 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
         notifyOutputChanged: () => void,
         _state: ComponentFramework.Dictionary,
     ): void {
+        this.context = context;
         this.notifyOutputChanged = notifyOutputChanged;
-
-        // Field controls must opt in before they can react to allocatedWidth/allocatedHeight changes.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
-        context.mode.trackContainerResize(true);
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        this.context = context;
         const parameter = context.parameters.sampleProperty;
         const readable = parameter?.security?.readable ?? true;
         const editable = parameter?.security?.editable ?? true;
@@ -34,7 +33,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
             disabled: context.mode.isControlDisabled || !readable,
             readOnly: !editable,
             hidden: !readable,
-            message: readable ? "" : "You do not have permission to read this value.",
+            message: readable ? "" : this.getString("{{name}}_PermissionDenied"),
             onChange: this.onChange,
         });
     }
@@ -47,6 +46,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
 
     public destroy(): void {
         this.notifyOutputChanged = null;
+        this.context = null;
     }
 
     private readonly onChange = (next: string): void => {
@@ -54,4 +54,8 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
         this.value = next;
         this.notifyOutputChanged?.();
     };
+
+    private getString(key: string): string {
+        return this.context?.resources?.getString(key) || key;
+    }
 }

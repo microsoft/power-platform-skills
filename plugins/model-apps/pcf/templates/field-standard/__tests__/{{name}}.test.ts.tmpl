@@ -19,6 +19,18 @@ function mount(parameters: Partial<IInputs>, disabled = false) {
     };
 }
 
+function mountWithStrings(parameters: Partial<IInputs>) {
+    const mounted = mount(parameters);
+    (mounted.context as ComponentFramework.Context<IInputs> & { resources: ComponentFramework.Resources }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => key === "{{name}}_PermissionDenied"
+            ? "Localized permission denied"
+            : key,
+    } as ComponentFramework.Resources;
+    mounted.control.updateView(mounted.context);
+    return mounted;
+}
+
 test("null raw value renders an empty field", () => {
     const { input } = mount({ sampleProperty: mockProperty<string>(null) as IInputs["sampleProperty"] });
 
@@ -45,13 +57,21 @@ test("non-editable security renders read-only", () => {
     expect(input().readOnly).toBe(true);
 });
 
-test("unreadable security shows a permission message", () => {
+test("unreadable security hides the field value", () => {
     const { container, input } = mount({
         sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
     });
 
     expect(input().hidden).toBe(true);
-    expect(container.textContent).toContain("permission");
+    expect(container.textContent).not.toContain("Hidden");
+});
+
+test("unreadable security uses the localized permission string", () => {
+    const { container } = mountWithStrings({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect(container.textContent).toContain("Localized permission denied");
 });
 
 test("change notifies exactly once and getOutputs returns the edited value", () => {

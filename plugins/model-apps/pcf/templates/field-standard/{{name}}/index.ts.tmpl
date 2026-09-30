@@ -5,6 +5,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private container: HTMLDivElement | null = null;
     private input: HTMLInputElement | null = null;
     private message: HTMLDivElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
     private notifyOutputChanged: (() => void) | null = null;
     private value = "";
     private readonly onInput = (): void => {
@@ -22,11 +23,8 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         container: HTMLDivElement,
     ): void {
         this.container = container;
+        this.context = context;
         this.notifyOutputChanged = notifyOutputChanged;
-
-        // Field controls must opt in before they can react to allocatedWidth/allocatedHeight changes.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
-        context.mode.trackContainerResize(true);
 
         const root = document.createElement("div");
         root.className = "{{cssClass}}";
@@ -47,6 +45,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
         const parameter = context.parameters.sampleProperty;
         const readable = parameter?.security?.readable ?? true;
         const editable = parameter?.security?.editable ?? true;
@@ -59,7 +58,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.input.readOnly = !editable;
         this.input.hidden = !readable;
         this.message.hidden = readable;
-        this.message.textContent = readable ? "" : "You do not have permission to read this value.";
+        this.message.textContent = readable ? "" : this.getString("{{name}}_PermissionDenied");
     }
 
     public getOutputs(): IOutputs {
@@ -76,6 +75,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.input = null;
         this.message = null;
         this.container = null;
+        this.context = null;
         this.notifyOutputChanged = null;
+    }
+
+    private getString(key: string): string {
+        return this.context?.resources?.getString(key) || key;
     }
 }
