@@ -546,11 +546,27 @@ function makeRunner({ emit, total }) {
         return undefined;
       }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
+      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
   return { run, mapLimit, skip, emit, total };
+}
+
+// Some SDK refusals end with the SDK call that fixes them — `fetchArtifact(...)` — which an operator of this
+// plugin cannot make. Where the operator's step is known, the halt names it too.
+//
+// ARTIFACT_PROJECTION_STALE: the SDK refuses to push a workspace copy projected by a different version of its
+// parsers — one an earlier version of this plugin saved. The build's plain fetch re-reads every CLEAN copy
+// before it edits one, so the refusal is reached only by a copy still holding edits an earlier build never
+// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The edits
+// were projected from the spec and the re-run re-applies them, so discarding the workspace loses nothing.
+// Pinned against the real bundle in workspace-projection-real-bundle.test.js.
+function operatorRemedy(err) {
+  if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
+    return ' — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). Delete the .maker-workspace directory (or the --workspace one) and re-run: the build re-applies every edit from the spec.';
+  }
+  return '';
 }
 
 // Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see

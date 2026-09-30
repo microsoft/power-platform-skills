@@ -7,8 +7,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.11.0
 
-AI features are written with each setting's own values, and rebuilding an existing app no longer
-rewrites its navigation.
+AI features are written with each setting's own values, rebuilding an existing app no longer
+rewrites its navigation, and the vendored SDK is refreshed.
 
 ### Fixed
 
@@ -29,12 +29,16 @@ rewrites its navigation.
   as the platform default rather than on.
 - **`appShell` keys the build does not read are errors** ([#631]). A `title` on an area or group (they
   take `label`) used to deploy an untitled one while lint, the build and `--verify` passed.
-- **A SQL deadlock no longer fails a delete or a build.** A record delete that SQL rolled back as a
-  deadlock victim is re-sent (up to three times), and a build that halts on one runs again like one
-  that halts on a SQL timeout; a teardown used to stop on it.
+- **A SQL deadlock no longer fails a delete or a build.** A request SQL rolled back as a deadlock
+  victim is re-sent (up to three times): a record delete by the plugin; a read, an app create or a
+  publish by the refreshed SDK. A build that halts on one runs again like one that halts on a SQL
+  timeout; a teardown used to stop on it.
 
 ### Changed
 
+- **The vendored SDK is refreshed.** A workspace saved by an earlier version is re-read on the next
+  build; one an interrupted build left holding unpushed edits halts and asks you to delete
+  `.maker-workspace` and re-run.
 - **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
   default (`0`). A spec that omits `m365` still leaves it at `0`.
 

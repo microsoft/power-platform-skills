@@ -1186,7 +1186,7 @@ changes. **Never patch the bundle** to work around an SDK defect: the next re-ve
 reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and re-vendor.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Four test files lock them — run all against every
+skill relies on behaviors that must survive. The test files below lock them — run all against every
 rebuilt bundle.
 
 **Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
@@ -1256,6 +1256,13 @@ artifacts, 2xx statuses, green build. The test therefore does two things: a **so
 fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+
+`scripts/tests/workspace-projection-real-bundle.test.js` — the **upgrade** guard. The SDK refuses to
+push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_STALE`), so a
+re-vendor that raises it makes every existing `.maker-workspace` old. Upgrades stay invisible only
+because a plain fetch re-reads a clean old copy (and the build fetches every existing form, view,
+chart and app before editing it); a copy still holding an interrupted build's edits is kept by that
+fetch and refused at push, and the runner then names the operator's remedy (delete the workspace).
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
