@@ -174,6 +174,18 @@ test('pcfprojBuildMode accepts double-quoted Condition values containing single 
   );
 });
 
+test('pcfprojBuildMode preserves Conditions whose quoted value contains a greater-than comparison', () => {
+  const greaterThanCondition = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)\' == \'Release\' And \'1\' > \'0\'">\n    <Name>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(greaterThanCondition)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
 test('pcfprojBuildMode reports conditioned overrides after unconditioned production as ineffective', () => {
   const conditionedAfterProduction = renderedPcfproj().replace(
     /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
@@ -473,6 +485,25 @@ test('collectProject reports unsafe pcfconfig outDir through resolveOutRoot with
   }
 });
 
+test('collectProject parses UTF-8 BOM package.json while preserving project bytes for upgrade', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-doctor-bom-package-'));
+  try {
+    const controlDir = path.join(dir, 'Star');
+    fs.mkdirSync(controlDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Star.pcfproj'), renderedPcfproj());
+    fs.writeFileSync(path.join(dir, 'package.json'), `\uFEFF${JSON.stringify(standardState().packageJson)}\n`);
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3 }));
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), '<?xml version="1.0"?><manifest><control namespace="Contoso.Controls" constructor="Star" version="1.0.0" display-name-key="Star" description-key="Star"><resources><code path="index.ts" /></resources></control></manifest>');
+
+    const state = collectProject(dir);
+
+    assert.equal(state.packageJson.devDependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('required doctor finding ids have the expected severity and a concrete fix', () => {
   const toolFindings = checkToolchain({
     node: '18.0.0',
@@ -586,6 +617,32 @@ test('CLI validates flags before probing and prints usage on errors', async () =
   assert.equal(cli.stdoutText(), '');
   assert.match(cli.stderrText(), /node scripts[/\\]pcf-doctor\.js/);
   assert.match(cli.stderrText(), /did you mean --needs/i);
+});
+
+test('CLI rejects unknown or empty needs and hosts before probing tools', async () => {
+  for (const [argv, pattern] of [
+    [['--needs', 'pussh'], /--needs contains unknown value 'pussh'/],
+    [['--needs', ','], /--needs must include at least one value/],
+    [['--hosts', 'model,console'], /--hosts contains unknown value 'console'/],
+    [['--hosts', ','], /--hosts must include at least one value/],
+  ]) {
+    let probed = false;
+    const cli = await runCli(argv, {
+      './lib/pcf-matrix': { loadMatrix: () => MATRIX },
+      './lib/pcf-doctor': {
+        collectToolchain: () => { probed = true; return {}; },
+        checkToolchain: () => [],
+        collectProject: () => ({}),
+        checkProject: () => [],
+        hasErrors: () => false,
+      },
+    });
+
+    assert.equal(cli.exitCode, 1, argv.join(' '));
+    assert.match(cli.stderrText(), pattern, argv.join(' '));
+    assert.equal(cli.stdoutText(), '', argv.join(' '));
+    assert.equal(probed, false, argv.join(' '));
+  }
 });
 
 test('CLI emits JSON and makes pac optional for build but required for push', async () => {

@@ -300,11 +300,27 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   const prepared = prepareUpgradeWrites(plan, projectDir, fsDep);
   const changedFiles = [];
 
-  for (const item of prepared.writes) {
-    if (item.after !== item.before) {
-      fsDep.writeFileSync(item.file, item.after);
-      changedFiles.push(item.file);
+  try {
+    for (const item of prepared.writes) {
+      if (item.after !== item.before) {
+        fsDep.writeFileSync(item.file, item.after);
+        changedFiles.push(item.file);
+      }
     }
+  } catch (err) {
+    for (const item of [...prepared.writes].reverse()) {
+      if (!changedFiles.includes(item.file)) continue;
+      try {
+        fsDep.writeFileSync(item.file, item.before);
+      } catch {
+        // Keep rolling back other files. The final changedFiles list below reports any file that
+        // still differs from its pre-apply bytes so callers do not get a success-shaped empty list.
+      }
+    }
+    err.applied = [];
+    err.skipped = prepared.skipped;
+    err.changedFiles = survivingChangedFiles(prepared.writes, fsDep);
+    throw err;
   }
 
   if (prepared.reinstall) {
@@ -325,6 +341,18 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   }
 
   return { applied: prepared.applied, skipped: prepared.skipped, changedFiles };
+}
+
+function survivingChangedFiles(writes, fsDep) {
+  const changed = [];
+  for (const item of writes) {
+    try {
+      if (fsDep.readFileSync(item.file, 'utf8') !== item.before) changed.push(item.file);
+    } catch {
+      changed.push(item.file);
+    }
+  }
+  return changed;
 }
 
 function prepareUpgradeWrites(plan, projectDir, fsDep) {
@@ -415,6 +443,7 @@ function runUpgrade(options = {}, deps = {}) {
   const matrix = deps.matrix || loadMatrix();
   const hosts = options.hosts || ['model'];
   const beforeState = collectUpgradeState(projectDir, deps);
+  const projectRoot = beforeState.projectPath || projectDir;
   const before = checkProject(beforeState, matrix, { hosts, needs: ['build'] });
   const plan = planUpgrade(beforeState, matrix, { hosts });
   let applied = [];
@@ -431,14 +460,14 @@ function runUpgrade(options = {}, deps = {}) {
 
   if (options.apply) {
     if (!options.allowDirty) {
-      const dirty = dirtyTreeStatus(projectDir, deps);
+      const dirty = dirtyTreeStatus(projectRoot, deps);
       if (!dirty.ok) {
         return { ok: false, error: dirty.error, plan: serializePlan(scopedPlan), applied, skipped, manual: plan.manual, before, after };
       }
     }
     let result;
     try {
-      result = applyUpgrade(scopedPlan, projectDir, {
+      result = applyUpgrade(scopedPlan, projectRoot, {
         ...deps,
         noInstall: options.noInstall,
         npmCli: options.npmCli,
@@ -459,7 +488,7 @@ function runUpgrade(options = {}, deps = {}) {
     applied = result.applied;
     skipped = result.skipped;
     const changedFiles = result.changedFiles || [];
-    const afterState = collectUpgradeState(projectDir, deps);
+    const afterState = collectUpgradeState(projectRoot, deps);
     after = checkProject(afterState, matrix, { hosts, needs: ['build'] });
     ok = !hasErrors(after);
     return {

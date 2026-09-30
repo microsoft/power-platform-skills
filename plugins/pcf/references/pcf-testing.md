@@ -17,6 +17,8 @@ Sources: [debugging custom controls](https://learn.microsoft.com/en-us/power-app
 
 If a run stops at metadata, report `runtime-not-checked`. Do not round it up.
 
+`verify-pcf.js` treats `clients` as the required client set to prove. Omitted clients default to web, but an explicit empty or whitespace-only intent client list is invalid because it cannot prove control identity or parameter binding for any client.
+
 ## Test pyramid
 
 ### Unit tests

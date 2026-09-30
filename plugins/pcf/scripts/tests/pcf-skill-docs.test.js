@@ -26,7 +26,7 @@ const PCF_FLOW_FILES = [
 const PCF_DOC_FILES = ['skills/pcf/SKILL.md', ...PCF_FLOW_FILES, ...PCF_REFERENCE_FILES];
 const PLUGIN_CHECK_LINE = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.';
 const ALLOWED_PLATFORM_ERROR_MESSAGES = [
-  // Observed in probe P11 on 2026-09-29 when the stock React template declared the excluded Fluent version.
+  // The stock React template has been observed with a Fluent version that the platform rejects.
   'platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.',
 ];
 

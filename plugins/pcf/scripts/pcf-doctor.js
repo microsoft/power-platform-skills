@@ -20,6 +20,8 @@ const USAGE = `Usage:
 
 const KNOWN = ['project', 'hosts', 'needs', 'npm-cli'];
 const NEED_VALUE = ['project', 'hosts', 'needs', 'npm-cli'];
+const KNOWN_HOSTS = ['model', 'pages'];
+const KNOWN_NEEDS = ['build', 'push'];
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -57,6 +59,8 @@ function runMain(argv = process.argv.slice(2)) {
   const matrix = loadMatrix();
   const hosts = splitList(flags.hosts, ['model']);
   const needs = splitList(flags.needs, ['build']);
+  validateSelection('hosts', hosts, KNOWN_HOSTS, flags.hosts !== undefined);
+  validateSelection('needs', needs, KNOWN_NEEDS, flags.needs !== undefined);
   const probes = collectToolchain({ npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined }, { runNpm, runPac, spawnResultSync });
   const toolchain = checkToolchain(probes, matrix, { needs });
   const project = [];
@@ -65,6 +69,12 @@ function runMain(argv = process.argv.slice(2)) {
     const projectDir = path.resolve(String(flags.project));
     const state = collectProject(projectDir);
     project.push(...checkProject(state, matrix, { hosts, needs }));
+  }
+
+  function validateSelection(name, values, allowed, explicit) {
+    if (explicit && values.length === 0) usageError(`--${name} must include at least one value (${allowed.join(',')})`);
+    const unknown = values.find((value) => !allowed.includes(value));
+    if (unknown) usageError(`--${name} contains unknown value '${unknown}' (expected ${allowed.join(',')})`);
   }
 
   const payload = {

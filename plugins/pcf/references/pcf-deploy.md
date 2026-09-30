@@ -17,6 +17,8 @@ node "${PLUGIN_ROOT}/scripts/pcf-push.js" --project <dir> --env <url> (--solutio
 
 `pcf-push.js` wraps `pac pcf push --environment`; the skill obtains consent because `pac pcf push` publishes all pending customizations in the environment.
 
+Boolean switches are bare. Use `--allow-dev-bundle` only when intentionally deploying a development bundle, and `--no-verify` only when intentionally skipping registration read-back; valued forms such as `--allow-dev-bundle=false` and `--no-verify=false` fail as usage errors.
+
 ## Versions and cache busting
 
 - PCF manifest versions are `x.y.z` and identify the control bundle.

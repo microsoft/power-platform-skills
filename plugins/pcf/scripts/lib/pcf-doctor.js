@@ -366,14 +366,18 @@ function pcfprojBuildMode(pcfprojText) {
 
 function pcfBuildModeOccurrences(text) {
   const occurrences = [];
-  const modeRe = /<PcfBuildMode\b([^>]*)>([\s\S]*?)<\/PcfBuildMode>/gi;
-  for (const match of text.matchAll(modeRe)) {
-    const tagAttrs = xmlAttrs(match[1] || '');
-    const ancestors = xmlAncestors(text, match.index);
+  for (const tag of scanXmlTags(text, 'PcfBuildMode')) {
+    if (tag.closing || tag.selfClosing) continue;
+    const closeRe = /<\/PcfBuildMode\s*>/gi;
+    closeRe.lastIndex = tag.endOffset;
+    const close = closeRe.exec(text);
+    if (!close) continue;
+    const tagAttrs = xmlAttrs(tag.attrsText || '');
+    const ancestors = xmlAncestors(text, tag.offset);
     occurrences.push({
-      value: match[2].trim(),
-      offset: match.index,
-      endOffset: match.index + match[0].length,
+      value: text.slice(tag.endOffset, close.index).trim(),
+      offset: tag.offset,
+      endOffset: close.index + close[0].length,
       conditioned: Object.hasOwn(tagAttrs, 'Condition') || ancestors.some((ancestor) => Object.hasOwn(ancestor.attrs, 'Condition') || ['Choose', 'When', 'Otherwise', 'Target'].includes(ancestor.name)),
     });
   }
@@ -382,25 +386,82 @@ function pcfBuildModeOccurrences(text) {
 
 function xmlAncestors(text, offset) {
   const stack = [];
-  const tagRe = /<\s*(\/?)([A-Za-z_][-A-Za-z0-9_:.]*)([^>]*)>/g;
-  let match;
-  while ((match = tagRe.exec(text)) && match.index < offset) {
-    if (match[0].startsWith('<?') || match[0].startsWith('<!')) continue;
-    const closing = !!match[1];
-    const name = match[2];
-    const selfClosing = /\/\s*>$/.test(match[0]);
-    if (closing) {
+  for (const tag of scanXmlTags(text)) {
+    if (tag.offset >= offset) break;
+    if (tag.closing) {
       for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].name === name) {
+        if (stack[i].name === tag.name) {
           stack.splice(i);
           break;
         }
       }
-    } else if (!selfClosing) {
-      stack.push({ name, attrs: xmlAttrs(match[3] || '') });
+    } else if (!tag.selfClosing) {
+      stack.push({ name: tag.name, attrs: xmlAttrs(tag.attrsText || '') });
     }
   }
   return stack;
+}
+
+function scanXmlTags(text, wantedName) {
+  const source = String(text || '');
+  const tags = [];
+  let i = 0;
+  while (i < source.length) {
+    const lt = source.indexOf('<', i);
+    if (lt === -1) break;
+    const next = source[lt + 1];
+    if (next === '!' || next === '?') {
+      const end = source.indexOf('>', lt + 1);
+      i = end === -1 ? source.length : end + 1;
+      continue;
+    }
+    let cursor = lt + 1;
+    let closing = false;
+    if (source[cursor] === '/') {
+      closing = true;
+      cursor++;
+    }
+    while (/\s/.test(source[cursor] || '')) cursor++;
+    const nameStart = cursor;
+    while (/[A-Za-z0-9_:.:-]/.test(source[cursor] || '')) cursor++;
+    const name = source.slice(nameStart, cursor);
+    if (!name) {
+      i = lt + 1;
+      continue;
+    }
+    const endOffset = findTagEnd(source, cursor);
+    if (endOffset === -1) break;
+    if (!wantedName || name.toLowerCase() === String(wantedName).toLowerCase()) {
+      const rawAttrs = source.slice(cursor, endOffset - 1);
+      tags.push({
+        name,
+        offset: lt,
+        endOffset,
+        closing,
+        selfClosing: !closing && /\/\s*$/.test(rawAttrs),
+        attrsText: rawAttrs.replace(/\/\s*$/, ''),
+      });
+    }
+    i = endOffset;
+  }
+  return tags;
+}
+
+function findTagEnd(text, start) {
+  let quote = null;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '>') return i + 1;
+  }
+  return -1;
 }
 
 function msbuildPcfReference(pcfprojText) {
@@ -440,7 +501,7 @@ function xmlAttrs(tag) {
   //   <PackageReference Include='Microsoft.PowerApps.MSBuild.Pcf' Version='1.*' />
   // Match the opening quote and read until the same quote so the other quote character can appear
   // inside the value. This is intentionally a tag-fragment parser; full XML parsing would lose the
-  // source offsets `pcfprojBuildMode` exports for Tasks 10 and 13.
+  // source offsets `pcfprojBuildMode` exports for build-mode repair guidance.
   for (const match of String(tag || '').matchAll(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
     attrs[match[1]] = match[3];
   }
@@ -538,7 +599,7 @@ function collectProject(projectDir, deps = {}) {
   const findProject = deps.findControlProject || findControlProject;
   const found = findProject(projectDir, deps);
   if (found.error) throw new Error(found.error);
-  const packageJson = JSON.parse(fsDep.readFileSync(found.packageJson, 'utf8'));
+  const packageJson = parseJsonWithOptionalBom(fsDep.readFileSync(found.packageJson, 'utf8'));
   const projectPath = found.projectDir;
   const manifestModels = found.manifests.map((file) => parseManifest(fsDep.readFileSync(file, 'utf8')).model);
   const eslintFiles = safeReaddir(fsDep, projectPath)
@@ -562,6 +623,10 @@ function collectProject(projectDir, deps = {}) {
     state.outUnsafe = String(err && err.message ? err.message : err);
   }
   return state;
+}
+
+function parseJsonWithOptionalBom(text) {
+  return JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
 }
 
 function outputStrays(outRoot, deps = {}) {

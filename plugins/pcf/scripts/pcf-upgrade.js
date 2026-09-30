@@ -10,6 +10,7 @@ const USAGE = `Usage:
 
 const KNOWN = ['project', 'hosts', 'apply', 'steps', 'allow-dirty', 'no-install', 'npm-cli'];
 const NEED_VALUE = ['project', 'hosts', 'steps', 'npm-cli'];
+const KNOWN_HOSTS = ['model', 'pages'];
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -46,9 +47,11 @@ function runMain(argv = process.argv.slice(2)) {
   for (const booleanFlag of ['apply', 'allow-dirty', 'no-install']) {
     if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
   }
+  const hosts = splitList(flags.hosts, ['model']);
+  validateHosts(hosts, flags.hosts !== undefined);
   const result = runUpgrade({
     project: flags.project ? path.resolve(String(flags.project)) : process.cwd(),
-    hosts: splitList(flags.hosts, ['model']),
+    hosts,
     apply: Boolean(flags.apply),
     steps: splitList(flags.steps, []),
     allowDirty: Boolean(flags['allow-dirty']),
@@ -56,6 +59,12 @@ function runMain(argv = process.argv.slice(2)) {
     npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined,
   });
   return emitResult(result.ok, result);
+}
+
+function validateHosts(hosts, explicit) {
+  if (explicit && hosts.length === 0) usageError(`--hosts must include at least one value (${KNOWN_HOSTS.join(',')})`);
+  const unknown = hosts.find((host) => !KNOWN_HOSTS.includes(host));
+  if (unknown) usageError(`--hosts contains unknown value '${unknown}' (expected ${KNOWN_HOSTS.join(',')})`);
 }
 
 if (require.main === module) {

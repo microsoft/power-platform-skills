@@ -39,9 +39,9 @@ node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.cto
 
 Two checks are distinct and must not be conflated:
 
-- **Clients**: `--clients` names clients that must use this control. Default is web. If a requested client does not use the control, verifier reports `PCF_BIND_CLIENT_MISSING`.
+- **Clients**: `--clients` names clients that must use this control. Default is web. Intent `clients` arrays must contain at least one of `web`, `phone` or `tablet` after trimming. If a requested client does not use the control, verifier reports `PCF_BIND_CLIENT_MISSING`.
 - **Form factors**: every FormXML binding must declare all three factors: phone `0`, tablet `1`, web `2`. A test-environment probe on 2026-09-29 observed the platform reject a web-only declaration with `Custom control declaration for form factor(s) 0,1 is missing`. Verifier reports `PCF_BIND_FACTOR_UNDECLARED` as an error. This is separate from runtime `context.client.getFormFactor()` values documented at https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/client/getformfactor.
 
 ## Unbind and teardown
 
-Before deleting or replacing a control, remove it from every form/grid or reset to the default control, save and publish, then verify again. Observed behavior on 2026-09-29: deleting a bound control failed until unbind → publish → delete. Use `pcf-inventory.js --where-used` as a dependency hint, not as proof that Liquid/text references do not exist.
+Before deleting or replacing a control, remove it from every form/grid or reset to the default control, save and publish, then verify again. Observed behavior on 2026-09-29: deleting a bound control failed until unbind → publish → delete. Use `pcf-inventory.js --where-used` as a dependency hint, not as proof that Liquid/text references do not exist.\r\n

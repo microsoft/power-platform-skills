@@ -16,6 +16,8 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Verify**: Re-run `node "${PLUGIN_ROOT}/scripts/pcf-doctor.js" --needs <mode>` and confirm it reports the tool as found.
 
+`pcf-doctor.js --needs` accepts `build` and `push`; `--hosts` accepts `model` and `pages`. Typos and empty comma lists fail before any tool probing so missing prerequisites are not silently downgraded.
+
 ### NuGet restore fails for Microsoft.PowerApps.MSBuild.Pcf
 
 **Symptom**: Build or push output names `Microsoft.PowerApps.MSBuild.Pcf` and restore fails before packaging.
@@ -65,6 +67,8 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 **Fix**: Correct the manifest against the [manifest schema](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/). For Pages, also apply the host rules in `pcf-hosts.md`.
 
 **Verify**: `node "${PLUGIN_ROOT}/scripts/lint-pcf.js" --project <dir>` passes. Then run a production build through the project build command and confirm it passes.
+
+If project lint reports that no `ControlManifest.Input.xml` files were found, pass the PCF project root or the exact manifest with `--manifest`; an empty result is a failed lint, not a successful project.
 
 ### Production build mode is set but ineffective
 

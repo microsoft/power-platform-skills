@@ -248,8 +248,8 @@ test('formsContainingControl uses contains fallback with ok/reason shape', async
 test('solutionPrefix resolves unmanaged solution publisher prefix', async () => {
   const sdk = fakeSdk({
     rows: {
-      solution: [{ solutionid: 's1', _publisherid_value: 'p1', ismanaged: false }],
-      publisher: [{ publisherid: 'p1', customizationprefix: 'new' }],
+      solution: [{ solutionid: 'solution-one', _publisherid_value: 'publisher-one', ismanaged: false }],
+      publisher: [{ publisherid: 'publisher-one', customizationprefix: 'new' }],
     },
   });
 
@@ -267,7 +267,7 @@ test('solutionPrefix resolves unmanaged solution publisher prefix', async () => 
       table: 'publisher',
       options: {
         select: ['publisherid', 'customizationprefix'],
-        filter: 'publisherid eq p1',
+        filter: 'publisherid eq publisher-one',
         top: 1,
       },
     },
@@ -277,6 +277,6 @@ test('solutionPrefix resolves unmanaged solution publisher prefix', async () => 
 test('solutionPrefix reports missing, duplicate, managed, and publisher failures', async () => {
   await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [] } }), 'missing'), /Solution 'missing' was not found/);
   await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [{}, {}] } }), 'dup'), /More than one solution/);
-  await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [{ _publisherid_value: 'p1', ismanaged: true }] } }), 'managed'), /managed solution/);
-  await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [{ _publisherid_value: 'p1', ismanaged: false }], publisher: [] } }), 'nopub'), /publisher.*could not be resolved/);
+  await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [{ _publisherid_value: 'publisher-one', ismanaged: true }] } }), 'managed'), /managed solution/);
+  await assert.rejects(solutionPrefix(fakeSdk({ rows: { solution: [{ _publisherid_value: 'publisher-one', ismanaged: false }], publisher: [] } }), 'nopub'), /publisher.*could not be resolved/);
 });

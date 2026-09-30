@@ -358,6 +358,30 @@ test('CLI passes --steps to runUpgrade and rejects a value on boolean --apply', 
   assert.match(applyValue.stderrText(), /--apply does not take a value/);
 });
 
+test('CLI rejects unknown and empty --hosts before runUpgrade', async () => {
+  const realAuth = require('../lib/dataverse-auth.js');
+  for (const [argv, pattern] of [
+    [['--project', 'D:\\Projects\\controls\\StarRating', '--hosts', 'model,console'], /--hosts contains unknown value 'console'/],
+    [['--project', 'D:\\Projects\\controls\\StarRating', '--hosts', ','], /--hosts must include at least one value/],
+  ]) {
+    const cli = loadCli(cliPath, {
+      argv,
+      requires: {
+        './lib/dataverse-auth': realAuth,
+        './lib/pcf-upgrade': { runUpgrade: () => { throw new Error('runUpgrade should not run'); } },
+      },
+    });
+    try {
+      await cli.main(argv);
+    } catch (err) {
+      if (!String(err && err.message).startsWith('process.exit(')) throw err;
+    }
+    assert.equal(cli.exitCode, 1, argv.join(' '));
+    assert.match(cli.stderrText(), pattern, argv.join(' '));
+    assert.equal(cli.stdoutText(), '', argv.join(' '));
+  }
+});
+
 test('runUpgrade limits apply to selected steps and rejects unknown step ids', () => {
   const { runUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-steps-'));
@@ -376,6 +400,44 @@ test('runUpgrade limits apply to selected steps and rejects unknown step ids', (
     const unknown = runUpgrade({ project: projectDir, apply: true, allowDirty: true, steps: ['UNKNOWN_STEP'] });
     assert.equal(unknown.ok, false);
     assert.match(unknown.error, /Unknown --steps value 'UNKNOWN_STEP'/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade applies relative to the discovered project root when started from a control subdirectory', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-nested-start-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+    const nested = path.join(projectDir, 'StarRating');
+
+    const result = runUpgrade({ project: nested, apply: true, allowDirty: true, steps: ['DEPS_TO_MATRIX'], noInstall: true });
+
+    assert.deepEqual(result.applied, ['DEPS_TO_MATRIX']);
+    assert.deepEqual(result.changedFiles, [path.join(projectDir, 'package.json')]);
+    assert.doesNotMatch(String(result.error || ''), /outside the PCF project/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade can collect and apply a UTF-8 BOM package.json without dropping the BOM', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-bom-package-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    writeScaffold(renderedProject(), projectDir);
+    const packagePath = path.join(projectDir, 'package.json');
+    fs.writeFileSync(packagePath, `\uFEFF${packageText('standard')}`);
+
+    const result = runUpgrade({ project: projectDir, apply: true, allowDirty: true, steps: ['DEPS_TO_MATRIX'], noInstall: true });
+
+    assert.deepEqual(result.applied, ['DEPS_TO_MATRIX']);
+    const after = fs.readFileSync(packagePath, 'utf8');
+    assert.equal(after.charCodeAt(0), 0xFEFF);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -491,6 +553,50 @@ test('applyUpgrade computes all transforms before writing any file', () => {
       ],
     }, projectDir), /boom/);
 
+    assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
+    assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyUpgrade rolls back earlier writes when a later write fails', () => {
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-write-fail-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const pkg = path.join(projectDir, 'package.json');
+    const proj = path.join(projectDir, 'StarRating.pcfproj');
+    fs.writeFileSync(pkg, '{"name":"before"}\n');
+    fs.writeFileSync(proj, '<Project />\n');
+    let writes = 0;
+    const failingFs = {
+      ...fs,
+      writeFileSync: (file, content) => {
+        writes++;
+        if (writes === 2) throw new Error('injected write failure');
+        return fs.writeFileSync(file, content);
+      },
+      realpathSync: fs.realpathSync,
+    };
+    failingFs.realpathSync.native = fs.realpathSync.native;
+
+    let error;
+    try {
+      applyUpgrade({
+        steps: [
+          { id: 'DEPS_TO_MATRIX', file: pkg, apply: () => '{"name":"after"}\n' },
+          { id: 'BUILDMODE_PRODUCTION', file: proj, apply: () => '<Project><PcfBuildMode>production</PcfBuildMode></Project>\n' },
+        ],
+      }, projectDir, { fs: failingFs });
+    } catch (err) {
+      error = err;
+    }
+
+    assert.ok(error);
+    assert.match(error.message, /injected write failure/);
+    assert.deepEqual(error.changedFiles, []);
     assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
     assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
   } finally {
