@@ -46,8 +46,8 @@ For component-only packages, only the control travels. For component plus bindin
 
 The full examples are committed as files and should be kept as the source of truth:
 
-- `plugins/pipelines/github-actions.yml`
-- `plugins/pipelines/azure-devops.yml`
+- `plugins/pcf/pipelines/github-actions.yml`
+- `plugins/pcf/pipelines/azure-devops.yml`
 
 They are examples to adapt, not drop-in pipelines. Both follow the same stage shape:
 

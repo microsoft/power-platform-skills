@@ -70,7 +70,7 @@ Layer G fixtures can be captured from live-lane agent-produced projects, includi
 
 1. Capture the project:
    ```powershell
-   node evals/pcf/capture-pcf-fixture.js <projectDir> evals\pcf\pcf\fixtures\<N>-<slug>
+   node evals/pcf/capture-pcf-fixture.js <projectDir> evals\pcf\fixtures\<N>-<slug>
    ```
    The capture tool excludes `node_modules`, `out`, `obj`, `bin`, and `generated`, and refuses paths outside `evals/pcf/fixtures/`.
 2. Scrub the captured files: no real environment, tenant, or org identifiers; use `https://contoso.crm.dynamics.com` for examples.
@@ -83,9 +83,9 @@ Layer G fixtures can be captured from live-lane agent-produced projects, includi
 From the repository root:
 
 ```powershell
-node evals\pcf\pcf\run-pcf.js --tier smoke
-node evals\\pcf\\pcf\\run-pcf.js --tier full   # all cases
-node --test evals\pcf\pcf\tests\*.test.js
+node evals\pcf\run-pcf.js --tier smoke
+node evals\pcf\run-pcf.js --tier full   # all cases
+node --test evals\pcf\tests\*.test.js
 ```
 
 Exit codes match app-builder: `0` all pass, `1` assertion failure, `2` harness or argument error.
@@ -106,4 +106,3 @@ ok 1 - 001-001-intent-field-clean
 # skip  0
 # fixtures 8 (pass 8, fail 0)
 ```
-

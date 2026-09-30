@@ -93,7 +93,8 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules, not behavior.
 
 **Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
-`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`; `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the `shared/` sources it bundles).
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
+`pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles).
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift

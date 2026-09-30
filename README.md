@@ -46,6 +46,7 @@ If you prefer to install manually, run these commands inside a GitHub Copilot CL
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
+    /plugin install pcf@power-platform-skills
     /plugin install mcp-apps@power-platform-skills
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
@@ -71,6 +72,14 @@ views, charts, security roles, app + sitemap — from a natural-language intent;
 generative pages for an app that already exists. Use either independently — neither requires the other
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
+
+### [PCF](plugins/pcf/README.md) (`plugins/pcf`)
+
+Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps, canvas apps and Power Pages.
+
+**Skills**: `/pcf:pcf` scaffolds Microsoft-maintained PCF templates and recipes, runs gates, deploys with PAC, and verifies registration and bindings.
+
+**Stack**: Node.js 20+, Power Apps component framework, PAC CLI, .NET SDK, and Azure CLI for verification/inventory
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
@@ -312,5 +321,3 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 Power Pages, Mobile Apps, and Model Apps ship 1DS telemetry code, but their committed configurations and event schemas differ. Power Pages and Mobile Apps telemetry are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps ships hard-disabled (`disabled: true`), so it currently transmits no events and writes no local telemetry mirror; if enabled later, its events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
 
 For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See the [shared telemetry guide](shared/telemetry/README.md) for the full field list, current plugin states, geo-routing behavior, kill-switch semantics, and local-mirror behavior.
-
-- **PCF** (`plugins/pcf`) — build, test, diagnose, deploy, verify and inventory Power Apps component framework code components.

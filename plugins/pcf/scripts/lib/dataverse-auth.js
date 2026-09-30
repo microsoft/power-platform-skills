@@ -423,18 +423,6 @@ function ensureOk(res, context, deps = {}) {
   throw new Error(`${context} failed: HTTP ${res.status} — ${msg}`);
 }
 
-/**
- * Builds a Dataverse verbose Label object.
- * @param {string} text
- * @param {number} [lang=1033]
- */
-function label(text, lang = 1033) {
-  return {
-    '@odata.type': 'Microsoft.Dynamics.CRM.Label',
-    LocalizedLabels: [{ '@odata.type': 'Microsoft.Dynamics.CRM.LocalizedLabel', Label: text, LanguageCode: lang }],
-  };
-}
-
 function parseArgs(argv) {
   const positional = [];
   const flags = {};

@@ -23,16 +23,20 @@ The skill runs in the main conversation loop because design choices, plan approv
 
 ```text
 intent/request
-  -> skills/pcf/SKILL.md routes mode and consent
-  -> scripts/pcf-doctor.js checks local tooling/project health
+  -> skills/pcf/SKILL.md routes new | existing | doctor | upgrade | deploy | bind | verify | inventory
+  -> scripts/pcf-doctor.js checks local tooling/project health; check-auth.js runs when an env is involved
   -> pcf-intent.json + scripts/write-pcf-plan.js render pcf-plan.md
   -> scripts/pcf-scaffold.js writes a matrix-pinned template/recipe
   -> implementation uses references/pcf-*.md + recipe README
   -> scripts/pcf-gates.js runs manifest/source/lint/test/build gates
+  -> Pages compatibility gate for Pages targets: standard field only + pcf-gates.js --hosts pages
   -> scripts/pcf-push.js --env <url> runs pac pcf push --environment <url>
   -> scripts/verify-pcf.js checks registration and FormXML binding evidence
+  -> Pages site configuration guidance and runtime evidence if a target site is reachable
   -> scripts/pcf-inventory.js lists registered controls and where-used dependencies
 ```
+
+The main route list is intentionally explicit in the skill because prompts never authorize writes by themselves. Deploy, binding, and runtime verification remain decision points in the conversation loop; deterministic scripts provide evidence but do not infer consent.
 
 Libraries are split by concern:
 
@@ -148,4 +152,5 @@ All shipped components in this release are checked below.
 - [x] Deploy, verify and inventory — `scripts/pcf-push.js`, `scripts/verify-pcf.js`, `scripts/pcf-inventory.js`, `scripts/lib/pcf-dataverse.js`, `pcf-binding-verify.js`; covered by `pcf-push.test.js`, `pcf-verify-cli.test.js`, `pcf-inventory.test.js`, `pcf-dataverse*.test.js`, and `pcf-binding-verify.test.js`.
 - [x] Public references — `references/pcf-best-practices.md`, `pcf-deploy.md`, `pcf-hosts.md`, `pcf-power-pages.md`, `pcf-recipes.md`, `pcf-testing.md`, `pcf-troubleshooting.md`; covered by `pcf-skill-docs.test.js` and repository metadata validators.
 - [x] Eval harness — `evals/pcf/`; covered by `node evals/pcf/run-pcf.js --tier smoke`, `--tier full`, and `node --test evals/pcf/tests/*.test.js`.
-- [x] Write-safety markers — `hooks/validate-write-safety.js`; covered by `scripts/tests/validate-write-safety.test.js`.
+- [x] Drift guard for copied model-apps and shared-skill sources — `scripts/tests/model-apps-copies.test.js`; covered by the plugin suite and by CI path filters that include the model-apps sources pcf bundles.
+- [x] Write-safety hook and markers — `hooks/hooks.json`, `hooks/validate-write-safety.js`; covered by `scripts/tests/validate-write-safety.test.js` and `node scripts/validate-hooks-manifests.js`.

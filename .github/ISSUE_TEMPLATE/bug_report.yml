@@ -13,7 +13,7 @@ body:
         - mcp-apps
         - mobile-app
         - model-apps
-      - pcf
+        - pcf
         - power-automate
         - power-pages
     validations:

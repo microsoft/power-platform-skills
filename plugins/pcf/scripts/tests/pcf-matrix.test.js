@@ -233,7 +233,18 @@ test('no file outside the matrix hard-codes a pcf-scripts version', () => {
     try {
       entries = fs.readdirSync(d, { withFileTypes: true });
     } catch (err) {
-      if (err && err.code === 'ENOENT') return;
+      // Windows checkouts materialize git symlinks such as CLAUDE.md as links.
+      // If one becomes dangling between discovery and traversal, skip that
+      // specific symlink race only; a missing normal directory still fails so
+      // version scans do not hide broken paths.
+      if (err && err.code === 'ENOENT') {
+        try {
+          if (fs.lstatSync(d).isSymbolicLink()) return;
+        } catch {
+          // Fall through: if even lstat cannot see a symlink, this is a real
+          // missing path and the scan should fail below.
+        }
+      }
       throw err;
     }
     for (const e of entries) {

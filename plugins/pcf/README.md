@@ -50,6 +50,73 @@ Example prompts:
 
 The skill pauses before environment writes, destructive local changes, deployment, and binding instructions that require maker action. Unattended runs may scaffold, lint, test, build, doctor, upgrade in dry-run mode, verify already-deployed metadata, and inventory read-only Dataverse evidence when credentials are available.
 
+The plugin invokes multiple tools during a session. To reduce approval prompts:
+
+### GitHub Copilot CLI
+
+**Option 1 — Allow specific tools (recommended)**
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(node *)' --allow-tool 'shell(npm *)' --allow-tool 'shell(pac *)' --allow-tool 'shell(az *)' --allow-tool 'shell(powershell *)'
+```
+
+**Option 2 — Allow all tools**
+
+```bash
+copilot --allow-all-tools
+```
+
+### Claude Code
+
+**Option 1 — Permission mode (recommended)**
+
+```jsonc
+// .claude/settings.json
+{
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(npm *)",
+      "Bash(pac *)",
+      "Bash(az *)",
+      "Bash(powershell *)"
+    ]
+  }
+}
+```
+
+**Option 2 — Auto-accept all**
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+## Hooks and guardrails
+
+The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatically while it's loaded. They are **fail-open**: any internal error exits 0, so a hook can never fail or abort a skill run. Because the plugin installs **globally**, the write-safety guard is scoped so it does not interfere with unrelated projects: it only **flags** (never blocks) writes outside the cwd during an active PCF authoring session (a `pcf-intent.json` or `pcf-plan.md` at/under cwd).
+
+| Hook | When | What it does |
+|---|---|---|
+| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd only during a PCF authoring session. Never blocks; silent in unrelated projects. |
+
+**Escape hatches** (environment variables — set to `1` or `true`):
+
+| Variable | Effect |
+|---|---|
+| `PCF_DISABLE_HOOKS` | Disables **all** pcf hooks. |
+| `PCF_SKIP_WRITE_GUARD` | Disables **only** the write-safety guard. |
+
+```powershell
+# Windows (PowerShell)
+$env:PCF_DISABLE_HOOKS = "1"
+```
+
+```bash
+# macOS / Linux (bash)
+export PCF_DISABLE_HOOKS=1
+```
+
 ## Relation to model-apps
 
 PCF code components ship in this separate plugin because the same component can be used by model-driven apps, canvas apps and Power Pages. The model-apps plugin still owns whole-app and generative-page authoring: `/model-apps:app-builder` builds whole apps, and `/model-apps:genpage` builds pages.

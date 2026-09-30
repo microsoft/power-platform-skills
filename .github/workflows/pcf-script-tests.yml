@@ -23,6 +23,7 @@ on:
             - "plugins/model-apps/scripts/resolve-interaction-mode.js"
             - "plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs"
             - "plugins/model-apps/scripts/vendor/PROVENANCE.json"
+            - "plugins/model-apps/scripts/vendor/.gitattributes"
             - ".github/workflows/pcf-script-tests.yml"
 
 permissions:

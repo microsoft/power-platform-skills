@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { TapReporter } = require('../model-apps/genpage/lib/reporter.js');
+const { TapReporter } = require('./lib/reporter.js');
 const { parseEvalArgs } = require('./lib/eval-args.js');
 const { computeFacts } = require('./lib/facts.js');
 const { ASSERTIONS } = require('./lib/assertions.js');
@@ -92,3 +92,4 @@ async function main() {
 
 if (require.main === module) main();
 module.exports = { main, parseArgs, loadEvals, dirForEval };
+

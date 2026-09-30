@@ -1,5 +1,5 @@
 'use strict';
-// Shared argument parsing for the pcf eval runners (app-builder + genpage layers 1/2).
+// Shared argument parsing for the pcf eval runner.
 //
 // Extracted because all three shipped a byte-identical `parseArgs` with the same defect class:
 // `argv[++i]` is `undefined` for a trailing flag, and an undefined value is FALSY, so every

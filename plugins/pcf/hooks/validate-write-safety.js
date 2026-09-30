@@ -4,11 +4,10 @@
  * PreToolUse guardrail for Write / Edit / MultiEdit.
  *
  * Path safety — reject writes whose absolute path escapes the current working
- * directory. Stops a runaway sub-agent (e.g. a parallel genpage or app-builder
- * page-builder) from clobbering ~/.bashrc, /etc/*, sibling repos, etc. Both
- * authoring skills always work inside a working directory created under the cwd
- * (genpage SKILL Phase 0 / app-builder SKILL Phase 0), so every legitimate write
- * stays under it.
+ * directory. Stops a runaway sub-agent (for example a helper repairing a PCF
+ * project) from clobbering ~/.bashrc, /etc/*, sibling repos, etc. The PCF
+ * authoring flow works inside a project directory created under the cwd, so
+ * every legitimate write stays under it.
  *
  * SCOPING (global-install safety): this plugin's hooks are installed globally, so
  * this guard must NOT constrain writes in unrelated projects. It therefore only
@@ -93,16 +92,13 @@ function isPathSafe(targetPath, cwd) {
 
 /**
  * True when the cwd looks like an active pcf authoring run: a session marker
- * file sits at the cwd or in one of its immediate child directories. Both authoring
- * skills create their working directory as a direct child of cwd and write a marker
+ * file sits at the cwd or in one of its immediate child directories. The skill
+ * creates its working directory as a direct child of cwd and writes a marker
  * into it, so the marker is at either `<cwd>/<marker>` (host started inside the
  * working dir) or `<cwd>/<workdir>/<marker>` (host started at the project root):
- *   - genpage      -> genpage-plan.md            (skills/genpage/SKILL.md Phase 0)
- *   - app-builder  -> app-spec.json / model-app-plan.md (skills/app-builder/SKILL.md
- *                     Phase 0 — the working dir holds both)
- * app-builder matters here for the same reason genpage does: its generate-pages phase
- * dispatches PARALLEL page-builder workers that write page `.tsx` files, which is
- * exactly the runaway-sub-agent write this guard flags. Shallow, bounded, and
+ *   - pcf -> pcf-intent.json / pcf-plan.md
+ *
+ * Shallow, bounded, and
  * fail-open: any error → false (treat as "not a pcf session" and do NOT warn),
  * because a hook must never interfere with unrelated work.
  */
@@ -156,11 +152,10 @@ readUtf8Stream(process.stdin).then((inputData) => {
     process.exit(0);
   }
 
-  // Global-install safety: only enforce during an active pcf authoring session
-  // (genpage or app-builder), so a globally-installed pcf plugin never blocks
-  // writes in unrelated projects.
+  // Global-install safety: only enforce during an active pcf authoring session,
+  // so a globally-installed pcf plugin never blocks writes in unrelated projects.
   if (!isPcfSession(cwd)) {
-    debug('no genpage-plan.md / app-spec.json / model-app-plan.md at/under cwd — not a pcf session, allowing');
+    debug('no pcf-intent.json / pcf-plan.md at/under cwd — not a pcf session, allowing');
     process.exit(0);
   }
 
