@@ -6,6 +6,10 @@ export const cellEditorOverrides: CellEditorOverrides = {
         if (defaultProps.secured) return null;
         const label = rendererParams.colDefs[rendererParams.columnIndex]?.displayName ?? defaultProps.columnDataType ?? "Text";
         const initialValue = defaultProps.charPress ?? (defaultProps.value == null ? "" : String(defaultProps.value));
+        if (defaultProps.charPress) {
+            defaultProps.onChange(defaultProps.charPress);
+            rendererParams.onCellValueChanged(defaultProps.charPress);
+        }
         const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
             const next = event.currentTarget.value;
             defaultProps.onChange(next);

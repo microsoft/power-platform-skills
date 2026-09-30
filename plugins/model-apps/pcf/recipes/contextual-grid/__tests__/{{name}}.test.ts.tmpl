@@ -25,6 +25,14 @@ function response(entities: ComponentFramework.WebApi.Entity[], nextLink?: strin
     return { entities, nextLink } as ComponentFramework.WebApi.RetrieveMultipleResponse;
 }
 
+function deferredResponse() {
+    let resolve!: (value: ComponentFramework.WebApi.RetrieveMultipleResponse) => void;
+    const promise = new Promise<ComponentFramework.WebApi.RetrieveMultipleResponse>((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
+
 async function flushPromises(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
@@ -300,6 +308,32 @@ test("unchanged updateView keeps loaded rows and does not restart the query", as
     await flushPromises();
 
     expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.container.textContent).toContain("First");
+    expect(mounted.container.textContent).toContain("Second");
+});
+
+test("unchanged updateView during load more keeps the button disabled and appends once", async () => {
+    const loadMore = deferredResponse();
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockReturnValueOnce(loadMore.promise);
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(mounted.loadMore()?.disabled).toBe(true);
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+
+    loadMore.resolve(response([{ contactid: "2", fullname: "Second" }]));
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.rows()).toHaveLength(2);
     expect(mounted.container.textContent).toContain("First");
     expect(mounted.container.textContent).toContain("Second");
 });

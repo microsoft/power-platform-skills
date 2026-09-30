@@ -121,9 +121,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             return;
         }
         this.currentQueryKey = queryKey;
-        this.loadMessage = "";
+        this.loadMessage = this.strings[STRINGS.loading];
         const token = ++this.loadToken;
-        this.render(context, this.strings[STRINGS.loading], !editable, false);
+        this.render(context, this.loadMessage, !editable, false);
         void this.refreshOptions(context, token, !editable);
     }
 

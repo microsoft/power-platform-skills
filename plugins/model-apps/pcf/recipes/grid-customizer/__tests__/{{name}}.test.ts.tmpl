@@ -126,6 +126,44 @@ test("text editor seeds typed-start characters, labels the input and preserves R
     expect(onCellValueChanged).toHaveBeenCalledWith("Zed");
 });
 
+test("text editor publishes typed-start characters before any input event", () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-4" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    editor?.({ value: "Old", charPress: "Z", onChange, columnDataType: "Text" }, params);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("Z");
+    expect(onCellValueChanged).toHaveBeenCalledTimes(1);
+    expect(onCellValueChanged).toHaveBeenCalledWith("Z");
+});
+
+test("text editor does not publish an initial value without typed-start characters", () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-5" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    editor?.({ value: "Old", onChange, columnDataType: "Text" }, params);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCellValueChanged).not.toHaveBeenCalled();
+});
+
 test("two instances on one page publish independent event names", () => {
     const firstFactory = { fireEvent: jest.fn() };
     const secondFactory = { fireEvent: jest.fn() };

@@ -99,7 +99,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
         const queryKey = gridQueryKey(config);
         if (queryKey === this.currentQueryKey) {
-            this.render(this.rows.length ? "ready" : this.state, this.rows.length ? "" : this.message);
+            const inFlight = this.state === "loading";
+            const state = inFlight ? "loading" : this.rows.length ? "ready" : this.state;
+            const message = inFlight ? this.message : this.rows.length ? "" : this.message;
+            this.render(state, message);
             return;
         }
         this.currentQueryKey = queryKey;
