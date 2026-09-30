@@ -6,6 +6,8 @@ This document records the `/pcf:pcf` skill as it ships in the pcf plugin. It is 
 
 `/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories Power Apps component framework (PCF) code components for model-driven apps and Power Pages.
 
+This plugin is in preview; [`pcf-capabilities.md`](pcf-capabilities.md) records the shipped capability evidence.
+
 This release covers:
 
 - Model-driven app and Power Pages host guidance.
@@ -142,6 +144,8 @@ The generated-project workflow builds all templates and available recipes on Ubu
 ## Status
 
 All shipped components in this release are checked below.
+
+See [`pcf-capabilities.md`](pcf-capabilities.md) for the evidence level behind each shipped capability.
 
 - [x] Skill orchestrator and flows — `skills/pcf/SKILL.md`, `create-flow.md`, `deploy-flow.md`, `bind-flow.md`, `pages-flow.md`, `upgrade-flow.md`; covered by `scripts/tests/pcf-skill-docs.test.js` and the offline eval harness.
 - [x] Compatibility matrix and lock sets — `compatibility-matrix.json`, `lock/standard/`, `lock/virtual/`; covered by `scripts/tests/pcf-matrix.test.js` and `pcf-ci-build.js --all`.

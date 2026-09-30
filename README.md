@@ -79,6 +79,8 @@ Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps componen
 
 **Skills**: `/pcf:pcf` scaffolds Microsoft-maintained PCF templates and recipes, runs gates, deploys with PAC, and verifies registration and bindings.
 
+**Status**: Preview — see [capabilities](plugins/pcf/docs/pcf-capabilities.md)
+
 **Stack**: Node.js 20+, Power Apps component framework, PAC CLI, .NET SDK, and Azure CLI for verification/inventory
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)

@@ -2,6 +2,8 @@
 
 Build, test, diagnose, upgrade, deploy, bind, verify and inventory Power Apps component framework (PCF) code components for model-driven apps and Power Pages.
 
+> **Preview**: Behaviour, file formats and commands may change between releases, and no recipe is runtime-certified yet. See [`docs/pcf-capabilities.md`](docs/pcf-capabilities.md) for what is proven today and [#656](https://github.com/microsoft/power-platform-skills/issues/656) for pending work.
+
 ## Installation
 
 ```bash

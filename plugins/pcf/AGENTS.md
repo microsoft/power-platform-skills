@@ -1,10 +1,10 @@
 # PCF Plugin Development Guide
 
-This plugin ships the `/pcf:pcf` skill for Power Apps component framework (PCF) code components.
+This plugin ships the preview `/pcf:pcf` skill for Power Apps component framework (PCF) code components.
 
 `/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories PCF components for model-driven apps and Power Pages. The authoring flow runs in the main conversation loop, not a `Task` subagent, because plan approval, environment consent, binding choices and runtime-verification choices are interactive. Unattended mode uses `scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes an environment write. The public design record is [`docs/pcf-design.md`](docs/pcf-design.md).
 
-Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`references/pcf-best-practices.md`](references/pcf-best-practices.md), [`references/pcf-testing.md`](references/pcf-testing.md), [`references/pcf-deploy.md`](references/pcf-deploy.md), [`references/pcf-power-pages.md`](references/pcf-power-pages.md), [`references/pcf-recipes.md`](references/pcf-recipes.md), and [`references/pcf-troubleshooting.md`](references/pcf-troubleshooting.md).
+Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`references/pcf-best-practices.md`](references/pcf-best-practices.md), [`references/pcf-testing.md`](references/pcf-testing.md), [`references/pcf-deploy.md`](references/pcf-deploy.md), [`references/pcf-power-pages.md`](references/pcf-power-pages.md), [`references/pcf-recipes.md`](references/pcf-recipes.md), [`references/pcf-troubleshooting.md`](references/pcf-troubleshooting.md), and [`docs/pcf-capabilities.md`](docs/pcf-capabilities.md).
 
 ## Layout
 
@@ -17,7 +17,7 @@ Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`refe
 - `hooks/` — lifecycle hook registration and the PCF write-safety guard.
 - `skills/pcf/` — skill workflow files.
 - `skills/report-issue/` — bundled shared bug-report workflow.
-- `references/` and `docs/pcf-design.md` — user-facing guidance and the shipped design record.
+- `references/`, `docs/pcf-design.md`, and `docs/pcf-capabilities.md` — user-facing guidance, the shipped design record, and capability evidence.
 - `evals/pcf/` — offline structural and generated-project eval fixtures.
 
 ## Behavioral spec per script
@@ -90,7 +90,7 @@ When a CLI test harness maps `parseArgs` to a fixed result, use `scripts/tests/h
 
 ## Code copied from model-apps
 
-Marketplace installs copy only one plugin directory, so pcf carries physical copies of model-apps helpers needed by PCF scripts: `process-runner.js`, `sdk-http-client.js`, `odata.js`, `source-literals.js`, `interaction-mode.js`, `nearest-name.js`, `utf8-stream.js`, `check-auth.js`, `resolve-interaction-mode.js`, and the vendored SDK bundle in `scripts/vendor/`. It also carries a documented subset of `dataverse-auth.js` whose retained function bodies match model-apps except for the PCF-specific `emitResult` JSON error contract.
+Marketplace installs copy only one plugin directory, so pcf carries physical copies of model-apps helpers needed by PCF scripts. `scripts/validate-plugin-copies.js` is the source of truth for the copy list and subset rules, including the PCF-specific `emitResult` JSON error contract in `dataverse-auth.js`.
 
 Run `node --test scripts/tests/model-apps-copies.test.js` after changing any copied source. Refresh verbatim copies with `Copy-Item` from `plugins/model-apps`; refresh the SDK by re-vendoring it in model-apps first, then copying the resulting bundle into pcf. Do not copy model-apps telemetry into pcf.
 
@@ -105,7 +105,8 @@ Any integration with `/model-apps:app-builder` stays at the skill level. With bo
 | Matrix versions, host support or platform-library rules | `compatibility-matrix.json`, matching `lock/<set>/`, `references/pcf-hosts.md`, `docs/pcf-design.md`, and generated-project CI evidence. |
 | Template or recipe behavior | `templates/`, `shared/`, `recipes/`, recipe README, `references/pcf-recipes.md`, unit tests and eval fixtures when the contract changes. |
 | Deploy, binding, verification or inventory behavior | `references/pcf-deploy.md`, `references/pcf-testing.md`, `docs/pcf-design.md`, relevant CLI tests and eval cases. |
-| Copied model-apps helper behavior | Refresh the pcf copy and update `scripts/tests/model-apps-copies.test.js` or workflow path filters when the source list changes. |
+| Copied model-apps helper behavior | Refresh the pcf copy and update `scripts/validate-plugin-copies.js`, `scripts/tests/model-apps-copies.test.js` or workflow path filters when the source list changes. |
+| Capability evidence or preview status | `docs/pcf-capabilities.md`, `docs/pcf-design.md`, `README.md`, and `CHANGELOG.md`. |
 
 ## Testing commands
 
