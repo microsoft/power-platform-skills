@@ -30,8 +30,11 @@ const ALLOWED_PLATFORM_ERROR_MESSAGES = [
   'platform library fluent_9_68_0 with version 9.68.0 is not supported by the platform.',
 ];
 
+// Read a plugin doc with LF line endings. Windows CI runners check files out with CRLF, while the
+// render functions these docs are compared against emit LF, so a verbatim comparison must not depend
+// on the checkout's line endings.
 function readPluginFile(relativePath) {
-  return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
+  return fs.readFileSync(path.join(ROOT, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function parseTroubleshootingEntries(text) {

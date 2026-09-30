@@ -813,7 +813,9 @@ test('CLI scaffolds and threads --npm-cli into --install', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.outDir, outDir);
-    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['ci'], cwd: outDir });
+    // The fake npm records process.cwd(), which the OS reports as the physical path. On macOS that is
+    // /private/var/... for an os.tmpdir() of /var/..., so compare against the resolved directory.
+    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['ci'], cwd: fs.realpathSync(outDir) });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

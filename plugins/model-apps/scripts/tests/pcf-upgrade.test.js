@@ -525,6 +525,39 @@ test('applyUpgrade refuses a project file symlink that resolves outside the proj
   }
 });
 
+test('applyUpgrade writes a project reached through a linked parent directory', () => {
+  // macOS resolves os.tmpdir() (/var/...) to /private/var/..., and a user's project can sit under any
+  // symlinked or junctioned folder. The containment check must accept files inside the project however
+  // the caller spelled the path, while the separate physical check still refuses files that resolve
+  // outside it. A junction needs no elevation on Windows; a symlink is used elsewhere.
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-linked-parent-'));
+  try {
+    const realParent = path.join(tmp, 'real');
+    const projectReal = path.join(realParent, 'StarRating');
+    fs.mkdirSync(projectReal, { recursive: true });
+    fs.writeFileSync(path.join(projectReal, 'package.json'), '{"name":"before"}\n');
+    const linkedParent = path.join(tmp, 'linked');
+    try {
+      fs.symlinkSync(realParent, linkedParent, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+
+    const projectDir = path.join(linkedParent, 'StarRating');
+    const pkg = path.join(projectDir, 'package.json');
+    const result = applyUpgrade({
+      steps: [{ id: 'DEPS_TO_MATRIX', file: pkg, apply: () => '{"name":"after"}\n' }],
+    }, projectDir, { noInstall: true });
+
+    assert.deepEqual(result.applied, ['DEPS_TO_MATRIX']);
+    assert.equal(fs.readFileSync(path.join(projectReal, 'package.json'), 'utf8'), '{"name":"after"}\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('runUpgrade reports changedFiles when reinstall fails after safe writes', () => {
   const { runUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-install-fail-'));

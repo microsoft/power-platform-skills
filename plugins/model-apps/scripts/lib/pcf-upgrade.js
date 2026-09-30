@@ -292,8 +292,12 @@ function serializePlan(plan) {
 function applyUpgrade(plan, projectDir, deps = {}) {
   const fsDep = deps.fs || fs;
   const runNpm = deps.runNpm || defaultRunNpm;
-  const safeProject = fsDep.realpathSync(projectDir);
-  const prepared = prepareUpgradeWrites(plan, safeProject, fsDep);
+  // Pass the project directory exactly as the caller spelled it. The plan's file paths are built from
+  // that same spelling, so the lexical containment check in resolveProjectFile compares like with
+  // like; the physical check there then resolves BOTH sides with realpath, which is what stops a file
+  // that is a link to somewhere outside the project. Realpathing only the project here broke every
+  // project reached through a linked folder, including all of macOS's os.tmpdir() (/var -> /private/var).
+  const prepared = prepareUpgradeWrites(plan, projectDir, fsDep);
   const changedFiles = [];
 
   for (const item of prepared.writes) {
@@ -323,7 +327,7 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   return { applied: prepared.applied, skipped: prepared.skipped, changedFiles };
 }
 
-function prepareUpgradeWrites(plan, safeProject, fsDep) {
+function prepareUpgradeWrites(plan, projectDir, fsDep) {
   const applied = [];
   const skipped = [];
   const writes = [];
@@ -342,7 +346,7 @@ function prepareUpgradeWrites(plan, safeProject, fsDep) {
       skipped.push(step.id);
       continue;
     }
-    const file = resolveProjectFile(step.file, safeProject, fsDep);
+    const file = resolveProjectFile(step.file, projectDir, fsDep);
     const before = fsDep.readFileSync(file, 'utf8');
     const after = step.apply(before);
     writes.push({ file, before, after });
