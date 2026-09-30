@@ -59,10 +59,14 @@ jobs:
               with:
                   node-version: 22
 
+            # `npm ci`, not `npm install`: the template ships a committed lock, and this job
+            # exists to prove the locked tree actually builds. `npm install` would silently
+            # resolve a different tree and let an upstream release break users without failing
+            # here first. It also fails loudly if the lock drifts from package.json.
             - name: install-template-dependencies
               shell: bash
               working-directory: plugins/mobile-apps/template
-              run: npm install --no-audit --no-fund
+              run: npm ci --no-audit --no-fund
 
             - name: prepare-and-type-check-template
               shell: bash

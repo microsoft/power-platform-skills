@@ -176,7 +176,9 @@ test('offline setup follows materialized Dataverse data and never infers connect
   assert.ok(sampleData < offline);
   assert.ok(offline < native);
   assert.doesNotMatch(skill, /Step 6\.85/);
-  const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7'));
+  // Design system was renumbered from 6.75 to Step 4 when the scaffold group moved ahead of
+  // the planning gates; the handoff wording it asserts on is unchanged.
+  const design = skill.slice(skill.indexOf('### Step 6.75 — Design system'), skill.indexOf('### Step 7'));
   assert.match(design, /`DONE`[^\n]+continue to Step 7/);
   assert.match(design, /Continuing to Step 7/);
   const offlineSetup = skill.slice(offline, native);
@@ -202,10 +204,9 @@ test('template preparation is delegated to the deterministic script', () => {
   assert.doesNotMatch(step, /\ncp\s+.*shared\/samples/);
   assert.doesNotMatch(step, /baseUrl\s*=/);
   assert.doesNotMatch(step, /Write `app\/_layout\.tsx`/);
-  assert.match(
-    step,
-    /`native-app-plan\.md` is expected here because Step 3 writes the approved plan before template preparation/,
-  );
+  // Preparation now runs ahead of the gates, so the plan is normally absent here; its presence
+  // on a resumed run must not be mistaken for an already-created app.
+  assert.match(step, /`native-app-plan\.md` is never a created-app marker/);
 });
 
 test('Power Apps initialization directly invokes the CLI with approved values', () => {
@@ -235,7 +236,7 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(preparation, /result\.writtenFiles/);
   assert.match(preparation, /removedPowerConfig.*removedLegacyFiles/);
   assert.match(preparation, /Do not rebuild this list from `git status`/);
-  assert.match(memory, /Step 5's `writtenFiles`.*`memory-bank\.md`/);
+  assert.match(memory, /Step 5's `writtenFiles`, `memory-bank\.md`/);
   assert.match(memory, /read-only.*Step 6/);
   assert.match(shared, /not modified afterward by the skill or its subagents/);
   assert.match(shared, /Do not suppress a protected-path finding/);
@@ -303,4 +304,161 @@ test('dependency install starts in Step 2a and is collected in Step 5', () => {
     skill.indexOf('### Step 5 — Prepare existing template'),
   );
   assert.doesNotMatch(betweenBootstrapAndPreparation, /install-dependencies\.js/);
+});
+
+test('the device QR remains the real preview', () => {
+  const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
+  assert.match(shared, /the device QR remains the real preview/);
+  assert.match(shared, /never treat a web render as evidence/);
+  assert.match(shared, /must never gate a step and never fail a run/);
+});
+
+test('environment selection offers a pick list before asking for a GUID', () => {
+  const step1 = section('### Step 1 — Prerequisites', '### Step 1.7 — Detect publisher prefix');
+
+  assert.match(step1, /scripts\/list-environments\.js/);
+  assert.match(step1, /Offer a choice; never demand a GUID/);
+  assert.match(step1, /active.*marks the environment PAC is currently connected to/);
+  // A real tenant returned 223 environments, so the skill must never render them flat.
+  assert.match(step1, /--filter "<user's search text>"/);
+  assert.match(step1, /BAP environment GUID/);
+  // PAC must stay optional or this undoes the zero-prerequisite work.
+  assert.match(step1, /\*\*PAC is not a prerequisite\.\*\*/);
+  assert.match(step1, /exits 0 with `\[\]`/);
+  assert.match(step1, /Do not install PAC, do not run `pac auth create`/);
+});
+
+test('skills are told the plugin root is pre-resolved so they stop searching for it', () => {
+  // create-mobile-app references ${PLUGIN_ROOT} ~49 times. Without this rule an agent whose host
+  // does not substitute the variable scans the filesystem to locate the plugin, which is slow and
+  // can find a stale checkout instead of the running one.
+  const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
+  assert.match(shared, /already resolved/i);
+  assert.match(shared, /Do NOT search the filesystem for the plugin directory/);
+  assert.match(shared, /scan unrelated trees/);
+});
+
+test('the run writes a build plan into docs/ as decisions are made', () => {
+  const protocol = section('## Build documentation protocol', '## TypeScript Gate Policy');
+  assert.match(protocol, /scripts\/app-docs\.js/);
+  assert.match(protocol, /docs\/create-app-plan\.html/);
+  // Sections must be written when known, not batched at the end, or an aborted run documents nothing.
+  assert.match(protocol, /Record each other section as soon as it is known/);
+  // A gate is answered against the rendered diagram, so the section is written before the ask.
+  assert.match(protocol, /\*before\* asking for approval/);
+  assert.match(protocol, /--state proposed/);
+  assert.match(protocol, /--state approved/);
+  assert.match(protocol, /never gate, retry, or fail a build/);
+  // The ER, the column tables and the colouring are all derived from the structured tables.
+  assert.match(protocol, /built from `dataModel\.tables`/);
+  assert.match(protocol, /--json-file/);
+
+  const bootstrap = section(
+    '### Step 2a — Create the app folder, start dependency install',
+    '### Step 2b — Requirements discovery',
+  );
+  assert.match(bootstrap, /app-docs\.js" --working-dir "<working_dir>" init/);
+
+  const record = section('### Step 3.9 — Confirm the approved plan', '### Step 6.75 — Design system');
+  assert.match(record, /--section architecture/);
+  assert.match(record, /--section dataModel/);
+  assert.match(record, /--section screens/);
+  // A connector-only app must retire both Dataverse phases or the plan never reaches 100%.
+  assert.match(record, /--id data-model --status skipped/);
+  assert.match(record, /--id dataverse --status skipped/);
+
+  // Step 3.9 has to sit after the gates and before any mutation.
+  assert.ok(skill.indexOf('### Step 3 — Plan') < skill.indexOf('### Step 3.9 — Confirm the approved plan'));
+  assert.ok(skill.indexOf('### Step 3.9 — Confirm the approved plan') < skill.indexOf('### Step 8 — Apply data model'));
+
+  assert.match(skill, /Build plan {4}: docs\/create-app-plan\.html/);
+});
+
+test('the design system is settled before any screen is generated', () => {
+  // Screen-builders read brand/design-system.md and the generated tokens; building screens
+  // first would mean restyling every one of them afterwards. The reordering work moved several
+  // phases, so pin this rather than rely on it staying true by accident.
+  const design = skill.indexOf('### Step 6.75 — Design system');
+  const skeletons = skill.indexOf('### Step 10.8 — Generate app-specific shared code');
+  const screens = skill.indexOf('### Step 11 — Build screens (parallel)');
+
+  assert.ok(design > 0 && skeletons > 0 && screens > 0);
+  assert.ok(design < skeletons, 'design must be chosen before skeletons are generated');
+  assert.ok(design < screens, 'design must be chosen before screens are built');
+});
+
+test('step cross-references name the step that actually does the work', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // The design system moved from Step 4 to Step 6.75 when the scaffold group moved back after
+  // the gates, but ~15 cross-references still said "Step 4" - which by then named Auth &
+  // environment selection. An agent following "design is deferred to Step 4" would have gone to
+  // the wrong step. Step numbers are prose here, so nothing else catches this.
+  const headingOf = (step) => {
+    const match = skill.match(new RegExp(`^### Step ${step.replace('.', '\\.')} — (.+)$`, 'm'));
+    assert.ok(match, `Step ${step} must exist`);
+    return match[1];
+  };
+  assert.match(headingOf('4'), /Auth & environment/);
+  assert.match(headingOf('6.75'), /Design system/);
+
+  // A line that talks about design, previews or the style picker must not cite Step 4.
+  const misdirected = skill.split('\n')
+    .map((line, index) => [index + 1, line])
+    .filter(([, line]) => /\bStep 4\b/.test(line) && /design|preview|vibe|style/i.test(line));
+  assert.deepEqual(
+    misdirected.map(([number, line]) => `${number}: ${line.trim().slice(0, 90)}`),
+    [],
+    'these lines send a design concern to the auth/environment step',
+  );
+});
+
+test('no command the skill runs asks the user to fetch or install anything first', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // Asserted on the fenced commands rather than the prose, because the prose legitimately
+  // contains the words - "Do not ask the user to run `degit` or `npm install`" is the rule
+  // itself, and a naive doesNotMatch over the whole file trips on its own prohibition.
+  const offenders = [];
+  for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
+    const body = block[1];
+    // `npm install` is banned as a bare command: the background installer owns install state,
+    // and a second npm against the same node_modules corrupts it. `npm install` appearing as
+    // part of a longer path (a message, a lock path) is not a command, hence the boundary.
+    for (const [pattern, why] of [
+      [/\bnpx degit\b/, 'fetches the template over the network instead of using the bundled snapshot'],
+      [/\bgit clone\b/, 'fetches the template over the network instead of using the bundled snapshot'],
+      [/(^|\s)npm install(\s|$)/m, 'bypasses install-dependencies.js, which owns install state'],
+    ]) {
+      if (pattern.test(body)) offenders.push(`${why}: ${body.trim().split('\n')[0].slice(0, 70)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], 'these runnable commands break the zero-prerequisite promise');
+});
+
+test('the bundled lock file reaches the generated app', () => {
+  // The lock is what makes a first install ~2.5x faster and reproducible. It only helps if
+  // bootstrap actually copies it, and an exclusion added to the copy list would silently
+  // undo that - the app would still build, just slowly and from a resolved-fresh tree.
+  const templateLock = path.resolve(__dirname, '..', '..', 'template', 'package-lock.json');
+  assert.ok(fs.existsSync(templateLock), 'the template must ship a lock file');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-lock-'));
+  const target = path.join(root, 'app');
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'bootstrap-mobile-project.js'), '--working-dir', target,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+
+  const report = JSON.parse(result.stdout);
+  assert.ok(report.copiedFiles.includes('package-lock.json'), 'the lock must be copied');
+  assert.deepEqual(
+    fs.readFileSync(path.join(target, 'package-lock.json')),
+    fs.readFileSync(templateLock),
+    'the generated app must get the exact locked tree the template was tested with',
+  );
 });

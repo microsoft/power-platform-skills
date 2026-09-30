@@ -14,6 +14,28 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
+## `${PLUGIN_ROOT}` is already resolved — never go looking for it
+
+`${PLUGIN_ROOT}` is substituted with the installed plugin's absolute path at runtime. Use it
+directly in `Bash`, `Read`, and `Glob` paths.
+
+**Do NOT search the filesystem for the plugin directory.** No `find` over the home directory, no
+`Glob` for `**/mobile-apps/scripts/*.js`, no walking up from the working directory. The user's app
+folder is usually nowhere near the plugin, so those searches scan unrelated trees, cost seconds to
+minutes, and can surface a stale checkout instead of the running plugin.
+
+If a host does not substitute the variable, export it once from the path the skill was loaded from
+and reuse it for the rest of the run:
+
+```bash
+PLUGIN_ROOT="<absolute path this plugin was loaded from>"
+```
+
+Then ask the user if that path is not known. Guessing by searching is slower and less reliable than
+one question.
+
+---
+
 ## Workflow Checkpoints
 
 Only steps with this marker directly below the heading emit checkpoint telemetry:
@@ -142,7 +164,8 @@ Never pass a directory or the whole project. Files with common text extensions (
 - MUST NOT install Expo modules with `npm install <pkg>` — use `npx expo install <pkg>` so versions stay Expo-SDK-compatible.
 - MUST NOT add packages with native source, podspecs, codegen configuration, Expo modules/config plugins, or platform projects unless they already exist in the template `package.json`. The wrapped binary only contains the template's native modules.
 - A package name is not evidence of native code. For explicit package requests or approved use cases, pure-JavaScript libraries, including JS-only `react-native-*` packages, may be selected and added at an exact version to app runtime `dependencies`; no Android/iOS rebuild is needed. Follow the selection, approval, and install gates in [`references/javascript-dependency-planning.md`](references/javascript-dependency-planning.md).
-- MUST NOT add browser-based runtime verification steps, React Native Web setup, screen-by-screen runtime checks, route crawling, or direct Metro/localhost HTTP probes to mobile-app skills. Runtime diagnosis, when requested, uses `/debug-app` against sanitized `.powernative/metro-logs/` files.
+- MUST NOT use the browser to *verify* the app: no screen-by-screen runtime checks, no route crawling, no direct Metro/localhost HTTP probes, and never treat a web render as evidence that a screen or capability works. Runtime diagnosis, when requested, uses `/debug-app` against sanitized `.powernative/metro-logs/` files, and the device QR remains the real preview.
+- The one permitted browser surface is the **run plan page** in the app's `docs/` folder, written by [`scripts/app-docs.js`](../scripts/app-docs.js): a static HTML file reporting plan progress beside a phone-frame build animation. It never renders or executes the generated app, so it is not a check on the agent's work - it keeps the user oriented during a long generation. It must never gate a step and never fail a run. The device QR at Step 12 remains the only way to see the app actually run.
 - MUST NOT add `react-native-reanimated/plugin` anywhere except as the **last** entry in `babel.config.js` `plugins` array. Wrong order silently breaks animations.
 - MUST NOT modify `app/_layout.tsx`'s provider wrapping order without re-running `npx tsc --noEmit`.
 - MUST NOT make changes outside the project root without user confirmation.

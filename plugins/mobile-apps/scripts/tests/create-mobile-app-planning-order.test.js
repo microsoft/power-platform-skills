@@ -176,7 +176,7 @@ test('preview preferences keep deferred Gate 4 markdown-only', () => {
   const handoff = section(createSkill, '#### Step 3b', '#### 3.9');
   assert.match(handoff, /legacy planner emits `PLAN_PREVIEW_PATH:[\s\S]*ignore that early preview output/);
   assert.match(handoff, /Do not open it[\s\S]*at Gate 4/);
-  assert.match(handoff, /With `--no-design`, Step 6\.75 and its HTML preview are both skipped/);
+  assert.match(handoff, /With `--no-design`, Step 6.75 and its HTML preview are both skipped/);
   assert.doesNotMatch(handoff, /open "|xdg-open|Start-Process/);
   const design = section(createSkill, '### Step 6.75', 'Offline profile setup is intentionally deferred');
   assert.match(design, /legacy[\s\S]*Gate 4 remains markdown-only/i);

@@ -149,8 +149,14 @@ test('preparation is idempotent and preserves generated and existing helper file
   assert.doesNotMatch(layout, /theme=\{lightTheme\}/);
   assert.doesNotMatch(layout, /darkTheme=\{darkTheme\}/);
   assert.doesNotMatch(layout, /<SafeAreaView[\s\S]*<Slot\s*\/>/);
-  assert.match(layout, /@ts-ignore - power\.config\.json/);
-  assert.match(layout, /@ts-ignore - connectorSchemas/);
+  // These were static imports behind @ts-ignore, which silenced TypeScript but still failed to
+  // resolve in Metro. Each id must stay a literal inside its own try/catch: Metro resolves
+  // require() statically, treats one guarded by try/catch as optional, and rejects a variable
+  // id outright with "Invalid call ... require(id)". Verified by bundling with neither file present.
+  assert.match(layout, /require\('\.\.\/power\.config\.json'\)/);
+  assert.match(layout, /require\('\.\.\/src\/generated\/connectorSchemas'\)/);
+  assert.match(layout, /require\('\.\.\/offline-profile\.json'\)/);
+  assert.doesNotMatch(layout, /^import powerConfig from/m);
 
   const beforeSecondRun = fileSnapshot(projectRoot);
   const second = prepareMobileTemplate({

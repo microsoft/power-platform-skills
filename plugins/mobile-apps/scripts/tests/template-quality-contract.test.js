@@ -130,3 +130,33 @@ test('template path aliases are inherited from the host tsconfig', () => {
   assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
   assert.strictEqual(tsconfig.compilerOptions, undefined);
 });
+
+test('the protected layout auth gate is unconditional', () => {
+  const layout = read('template/app/(app)/_layout.tsx');
+  // A dev-only bypass shipped alongside the live in-browser preview; the preview is gone, so
+  // nothing may weaken this gate again.
+  assert.match(layout, /if \(!isLoading && !isSignedIn\)/);
+  assert.doesNotMatch(layout, /PREVIEW_MODE/);
+  assert.doesNotMatch(layout, /EXPO_PUBLIC_PREVIEW/);
+  assert.match(layout, /<Redirect href="\/login" \/>/);
+});
+
+test('generated config files are optional so the app bundles before they exist', () => {
+  // Verified empirically: with no power.config.json and no connectorSchemas, `expo start --web`
+  // serves the app (HTTP 200) and the bundle compiles. A static `import` fails to resolve in
+  // Metro regardless of @ts-ignore; a literal require() inside try/catch is treated as optional.
+  for (const file of ['template/app/_layout.tsx', 'template/app/login.tsx']) {
+    const source = read(file);
+    assert.doesNotMatch(source, /^import powerConfig from/m, `${file} must not statically import power.config.json`);
+    assert.match(source, /require\('\.\.\/power\.config\.json'\)/, `${file} must require it optionally`);
+    assert.match(source, /Cannot find module/, `${file} must only swallow a missing-module error`);
+  }
+  // A variable id fails Metro transform with "Invalid call", so the repetition is load-bearing.
+  // Strip comments first: the explanation above quotes the bad form, and matching prose would
+  // fail on the very text that documents why the code is written this way.
+  const code = read('template/app/_layout.tsx')
+    .split('\n')
+    .filter((line) => !/^\s*(\*|\/\/)/.test(line))
+    .join('\n');
+  assert.doesNotMatch(code, /require\([^'"]/, 'every require id must be a literal');
+});

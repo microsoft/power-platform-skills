@@ -52,8 +52,12 @@ and connector wiring.
 	and installs the host package and the required Expo / React Native runtime
 	dependencies in the background while you answer the planning questions.
 
-	To build in a folder you prepared yourself, create it first and pass it to the
-	skill as `/create-mobile-app --working-dir ./my-mobile-app`:
+	To build somewhere specific, pass the folder as
+	`/create-mobile-app --working-dir ./my-mobile-app`.
+	It does not have to exist first — the skill creates it and copies this template in.
+
+	Materializing the template yourself is optional and is not a prerequisite.
+	The skill accepts a folder prepared this way as-is:
 
 	```sh
 	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app

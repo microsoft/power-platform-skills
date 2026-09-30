@@ -52,14 +52,23 @@ capabilities, and connector wiring.
     Expo / React Native runtime dependencies in the background while you work
     through the planning questions.
 
+    It also writes a **build plan** to `docs/create-app-plan.html` as it goes: the environment
+    it used, the requirements you confirmed, the approved data model with a colour-coded ER
+    diagram, the screen plan, and the design system. It stays in the repo afterwards, so the
+    app carries the record of how it was built.
+
+    The same page shows progress as the app is generated: a phone that plays a building animation, then a carousel of the planned screens, and finally a QR code to open the app on a real device.
+
     To build in a folder you made yourself, pass it explicitly:
 
     ```text
     /create-mobile-app --working-dir ./my-mobile-app
     ```
 
-    It must be empty, or already hold a template you materialized yourself with
-    `npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main`.
+    The folder does not need to exist, and you do not need to put anything in it.
+    The skill creates it and fills it from the template bundled in the plugin.
+    An empty folder works too, as does one you already materialized yourself with
+    `npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main` — but that is an option, not a step you have to run first.
     The skill never writes over content that is already there.
 
     When prompted to sign in, use credentials for the tenant where the Dataverse

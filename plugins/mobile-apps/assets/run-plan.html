@@ -1,0 +1,1427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __APP_NAME__</title>
+<script nonce="__ATTR_CSP_NONCE__" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --warn:#ca5010; --warn-bg:#ca50100a; --warn-border:#ca501020;
+  --fail:#a4262c; --fail-bg:#a4262c0a; --fail-border:#a4262c20;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.topbar-sep{opacity:0.5;}
+.topbar-right{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:0.2px;border:1px solid transparent;}
+.pill-platform{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border);}
+.pill-progress{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-border);}
+.pill-live{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
+.shell{display:flex;align-items:flex-start;}
+.layout{display:flex;min-height:calc(100vh - 65px);flex:1;min-width:0;}
+.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+.rail-title{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
+.device{width:300px;height:620px;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
+.device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
+.device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
+.device-screen iframe{width:100%;height:100%;border:0;}
+/* Stage 1 - building */
+.bld{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#faf9f8;padding:0 28px;text-align:center;}
+.bld-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
+.bld-ring{position:absolute;border:1px solid rgba(32,31,30,.12);border-radius:50%;animation:railSpin linear infinite;}
+.bld-ring:nth-child(1){width:96px;height:96px;animation-duration:9s;}
+.bld-ring:nth-child(2){width:132px;height:132px;animation-duration:16s;animation-direction:reverse;border-style:dashed;}
+@keyframes railSpin{to{transform:rotate(360deg);}}
+.bld-core{width:72px;height:72px;display:grid;place-items:center;animation:railFloat 4s ease-in-out infinite;}
+.bld-core img{width:62px;height:62px;}
+@keyframes railFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-6px);}}
+.bld-title{color:#201f1e;font-size:16px;font-weight:650;}
+.bld-msg{color:#605e5c;font-size:13px;min-height:36px;}
+.bld-bar{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
+.bld-bar span{display:block;height:100%;background:#0078d4;transition:width .5s ease;}
+.bld-caps{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;}
+.bld-cap{font-size:10.5px;color:#605e5c;background:#ffffff;border:1px solid #e1dfdd;border-radius:999px;padding:3px 9px;opacity:0;animation:railFade .6s ease forwards;}
+@keyframes railFade{to{opacity:1;}}
+/* Stage 2 - carousel */
+.car{position:absolute;inset:0;background:#fff;}
+.car-frame{position:absolute;inset:0;overflow:auto;}
+.car-nav{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(to top,rgba(0,0,0,.55),transparent);z-index:4;}
+.car-btn{width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.92);color:#201f1e;font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
+.car-btn:disabled{opacity:.35;cursor:default;}
+.car-dots{display:flex;gap:5px;}
+.car-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.45);}
+.car-dot.on{background:#fff;}
+.rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
+/* Stage 3 - QR */
+.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#fff;padding:0 26px;text-align:center;}
+.qr img{width:196px;height:196px;}
+.qr-title{font-size:16px;font-weight:700;color:#201f1e;}
+.qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
+.qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
+@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;padding:32px 40px 72px;max-width:1060px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--purple);}
+.stat-card:nth-child(3)::after{background:var(--warn);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--text-bright);}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.progress-track{height:6px;border-radius:999px;background:var(--surface2);border:1px solid var(--border);overflow:hidden;margin-bottom:8px;}
+.progress-fill{display:block;height:100%;background:var(--accent);transition:width 0.4s ease;}
+.progress-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--text-dim);margin-bottom:24px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:10px;display:grid;grid-template-columns:22px 1fr auto;gap:14px;align-items:start;box-shadow:var(--shadow-4);}
+.card.is-active{border-color:var(--accent-border);background:var(--accent-bg);}
+.card.is-skipped{opacity:0.55;}
+.mark{width:18px;height:18px;border-radius:50%;border:2px solid var(--border-light);margin-top:3px;flex-shrink:0;}
+.is-done .mark{border-color:var(--pass);background:var(--pass);position:relative;}
+/* Tick drawn from two borders on a rotated box rather than a glyph, so it cannot fall back
+   to a missing character and needs no extra element in the card markup. */
+.is-done .mark::after{content:'';position:absolute;left:4.5px;top:1px;width:3.5px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}
+.is-active .mark{border-color:var(--accent);border-right-color:transparent;animation:spin 1s linear infinite;}
+.is-failed .mark{border-color:var(--fail);background:var(--fail);}
+.is-skipped .mark{border-style:dashed;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.step-title{font-weight:600;color:var(--text-bright);}
+.step-detail{font-size:12.5px;color:var(--text-dim);}
+.step-note{font-size:12.5px;color:var(--accent);margin-top:4px;}
+.step-ref{font-size:11px;color:var(--text-dim);font-family:var(--mono);margin-top:4px;opacity:0.75;}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);white-space:nowrap;}
+.chip-done{background:var(--pass-bg);border-color:var(--pass-border);color:var(--pass);}
+.chip-active{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);}
+.chip-failed{background:var(--fail-bg);border-color:var(--fail-border);color:var(--fail);}
+.empty{color:var(--text-dim);font-size:13px;padding:18px 20px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);}
+.cap{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);padding:16px 20px;margin-bottom:10px;box-shadow:var(--shadow-4);}
+.cap-connector{border-left-color:var(--purple);}
+.cap-offline-on{border-left-color:var(--pass);}
+.cap-offline-off{border-left-color:var(--border-light);}
+.cap-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.cap-icon{flex:0 0 28px;height:28px;border-radius:8px;}
+.cap-icon svg{width:17px;height:17px;}
+.cap-connector .cap-icon{background:var(--purple-bg);color:var(--purple);}
+.cap-name{font-size:14px;font-weight:700;color:var(--text-bright);}
+.cap-kind{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:2px 8px;border-radius:3px;background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+.cap-kind-connector{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-border);}
+.cap-why{font-size:13px;color:var(--text-dim);line-height:1.6;}
+.perm{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--border);}
+.perm:last-child{border-bottom:none;}
+.perm-icon{flex:0 0 34px;height:34px;display:grid;place-items:center;border-radius:9px;background:var(--surface2);color:var(--text-dim);}
+.perm-icon svg{width:19px;height:19px;display:block;}
+.perm-body{flex:1;min-width:0;}
+.perm-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px;}
+.perm-name{font-size:13.5px;font-weight:600;color:var(--text-bright);}
+.perm-badge{font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:2px 8px;border-radius:999px;border:1px solid transparent;}
+.perm-good{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
+.perm-info{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border);}
+.perm-warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
+.perm-muted{background:var(--surface2);color:var(--text-dim);border-color:var(--border);}
+.perm-act{font-size:12.5px;color:var(--text-dim);margin-top:4px;opacity:.85;}
+.perm-why{font-size:13px;color:var(--text-dim);line-height:1.6;}
+.boundary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
+.boundary{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-4);}
+.boundary h4{margin:0 0 10px;font-size:13.5px;color:var(--text-bright);}
+.boundary .bullets{font-size:13px;color:var(--text-dim);}
+.bullets{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
+.bullets li{line-height:1.55;}
+.bullets li::marker{color:var(--text-dim);}
+.cap-why strong{color:var(--text);font-weight:600;}
+.approval{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:var(--radius);margin-bottom:18px;font-size:13px;font-weight:600;}
+.approval-proposed{background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);}
+.approval-approved{background:var(--pass-bg);border:1px solid var(--pass-border);color:var(--pass);}
+.approval-dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex-shrink:0;}
+.approval-proposed .approval-dot{animation:approvalPulse 1.6s ease-in-out infinite;}
+@keyframes approvalPulse{0%,100%{opacity:.35;}50%{opacity:1;}}
+.facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-bottom:8px;}
+.fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow-4);}
+.fact-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.fact-value{font-size:13.5px;color:var(--text-bright);word-break:break-word;}
+.fact-value.mono{font-family:var(--mono);font-size:12.5px;}
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-4);overflow:auto;margin-bottom:8px;}
+.diagram pre{font-family:var(--mono);font-size:12px;color:var(--text-dim);white-space:pre;margin:0;}
+.diagram-note{font-size:11.5px;color:var(--text-dim);margin-bottom:18px;}
+.badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:2px 8px;border-radius:3px;}
+.badge-create{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.badge-reuse{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+.badge-extend{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);}
+.status-pill{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:3px 9px;border-radius:999px;white-space:nowrap;}
+.status-new{color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);}
+.status-modified{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);}
+.status-reused{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+.key-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;font-family:var(--mono);}
+.key-PK{color:var(--accent);background:var(--accent-bg);}
+.key-FK{color:var(--purple);background:var(--purple-bg);}
+.type-chip{font-size:10px;font-family:var(--mono);color:var(--text-dim);background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
+.entity{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border-light);border-radius:var(--radius);margin-bottom:10px;box-shadow:var(--shadow-4);overflow:hidden;}
+.entity.new{border-left-color:var(--accent);}
+.entity.modified{border-left-color:var(--warn);}
+.entity.reused{border-left-color:var(--pass);}
+.entity-head{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;}
+.entity-name{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text-bright);}
+.entity-display{font-size:12.5px;color:var(--text-dim);}
+.entity-spacer{flex:1;}
+.expand-chevron{color:var(--text-dim);font-size:12px;transition:transform 0.2s;}
+.entity.open .expand-chevron{transform:rotate(90deg);}
+.entity-summary{padding:0 18px 14px;display:grid;gap:6px;}
+.entity-body{display:none;padding:0 18px 16px;border-top:1px solid var(--border);margin-top:2px;padding-top:14px;}
+.entity.open .entity-body{display:block;}
+.col-table{width:100%;border-collapse:collapse;margin-top:4px;}
+.col-table th{text-align:left;font-size:10px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:6px 8px;border-bottom:2px solid var(--border);background:var(--surface2);}
+.col-table td{padding:6px 8px;border-bottom:1px solid var(--border);font-size:12.5px;}
+.col-table .col-logical{font-family:var(--mono);font-size:11px;color:var(--text-bright);}
+.rel-line{font-size:12.5px;color:var(--text);padding:4px 0;}
+.rel-arrow{color:var(--accent);font-weight:700;font-family:var(--mono);}
+.er-toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;}
+.er-legend{display:flex;gap:14px;flex-wrap:wrap;}
+.er-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);font-weight:500;}
+.er-legend-swatch{width:12px;height:12px;border-radius:2px;border:2px solid;}
+.er-toggle{padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;}
+.er-toggle:hover{border-color:var(--accent);color:var(--accent);}
+.er-toggle.active{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);}
+.palette-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;}
+.swatch-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-4);}
+.swatch{height:64px;width:100%;display:block;}
+.swatch-meta{padding:9px 12px;}
+.swatch-name{font-size:12px;font-weight:600;color:var(--text-bright);}
+.swatch-value{font-size:11px;color:var(--text-dim);font-family:var(--mono);}
+@media(max-width:860px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;display:flex;flex-wrap:wrap;border-right:none;border-bottom:1px solid var(--border);padding:8px;}
+  .nav-group-label{width:100%;}
+  .nav-btn{width:auto;border-left:none;border-bottom:2px solid transparent;padding:10px 14px;}
+  .nav-btn.active{border-left:none;border-bottom-color:var(--accent);}
+  .content{padding:24px 18px 60px;}
+  .stats-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="./power-apps-icon.svg" alt="Power Apps"/>
+    <div>
+      <div class="topbar-title">__PLAN_TITLE__</div>
+      <div class="topbar-sub">
+        <span>__HTML_APP_NAME__</span>
+        <span class="topbar-sep">|</span>
+        <span>Updated __HTML_GENERATED_AT__</span>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="pill pill-platform">__HTML_DATA_PLATFORM__</span>
+    <span class="pill pill-progress" id="pillProgress">0 of 0</span>
+  </div>
+</div>
+
+<div class="shell">
+<div class="layout">
+  <div class="sidebar">
+    <div class="nav-group-label">Plan</div>
+    <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+    <button class="nav-btn" data-tab="steps"><span class="nav-icon">&#9638;</span> Build steps</button>
+    <button class="nav-btn" data-tab="requirements"><span class="nav-icon">&#9998;</span> Requirements</button>
+    <button class="nav-btn" data-tab="datamodel"><span class="nav-icon">&#9636;</span> Data model</button>
+    <button class="nav-btn" data-tab="capabilities"><span class="nav-icon">&#9679;</span> Capabilities</button>
+    <button class="nav-btn" data-tab="screens"><span class="nav-icon">&#9635;</span> Screens</button>
+    <button class="nav-btn" data-tab="design"><span class="nav-icon">&#9728;</span> Design</button>
+    <button class="nav-btn" data-tab="trust"><span class="nav-icon">&#9670;</span> Trust report</button>
+  </div>
+
+  <div class="content">
+    <div class="section active" id="tab-overview">
+      <h2>Overview</h2>
+      <div class="section-desc">
+        How <code>/create-mobile-app</code> is building this app. This page is rewritten as each
+        phase completes and stays in <code>docs/</code> afterwards.
+      </div>
+
+      <div class="summary-box" id="summaryBox"></div>
+
+      <div class="progress-track"><span class="progress-fill" id="progressFill"></span></div>
+      <div class="progress-meta">
+        <span id="progressCurrent"></span>
+        <span id="progressCount"></span>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-num" id="statDone">0</div><div class="stat-label">Completed</div></div>
+        <div class="stat-card"><div class="stat-num" id="statRemaining">0</div><div class="stat-label">Remaining</div></div>
+        <div class="stat-card"><div class="stat-num" id="statSkipped">0</div><div class="stat-label">Not needed</div></div>
+      </div>
+
+      <h3>Environment</h3>
+      <div class="facts" id="environmentFacts"></div>
+
+      <h3>Architecture</h3>
+      <div id="approval-architecture"></div>
+      <div class="facts" id="architectureFacts"></div>
+    </div>
+
+    <div class="section" id="tab-steps">
+      <h2>Build steps</h2>
+      <div class="section-desc">
+        Each row groups several skill steps; the reference shows which ones.
+      </div>
+      <div id="stepsContainer"></div>
+    </div>
+    <div class="section" id="tab-requirements">
+      <h2>Requirements</h2>
+      <div class="section-desc">What you asked for, and the choices confirmed during the wizard.</div>
+      <div class="summary-box" id="briefBox"></div>
+      <h3>Your choices</h3>
+      <div class="facts" id="requirementsFacts"></div>
+    </div>
+
+    <div class="section" id="tab-datamodel">
+      <h2>Data model</h2>
+      <div class="section-desc">Tables approved at Gate 2, and how each one was sourced.</div>
+
+      <div id="approval-datamodel"></div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-num" id="statNew">0</div><div class="stat-label">New tables</div></div>
+        <div class="stat-card"><div class="stat-num" id="statReused">0</div><div class="stat-label">Reused</div></div>
+        <div class="stat-card"><div class="stat-num" id="statModified">0</div><div class="stat-label">Extended</div></div>
+      </div>
+
+      <div class="er-toolbar">
+        <div class="er-legend">
+          <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(0,120,212,0.08);border-color:#0078d4;"></span> New</div>
+          <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(202,80,16,0.08);border-color:#ca5010;"></span> Extended</div>
+          <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(16,124,16,0.08);border-color:#107c10;"></span> Reused</div>
+        </div>
+        <button id="erCompactBtn" class="er-toggle">Compact view</button>
+      </div>
+
+      <div id="erContainer"></div>
+      <h3>Tables</h3>
+      <div id="tablesContainer"></div>
+    </div>
+
+    <div class="section" id="tab-capabilities">
+      <h2>Capabilities</h2>
+      <div class="section-desc">
+        What this app can do, and why each capability was chosen. An app can run entirely on
+        connectors with no Dataverse at all.
+      </div>
+
+      <h3>Device capabilities</h3>
+      <div id="deviceCapabilities"></div>
+
+      <h3>Connectors</h3>
+      <div id="connectorList"></div>
+
+      <h3>Offline</h3>
+      <div id="offlineBlock"></div>
+    </div>
+
+    <div class="section" id="tab-screens">
+      <h2>Screens</h2>
+      <div class="section-desc">The screen graph approved at Gate 3 and the per-screen specs from Gate 4.</div>
+      <div id="approval-screens"></div>
+      <div id="graphContainer"></div>
+      <h3>Screen specs</h3>
+      <div id="screensContainer"></div>
+    </div>
+
+    <div class="section" id="tab-design">
+      <h2>Design</h2>
+      <div class="section-desc">The design direction applied to every generated screen.</div>
+      <div id="approval-design"></div>
+      <div class="facts" id="designFacts"></div>
+      <h3>Palette</h3>
+      <div class="palette-grid" id="paletteContainer"></div>
+    </div>
+
+    <div class="section" id="tab-trust">
+      <h2>Trust report</h2>
+      <div class="section-desc">
+        What this app can reach on the device, what it keeps, and what it does while you are not
+        looking. Every entry comes from the approved plan and the capabilities actually wired up,
+        not from what the shared template could theoretically do.
+      </div>
+
+      <h3>Permission behavior</h3>
+      <div class="section-desc">
+        Nothing is requested at launch. Each permission is asked for beside the feature that needs
+        it, and can be refused without blocking the rest of the app.
+      </div>
+      <div id="permissionList"></div>
+
+      <h3>Privacy and data boundaries</h3>
+      <div class="boundary-grid">
+        <div class="boundary" id="handlesCard"></div>
+        <div class="boundary" id="notCollectedCard"></div>
+      </div>
+
+      <h3>Battery-conscious behavior</h3>
+      <div class="section-desc">
+        Work is tied to visible screens, user actions, and the configured offline runtime - not to
+        app-created background workers or polling loops.
+      </div>
+      <div id="batteryList"></div>
+    </div>
+
+  </div>
+</div>
+
+<aside class="rail">
+  <div class="rail-title" id="railTitle">Your app</div>
+  <div class="device">
+    <div class="device-notch"></div>
+    <div class="device-screen" id="deviceScreen"></div>
+  </div>
+  <div class="rail-caption" id="railCaption"></div>
+</aside>
+</div>
+
+<script id="phasesData" type="application/json">__JSON_PHASES__</script>
+<script id="summaryData" type="application/json">__JSON_SUMMARY__</script>
+<script id="sectionsData" type="application/json">__JSON_SECTIONS__</script>
+<script id="sectionStatesData" type="application/json">__JSON_SECTION_STATES__</script>
+<script id="phoneData" type="application/json">__JSON_PHONE__</script>
+
+<script nonce="__ATTR_CSP_NONCE__">
+(function () {
+  var phases = JSON.parse(document.getElementById('phasesData').textContent);
+  var summary = JSON.parse(document.getElementById('summaryData').textContent);
+  var sections = JSON.parse(document.getElementById('sectionsData').textContent);
+  var sectionStates = JSON.parse(document.getElementById('sectionStatesData').textContent);
+  var phone = JSON.parse(document.getElementById('phoneData').textContent);
+  var capabilities = __JSON_CAPABILITIES__;
+
+  var STATUS_CLASS = {
+    done: 'is-done', active: 'is-active', failed: 'is-failed',
+    skipped: 'is-skipped', pending: 'is-pending'
+  };
+  var STATUS_CHIP = {
+    done: 'chip chip-done', active: 'chip chip-active',
+    failed: 'chip chip-failed', skipped: 'chip', pending: 'chip'
+  };
+  var STATUS_LABEL = {
+    done: 'complete', active: 'in progress', failed: 'failed',
+    skipped: 'not needed', pending: 'pending'
+  };
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    // textContent everywhere: phase notes are author-written today, but keeping the whole
+    // tree as text means a future free-text note can never become markup.
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  /**
+   * Each gated section is written to this page while it is still a *proposal*, so the user can
+   * read the rendered diagram before answering the gate in the terminal. The banner says which
+   * state it is in; without it a proposal and an approved decision look identical.
+   */
+  function approvalBanner(containerId, sectionName) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.textContent = '';
+
+    var state = sectionStates[sectionName];
+    if (!state) return;
+
+    var banner = el('div', 'approval approval-' + state);
+    banner.appendChild(el('span', 'approval-dot'));
+    banner.appendChild(el('span', null, state === 'proposed'
+      ? 'Proposed \u2014 review this, then answer the approval prompt in your terminal'
+      : 'Approved'));
+    container.appendChild(banner);
+  }
+
+  function facts(containerId, rows) {
+    var container = document.getElementById(containerId);
+    container.textContent = '';
+    var present = rows.filter(function (row) {
+      if (Array.isArray(row[1])) return row[1].length > 0;
+      return row[1] !== undefined && row[1] !== null && row[1] !== '';
+    });
+    if (!present.length) {
+      container.appendChild(el('div', 'empty', 'Not captured yet.'));
+      return;
+    }
+    present.forEach(function (row) {
+      var card = el('div', 'fact');
+      card.appendChild(el('div', 'fact-label', row[0]));
+      var value;
+      if (Array.isArray(row[1])) {
+        value = el('div', 'fact-value' + (row[2] ? ' mono' : ''));
+        value.appendChild(bullets(row[1]));
+      } else {
+        value = el('div', 'fact-value' + (row[2] ? ' mono' : ''), String(row[1]));
+      }
+      // row[3] renders the value in the typeface it names, so a font choice is something the
+      // reader can see rather than a string they have to imagine - the same reason the palette
+      // shows swatches instead of hex codes.
+      if (row[3]) applyFontFamily(value, row[3]);
+      card.appendChild(value);
+      container.appendChild(card);
+    });
+  }
+
+  function list(value) {
+    return Array.isArray(value) && value.length ? value.join(', ') : '';
+  }
+
+  /**
+   * Render an array as a bulleted list.
+   *
+   * Several of these fields are genuinely enumerable - a feature list, the distinct rules that
+   * make up an offline decision - and joining them with commas produced a paragraph nobody could
+   * scan. Items go in as textContent, so a free-text feature can never become markup.
+   */
+  /**
+   * Render an element in a plan-named typeface.
+   *
+   * The name comes from the plan, so it is not interpolated into CSS unchecked: anything outside
+   * letters, digits, space, hyphen and period is rejected outright rather than escaped, which
+   * keeps a crafted value from closing the quoted family and appending further declarations.
+   * A generic fallback follows the family so an uninstalled font degrades to the system UI face
+   * instead of rendering as the browser default serif.
+   */
+  function applyFontFamily(node, family) {
+    var name = String(family == null ? '' : family).trim();
+    if (!name || !/^[A-Za-z0-9 .-]+$/.test(name)) return;
+    node.style.fontFamily = '"' + name + '", system-ui, sans-serif';
+  }
+
+  function bullets(items, className) {
+    var ul = el('ul', 'bullets' + (className ? ' ' + className : ''));
+    items.forEach(function (item) {
+      ul.appendChild(el('li', null, entryLabel(item)));
+    });
+    return ul;
+  }
+
+  /**
+   * Capabilities and connectors are recorded either as a bare name or as `{ name, reason }`.
+   * `/create-mobile-app` asks for the reason, but an older plan or a partial write can carry
+   * only the name, so every list of them has to accept both shapes. Going through String()
+   * instead is what put "[object Object]" on the overview.
+   */
+  function entryLabel(entry) {
+    if (typeof entry === 'string') return entry;
+    if (entry && typeof entry === 'object' && entry.name) return String(entry.name);
+    return '';
+  }
+
+  function entryNames(entries) {
+    return (entries || []).map(entryLabel).filter(Boolean);
+  }
+
+  /**
+   * Split author-written prose into the paragraphs it was written as.
+   *
+   * The plan records a rationale as one string with blank lines between points. One chunk means
+   * the author wrote a single paragraph, and forcing that into a one-item list reads worse than
+   * leaving it as prose - so the caller decides based on how many chunks come back.
+   */
+  function paragraphs(value) {
+    return String(value == null ? '' : value)
+      .split(/\n\s*\n/)
+      .map(function (part) { return part.replace(/\s+/g, ' ').trim(); })
+      .filter(Boolean);
+  }
+
+  /**
+   * Render a mermaid source into a container, or show its definition if that is impossible.
+   *
+   * Both diagrams go through here. They used to differ - the ER called mermaid.render() while
+   * the screen graph relied on startOnLoad - so turning startOnLoad off to control ER rendering
+   * silently left the screen graph as raw source. One path means one behaviour.
+   */
+  function renderMermaid(containerId, source, emptyText, onRendered) {
+    var container = document.getElementById(containerId);
+    container.textContent = '';
+    if (!source) {
+      container.appendChild(el('div', 'empty', emptyText));
+      return;
+    }
+
+    var panel = el('div', 'diagram');
+    container.appendChild(panel);
+
+    if (typeof mermaid === 'undefined') {
+      showSource(container, panel, source, { message: 'Mermaid could not load' });
+      return;
+    }
+    try {
+      mermaid.render('mmd' + Math.random().toString(36).slice(2), source).then(function (result) {
+        panel.innerHTML = result.svg;
+        if (onRendered) onRendered(panel);
+      }).catch(function (error) {
+        showSource(container, panel, source, error);
+      });
+    } catch (error) {
+      showSource(container, panel, source, error);
+    }
+  }
+
+  function showSource(container, panel, source, error) {
+    panel.textContent = '';
+    panel.appendChild(el('pre', null, source));
+    // Say why. A silent fall back to source reads like an intended view rather than a failure.
+    container.appendChild(el('div', 'diagram-note',
+      'Diagram could not be drawn, showing its definition instead'
+      + (error && error.message ? ' \u2014 ' + error.message : '') + '.'));
+  }
+
+  function renderPhone() {
+    var screen = document.getElementById('deviceScreen');
+    var title = document.getElementById('railTitle');
+    var caption = document.getElementById('railCaption');
+    screen.textContent = '';
+    caption.textContent = '';
+
+    if (phone.stage === 'qr' && phone.qrImage) {
+      title.textContent = 'Open it on your phone';
+      var qr = el('div', 'qr');
+      var img = document.createElement('img');
+      img.src = phone.qrImage;
+      img.alt = 'Metro QR code';
+      qr.appendChild(img);
+      qr.appendChild(el('div', 'qr-title', 'Scan to run the app'));
+      qr.appendChild(el('div', 'qr-sub', 'Open the Power Apps Mobile Preview app and scan this code. Your phone and this machine need to be on the same network.'));
+      if (phone.qrUrl) qr.appendChild(el('div', 'qr-url', phone.qrUrl));
+      screen.appendChild(qr);
+      caption.textContent = 'Edits hot-reload straight onto the device.';
+      return;
+    }
+
+    if (phone.stage === 'screens' && phone.screens && phone.screens.length) {
+      title.textContent = 'Your screens';
+      var index = 0;
+      var car = el('div', 'car');
+      var frame = el('div', 'car-frame');
+      var nav = el('div', 'car-nav');
+      var prev = el('button', 'car-btn', '\u2039');
+      var next = el('button', 'car-btn', '\u203a');
+      var dots = el('div', 'car-dots');
+      nav.appendChild(prev); nav.appendChild(dots); nav.appendChild(next);
+      car.appendChild(frame); car.appendChild(nav);
+      screen.appendChild(car);
+
+      var show = function (i) {
+        index = Math.max(0, Math.min(phone.screens.length - 1, i));
+        var current = phone.screens[index] || {};
+        // Plugin-authored markup, produced the same way /preview-screens produces its mockups.
+        // It is generated content, not user input, which is why it may be inserted as markup.
+        frame.innerHTML = current.html || '';
+        caption.textContent = (current.name ? current.name + '  \u00b7  ' : '')
+          + (index + 1) + ' of ' + phone.screens.length;
+        prev.disabled = index === 0;
+        next.disabled = index === phone.screens.length - 1;
+        dots.textContent = '';
+        phone.screens.forEach(function (unused, i2) {
+          dots.appendChild(el('span', 'car-dot' + (i2 === index ? ' on' : '')));
+        });
+      };
+      prev.addEventListener('click', function () { show(index - 1); });
+      next.addEventListener('click', function () { show(index + 1); });
+      show(0);
+      return;
+    }
+
+    title.textContent = 'Building your app';
+    var bld = el('div', 'bld');
+    var orbit = el('div', 'bld-orbit');
+    orbit.appendChild(el('div', 'bld-ring'));
+    orbit.appendChild(el('div', 'bld-ring'));
+    var core = el('div', 'bld-core');
+    var logo = document.createElement('img');
+    logo.src = './power-apps-icon.svg';
+    logo.alt = '';
+    core.appendChild(logo);
+    orbit.appendChild(core);
+    bld.appendChild(orbit);
+
+    bld.appendChild(el('div', 'bld-title', 'Step ' + Math.min(summary.done + 1, summary.total) + ' of ' + summary.total));
+    bld.appendChild(el('div', 'bld-msg', summary.currentTitle));
+    var bar = el('div', 'bld-bar');
+    var fill = el('span');
+    fill.style.width = summary.percent + '%';
+    bar.appendChild(fill);
+    bld.appendChild(bar);
+
+    var caps = el('div', 'bld-caps');
+    capabilities.forEach(function (label, i) {
+      var chip = el('span', 'bld-cap', label);
+      chip.style.animationDelay = (0.25 + i * 0.16) + 's';
+      caps.appendChild(chip);
+    });
+    bld.appendChild(caps);
+    screen.appendChild(bld);
+    caption.textContent = 'Your screens appear here once the design is locked.';
+  }
+
+  function renderOverview() {
+    approvalBanner('approval-architecture', 'architecture');
+    document.getElementById('summaryBox').textContent = summary.narrative;
+    document.getElementById('progressFill').style.width = summary.percent + '%';
+    document.getElementById('progressCurrent').textContent = summary.currentTitle;
+    document.getElementById('progressCount').textContent =
+      summary.done + ' of ' + summary.total + ' steps done' +
+      (summary.failed ? ' · ' + summary.failed + ' failed' : '');
+    document.getElementById('statDone').textContent = summary.done;
+    document.getElementById('statRemaining').textContent = summary.total - summary.done;
+    document.getElementById('statSkipped').textContent = summary.skipped;
+    document.getElementById('pillProgress').textContent = summary.done + ' of ' + summary.total;
+
+    var env = sections.environment || {};
+    facts('environmentFacts', [
+      ['Environment', env.displayName],
+      ['Environment ID', env.environmentId, true],
+      ['Environment URL', env.environmentUrl, true],
+      ['Tenant', env.tenantId, true],
+      ['Publisher prefix', env.publisherPrefix, true],
+      ['App registration', (sections.auth || {}).status]
+    ]);
+
+    var arch = sections.architecture || {};
+    facts('architectureFacts', [
+      ['Data platform', arch.dataPlatform],
+      ['Device capabilities', entryNames(arch.nativeCapabilities)],
+      ['Connectors', entryNames(arch.connectors)]
+    ]);
+  }
+
+  function renderRequirements() {
+    var req = sections.requirements || {};
+    document.getElementById('briefBox').textContent =
+      req.brief || 'The confirmed feature brief will appear here once requirements are agreed.';
+    facts('requirementsFacts', [
+      ['App name', req.appName],
+      ['Folder', req.slug, true],
+      ['Platforms', list(req.platforms) || req.platforms],
+      ['Aesthetic', req.aesthetic],
+      ['Industry', req.industry],
+      ['Features', req.features]
+    ]);
+  }
+
+  var REASON_LABEL = {
+    new: 'Why create it:', reused: 'Why reuse it:', modified: 'Why extend it:',
+  };
+
+  var STATUS_ALIAS = { create: 'new', created: 'new', extend: 'modified', modify: 'modified', reuse: 'reused', existing: 'reused' };
+
+  function tableStatus(table) {
+    var raw = String(table.status || table.action || 'new').toLowerCase();
+    return STATUS_ALIAS[raw] || (['new', 'modified', 'reused'].indexOf(raw) >= 0 ? raw : 'new');
+  }
+
+  // Mermaid's erDiagram grammar accepts a narrow ATTRIBUTE_WORD. Dataverse type names such as
+  // "Yes/No" contain characters that abort the whole parse, so strip anything outside the
+  // allowed set rather than letting one column blank the diagram.
+  function erWord(value) {
+    return String(value == null ? '' : value).replace(/[^A-Za-z0-9_]/g, '_');
+  }
+
+  function erLabel(value) {
+    // Newlines, quotes and angle brackets all end a mermaid label early. Truncate too: an
+    // over-long label wraps the box and pushes the diagram off screen.
+    return String(value == null ? '' : value)
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/"/g, "'")
+      .replace(/[<>]/g, '')
+      .slice(0, 40);
+  }
+
+  /**
+   * Emit one of exactly three known-good cardinality tokens - never a value from the plan.
+   * `native-app-plan.md` writes human shorthand ("N:1"), and a single unrecognised token aborts
+   * the whole erDiagram parse, which is how a complete model ends up displayed as source. An
+   * allowlist makes an unrenderable diagram impossible rather than merely unlikely.
+   */
+  function erCardinality(value) {
+    var raw = String(value == null ? '' : value).trim().toLowerCase();
+    if (raw === '1:1' || raw === '||--||' || raw === 'one-to-one') return '||--||';
+    if (raw === 'n:n' || raw === 'm:n' || raw === '}o--o{' || raw === 'many-to-many') return '}o--o{';
+    if (raw === 'n:1' || raw === 'm:1' || raw === '}o--||' || raw === 'many-to-one') return '}o--||';
+    // One-to-many is what a lookup column produces, so it is the safe default for anything else.
+    return '||--o{';
+  }
+
+  function buildErDiagram(tables, compact) {
+    var lines = ['erDiagram'];
+    var ids = {};
+    tables.forEach(function (table) {
+      var name = String(table.logicalName || table.name || '');
+      var id = erWord(name).toUpperCase();
+      ids[name] = id;
+      lines.push('    ' + id + '["' + erLabel(name) + (table.displayName ? ' (' + erLabel(table.displayName) + ')' : '') + '"] {');
+      var columns = table.columns || [];
+      if (compact) columns = columns.filter(function (c) { return (c.key || '') === 'PK'; });
+      columns.forEach(function (column) {
+        if (typeof column === 'string') { lines.push('        string ' + erWord(column)); return; }
+        var key = column.key === 'PK' || column.key === 'FK' ? ' ' + column.key : '';
+        lines.push('        ' + (erWord(column.type) || 'string') + ' ' + erWord(column.logicalName || column.name) + key);
+      });
+      lines.push('    }');
+    });
+
+    var seen = {};
+    tables.forEach(function (table) {
+      var from = ids[String(table.logicalName || table.name || '')];
+      (table.relationships || []).forEach(function (rel) {
+        var to = ids[rel.relatedTable];
+        if (!from || !to || from === to) return;
+        var pairKey = [from, to].sort().join('|');
+        if (seen[pairKey]) return;
+        seen[pairKey] = true;
+        lines.push('    ' + from + ' ' + erCardinality(rel.cardinality) + ' ' + to + ' : "' + erLabel(rel.name || 'related') + '"');
+      });
+    });
+    return lines.join('\n');
+  }
+
+  /**
+   * Derive the screen graph from the approved screen list.
+   *
+   * Deliberately NOT read from a planner-authored mermaid string. The ER diagram used to work
+   * that way and a single bad token rendered the whole model as source; the same field here was
+   * never populated by anything, so the graph silently showed its empty state instead. Route
+   * nesting is already present in `list[]`, so deriving the graph from the same data the cards
+   * render means the two cannot disagree, and there is no token the plan can supply that breaks
+   * the parse.
+   */
+  function buildScreenGraph(items, navigation) {
+    var nodes = items.map(function (screen, index) {
+      var route = String(screen.route || '');
+      return {
+        id: 'S' + index,
+        // Normalize to a trailing slash so prefix tests are unambiguous: without it
+        // "/(app)/sites" would parent "/(app)/sites-admin" as well as "/(app)/sites/[id]".
+        prefix: route.replace(/\/+$/, '') + '/',
+        name: erLabel(screen.name || route || 'Screen'),
+        // Everything under the (app) route group hangs off the signed-in shell; anything else
+        // (login, onboarding) is an entry point that leads into it.
+        inShell: route.indexOf('/(app)') === 0
+      };
+    });
+
+    nodes.forEach(function (node) {
+      var parent = null;
+      nodes.forEach(function (other) {
+        if (other === node || node.prefix === other.prefix) return;
+        if (node.prefix.indexOf(other.prefix) !== 0) return;
+        // The deepest matching route is the real parent: /a/[id]/scan belongs to /a/[id], not /a.
+        if (!parent || other.prefix.length > parent.prefix.length) parent = other;
+      });
+      node.parent = parent;
+    });
+
+    // `navigation` is a full sentence ("Bottom tabs (Today, Schedule...) with a stack pushed
+    // from each tab"). erLabel's hard 40-char cut would slice it mid-word, so take the leading
+    // phrase before the first bracket or full stop, which is the shell's actual name.
+    var shellLabel = erLabel(String(navigation || '').split(/[(.]/)[0].trim()) || 'App shell';
+    var lines = ['flowchart LR'];
+    lines.push('    SHELL{{"' + shellLabel + '"}}');
+    nodes.forEach(function (node) {
+      lines.push('    ' + node.id + '["' + node.name + '"]');
+    });
+    nodes.forEach(function (node) {
+      if (node.parent) lines.push('    ' + node.parent.id + ' --> ' + node.id);
+      else if (node.inShell) lines.push('    SHELL --> ' + node.id);
+      else lines.push('    ' + node.id + ' --> SHELL');
+    });
+    return lines.join('\n');
+  }
+
+  /**
+   * Tint the rendered entity boxes by status so the diagram carries the same new/extended/reused
+   * meaning as the legend and the cards. Mermaid v11 prefixes node ids with the svg element id
+   * (erSvg123-entity-INSPECTION-0), so match on the suffix rather than an exact id.
+   */
+  function colorErDiagram(container, tables) {
+    var svg = container.querySelector('svg');
+    if (!svg) return;
+
+    var fills = { new: '#d0e4f5', modified: '#f5dcc8', reused: '#c8e6c9' };
+    var strokes = { new: '#0078d4', modified: '#ca5010', reused: '#107c10' };
+
+    var statusById = {};
+    tables.forEach(function (table) {
+      var id = erWord(table.logicalName || table.name || '').toUpperCase();
+      statusById[id] = tableStatus(table);
+    });
+
+    svg.querySelectorAll('g.node').forEach(function (node) {
+      var match = (node.getAttribute('id') || '').match(/entity-(.+)-\d+$/);
+      if (!match) return;
+      var status = statusById[match[1]];
+      if (!status) return;
+
+      var group = node.querySelector('.outer-path') || node.children[0];
+      if (!group || group.tagName !== 'g') return;
+      var paths = group.querySelectorAll('path');
+      if (paths[0]) paths[0].setAttribute('fill', fills[status]);
+      if (paths[1]) {
+        paths[1].setAttribute('stroke', strokes[status]);
+        paths[1].setAttribute('stroke-width', '2');
+      }
+    });
+  }
+
+  function drawEr(source, tables) {
+    renderMermaid('erContainer', source,
+      'No data model \u2014 this app uses connectors only.',
+      function (panel) { colorErDiagram(panel, tables || []); });
+  }
+
+  function renderDataModel() {
+    approvalBanner('approval-datamodel', 'dataModel');
+    var model = sections.dataModel || {};
+    var tables = model.tables || [];
+
+    var counts = { new: 0, modified: 0, reused: 0 };
+    tables.forEach(function (table) { counts[tableStatus(table)] += 1; });
+    document.getElementById('statNew').textContent = counts.new;
+    document.getElementById('statReused').textContent = counts.reused;
+    document.getElementById('statModified').textContent = counts.modified;
+
+    // A hand-written diagram in the plan wins; otherwise build one from the table data so the
+    // ER stays in step with what was actually approved.
+    var compact = false;
+    function paint() {
+      drawEr(tables.length ? buildErDiagram(tables, compact) : (model.mermaid || ''), tables);
+    }
+    paint();
+
+    var toggle = document.getElementById('erCompactBtn');
+    toggle.addEventListener('click', function () {
+      compact = !compact;
+      toggle.classList.toggle('active', compact);
+      paint();
+    });
+
+    var container = document.getElementById('tablesContainer');
+    container.textContent = '';
+    if (!tables.length) {
+      container.appendChild(el('div', 'empty',
+        model.connectorOnly
+          ? 'This app has no Dataverse tables — it runs on connectors. See the Capabilities tab.'
+          : 'No tables approved yet.'));
+      return;
+    }
+
+    tables.forEach(function (table) {
+      var status = tableStatus(table);
+      var entity = el('div', 'entity ' + status);
+
+      var head = el('div', 'entity-head');
+      head.appendChild(el('span', 'expand-chevron', '\u276f'));
+      head.appendChild(el('span', 'entity-name', table.logicalName || table.name || ''));
+      if (table.displayName) head.appendChild(el('span', 'entity-display', table.displayName));
+      head.appendChild(el('span', 'entity-spacer'));
+      head.appendChild(el('span', 'status-pill status-' + status, status === 'modified' ? 'extended' : status));
+      head.addEventListener('click', function () { entity.classList.toggle('open'); });
+      entity.appendChild(head);
+
+      // Visible without expanding: what the table holds, and why it is being created, reused or
+      // extended. The columns and relationships below are detail; this is the decision.
+      if (table.purpose || table.reason) {
+        var summary = el('div', 'entity-summary');
+        if (table.purpose) summary.appendChild(el('div', 'step-detail', table.purpose));
+        if (table.reason) {
+          var why = el('div', 'cap-why');
+          why.appendChild(el('strong', null, REASON_LABEL[status] + ' '));
+          why.appendChild(document.createTextNode(table.reason));
+          summary.appendChild(why);
+        }
+        entity.appendChild(summary);
+      }
+
+      var body = el('div', 'entity-body');
+
+      var columns = table.columns || [];
+      if (columns.length) {
+        var tableEl = el('table', 'col-table');
+        var thead = el('thead');
+        var headRow = el('tr');
+        ['Column', 'Display', 'Type', 'Key'].forEach(function (label) {
+          headRow.appendChild(el('th', null, label));
+        });
+        thead.appendChild(headRow);
+        tableEl.appendChild(thead);
+
+        var tbody = el('tbody');
+        columns.forEach(function (column) {
+          var normalized = typeof column === 'string' ? { logicalName: column } : column;
+          var row = el('tr');
+          row.appendChild(el('td', 'col-logical', normalized.logicalName || normalized.name || ''));
+          row.appendChild(el('td', null, normalized.displayName || ''));
+          var typeCell = el('td');
+          if (normalized.type) typeCell.appendChild(el('span', 'type-chip', normalized.type));
+          row.appendChild(typeCell);
+          var keyCell = el('td');
+          if (normalized.key === 'PK' || normalized.key === 'FK') {
+            keyCell.appendChild(el('span', 'key-badge key-' + normalized.key, normalized.key));
+          }
+          row.appendChild(keyCell);
+          tbody.appendChild(row);
+        });
+        tableEl.appendChild(tbody);
+        body.appendChild(tableEl);
+      }
+
+      (table.relationships || []).forEach(function (rel) {
+        var line = el('div', 'rel-line');
+        line.appendChild(el('span', 'rel-arrow', '\u2192 '));
+        line.appendChild(document.createTextNode((rel.name || 'related') + ' \u00b7 ' + rel.relatedTable));
+        body.appendChild(line);
+      });
+
+      entity.appendChild(body);
+      container.appendChild(entity);
+    });
+  }
+
+  /**
+   * Capabilities carry a reason, not just a name. "Camera" tells the user nothing; "Camera -
+   * technicians photograph meter damage at the visit" tells them whether the choice was right,
+   * which is the only question an approval gate is really asking.
+   *
+   * Accepts a plain string too, so an older plan that recorded bare names still renders.
+   */
+  function capabilityCards(containerId, entries, kind, emptyText) {
+    var container = document.getElementById(containerId);
+    container.textContent = '';
+    var list = (entries || []).map(function (entry) {
+      return typeof entry === 'string' ? { name: entry } : (entry || {});
+    }).filter(function (entry) { return entryLabel(entry); });
+
+    if (!list.length) {
+      container.appendChild(el('div', 'empty', emptyText));
+      return;
+    }
+
+    list.forEach(function (entry) {
+      var card = el('div', 'cap' + (kind === 'connector' ? ' cap-connector' : ''));
+      var head = el('div', 'cap-head');
+      head.appendChild(permissionIcon(entry.name, kind === 'connector' ? 'plug' : 'device', 'cap-icon'));
+      head.appendChild(el('span', 'cap-name', entry.name));
+      // No "device"/"connector" pill: the section heading above already says which list this is,
+      // and the coloured left border carries it visually. A label that only repeats its heading
+      // is noise on every row. The offline card keeps its pill because the sync *mode* is real
+      // information the heading does not give.
+      card.appendChild(head);
+      card.appendChild(el('div', 'cap-why', entry.reason || 'No rationale recorded.'));
+      container.appendChild(card);
+    });
+  }
+
+  function renderCapabilities() {
+    var arch = sections.architecture || {};
+    capabilityCards('deviceCapabilities', arch.nativeCapabilities, 'device',
+      'No device capabilities — this app uses data and navigation only.');
+    capabilityCards('connectorList', arch.connectors, 'connector',
+      'No connectors — this app reads its data from Dataverse directly.');
+
+    var container = document.getElementById('offlineBlock');
+    container.textContent = '';
+    var offline = sections.offline;
+    if (!offline) {
+      container.appendChild(el('div', 'empty', 'Offline has not been decided yet.'));
+      return;
+    }
+
+    var on = offline.enabled === true;
+    var card = el('div', 'cap ' + (on ? 'cap-offline-on' : 'cap-offline-off'));
+    var head = el('div', 'cap-head');
+    head.appendChild(el('span', 'cap-name', on ? 'Offline sync enabled' : 'Online only'));
+    if (offline.mode) head.appendChild(el('span', 'cap-kind', offline.mode));
+    card.appendChild(head);
+    var reasons = paragraphs(offline.rationale);
+    if (reasons.length > 1) {
+      var why = el('div', 'cap-why');
+      why.appendChild(bullets(reasons));
+      card.appendChild(why);
+    } else {
+      card.appendChild(el('div', 'cap-why', reasons[0] || 'No rationale recorded.'));
+    }
+
+    if (on && offline.tables && offline.tables.length) {
+      card.appendChild(el('div', 'step-ref', 'Synced tables: ' + list(offline.tables)));
+    }
+    container.appendChild(card);
+  }
+
+  function renderScreens() {
+    approvalBanner('approval-screens', 'screens');
+    var screens = sections.screens || {};
+    var items = screens.list || [];
+    renderMermaid('graphContainer',
+      items.length ? buildScreenGraph(items, screens.navigation) : '',
+      'The screen graph will appear here after Gate 3.');
+
+    var container = document.getElementById('screensContainer');
+    container.textContent = '';
+    if (!items.length) {
+      container.appendChild(el('div', 'empty', 'No screens planned yet.'));
+      return;
+    }
+    items.forEach(function (screen) {
+      var card = el('div', 'card');
+      card.appendChild(el('div', 'mark'));
+      var body = el('div');
+      body.appendChild(el('div', 'step-title', screen.name));
+      if (screen.purpose) body.appendChild(el('div', 'step-detail', screen.purpose));
+      var meta = [];
+      if (screen.route) meta.push(screen.route);
+      if (screen.data) meta.push(screen.data);
+      if (screen.capabilities && screen.capabilities.length) meta.push(list(screen.capabilities));
+      if (meta.length) body.appendChild(el('div', 'step-ref', meta.join('  \u00b7  ')));
+      card.appendChild(body);
+      if (screen.status) card.appendChild(el('span', 'chip', screen.status));
+      container.appendChild(card);
+    });
+  }
+
+  /**
+   * Outline icons for the trust report, drawn as inline SVG on a 24x24 grid.
+   *
+   * Geometric unicode shapes were tried first and failed the job: at 15px a filled square, a
+   * fisheye and a lozenge are indistinguishable, so the column read as decoration rather than
+   * telling you at a glance which permission a row is about. SVG also renders identically
+   * everywhere, which is the reason the nav icons are pinned to a proven unicode block.
+   *
+   * Every string here is a code-owned constant - no plan data reaches them - which is why they
+   * may be assigned as markup.
+   */
+  var ICON_PATHS = {
+    camera: '<rect x="3.2" y="7" width="17.6" height="12" rx="2.5"/><path d="M9 7l1-2h4l1 2"/><circle cx="12" cy="13" r="3"/>',
+    barcode: '<path d="M4 6v12M7.2 6v12M10.4 6v12M13.6 6v12M16.8 6v12M20 6v12"/>',
+    location: '<path d="M12 21c3.8-4 6-7.2 6-10a6 6 0 1 0-12 0c0 2.8 2.2 6 6 10z"/><circle cx="12" cy="11" r="2.2"/>',
+    gps: '<circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.1"/><path d="M12 2.6v2.8M12 18.6v2.8M2.6 12h2.8M18.6 12h2.8"/>',
+    microphone: '<rect x="9.4" y="3.4" width="5.2" height="10.2" rx="2.6"/><path d="M6.4 11.6a5.6 5.6 0 0 0 11.2 0"/><path d="M12 17.2v3.4"/>',
+    contacts: '<circle cx="12" cy="8.4" r="3.6"/><path d="M5.2 19.8a6.8 6.8 0 0 1 13.6 0"/>',
+    bell: '<path d="M18 16.2v-5.2a6 6 0 1 0-12 0v5.2l-1.6 2.2h15.2z"/><path d="M10 20.2a2 2 0 0 0 4 0"/>',
+    faceid: '<path d="M4 9V6.6A2.6 2.6 0 0 1 6.6 4H9M15 4h2.4A2.6 2.6 0 0 1 20 6.6V9M20 15v2.4a2.6 2.6 0 0 1-2.6 2.6H15M9 20H6.6A2.6 2.6 0 0 1 4 17.4V15"/><path d="M9.6 10.6v1.2M14.4 10.6v1.2"/><path d="M9.6 15a3.6 3.6 0 0 0 4.8 0"/>',
+    photos: '<rect x="3.2" y="7.4" width="13.4" height="11.4" rx="2"/><circle cx="7.4" cy="11.4" r="1.2"/><path d="M3.2 16.2l3.6-3 4.2 3.6"/><path d="M7.4 7.4V6a1.6 1.6 0 0 1 1.6-1.6h10.4A1.6 1.6 0 0 1 21 6v9a1.6 1.6 0 0 1-1.6 1.6h-2.8"/>',
+    cloud: '<path d="M7.2 18.4h10.2a3.6 3.6 0 0 0 .4-7.2 5.6 5.6 0 0 0-10.8-1 4.1 4.1 0 0 0 .2 8.2z"/>',
+    globe: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><ellipse cx="12" cy="12" rx="3.6" ry="8"/>',
+    battery: '<rect x="3" y="8" width="15.4" height="8.8" rx="2.4"/><path d="M21 11.4v2.4"/><rect x="5.4" y="10.4" width="5.2" height="4" rx="1" fill="currentColor" stroke="none"/>',
+    refresh: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4.2v4.2h-4.2"/>',
+    shield: '<path d="M12 3.4l7.2 2.8v5.2c0 4.4-3 7.8-7.2 9.2-4.2-1.4-7.2-4.8-7.2-9.2V6.2z"/>',
+    mail: '<rect x="3" y="5.5" width="18" height="13" rx="2.2"/><path d="M3.6 7.2l7.5 5.2a1.6 1.6 0 0 0 1.8 0l7.5-5.2"/>',
+    documents: '<path d="M13.5 3.5H7.6A2.1 2.1 0 0 0 5.5 5.6v12.8a2.1 2.1 0 0 0 2.1 2.1h8.8a2.1 2.1 0 0 0 2.1-2.1V8.5z"/><path d="M13.5 3.5V8.5h5"/><path d="M9 13.2h6M9 16.4h4"/>',
+    database: '<ellipse cx="12" cy="6.4" rx="7" ry="2.8"/><path d="M5 6.4v11.2c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8V6.4"/><path d="M5 12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8"/>',
+    chat: '<path d="M20 12.4a7.2 7.2 0 0 1-9.8 6.7L4.6 20.4 6 15A7.2 7.2 0 1 1 20 12.4z"/>',
+    plug: '<path d="M10.2 13.8a3.6 3.6 0 0 0 5.1 0l3-3a3.6 3.6 0 0 0-5.1-5.1l-1.3 1.3"/><path d="M13.8 10.2a3.6 3.6 0 0 0-5.1 0l-3 3a3.6 3.6 0 0 0 5.1 5.1l1.3-1.3"/>',
+    device: '<rect x="6.5" y="2.8" width="11" height="18.4" rx="2.4"/><path d="M10.4 5.6h3.2"/><path d="M11 18.6h2"/>'
+  };
+
+  // Keyed off the capability name because the plan records a human label ("Barcode & QR
+  // scanning"), not an enum. Order matters: "background location" must be tested before the
+  // plain location pattern, or a background-tracking row would claim the on-demand pin icon.
+  var PERMISSION_ICONS = [
+    [/photo librar|gallery|picker/, 'photos'],
+    [/camera|image capture|photo/, 'camera'],
+    [/barcode|scanner|scanning|qr/, 'barcode'],
+    [/background location|continuous gps|\bgps\b/, 'gps'],
+    [/location|geofence|geo/, 'location'],
+    [/microphone|audio|voice/, 'microphone'],
+    [/contact|calendar|address book/, 'contacts'],
+    [/notification|push|alert/, 'bell'],
+    [/biometric|face id|touch id|fingerprint|unlock/, 'faceid'],
+    [/offline|sqlite|sync|upload/, 'cloud'],
+    [/network|connectivity|online|signal/, 'globe'],
+    [/outlook|\bmail\b|email|smtp/, 'mail'],
+    [/sharepoint|document|\blibrary\b|\bfiles?\b/, 'documents'],
+    [/blob|storage account|\bsql\b|dataverse|database|\btables?\b/, 'database'],
+    [/teams|\bchat\b|message/, 'chat'],
+    [/refresh|poll/, 'refresh'],
+    [/battery|power|background/, 'battery']
+  ];
+
+  function permissionIconName(name, fallback) {
+    var value = String(name == null ? '' : name).toLowerCase();
+    for (var i = 0; i < PERMISSION_ICONS.length; i++) {
+      if (PERMISSION_ICONS[i][0].test(value)) return PERMISSION_ICONS[i][1];
+    }
+    // The fallback says what kind of list this is, so an unmatched connector reads as a
+    // connector rather than as a device permission.
+    return ICON_PATHS[fallback] ? fallback : 'shield';
+  }
+
+  function permissionIcon(name, fallback, className) {
+    var span = el('span', 'perm-icon' + (className ? ' ' + className : ''));
+    span.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"'
+      + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + ICON_PATHS[permissionIconName(name, fallback)] + '</svg>';
+    return span;
+  }
+
+  /**
+   * How a permission is acquired, not merely whether it is. These are the seven cross-platform
+   * acquisition patterns plus "never asked for"; which one an app uses is the substance of a
+   * least-privilege claim, because "on demand" and "at startup" grant the same access while
+   * asking for it very differently.
+   *
+   * `tone` drives the badge colour: `good` for patterns that tie access to an explicit user
+   * action or avoid a standing grant entirely, `warn` for ones that take the grant before the
+   * user has context, `info` for the rest.
+   */
+  var PERMISSION_STATUSES = {
+    'on-demand': { label: 'ON DEMAND', tone: 'good' },
+    'on-startup': { label: 'AT STARTUP', tone: 'warn' },
+    'on-first-access': { label: 'ON FIRST ACCESS', tone: 'info' },
+    'per-operation': { label: 'PER OPERATION', tone: 'good' },
+    'incremental': { label: 'INCREMENTAL', tone: 'info' },
+    'system-settings': { label: 'VIA SETTINGS', tone: 'warn' },
+    'system-mediated': { label: 'SYSTEM-MEDIATED', tone: 'good' },
+    'not-requested': { label: 'NOT REQUESTED', tone: 'muted' }
+  };
+
+  var STATUS_ALIASES = {
+    ondemand: 'on-demand', requested: 'on-demand', 'on-use': 'on-demand',
+    startup: 'on-startup', 'on-launch': 'on-startup', 'on-load': 'on-startup', onboarding: 'on-startup',
+    'first-access': 'on-first-access', automatic: 'on-first-access', implicit: 'on-first-access',
+    'per-use': 'per-operation', 'every-time': 'per-operation', ephemeral: 'per-operation',
+    escalating: 'incremental', 'incremental-escalation': 'incremental',
+    settings: 'system-settings', 'via-settings': 'system-settings',
+    'system-picker': 'system-mediated', picker: 'system-mediated', mediated: 'system-mediated',
+    'not-used': 'not-requested', none: 'not-requested', never: 'not-requested'
+  };
+
+  /**
+   * Anything unrecognised resolves to `not-requested` - the claim that promises least - so a
+   * typo or a stale status can never overstate what the app reaches for.
+   */
+  function permissionStatus(raw) {
+    var value = String(raw == null ? '' : raw).toLowerCase().trim().replace(/[\s_]+/g, '-');
+    value = STATUS_ALIASES[value] || value;
+    return PERMISSION_STATUSES[value] ? value : 'not-requested';
+  }
+
+  function boundaryCard(containerId, heading, items) {
+    var container = document.getElementById(containerId);
+    container.textContent = '';
+    container.appendChild(el('h4', null, heading));
+    var entries = (items || []).filter(Boolean);
+    if (!entries.length) {
+      container.appendChild(el('div', 'empty', 'Not recorded yet.'));
+      return;
+    }
+    container.appendChild(bullets(entries));
+  }
+
+  function renderTrust() {
+    var trust = sections.trust || {};
+
+    var permissions = document.getElementById('permissionList');
+    permissions.textContent = '';
+    var entries = trust.permissions || [];
+    if (!entries.length) {
+      permissions.appendChild(el('div', 'empty',
+        'Permission behaviour appears here once the capabilities are approved at Gate 1.'));
+    } else {
+      entries.forEach(function (entry) {
+        var name = entryLabel(entry) || 'Capability';
+        var row = el('div', 'perm');
+        row.appendChild(permissionIcon(name));
+        var body = el('div', 'perm-body');
+        var head = el('div', 'perm-head');
+        head.appendChild(el('span', 'perm-name', name));
+        var status = permissionStatus(entry.status);
+        var meta = PERMISSION_STATUSES[status];
+        head.appendChild(el('span', 'perm-badge perm-' + meta.tone, meta.label));
+        body.appendChild(head);
+        body.appendChild(el('div', 'perm-why',
+          entry.detail || entry.reason || 'No access behaviour recorded.'));
+        // Authorization and activation are different events: holding a camera grant is not the
+        // same as the lens being on. Shown separately so a reader can see both.
+        if (entry.activation) {
+          body.appendChild(el('div', 'perm-act', 'Hardware: ' + entry.activation));
+        }
+        row.appendChild(body);
+        permissions.appendChild(row);
+      });
+    }
+
+    boundaryCard('handlesCard', 'What the app handles', trust.handles);
+    boundaryCard('notCollectedCard', 'What the app does not collect', trust.notCollected);
+
+    var battery = document.getElementById('batteryList');
+    battery.textContent = '';
+    var behaviours = trust.battery || [];
+    if (!behaviours.length) {
+      battery.appendChild(el('div', 'empty', 'Background behaviour appears here once capabilities are wired.'));
+      return;
+    }
+    behaviours.forEach(function (entry) {
+      var name = entryLabel(entry) || 'Behaviour';
+      var row = el('div', 'perm');
+      row.appendChild(permissionIcon(name));
+      var body = el('div', 'perm-body');
+      body.appendChild(el('div', 'perm-name', name));
+      body.appendChild(el('div', 'perm-why', entry.detail || entry.reason || ''));
+      row.appendChild(body);
+      battery.appendChild(row);
+    });
+  }
+
+  function renderDesign() {
+    approvalBanner('approval-design', 'design');
+    var design = sections.design || {};
+    facts('designFacts', [
+      ['Direction', design.direction],
+      ['Heading font', design.headingFont, false, design.headingFont],
+      ['Body font', design.bodyFont, false, design.bodyFont],
+      ['Dark mode', design.darkMode]
+    ]);
+
+    var container = document.getElementById('paletteContainer');
+    container.textContent = '';
+    var palette = design.palette || [];
+    if (!palette.length) {
+      container.appendChild(el('div', 'empty', 'No palette captured yet.'));
+      return;
+    }
+    palette.forEach(function (entry) {
+      var card = el('div', 'swatch-card');
+      var swatch = el('div', 'swatch');
+      // Only accept a literal hex colour; anything else stays unset rather than becoming
+      // an arbitrary CSS value.
+      if (/^#[0-9a-fA-F]{3,8}$/.test(entry.value || '')) swatch.style.backgroundColor = entry.value;
+      card.appendChild(swatch);
+      var meta = el('div', 'swatch-meta');
+      meta.appendChild(el('div', 'swatch-name', entry.name || ''));
+      meta.appendChild(el('div', 'swatch-value', entry.value || ''));
+      card.appendChild(meta);
+      container.appendChild(card);
+    });
+  }
+
+  function renderSteps() {
+    var container = document.getElementById('stepsContainer');
+    container.textContent = '';
+    if (!phases.length) {
+      container.appendChild(el('div', 'empty', 'No steps recorded yet.'));
+      return;
+    }
+    phases.forEach(function (phase) {
+      var card = el('div', 'card ' + (STATUS_CLASS[phase.status] || 'is-pending'));
+      card.appendChild(el('div', 'mark'));
+
+      var body = el('div');
+      body.appendChild(el('div', 'step-title', phase.title));
+      body.appendChild(el('div', 'step-detail', phase.detail));
+      if (phase.note) body.appendChild(el('div', 'step-note', phase.note));
+      if (phase.skillSteps) body.appendChild(el('div', 'step-ref', 'Step ' + phase.skillSteps));
+      card.appendChild(body);
+
+      card.appendChild(el('span', STATUS_CHIP[phase.status] || 'chip', STATUS_LABEL[phase.status] || phase.status));
+      container.appendChild(card);
+    });
+  }
+
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
+  }
+
+  renderPhone();
+  renderOverview();
+  renderRequirements();
+  renderDataModel();
+  renderCapabilities();
+  renderScreens();
+  renderDesign();
+  renderTrust();
+  renderSteps();
+
+  /**
+   * The agent rewrites this file in place, and the page is opened over file://, where fetch() is
+   * CORS-blocked - so there is no way to poll for changes and patch the DOM. A reload is the only
+   * mechanism available, which makes *when* it happens the whole design:
+   *
+   *  - Restore the open tab and scroll position through sessionStorage, so a reload never throws
+   *    the reader back to the top of Overview.
+   *  - Pause while the reader is actually using the page. Being yanked mid-sentence is worse than
+   *    seeing a slightly stale plan.
+   *  - Stop entirely once nothing is in progress.
+   */
+  var STORE_TAB = 'mobile-plan-tab';
+  var STORE_SCROLL = 'mobile-plan-scroll';
+  var RELOAD_MS = 10000;
+  var QUIET_MS = 30000;
+  var lastInteraction = 0;
+
+  function showTab(tab) {
+    var button = document.querySelector('.nav-btn[data-tab="' + tab + '"]');
+    var section = document.getElementById('tab-' + tab);
+    if (!button || !section) return;
+    document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.remove('active'); });
+    document.querySelectorAll('.section').forEach(function (x) { x.classList.remove('active'); });
+    button.classList.add('active');
+    section.classList.add('active');
+  }
+
+  document.querySelectorAll('.nav-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      lastInteraction = Date.now();
+      showTab(btn.dataset.tab);
+      try { sessionStorage.setItem(STORE_TAB, btn.dataset.tab); } catch (e) { /* private mode */ }
+    });
+  });
+
+  ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
+    window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
+  });
+
+  window.addEventListener('beforeunload', function () {
+    try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
+  });
+
+  try {
+    var savedTab = sessionStorage.getItem(STORE_TAB);
+    if (savedTab) showTab(savedTab);
+    var savedScroll = Number(sessionStorage.getItem(STORE_SCROLL) || 0);
+    if (savedScroll > 0) window.scrollTo(0, savedScroll);
+  } catch (e) { /* sessionStorage unavailable; first-tab default is fine */ }
+
+  if (!summary.settled) {
+    setInterval(function () {
+      // Never interrupt someone who is reading. The next tick picks it up.
+      if (Date.now() - lastInteraction < QUIET_MS) return;
+      if (document.hidden) return;
+      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
+      location.reload();
+    }, RELOAD_MS);
+  }
+})();
+</script>
+</body>
+</html>
