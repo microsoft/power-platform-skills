@@ -58,7 +58,7 @@ When an environment is involved, also run:
 node "${PLUGIN_ROOT}/scripts/check-auth.js" --env <envUrl> [--require-pac]
 ```
 
-Use `--require-pac` for push, binding verification and any path that calls PAC. If auth or tools block, report the script's JSON message and stop.
+Use `--require-pac` only for push/package paths and any other path that invokes PAC. Verification and inventory use Azure CLI plus Dataverse reads, so they require `az` auth but not PAC. If auth or tools block, report the script's JSON message and stop.
 
 For repair work, read [../../references/pcf-troubleshooting.md](../../references/pcf-troubleshooting.md) before choosing fixes. It maps build/import/update/render symptoms to the checks and scripts that produce actionable evidence.
 
@@ -107,6 +107,15 @@ Use `--skip` only for an explicitly irrelevant gate, and explain why. Never weak
 ```powershell
 node "${PLUGIN_ROOT}/scripts/pcf-build.js" --project <dir> [--mode production|development] [--no-clean]
 ```
+
+Before redeploying an existing control, compare the current manifest with the previous manifest when a baseline is available:
+
+```powershell
+git show <ref>:<path>/ControlManifest.Input.xml > <temp-old-manifest>
+node "${PLUGIN_ROOT}/scripts/lint-pcf.js" --manifest <current manifest> --against <temp-old-manifest> [--hosts model,pages] [--strict]
+```
+
+If no previous manifest is available, state that compatibility was not compared; do not claim the redeploy is backwards-compatible from gates alone.
 
 ## Phase 5 — Pages compatibility gate
 

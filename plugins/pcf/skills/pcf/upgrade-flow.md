@@ -25,6 +25,7 @@ Use this flow for an existing PCF project. It keeps upgrade automation narrow an
    Do not pass a value to `--apply`; the CLI rejects `--apply <id>` and `--apply=<id>`.
 6. If `--no-install` is used, run the reinstall command the result names, usually `npm install` in the PCF project.
 7. Run `pcf-gates.js`, redeploy with `deploy-flow.md`, rebind if needed, and verify.
+8. Before redeploying over an existing registration, run `lint-pcf.js --manifest <current> --against <previous manifest>` when the previous manifest is available from source control or an exported baseline. If no baseline exists, record that compatibility was not compared instead of claiming a backwards-compatible upgrade.
 
 ## STANDARD_TO_VIRTUAL
 

@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOLUTION_NAME: ContosoPcfControls
-      SOLUTION_PROJECT: build/solution
-      SOLUTION_ZIP: build/solution/bin/Release/ContosoPcfControls_managed.zip
+      SOLUTION_PROJECT: build/ContosoPcfControls
+      SOLUTION_ZIP: build/ContosoPcfControls/bin/Release/ContosoPcfControls_managed.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +34,8 @@ jobs:
 
       - name: Power Platform Tool Installer
         uses: microsoft/powerplatform-actions/actions-install@v1
+        with:
+          add-tools-to-path: true
 
       - name: Build PCF control
         run: |
@@ -46,9 +48,9 @@ jobs:
       - name: Pack managed solution
         shell: bash
         run: |
-          mkdir -p "$SOLUTION_PROJECT"
+          mkdir -p "$(dirname "$SOLUTION_PROJECT")"
+          pac solution init --publisher-name Contoso --publisher-prefix contoso --outputDirectory "$SOLUTION_PROJECT"
           cd "$SOLUTION_PROJECT"
-          pac solution init --publisher-name Contoso --publisher-prefix contoso
           pac solution add-reference --path "$GITHUB_WORKSPACE"
           dotnet build -c Release -p:SolutionPackageType=Managed
 

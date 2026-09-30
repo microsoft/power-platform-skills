@@ -16,8 +16,8 @@ pool:
 variables:
   NodeVersion: '20.x'
   SolutionName: ContosoPcfControls
-  SolutionProject: '$(Build.ArtifactStagingDirectory)/solution'
-  SolutionZip: '$(Build.ArtifactStagingDirectory)/solution/bin/Release/ContosoPcfControls_managed.zip'
+  SolutionProject: '$(Build.ArtifactStagingDirectory)/$(SolutionName)'
+  SolutionZip: '$(Build.ArtifactStagingDirectory)/$(SolutionName)/bin/Release/$(SolutionName)_managed.zip'
 
 steps:
   - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.tool-installer.PowerPlatformToolInstaller@2
@@ -39,9 +39,9 @@ steps:
     displayName: Test PCF control
 
   - script: |
-      mkdir -p "$(SolutionProject)"
+      mkdir -p "$(dirname "$(SolutionProject)")"
+      pac solution init --publisher-name Contoso --publisher-prefix contoso --outputDirectory "$(SolutionProject)"
       cd "$(SolutionProject)"
-      pac solution init --publisher-name Contoso --publisher-prefix contoso
       pac solution add-reference --path "$(Build.SourcesDirectory)"
       dotnet build -c Release -p:SolutionPackageType=Managed
     displayName: Pack managed solution

@@ -43,7 +43,7 @@ The main route list is intentionally explicit in the skill because prompts never
 Libraries are split by concern:
 
 - `pcf-matrix.js` owns version and host policy from `compatibility-matrix.json`.
-- `pcf-manifest.js` parses manifests, lints host rules and diffs breaking changes.
+- `pcf-manifest.js` parses manifests, lints host rules and supports explicit breaking-change diffs.
 - `pcf-code-gate.js` scans source for unsupported host/runtime patterns.
 - `pcf-scaffold.js` renders templates and recipes from `templates/`, `shared/`, and `recipes/`.
 - `pcf-build.js` executes the project-local `pcf-scripts` binary through `process.execPath`.
@@ -93,13 +93,15 @@ Recipes overlay a template with task-focused behavior. The recipe catalog in [`.
 
 `pcf-gates.js` is the release gate for generated or edited projects:
 
-1. Manifest parse/host/diff checks (`PCF_*` and `PCF_DIFF_*` findings).
+1. Manifest parse and host checks (`PCF_*` findings).
 2. Source checks for host DOM, `Xrm`, unsupported internal context access, undeclared features and virtual-root ownership (`PCF_CODE_*`, `PCF_VIRTUAL_*`).
 3. Project lint.
 4. Unit tests.
 5. Production build and bundle findings (`PCF_BUILD_*`, `PCF_BUNDLE_*`, `PCF_OUT_*`).
 
 Evidence levels are defined in [`../references/pcf-testing.md`](../references/pcf-testing.md): `built`, `gated`, `registered`, `bound(draft)`, `bound(published)`, `runtime-verified`, and `runtime-not-checked`. A run may honestly end at `runtime-not-checked` when no browser or target site was checked.
+
+Breaking-change diff checks (`PCF_DIFF_*` findings) are not part of `pcf-gates.js`; run `lint-pcf.js --manifest <current> --against <previous manifest>` separately before redeploying an existing control when a baseline manifest is available. If the baseline is unavailable, the skill reports that compatibility was not compared instead of rounding a green gate up to a compatibility claim.
 
 ## Deploy
 

@@ -7,6 +7,7 @@ Deployment writes to an environment. Obtain explicit consent before the write: e
 Preconditions:
 
 - `pcf-gates.js` is green for the target hosts.
+- Existing controls with an available previous manifest have passed `lint-pcf.js --manifest <current> --against <previous>`. If no baseline exists, the report says compatibility was not compared.
 - Auth passed with `check-auth.js --env <envUrl> --require-pac`.
 - The target is safe to write.
 - Consent is recorded.

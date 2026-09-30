@@ -32,7 +32,8 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 - Scaffolds are matrix-pinned and include the package scripts that PAC expects during `pac pcf push`.
 
 ### Quality gates — 🧪 tested
-- `pcf-gates.js` runs manifest and host lint, breaking-change diff checks, source gates, ESLint, unit tests, production build, bundle-size checks and unexpected-output checks.
+- `pcf-gates.js` runs manifest and host lint, source gates, ESLint, unit tests, production build, bundle-size checks and unexpected-output checks.
+- Breaking-change comparison is a separate manifest check: run `lint-pcf.js --manifest <current> --against <previous manifest>` when a previous manifest is available.
 - Host-specific policy covers model-driven apps and Power Pages guidance.
 
 ### Doctor and upgrade — 🧪 tested

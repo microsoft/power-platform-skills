@@ -30,7 +30,10 @@ test('GitHub Actions example has installer, build, test, pack, publish, and impo
   const text = read('github-actions.yml');
 
   assert.match(text, /microsoft\/powerplatform-actions\/actions-install@/);
+  assert.match(text, /add-tools-to-path:\s*true/);
   assert.match(text, /microsoft\/powerplatform-actions\/import-solution@/);
+  assert.match(text, /SOLUTION_PROJECT:\s*build\/ContosoPcfControls/);
+  assert.match(text, /pac solution init[^\n]+--outputDirectory "\$SOLUTION_PROJECT"/);
   assertOrdered(text, ['Power Platform Tool Installer', 'Build PCF control', 'Test PCF control', 'Pack managed solution', 'Publish artifact', 'Import managed solution']);
   assertNoInlineSecrets(text);
 });
@@ -40,6 +43,9 @@ test('Azure DevOps example has installer, build, test, pack, publish, and import
 
   assert.match(text, /PowerPlatformToolInstaller@2/);
   assert.match(text, /PowerPlatformImportSolution@2/);
+  assert.match(text, /SolutionProject: '\$\(Build\.ArtifactStagingDirectory\)\/\$\(SolutionName\)'/);
+  assert.match(text, /SolutionZip: '\$\(Build\.ArtifactStagingDirectory\)\/\$\(SolutionName\)\/bin\/Release\/\$\(SolutionName\)_managed\.zip'/);
+  assert.match(text, /pac solution init[^\n]+--outputDirectory "\$\(SolutionProject\)"/);
   assertOrdered(text, ['PowerPlatformToolInstaller', 'Build PCF control', 'Test PCF control', 'Pack managed solution', 'Publish pipeline artifact', 'Import managed solution']);
   assertNoInlineSecrets(text);
 });
