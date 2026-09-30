@@ -280,6 +280,10 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
   assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
   assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
+  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live.
+  assert.ok(isTransientHalt({ message: 'HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' }));
+  assert.ok(!isTransientHalt({ message: 'Sql error: Generic SQL error. Sql Number: 547' }), 'another SQL error is not a deadlock');
+  assert.ok(!isTransientHalt({ transient: false, message: 'Sql Number: 1205' }), 'an explicit non-transient still wins');
   // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.
   assert.ok(!isTransientHalt({ recoverable: true }));
   assert.ok(!isTransientHalt({ message: 'validation failed', cause: { statusCode: 400 } }));
@@ -1792,7 +1796,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 

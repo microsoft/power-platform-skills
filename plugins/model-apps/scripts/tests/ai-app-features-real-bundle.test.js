@@ -264,34 +264,73 @@ test('REAL BUNDLE: a malformed appModuleId is rejected up front', async () => {
   await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: 'not-a-guid' }));
 });
 
-// The boolean spelling is NOT a flat 1/0, and the schema doc said it was. That inaccuracy caused a
-// real incident: `appFeatures: { nlSearch: false, nlChart: false }` was written believing it meant
-// "leave alone", and it DISABLED two features a live app was inheriting as on. For the form-fill
-// family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so `false` there is an
-// explicit off rather than an unset.
+// The boolean spelling is NOT a flat 1/0, and the schema doc once said it was. That inaccuracy caused
+// a real incident: `appFeatures: { nlSearch: false, nlChart: false }` was written believing it meant
+// "leave alone", and it changed two features a live app was inheriting as on.
 //
-// Pinned against the real bundle in BOTH directions, so a re-vendor that changes the encoding fails
-// here instead of silently making the documentation wrong again.
-test('REAL BUNDLE: the boolean-to-numeric mapping is per-family, not a flat 1/0', async () => {
-  const EXPECTED = {
-    formFill: { setting: 'FormFillBarUXEnabled', onValue: '2', offValue: '1' },
-    nlSearch: { setting: 'NLGridSearchSetting', onValue: '1', offValue: '0' },
-    nlChart: { setting: 'NLChartDataVisualizationSetting', onValue: '1', offValue: '0' },
-    m365: { setting: 'm365copilotmodelappenabled', onValue: '1', offValue: '0' },
-  };
-
-  for (const [feature, want] of Object.entries(EXPECTED)) {
-    for (const [flag, expected] of [[true, want.onValue], [false, want.offValue]]) {
-      // Gate reported ON so the SDK writes in both directions (enabling is gated; disabling is not).
+// Every per-app AI setting is a tri-state: most are 0 = Default, 1 = Off, 2 = On, while NL charts are
+// 0 = Off, 1 = Auto, 2 = On (the platform's own settings UI). The vendored SDK's boolean mapping knows
+// only the form-fill family, so `true` reached grid search and M365 as '1' — Off — and charts as
+// '1' — Auto (AB#6714731). The build therefore encodes every flag itself (`encodeAiFlags`) and hands
+// the SDK explicit values, which it writes verbatim.
+//
+// Pinned against the real bundle for every feature in BOTH directions, so a re-vendor that starts
+// re-mapping explicit values fails here instead of silently writing the wrong state.
+test('REAL BUNDLE: every feature\u2019s encoded On/Off value is written verbatim and proven', async () => {
+  const { AI_APP_SETTING, AI_SETTING_CODEC, encodeAiFlags } = require('../lib/ai-app-settings.js');
+  const features = Object.keys(AI_APP_SETTING);
+  assert.deepStrictEqual(Object.keys(AI_SETTING_CODEC).sort(), [...features].sort(), 'every per-app setting has a codec entry');
+  for (const feature of features) {
+    for (const [flag, expected] of [[true, AI_SETTING_CODEC[feature].enabled], [false, AI_SETTING_CODEC[feature].disabled]]) {
+      const encoded = encodeAiFlags({ [feature]: flag });
+      assert.strictEqual(encoded[feature], expected, `${feature}=${flag}: encoded value`);
       const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: expected }] });
-      await sdk.setAppAiFeatures(APP, { [feature]: flag }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+      const r = await sdk.setAppAiFeatures(APP, encoded, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
       const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
       assert.ok(save, `${feature}=${flag}: a SaveSettingValue must be issued`);
-      assert.strictEqual(save.body.SettingName, want.setting, `${feature}: setting name`);
-      assert.strictEqual(String(save.body.Value), expected,
-        `${feature}=${flag} must write ${expected} — the docs previously claimed a flat 1/0, which is wrong for the form-fill family`);
+      assert.strictEqual(save.body.SettingName, AI_APP_SETTING[feature], `${feature}: setting name`);
+      assert.strictEqual(String(save.body.Value), expected, `${feature}=${flag} must write ${expected}`);
+      assert.deepStrictEqual(r.applied, [feature], `${feature}=${flag}: the SDK proves the override holding ${expected}`);
     }
   }
+  // The absolute values, so an edit to the codec cannot drift unnoticed.
+  assert.deepStrictEqual(encodeAiFlags({ formFill: true, nlSearch: true, nlChart: true, m365: true }), { formFill: '2', nlSearch: '2', nlChart: '2', m365: '2' });
+  assert.deepStrictEqual(encodeAiFlags({ formFill: false, nlSearch: false, nlChart: false, m365: false }), { formFill: '1', nlSearch: '1', nlChart: '0', m365: '1' });
+});
+
+// Why the build encodes at all: the SDK's own boolean mapping, as vendored. If a re-vendor makes this
+// fail because the SDK now maps these features correctly, delete this test — the build's own encoding
+// stays correct, because an explicit value passes through verbatim.
+test('REAL BUNDLE (known SDK gap): a raw boolean `true` still writes 1 for grid search, charts and M365', async () => {
+  for (const [feature, setting] of [['nlSearch', 'NLGridSearchSetting'], ['nlChart', 'NLChartDataVisualizationSetting'], ['m365', 'm365copilotmodelappenabled']]) {
+    const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
+    await sdk.setAppAiFeatures(APP, { [feature]: true }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+    const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
+    assert.strictEqual(save.body.SettingName, setting);
+    assert.strictEqual(String(save.body.Value), '1', `${feature}: the SDK maps true to '1' (Off, or Auto for charts), which is why the build never passes it a boolean`);
+  }
+});
+
+test('REAL BUNDLE: an encoded OFF that did not persist is not blamed on an org gate that governs turning it ON', async () => {
+  // The same gap from the other side: the SDK reads any non-zero value as enabling, so an absent
+  // override for grid search Off ('1') with its gate off comes back `skipped`, telling an admin to
+  // enable the feature. The build re-buckets it before anything reads the result.
+  const { encodeAiFlags, rebucketNonEnablingSkips } = require('../lib/ai-app-settings.js');
+  const encoded = encodeAiFlags({ nlSearch: false });
+  const { sdk } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const r = await sdk.setAppAiFeatures(APP, encoded, FAST);
+  assert.deepStrictEqual(r.skipped, ['nlSearch'], 'the SDK still labels it skipped (if this fails, the SDK gap closed)');
+  rebucketNonEnablingSkips(r, encoded);
+  assert.deepStrictEqual([r.skipped, r.notPersisted], [[], ['nlSearch']]);
+  assert.strictEqual(r.outcomes[0].status, 'notPersisted');
+  assert.doesNotMatch(r.outcomes[0].reason, /must enable/);
+  assert.match(r.outcomes[0].reason, /holding '1'/);
+  // An enabling request keeps the SDK's verdict and its admin-action reason.
+  const on = encodeAiFlags({ nlSearch: true });
+  const { sdk: sdk2 } = await freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const r2 = rebucketNonEnablingSkips(await sdk2.setAppAiFeatures(APP, on, FAST), on);
+  assert.deepStrictEqual(r2.skipped, ['nlSearch']);
+  assert.match(r2.outcomes[0].reason, /must enable/);
 });
 
 test('REAL BUNDLE: disabling is NOT gated — a false is written even when the org gate is off', async () => {

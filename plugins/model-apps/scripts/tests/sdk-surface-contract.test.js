@@ -90,6 +90,9 @@ const SKILL_SDK_SURFACE = [
   // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
   // call is the only way to write them.
   'setFormSecurityRoles',
+  // Reads a form's <DisplayConditions> back — including its `Order`, the form's place in the table's
+  // Main Form Set, which the forms phase sets and keeps (AB#6736948).
+  'getFormSecurityRoles',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',

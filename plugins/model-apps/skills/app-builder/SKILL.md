@@ -399,8 +399,8 @@ The App Spec field `languageCode` pins the same value across runs. It now covers
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
 1033 take the authoring language as an option.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
-concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
+Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
+deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
@@ -509,7 +509,8 @@ Never fails.
 
 **App-level features** (`ai.appFeatures`) — `formFill` (Copilot-assisted form fill), `nlSearch`
 (natural-language grid/view search), `nlChart` (NL chart / AI data visualization), `m365` (M365
-Copilot). All default to `true` except `m365`; set any to `false` to opt out.
+Copilot). All default to on except `m365`, which is left at its platform default; `false` writes an
+explicit Off for this app (each setting's values: `references/app-spec-schema.md` → `ai`).
 
 **Per-table row summaries** (`ai.summaries`):
 - `default: "auto"` — the skill auto-selects good-candidate tables (skips lookup-only / config /
@@ -659,7 +660,9 @@ child view id. Each step emits `[n/total]`.
   (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the
   `personas[]` this form is offered to, or `everyone: true`; applied after the roles exist. A form
   with no assignment is visible to **every** role, so this **restricts** a form rather than granting
-  it); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
+  it); **which form a table opens with** (`forms[].isDefault` / `entities[].mainFormOrder` set the
+  table's Main Form Set order, on existing tables too — a user's remembered form still opens first for
+  that user; see app-spec-schema.md); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
   object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap

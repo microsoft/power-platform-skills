@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement, parseFetchXml } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
@@ -136,6 +136,227 @@ test('verifySpec: dashboard subarea resolves the dashboard id and matches the si
   const wrong = { ...present, sitemapXml: async () => '<SiteMap><Area><SubArea Id="s" DefaultDashboard="99999999-0000-0000-0000-000000000000"/></Area></SiteMap>' };
   const bad = await verifySpec(spec, wrong);
   assert.ok(bad.missing.some((m) => m.kind === 'subarea'), 'a different dashboard id does not satisfy the check');
+});
+
+// AB#6726727: an entry wired to the dashboard but without the launcher Url shows a placeholder icon, and
+// the designer does not treat it as a dashboard entry. That is the shape earlier builds wrote over
+// designer-made entries, and the wiring check alone passed it.
+test('verifySpec: a dashboard nav entry must carry the launcher Url', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const reader = (tag) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => `<SiteMap><Area><Group>${tag}</Group></Area></SiteMap>`,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const damaged = await verifySpec(spec, reader(`<SubArea Id="sub_0_0_0" DefaultDashboard="${DASH}" ResourceId="SitemapDesigner.NewSubArea" />`));
+  assert.strictEqual(launcher(damaged).present, false);
+  assert.match(launcher(damaged).detail, /placeholder icon/);
+  // Attribute order and GUID spelling are Dataverse's to choose.
+  const designer = await verifySpec(spec, reader(`<SubArea DefaultDashboard="{${DASH.toUpperCase()}}" Id="ops" Url="/workplace/home_dashboards.aspx" Client="All,Web" />`));
+  assert.strictEqual(launcher(designer).present, true);
+  // Only the entry for THIS dashboard counts: another entry's launcher Url proves nothing.
+  const elsewhere = await verifySpec(spec, reader(`<SubArea Id="x" DefaultDashboard="${DASH}" /><SubArea Id="y" Url="/workplace/home_dashboards.aspx" DefaultDashboard="99999999-0000-0000-0000-000000000000" />`));
+  assert.strictEqual(launcher(elsewhere).present, false);
+  // Only the exact launcher satisfies both consumers: the runtime's glyph test is case-sensitive, and
+  // the designer compares the whole Url.
+  for (const url of ['/WorkPlace/Home_Dashboards.aspx', '/workplace/home_dashboards.aspx?pagetype=dashboard']) {
+    const near = await verifySpec(spec, reader(`<SubArea Id="ops" Url="${url.replace(/&/g, '&amp;')}" DefaultDashboard="${DASH}" />`));
+    assert.strictEqual(launcher(near).present, false, url);
+  }
+  // Not wired at all: the wiring check fails, and there is no second check to double-count it.
+  const unwired = await verifySpec(spec, reader('<SubArea Id="x" Entity="account" />'));
+  assert.strictEqual(launcher(unwired), undefined);
+});
+
+// Only a real nav entry — a SubArea directly under SiteMap/Area/Group — can carry the launcher Url for its
+// dashboard. A `<SubArea …>` in a comment, a CDATA section, a processing instruction or anywhere else is
+// no entry, so a decoy there carrying the Url must not pass the real entry that lacks it.
+test('verifySpec: a SubArea that is no nav entry cannot satisfy the dashboard launcher check', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const readerOf = (xml) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => xml,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const decoy = `<SubArea Id="decoy" Url="/workplace/home_dashboards.aspx" DefaultDashboard="${DASH}" />`;
+  const damaged = `<SubArea Id="ops" DefaultDashboard="{${DASH.toUpperCase()}}" />`;
+  for (const xml of [
+    `<SiteMap><Area><Group>${damaged}<!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${damaged}<![CDATA[${decoy}]]></Group></Area></SiteMap>`,
+    `<?decoy ${decoy}?><SiteMap><Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap>${decoy}<Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}<Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group><SubArea Id="outer" Entity="account">${decoy}</SubArea>${damaged}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /placeholder icon/, xml);
+    assert.strictEqual(subareaDashboardHasLauncher(xml, DASH), false, xml);
+  }
+  // Only a decoy wires it, or the walk cannot read the sitemap at all: no nav entry to fault for a missing
+  // Url, so the check fails with what is actually wrong.
+  for (const xml of [
+    `<SiteMap><Area><Group><!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}</Area></SiteMap>`,
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${decoy}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /no nav entry points at it/, xml);
+  }
+  // The real entry passes with children of its own and its Url read XML-decoded, as the runtime reads it.
+  const real = `<SiteMap><Area><Group><SubArea Id="ops" Url="&#47;workplace/home_dashboards.aspx" DefaultDashboard="{${DASH.toUpperCase()}}"><Titles><Title LCID="1033" Title="Ops" /></Titles></SubArea></Group></Area></SiteMap>`;
+  assert.strictEqual(launcher(await verifySpec(spec, readerOf(real))).present, true);
+  assert.strictEqual(subareaDashboardHasLauncher(real, DASH), true);
+});
+
+test('verifySpec: a pinned dashboardId verifies a dashboard renamed since the download', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Command Center - Event operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Command Center - Event operations', title: 'Event operations' }] }] }] } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) return [{ formid: PIN, name: 'Event operations', type: 0 }];
+      return []; // the stale name finds nothing
+    },
+    sitemapXml: async () => `<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${PIN.toUpperCase()}}" /></Group></Area></SiteMap>`,
+  };
+  const r = await verifySpec(spec, read);
+  for (const kind of ['dashboard', 'subarea', 'subarea-dashboard-launcher']) {
+    const chk = r.checks.find((c) => c.kind === kind);
+    assert.ok(chk && chk.present, `${kind}: ${JSON.stringify(chk)}`);
+  }
+});
+
+// The build KEEPS a nav entry's icon that was changed in the designer since the spec's baseline when
+// the spec still has the baseline's value (sitemap-merge.js), so verify must accept exactly that case —
+// or the build's own --verify fails on a value it deliberately left alone.
+test('verifySpec: an icon the build kept from the designer passes only in the case the build keeps it', async () => {
+  const spec = { entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'new_order', title: 'Orders', vectorIcon: '$webresource:new_old.svg' }] }] }] } };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_order' }), findColumns: async () => [{ logicalName: 'new_name' }],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="o" Entity="new_order" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>',
+  };
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  assert.strictEqual(vec(await verifySpec(spec, read)).present, false, 'no baseline: the spec value is required');
+  const kept = vec(await verifySpec(spec, read, { baselineSpec: JSON.parse(JSON.stringify(spec)) }));
+  assert.strictEqual(kept.present, true, 'the spec still has the baseline value: the designer\u2019s is kept');
+  assert.match(kept.detail, /changed in the designer since the spec\u2019s baseline/);
+  // The SPEC changed it since the baseline: the build writes it, so it must be there.
+  const baseline = JSON.parse(JSON.stringify(spec));
+  baseline.appShell.areas[0].groups[0].subAreas[0].vectorIcon = '$webresource:new_older.svg';
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec: baseline })).present, false, 'an edit the spec made is still verified');
+});
+
+// The exemption is for a value the build KEPT on an entry that is there — never for a missing entry,
+// whose icon check is the one thing that fails when a URL entry is gone (there is no separate check).
+test('verifySpec: a nav entry missing from the sitemap fails its icon check, baseline or not', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  for (const xml of ['<SiteMap />', '', null]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, JSON.stringify(xml));
+  }
+  // The same entry present with a designer icon IS kept — its URL matched after the XML escaping is read.
+  const read = { findTable: async () => null, findColumns: async () => [],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, true);
+  // Two live entries for the same target: which one the build kept cannot be told, so nothing is.
+  const twice = { ...read, sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /><SubArea Id="h2" Url="https://contoso.example/help?a=1&amp;b=2" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, twice, { baselineSpec })).present, false);
+});
+
+// Only real elements are navigation, and their values are read the way an XML parser reads them.
+test('verifySpec: a kept icon is judged on real SubArea elements, fully XML-decoded', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  const liveOf = (inner) => ({ findTable: async () => null, findColumns: async () => [], sitemapXml: async () => `<SiteMap><Area><Group>${inner}</Group></Area></SiteMap>` });
+  // `extra` goes FIRST: an attribute holding a raw `>` must come before the ones the match needs.
+  const entry = (url, extra = '') => `<SubArea Id="h"${extra} Url="${url}" VectorIcon="$webresource:new_designer.svg" />`;
+  // Commented out, or inside CDATA or a processing instruction, an entry is text — nothing was kept.
+  for (const wrapped of [`<!-- ${entry('https://contoso.example/help?a=1&amp;b=2')} -->`, `<![CDATA[${entry('https://contoso.example/help?a=1&amp;b=2')}]]>`, `<?note ${entry('https://contoso.example/help?a=1&amp;b=2')} ?>`]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(wrapped), { baselineSpec })).present, false, wrapped);
+  }
+  // Nor is an element the SDK does not model as navigation: another name that starts the same way, or a
+  // SubArea anywhere but directly under SiteMap/Area/Group (the SDK keeps those as opaque XML).
+  const url = 'https://contoso.example/help?a=1&amp;b=2';
+  for (const other of [
+    `<SubArea-Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubArea:Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubAreaÜ Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<保存>${entry(url)}</保存>`,
+    `<Descriptions>${entry(url)}</Descriptions>`,
+    `<SubArea Id="outer" Entity="account">${entry(url)}</SubArea>`,
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(other), { baselineSpec })).present, false, other);
+  }
+  // A document the walk cannot account for completely grants no exemption at all: a document type
+  // declaration, a `<` that starts no tag, a closing tag out of order.
+  for (const xml of [
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${entry(url)}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)} a < b</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}</Area></Group></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}`,
+  ]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, xml);
+    assert.strictEqual(liveNavEntries(xml), null, `unreadable: ${xml}`);
+  }
+  // ...while the real entry after such a sibling is still found: the walk returns to the Group level.
+  assert.strictEqual(vec(await verifySpec(spec, liveOf(`<Descriptions><Description LCID="1033" Description="x" /></Descriptions>${entry(url)}`), { baselineSpec })).present, true);
+  // A numeric reference, either quote style, and a raw `>` inside a value are all the same live entry.
+  for (const live of [
+    entry('https://contoso.example/help?a=1&#38;b=2'),
+    entry('https://contoso.example/help?a=1&#x26;b=2'),
+    "<SubArea Id='h' Url='https://contoso.example/help?a=1&amp;b=2' VectorIcon='$webresource:new_designer.svg' />",
+    entry('https://contoso.example/help?a=1&amp;b=2', ' Description="a > b"'),
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(live), { baselineSpec })).present, true, live);
+  }
+});
+
+// Verify must line the baseline up the way the build does: by the id each dashboard and page resolves
+// to here. A pin the author dropped, while the name still finds the same dashboard, is the same entry.
+test('verifySpec: an icon kept on a dashboard or page entry is judged by the ids resolved here', async () => {
+  const A = 'aaaa1111-2222-3333-4444-555566667777';
+  const P = 'bbbb1111-2222-3333-4444-555566667777';
+  const spec = { schemaVersion: 2, entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    pages: [{ key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'home.tsx' } }],
+    appShell: { areas: [{ groups: [{ subAreas: [
+      { dashboard: 'Ops', title: 'Ops', vectorIcon: '$webresource:new_old.svg' },
+      { page: 'home', title: 'Home', vectorIcon: '$webresource:new_oldpage.svg' },
+    ] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  baselineSpec.dashboards[0].dashboardId = A; // downloaded pinned; the author has since dropped the pin
+  baselineSpec.__deployedIds = { dashboards: { Ops: A }, pages: { home: P } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: A, name: 'Ops' }] : []),
+    manifest: async () => ({ pages: [{ key: 'home', pageId: P }] }),
+    sitemapPageIds: async () => [P], existenceIds: async () => [P],
+    sitemapXml: async () => '<SiteMap><Area><Group>'
+      + `<SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${A.toUpperCase()}}" VectorIcon="$webresource:new_designer.svg" />`
+      + `<SubArea Id="home" GenPageId="${P}" VectorIcon="$webresource:new_designerpage.svg" />`
+      + '</Group></Area></SiteMap>',
+  };
+  const icons = (r) => r.checks.filter((c) => c.kind === 'subarea-vectorIcon').map((c) => [c.name, c.present]);
+  assert.deepStrictEqual(icons(await verifySpec(spec, read, { baselineSpec })), [['Ops', true], ['Home', true]]);
+  // Without the ids a dashboard or page resolves to here, nothing lines up and both are required again.
+  const unresolved = { ...read, queryRecords: async () => [], manifest: async () => ({ pages: [] }) };
+  assert.deepStrictEqual(icons(await verifySpec(spec, unresolved, { baselineSpec })), [['Ops', false], ['Home', false]]);
 });
 
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
@@ -861,21 +1082,23 @@ const aiRead = (overrides, effective, opts = {}) => {
   };
 };
 const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
-// The AI form-fill family does not use 1/0: 0 = platform default, 1 = DISABLED, 2 = ENABLED
-// (SDK SETTING_CODEC, mirroring the admin UI). An ENABLED override therefore holds '2'.
+// Every per-app AI setting is a tri-state, not 1/0, and On is '2' for all of them: most use
+// 0 = Default, 1 = Off, 2 = On, while NL charts use 0 = Off, 1 = Auto, 2 = On (the platform's own
+// settings UI; AB#6714731). An ENABLED override therefore holds '2'.
 const ALL_SETTINGS_ON = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
-  m365copilotmodelappenabled: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
+  m365copilotmodelappenabled: '2',
 };
 // The overrides a DEFAULT build writes: `resolveAiFlags` seeds formFill/nlSearch/nlChart on and
-// m365 off for any spec carrying `ai`, and verify reconciles that whole set — so a test focusing on
-// ONE feature must still satisfy the other three or it is asserting on unrelated misses.
+// leaves m365 at its platform default ('0') for any spec carrying `ai`, and verify reconciles that
+// whole set — so a test focusing on ONE feature must still satisfy the other three or it is
+// asserting on unrelated misses.
 const DEFAULT_SETTINGS = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
   m365copilotmodelappenabled: '0',
 };
 const aiMissing = (r, feature) => r.missing.find((m) => m.kind === 'ai-feature' && m.name === feature);
@@ -924,14 +1147,33 @@ test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared
   assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
 });
 
-test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
+test('verifySpec: an explicit OFF request is verified against the setting\u2019s Off value, not treated as dont-care', async () => {
   const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
   assert.strictEqual(r.ok, false);
-  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
+  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold Off.
   // OFF for this family is '1' (DISABLED). '0' would be the platform default — deliberately NOT
-  // accepted as off, because it defers to flighting rather than turning the feature off.
+  // accepted as off, because it defers to the platform rather than turning the feature off.
   const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+test('verifySpec: Off is each setting\u2019s own value \u2014 1 for grid search and M365, 0 for charts (AB#6714731)', async () => {
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true, nlSearch: false, nlChart: false, m365: false } } };
+  const ok = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '1' }));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+  // What earlier builds wrote for `false` was '0' everywhere: Off for charts, but only Default for grid
+  // search and M365, which defers to the platform rather than turning the feature off.
+  const old = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '0', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '0' }));
+  assert.deepStrictEqual(old.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlSearch']);
+});
+
+test('verifySpec: the values earlier builds wrote for ON do not verify as on (AB#6714731)', async () => {
+  // `true` used to be written as '1' outside the form-fill family — Off for grid search and M365,
+  // Auto for charts — and verify expected the same '1', so the build and its check agreed on it.
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '1', m365copilotmodelappenabled: '1' }));
+  assert.deepStrictEqual(r.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlChart', 'nlSearch']);
+  assert.match(aiMissing(r, 'nlSearch').detail, /requested '2'/);
+  assert.match(aiMissing(r, 'nlChart').detail, /holds '1'/);
 });
 
 test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not present)', async () => {
@@ -969,8 +1211,9 @@ test('verifySpec: an undeclared feature is still checked when the spec declares 
   // The partial-declaration half of the same hole: `{ appFeatures: { m365: true } }` still causes
   // the build to write formFill/nlSearch/nlChart.
   const spec = { ...AI_BASE, ai: { appFeatures: { m365: true } } };
-  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '1' }));
+  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '2' }));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 4);
+  assert.ok(!aiMissing(r, 'm365'), 'the declared feature itself is in place');
   assert.ok(aiMissing(r, 'formFill'), 'the undeclared formFill default is reconciled');
   assert.strictEqual(r.ok, false);
 });
@@ -1053,17 +1296,20 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // The normalization is deliberately UNCONDITIONAL: branching on a `dataType` read made the
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
-  // Requested on nlSearch, not formFill: this asserts that a Boolean SPELLING of the stored value is
-  // reconciled with the requested one, and that only makes sense for a setting whose on/off really
-  // is 1/0. The form-fill family is a 0/1/2 enum (0 = platform default, 1 = disabled, 2 = enabled)
-  // and never stores 'true'/'false', so pointing this at formFill would assert a shape the platform
-  // cannot produce — and, with the request and the stub naming different settings, it could pass or
-  // fail for reasons unrelated to the normalisation under test.
+  // No per-app AI setting is Boolean today — all of them store 0/1/2 — so this guards the
+  // normalisation itself: a Boolean spelling means the feature's OWN on/off value ('true' is '2'),
+  // never the generic '1', which for grid search is Off. Mapping it to '1' would let a stored
+  // 'true' satisfy an explicit OFF request.
   const spec = { ...AI_BASE, ai: { appFeatures: { nlSearch: true } } };
   return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
     const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
     assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
+    const wantOff = { ...AI_BASE, ai: { appFeatures: { nlSearch: false } } };
+    const inverted = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' }));
+    assert.ok(aiMissing(inverted, 'nlSearch'), "a stored 'true' must not satisfy an explicit OFF ('1') request");
+    const offOk = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
+    assert.ok(!aiMissing(offOk, 'nlSearch'), "a stored 'false' is this setting's Off");
   });
 });
 
@@ -1907,6 +2153,32 @@ test('verify reports unreadable dashboards, tiles and tile targets as UNVERIFIED
 test('verify checks dashboard EXISTENCE only when the reader cannot read tiles (additive, reader-gated)', async () => {
   const chk = await dashCheck({ reader: { dashboardComponents: undefined } });
   assert.strictEqual(chk.present, true);
+});
+
+// A pinned dashboardId is what the build binds first, so a read of it that FAILS leaves the dashboard
+// unverified — it must not fall through to the name (which may find another app's namesake) or pass.
+test('verifySpec: a pinned dashboardId whose read fails is reported unverified, not proven', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Operations', title: 'Operations' }] }] }] } };
+  let byName = 0;
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) throw new Error('read refused (403)');
+      byName += 1;
+      return [{ formid: 'bbbb1111-2222-3333-4444-555566667777', name: 'Operations', type: 0 }];
+    },
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{BBBB1111-2222-3333-4444-555566667777}" /></Group></Area></SiteMap>',
+  };
+  const r = await verifySpec(spec, read);
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk && !chk.present, JSON.stringify(chk));
+  assert.match(chk.detail, /its dashboardId could not be resolved \(read refused \(403\)\) — unverified, not proven correct/);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(byName, 0, 'the name is not tried after the pinned read failed — it could find another app\u2019s namesake');
 });
 
 test('verify ignores non-chart tiles when proving a dashboard', async () => {

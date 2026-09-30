@@ -142,7 +142,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
   never duplicates a control. A row that a pruned or moved cell leaves holding nothing is removed too
   (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
-  a row-spanning cell above still reserves is kept, and so is a row that was already empty. On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  a row-spanning cell above still reserves is kept, and so is a row that was already empty.
+  **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
+  Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
+  (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
+  were served with the `isdefault` form last). After every form exists, the forms phase promotes the default (an explicit
+  `isDefault` or `entities[].mainFormOrder[0]` on any table; the first Main form only on a table the
+  spec owns) and then writes Order 0..n-1 onto the spec's Main forms, the ones it does not list keeping
+  their stored relative order. On a table it orders nothing on, a Main form it creates is created after the
+  table's others: its order is written into the new form's own `<DisplayConditions>` before the first
+  push (`createInPlace`), so no interrupted run or later failure can leave it at the Order 0 every new
+  form gets — a later build could not tell it is new. Only declared forms are written, order-only through `setFormSecurityRoles` so roles
+  survive; a table ordered by hand (`securityRoles.order`) is left alone; the step is best-effort (✗ and
+  a warning, never a halt). Verify checks the stored order (`form-order`) and what the public
+  `RetrieveFilteredForms` serves the user running it (`form-order-served`). On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
   when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
   retries and later failures stay bound to that gate-time list — an empty list included, when the run
   includes the removal phases. A later `--allow-destructive` run may
@@ -239,6 +252,36 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
   nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
   run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
+  **An existing app's sitemap is rewritten ONTO its live nodes (AB#6726727).** The App Spec describes a
+  node's label/title, target and icons only, and the SDK serializes a node without its fetched `bag` from
+  scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,
+  `AvailableOffline="true"`). Both existing-app writers (the app-shell write and the pages finalizer)
+  therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
+  subarea corresponds by navigation target (a URL keeps the case of its path and query), an area or
+  group by a label its level uses once, then by the navigation entries it holds, then by the id an
+  earlier build gave it (a node none of these identifies is written as new rather than guessed); the
+  live `id` and `bag` are kept, and only
+  what the spec sets is overlaid — chrome it does not name is still removed, as before. Because the SDK
+  only patches an existing `<Titles>` on a node with a bag, and reads an empty title as "no edit", a
+  title added to an entry that had none, or removed from one, is reconciled in the adopted bag at the
+  SDK's language (other languages' titles are kept). Every dashboard entry carries exactly
+  `Url="/workplace/home_dashboards.aspx"` — the designer writes it on every dashboard entry and
+  recognizes one only by the whole Url, and the runtime keys the dashboard glyph on it with a
+  case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`, which
+  reads only real nav entries — a `SubArea` directly under `SiteMap/Area/Group`, never one in a comment
+  or elsewhere — as the kept-icon check below does). With a
+  **baseline** — `.maker-workspace/last-applied.json`, written atomically by a successful apply and
+  by download, stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
+  title/icon that the spec has not changed since, but the designer has, is kept and reported rather
+  than reverted (`keepsLiveValue`); without one the spec wins and every change to an existing entry is
+  reported. Baseline entries are lined up with live ones by the ids the baseline RECORDED for its
+  environment (`__deployedIds`: what the apply resolved, or what the download read), never by the
+  spec's own `dashboardId`/`pageId`, which may be another environment's. Verify accepts a kept icon by
+  the same rule and identities, and only on a live entry that exists. A downloaded dashboard carries
+  `dashboards[].dashboardId`, which build, verify and teardown resolve before the name
+  (`findPinnedDashboard`) — when it resolves it is the only candidate, and teardown still requires
+  solution membership — so a dashboard renamed in the designer is reused, with a warning since a build
+  never renames one, instead of a second being created under the stale name.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -372,8 +415,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   412 every time). This is why
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
-  that file for the wire contract, why a `$batch` is never retried, and why a conditional write that
-  gets no answer is never re-sent). Pinned by
+  that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
+  ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
   The empty solution container goes last — but a **built-in
@@ -397,7 +441,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities/tables, icon web resources,
-  dashboards, solution).
+  dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
+  `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
+  that were never deployed — and writes only the baseline (`last-applied.json`) into it.
   **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
   classic dashboards, icons, and solution round-trip; **forms, views, charts, and commands do NOT yet
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
@@ -534,8 +580,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
-  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
-  1/0) or an explicit integer such as `2` ("on for everyone"), bounded to `0..1000000` — the same range
+  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` — encoded by the
+  plugin to each setting's own On/Off value (On is `2` everywhere; Off is `1`, but `0` for `nlChart`;
+  `AI_SETTING_CODEC` in `lib/ai-app-settings.js`, AB#6714731) before the SDK sees them — or an explicit
+  integer written verbatim, bounded to `0..1000000` — the same range
   the SDK enforces, so validation rejects an out-of-range value up front instead of aborting the build
   half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
   (an immediate read can still return the environment fallback, which previously produced a false
@@ -705,6 +753,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
     form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
@@ -731,6 +780,8 @@ scripts/
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
+    sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
+    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
@@ -739,7 +790,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's) + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
@@ -1159,7 +1210,7 @@ changes. **Never patch the bundle** to work around an SDK defect: the next re-ve
 reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and re-vendor.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Four test files lock them — run all against every
+skill relies on behaviors that must survive. The test files below lock them — run all against every
 rebuilt bundle.
 
 **pcf copy sync.** The pcf plugin copies selected model-apps helpers and the vendored SDK bundle
@@ -1235,6 +1286,26 @@ artifacts, 2xx statuses, green build. The test therefore does two things: a **so
 fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+
+`scripts/tests/workspace-projection-real-bundle.test.js` — the **upgrade** guard. The SDK refuses to
+push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_STALE`), so a
+re-vendor that raises it makes every existing `.maker-workspace` old. Upgrades stay invisible only
+because a plain fetch re-reads a clean old copy (and the build fetches every existing form, view,
+chart and app before editing it); a copy still holding an interrupted build's edits is kept by that
+fetch and refused at push — or, when the environment's copy has moved since, refused by the fetch
+itself (`LOCAL_EDITS_WOULD_BE_LOST`, measured live on a 2.10.0 workspace). For the push refusal the
+runner names the manual reset every workspace-reset remedy shares
+(`RESET_WORKSPACE` in `lib/entity-provision.js`): stop other builds and teardowns on the workspace
+first — the changed-only snapshot holds their leases and a running teardown's registration — then
+delete everything except `last-applied.json` (the navigation baseline) and `destructive-approval.json`
+(the approved removals), which no re-run can rebuild. The build does not reset the copy itself: the
+SDK's per-artifact lock is per process, so an overwrite could discard another build's newer edits on
+the same workspace. For the fetch refusal it asks for a review first: the environment has changed
+since the copy was fetched (maybe by a maker — the same copy is what a concurrent-edit halt keeps as
+a fence), so rebuilding the same spec over a cleared copy could overwrite that change. The halt says
+to look at the change in Maker and put into the spec what should stay, then make the same reset. (A
+re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
+can leave them before the app exists.)
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/

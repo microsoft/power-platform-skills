@@ -21,11 +21,12 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
-const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
+const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
+const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('./lib/deployed-baseline.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
@@ -601,6 +602,9 @@ async function buildModelApp(spec, opts, deps) {
         authorizedSitemapRemovals,
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
+        // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
+        // rewrite keep a nav change made in the designer since then instead of reverting it.
+        baselineSpec: opts.baselineSpec,
         emit,
       });
       break;
@@ -671,7 +675,7 @@ async function buildModelApp(spec, opts, deps) {
           // written and every later run would fall back to a full build. Without the second, the
           // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
           // at all) fails the same way on every run after the first.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -767,7 +771,10 @@ function isTransientHalt(err) {
   return (
     status === 429 ||
     status === 503 ||
-    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg)
+    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
+    // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
+    // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
+    SQL_DEADLOCK_VICTIM.test(msg)
   );
 }
 
@@ -822,6 +829,32 @@ function assertSnapshotInvalidated(store, workspaceDir) {
     );
   }
   return inv;
+}
+
+// #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
+// what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
+// state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
+// re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
+// the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
+// found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort:
+// returns whether the baseline was written, and never throws.
+//
+// The spec is persisted ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
+// detect a .tsx / contentPath byte edit, not just a spec-JSON change. It records the content that was
+// actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
+// dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
+// them, and a spec downloaded elsewhere carries another environment's). `write` is a test seam.
+function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity }, write = writeBaseline) {
+  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
+  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
+  const effectiveSuccess = !!(r && r.ok && (!r.verify || r.verify.ok));
+  if (!(effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied))) return false;
+  try {
+    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -958,23 +991,16 @@ async function main() {
   // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
   // only (it does not yet gate --apply; see docs/app-builder-capabilities.md). Never fatal.
-  const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
+  const lastAppliedPath = baselinePath(workspaceDir);
   // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
-  // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't
-  // be read. Confined to appDir: a '..'-escaping or absolute path (already rejected at spec-validation
-  // time) resolves outside and returns null rather than reading an arbitrary file. A null result makes
-  // annotateContentHashes emit __contentSha:null, so an unreadable/vanished source reads as CHANGED
-  // (fail-closed) instead of a silent no-op. Bytes are read raw (Buffer) so the hash matches regardless
-  // of encoding; the diff only cares whether the bytes changed, not how they decode.
+  // engine does — relative to the app folder (opts.appDir) — confined to it (deployed-baseline.js).
   const appDirAbs = path.resolve(opts.appDir || '.');
-  const readContent = (relPath) => {
-    try {
-      const abs = path.resolve(appDirAbs, relPath);
-      const rel = path.relative(appDirAbs, abs);
-      if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return null;
-      return fs.readFileSync(abs);
-    } catch { return null; }
-  };
+  const readContent = confinedReader(appDirAbs);
+  // The environment and app a baseline must describe to count (see deployed-baseline.js).
+  const baselineIdentity = { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) };
+  // AB#6726727: the same snapshot is the sitemap rewrite's baseline. Read BEFORE the apply, which
+  // replaces it on success; a missing or mismatched one just means the spec wins and the build says so.
+  if (opts.apply) opts.baselineSpec = readBaseline(workspaceDir, baselineIdentity) || undefined;
   if (!opts.apply) {
     try {
       if (fs.existsSync(lastAppliedPath)) {
@@ -1045,21 +1071,7 @@ async function main() {
   } finally {
     cleanup();
   }
-  // #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
-  // what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
-  // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
-  // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
-  // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
-  // found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort.
-  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
-  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
-  const effectiveSuccess = r.ok && (!r.verify || r.verify.ok);
-  if (effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
-    // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
-    // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
-    // actually deployed by THIS apply.
-    try { fs.writeFileSync(lastAppliedPath, JSON.stringify(annotateContentHashes(spec, readContent))); } catch { /* non-fatal */ }
-  }
+  persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
   // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
   // to raise), while r still carries the full build + verify detail.
@@ -1070,4 +1082,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline };

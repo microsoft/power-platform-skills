@@ -33,6 +33,51 @@ test('writeSnapshotAtomic + readSnapshot round-trip and leave NO temp file behin
   } finally { rm(d); }
 });
 
+// The apply snapshot and the sitemap baseline (deployed-baseline.js) share this writer. A write that fails at any
+// step — the write, the fsync, the rename — leaves the target exactly as it was and no temp beside it, and the text
+// lands whole however the OS splits the write (a short write fsynced and renamed into place is a partial file).
+test('writeFileAtomic leaves the target as it was, and no temp, when any step fails — and writes the whole text', (t) => {
+  const d = ws();
+  try {
+    const target = path.join(d, 'file.json');
+    fs.writeFileSync(target, 'previous');
+    for (const [step, code] of [['writeSync', 'ENOSPC'], ['fsyncSync', 'EIO'], ['renameSync', 'EPERM']]) {
+      const mock = t.mock.method(fs, step, () => { throw Object.assign(new Error(`simulated ${code}`), { code }); });
+      // A Buffer goes through writeFileSync's own loop over fs.writeSync, so the write itself can be failed.
+      assert.throws(() => store.writeFileAtomic(target, Buffer.from('next')), { code }, step);
+      mock.mock.restore();
+      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'previous', `${step}: the target is untouched`);
+      assert.deepStrictEqual(fs.readdirSync(d), ['file.json'], `${step}: no temp is left beside it`);
+    }
+    const text = JSON.stringify({ padding: 'x'.repeat(64) });
+    const realWriteSync = fs.writeSync;
+    let calls = 0;
+    const split = t.mock.method(fs, 'writeSync', (fd, data, ...rest) => {
+      calls += 1;
+      const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+      const offset = typeof data === 'string' ? 0 : (rest[0] || 0);
+      return realWriteSync(fd, buf, offset, 1);
+    });
+    store.writeFileAtomic(target, Buffer.from(text, 'utf8'));
+    split.mock.restore();
+    assert.strictEqual(calls, Buffer.byteLength(text), 'each byte went through its own write');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), text, 'the whole text landed');
+    assert.deepStrictEqual(fs.readdirSync(d), ['file.json']);
+  } finally { rm(d); }
+});
+
+test('writeSnapshotAtomic writes through writeFileAtomic: a write that fails leaves the previous snapshot', (t) => {
+  const d = ws();
+  try {
+    store.writeSnapshotAtomic(d, eligible('g1'));
+    const mock = t.mock.method(fs, 'renameSync', () => { throw Object.assign(new Error('simulated EPERM'), { code: 'EPERM' }); });
+    assert.throws(() => store.writeSnapshotAtomic(d, eligible('g2')), { code: 'EPERM' });
+    mock.mock.restore();
+    assert.strictEqual(store.readSnapshot(d).generation, 'g1', 'the previous snapshot is untouched');
+    assert.deepStrictEqual(fs.readdirSync(d).filter((f) => f.endsWith('.tmp')), [], 'and no temp is left');
+  } finally { rm(d); }
+});
+
 test('readSnapshot: absent file -> null; garbage/foreign-schema -> null (fail-closed)', () => {
   const d = ws();
   try {

@@ -5,7 +5,63 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.10.0
+## [Unreleased] — 2.11.0
+
+AI features are written with each setting's own values, rebuilding an existing app no longer
+rewrites its navigation, a table opens with the form the spec makes its default, and the vendored
+SDK is refreshed.
+
+### Added
+
+- **`entities[].mainFormOrder`** (AB#6736948) — a table's Main forms in the order they are offered,
+  first to last; the first is the one the table opens with. Works on existing tables.
+
+### Fixed
+
+- **A table opens with its default form** (AB#6736948). What opens is decided by the order of a
+  table's Main forms, not the default flag, and new forms all share one position — so a table with
+  several Main forms could open with an alternate one. The build now also puts the default form
+  first, and `--verify` checks the order. `isDefault` on an existing table used to be ignored; a form
+  the build adds to an existing table now goes after its other Main forms.
+- **A teardown no longer stops when Dataverse is busy.** A delete refused with 429 (another
+  customization still running) is re-sent like other throttled requests; the solution delete that
+  ends a teardown used to fail and leave the solution behind.
+- **Download reads what is deployed.** It no longer reads through the folder's `.maker-workspace`,
+  where a copy an interrupted build left could make it fail or return edits never deployed.
+- **Rebuilding an existing app keeps its navigation as it is** (AB#6726727). Every nav entry was
+  rewritten as a new one, so an unrelated edit turned a designer-made dashboard entry's icon into a
+  placeholder and dropped its other settings. Entries now keep their id and everything the spec does
+  not describe; dashboard entries carry the designer's launcher Url, and `--verify` fails one without
+  it.
+- **A nav title or icon changed in the designer after a download is kept**, with a warning, instead of
+  being reverted by the stale spec. Download records the spec as a baseline for that environment.
+- **A dashboard renamed in the designer** is reused by the id a download now records
+  (`dashboards[].dashboardId`); it used to be recreated under the old name.
+- **AI feature values** (AB#6714731). `true` wrote `1` outside the form-fill family: *Off* for
+  natural-language grid search and M365 Copilot, *Auto* for NL charts, and `--verify` expected the
+  same. `true` now writes `2` (*On*) for every feature, so the next build of an AI-enabled app turns
+  NL grid search back on. `false` writes that setting's *Off*: `1`, or `0` for NL charts.
+- **`ai-preflight`** no longer shows ✓ for an app with M365 Copilot off, and reports NL charts' *Auto*
+  as the platform default rather than on.
+- **`appShell` keys the build does not read are errors** ([#631]). A `title` on an area or group (they
+  take `label`) used to deploy an untitled one while lint, the build and `--verify` passed.
+- **A SQL deadlock no longer fails a delete or a build.** A request SQL rolled back as a deadlock
+  victim is re-sent (up to three times): a record delete, or an app delete's change set, by the
+  plugin; a read, an app create or a publish by the refreshed SDK. A build that halts on one runs
+  again like one that halts on a SQL timeout; a teardown used to stop on it.
+
+### Changed
+
+- **The vendored SDK is refreshed.** A workspace saved by an earlier version is re-read on the next
+  build; a copy an interrupted build left holding unpushed edits halts it and names the step to take.
+  A remedy that asks you to clear `.maker-workspace` now says to stop other runs on it first and to
+  keep `last-applied.json` and `destructive-approval.json`.
+- **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
+  default (`0`). A spec that omits `m365` still leaves it at `0`.
+
+[#631]: https://github.com/microsoft/power-platform-skills/issues/631
+
+## [2.10.0]
 
 Connector authoring loses its feature flag, `--allow-destructive` removes only what a maker was
 shown, and the vendored SDK is refreshed.

@@ -74,33 +74,66 @@ function runPreflight(readiness, effective = {}) {
   for (const [key, meta] of Object.entries(FEATURE_META)) {
     const f = readiness[key];
     if (!f) continue;
+    // Where a feature's readiness gate IS its own per-app setting (the form-fill toolbar,
+    // predictions, files, and M365), the SDK decides `enabled` with its own codec, which — as
+    // vendored — knows only the form-fill family's scale, so M365's Off (`1`) reads as enabled.
+    // Read that value through this plugin's codec instead. A gate that is a different row (NL search,
+    // NL charts, smart paste, summaries) is a boolean the SDK already reads correctly, so it keeps
+    // the SDK's answer.
+    const enabled = f.setting === AI_APP_SETTING[key] && f.value !== undefined && f.value !== null
+      ? settingIsOn(f.value, key) === true
+      : f.enabled;
     const eff = effective[key] || {};
     // Only a POSITIVE reading counts. `eff.error` (could not look, or the setting is not
     // provisioned here) must never be read as "in effect" — that would suppress a real admin action.
     const inEffect = eff.on === true;
     // "Platform default" is a SPECIFIC state, not a synonym for "we could not decide". Only a
-    // codec-governed feature sitting at its default value ('0') defers to flighting; an
-    // unrecognised value like '3' or 'yes' is simply indeterminate, and calling that "the platform
-    // decides" would invent a fact. Both suppress the ✓/✗ claim, but only one earns the explanation.
+    // codec-governed feature sitting at its own platform-default value ('0' for most, '1' — Auto —
+    // for charts) defers to the platform; an unrecognised value like '3' or 'yes' is simply
+    // indeterminate, and calling that "the platform decides" would invent a fact. Both suppress the
+    // ✓/✗ claim, but only one earns the explanation.
     const codec = AI_SETTING_CODEC[key];
     const effectiveDefault = eff.on === undefined && !eff.error && codec
-      && eff.value !== undefined && String(eff.value).trim() === '0';
+      && eff.value !== undefined && String(eff.value).trim() === codec.platformDefault;
     const effectiveIndeterminate = eff.on === undefined && !eff.error && eff.value !== undefined && !effectiveDefault;
     features.push({
       feature: key,
-      enabled: f.enabled,
+      enabled,
       setting: f.setting,
       ...(eff.value !== undefined ? { effectiveValue: eff.value, effectiveScope: eff.scope } : {}),
       ...(inEffect ? { inEffect: true } : {}),
       ...(effectiveDefault ? { effectiveDefault: true } : {}),
       ...(effectiveIndeterminate ? { effectiveIndeterminate: true } : {}),
     });
-    if (!f.enabled && !inEffect) {
+    if (!enabled && !inEffect) {
       adminActions.push(meta.action(f));
     }
   }
 
   return { features, adminActions };
+}
+
+/**
+ * One feature's line of the readiness report. "Not enabled" is not one state, so there are four:
+ * ✓ in effect through a setting the readiness gate does not read; ? at the platform default (the
+ * platform decides); ? a value this plugin does not recognise; otherwise ✓ or ✗ from the gate.
+ */
+function featureLine(f) {
+  const label = FEATURE_META[f.feature]?.label || f.feature;
+  if (f.inEffect && !f.enabled) {
+    // The distinction that matters: running, but not because of anything this app declares.
+    return `  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`;
+  }
+  if (f.effectiveDefault) {
+    // "Platform default" is not off. `0` (Default) for most of these settings and `1` (Auto) for
+    // charts defer to the platform, so the feature may well be running; printing ✗ would assert
+    // something we cannot see.
+    return `  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by the platform, not by this environment\n`;
+  }
+  if (f.effectiveIndeterminate) {
+    return `  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`;
+  }
+  return `  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`;
 }
 
 async function main() {
@@ -164,21 +197,7 @@ async function main() {
 
     process.stderr.write('\nAI Feature Readiness\n');
     process.stderr.write('====================\n');
-    for (const f of report.features) {
-      const label = FEATURE_META[f.feature]?.label || f.feature;
-      if (f.inEffect && !f.enabled) {
-        // The distinction that matters: running, but not because of anything this app declares.
-        process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
-      } else if (f.effectiveDefault) {
-        // "Platform default" is not off. For the AI form-fill family `0` means "defer to flighting",
-        // so the feature may well be running; printing ✗ would assert something we cannot see.
-        process.stderr.write(`  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by service flighting, not by this environment\n`);
-      } else if (f.effectiveIndeterminate) {
-        process.stderr.write(`  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`);
-      } else {
-        process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
-      }
-    }
+    for (const f of report.features) process.stderr.write(featureLine(f));
     if (report.adminActions.length) {
       process.stderr.write('\nAdmin actions required:\n');
       for (const a of report.adminActions) {
@@ -200,7 +219,7 @@ async function main() {
   emitResult(true, { ok: true, ...report });
 }
 
-module.exports = { runPreflight };
+module.exports = { runPreflight, featureLine };
 
 if (require.main === module) {
   main().catch((err) => {

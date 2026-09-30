@@ -356,7 +356,7 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
 }
 ```
 - **Unknown table keys are REJECTED, not ignored.** A table accepts exactly the keys above
-  plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
+  plus `statusReasons` / `alternateKeys` / `mainFormOrder`. Anything else — a misspelled `pluralname`, or a
   `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
   fails validation naming the alternative, rather than validating clean and being dropped from the
   build.
@@ -459,7 +459,8 @@ without needing a business rule or a plug-in to enforce it.
 ### entity sub-sections (optional)
 ```jsonc
 "statusReasons": [ { "label": "In Review", "state": "Active" } ],   // custom status values
-"alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ]
+"alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ],
+"mainFormOrder": ["Work Item", "Work Item — Summary"]   // the Main Form Set order — see forms[] → "Which form a table opens with"
 ```
 
 ## Conditional features — read `app-spec-schema-advanced.md` when you use one
@@ -571,6 +572,11 @@ why they need naming here at all.
   set, and `existing` means the build cannot prove it owns the table, so rewriting another app's
   default views is not a safe default. Set **`"enrichDefaultViews": true`** to override that when you
   know the reused table is yours. Author-declared `views[]` are separate and always win.
+- **A view is found by its name on its table, so a name the table already has is that view.** A view
+  named like the platform's own "Active &lt;Plural&gt;", or like any view already on the table, is not
+  created a second time: the build adds the spec's columns to the existing view (removing none) and
+  writes its `description`, but does not reapply its `filters` or `sort` — it warns instead. Give the
+  view its own name to get a separate one.
 
 ## charts[]
 ```jsonc
@@ -660,15 +666,18 @@ why they need naming here at all.
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
-- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**.
-  Exactly one Main form per table may set it; the fallback is the first Main form in spec order, so
-  selection is order-independent either way (it is applied once, after every form exists, rather than
-  each form racing to promote itself). A promotion the environment refuses is reported as a warning
-  and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
-  can no longer record a default it did not actually set. Moving the default to another form **clears**
-  it on the table's other spec-declared Main forms (measured: setting the flag on one form does not
-  clear it on another, so both stayed default), and `--verify` fails while any of them still holds
-  it. Forms the spec does not declare, and their activation state, are never touched.
+- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**:
+  the build marks it `systemform.isdefault` **and** puts it first in the table's Main Form Set order —
+  the flag alone does not decide what opens (see *Which form a table opens with* below). Exactly one
+  Main form per table may set it. Set explicitly, it applies on **any** table, `existing: true`
+  included; without it, a table this spec creates opens with its first Main form in spec order. It is
+  applied once, after every form exists, rather than each form racing to promote itself. A promotion
+  the environment refuses is reported as a warning and fails `--verify`, which proves the deployed
+  `systemform.isdefault` independently — so a build can no longer record a default it did not
+  actually set. Moving the default to another form **clears** it on the table's other spec-declared
+  Main forms (measured: setting the flag on one form does not clear it on another, so both stayed
+  default), and `--verify` fails while any of them still holds it. Forms the spec does not declare,
+  and their activation state, are never touched.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -685,6 +694,48 @@ why they need naming here at all.
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Which form a table opens with — `isDefault` and `entities[].mainFormOrder`
+
+A table's Main forms are served in its **Main Form Set order**, and a user opens the **first one
+they may open** — unless they switched forms earlier: the platform remembers the last Main form each
+user opened for a table and opens that one for them while they may still open it. The order is
+stored on each form (its formxml `<DisplayConditions Order="n">`), and `systemform.isdefault` does
+not change it: measured, moving the flag reordered nothing, and a table's three new Main forms — all
+at the same order, as every new form is — were served with the `isdefault` form *last*.
+
+- **`forms[].isDefault: true`** — this form opens first: it becomes the table's default **and** comes
+  first in the order. Applied on any table.
+- **`entities[].mainFormOrder`** — the order itself, first to last, as names of the table's Main forms
+  in `forms[]`:
+  ```jsonc
+  { "schemaName": "contoso_workitem", "existing": true,
+    "mainFormOrder": ["Work Item", "Work Item — Summary", "My Work — Work Item"] }
+  ```
+  The first form is the one the table opens with (an `isDefault` form must be first). A partial list
+  puts the listed forms first; the table's other spec forms follow in their current order. Each name
+  is spelled as in `forms[]`, and must not match another Main form of the table ignoring case and
+  accents — Dataverse, and so the build, compares form names that way, and could not tell them apart.
+- **Neither set:** on a table this spec creates, the first Main form in spec order comes first and
+  the others follow in spec order. On any other table the order is left as it is, and a Main form the
+  build *creates* there is put after the table's other Main forms — adding an alternate form does not
+  change what the table opens with. If none of those forms has an order yet, the new form comes first
+  and the build warns; it also warns when the new form comes before a form that has no order (a form
+  without one is served after every form that has one). The new form's place is part of creating it,
+  so an interrupted build cannot leave it first.
+- **Only forms in `forms[]` are written.** A Main form the spec does not declare keeps its order; if
+  it would still come first, the build warns and `--verify` fails, naming it. Move it down in Maker
+  (**Form settings → Form order**), or declare it and list it in `mainFormOrder`.
+- **`securityRoles.order`** writes the same attribute. A table where a Main form sets it is ordered by
+  hand: the build leaves its order alone, and the spec cannot also give it `mainFormOrder`.
+- **Also deciding what a user sees:** their security roles — a form restricted by `securityRoles` is
+  served only to those roles, and everyone else opens the next form they may open — and their
+  remembered form, which is per user, not configuration (they change it by switching forms). An app
+  offers **every** active Main form of its tables, including forms the spec does not declare (the
+  stock "Information" form among them); a spec cannot leave one out today.
+- **`--verify`** checks the stored order (`form-order`) and the order the platform serves the user
+  running verify (`form-order-served`, read with the public `RetrieveFilteredForms` function). When
+  that user may not open the first form, the check is reported as not applicable, not as a pass.
 
 ### Explicit layout — tabs, form-columns, sections
 
@@ -878,7 +929,9 @@ fail to add anyone. Every malformed shape is a hard error for that reason.
   This direction fails closed (access never silently widens), but it does mean "undo" is an explicit
   `{ "everyone": true }`.
 - **`fallbackForm`** *(optional)* — show this form to users whose roles have no form of their own.
-- **`order`** *(optional, non-negative integer)* — display order among the entity's forms.
+- **`order`** *(optional, non-negative integer)* — this form's place in the table's Main Form Set
+  (the same attribute `isDefault` and `entities[].mainFormOrder` set; see *Which form a table opens
+  with*). A table where a form sets it is ordered by hand, and cannot also have `mainFormOrder`.
 - Both `fallbackForm` and `order` are **preserved** when omitted, so a later build that sets only
   `personas` does not reset them.
 
@@ -1016,6 +1069,24 @@ custom control), but the spec validator emits a warning.
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **Areas and groups take `label`; subareas take `title`.** Each level accepts only the keys the build
+  reads — area: `label`, `icon`, `vectorIcon`, `iconDescription`, `groups`; group: `label`,
+  `iconDescription`, `subAreas`; subarea: `title`, one target, `icon`, `vectorIcon`, `iconDescription` —
+  and anything else is a validation error, so a `title` on an area says "did you mean `label`?" rather
+  than deploying an untitled area.
+- **Rebuilding an existing app keeps what the spec cannot describe.** Each nav entry the spec keeps is
+  written onto the live entry it corresponds to (a subarea by its target; an area or group by its
+  label), so the live entry's id, its other attributes (`Client`, `Sku`, `AvailableOffline`, …) and its
+  titles in other languages survive; only the label, title, target and icons the spec sets are applied.
+  A `dashboard` entry is written the way the designer writes one, with
+  `Url="/workplace/home_dashboards.aspx"` — without it the app shows a placeholder icon for the entry,
+  and `--verify` fails it.
+- **A nav change made in the designer after a download is kept, not reverted.** Download and every
+  successful apply record the spec as a baseline in `.maker-workspace/last-applied.json`, for that
+  environment and app. When the spec still has the baseline's title or icon for an entry and the
+  environment has something else, the build keeps the environment's value and says so, and `--verify`
+  accepts it — change the spec to change it. With no baseline for the environment, the spec wins and the
+  build reports each change it makes to an existing entry.
 - **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
   the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
   `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon
@@ -1117,7 +1188,10 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 ## ai (optional — AI feature flags and row-summary configuration)
 
 Controls AI-powered features that the platform activates at the app/table level. The block is
-entirely optional; omitting it leaves every AI feature at its platform default.
+entirely optional; omitting it writes no AI setting, so the app's existing AI settings are left as
+they are — a feature follows the environment's value only where the app has no value of its own
+(removing an app-scope value is not something the build does). Any `ai` block writes every feature
+below as an app-scope value, which overrides the environment's.
 
 > **Admin-gated.** AI features turn on only where the environment administrator has enabled them
 > in Power Platform Admin Center (Environments → Settings → Product → Features). The `ai-features`
@@ -1136,15 +1210,20 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   //
   // `false` DOES NOT MEAN "leave alone". It writes an explicit app-scope override that BEATS the
   // org value, so setting it on a feature the org has enabled turns that feature OFF for this app.
-  // To leave a feature as the environment provides it, omit the whole `ai.appFeatures` block.
+  // To defer a feature to the platform instead, give it that setting's platform-default value — still
+  // an app-scope value, so the app gets the platform's default rather than the environment's setting.
   //
-  // The numeric value written is NOT a flat 1/0 — it differs by family (captured from the bundle):
-  //   formFill, formFillSuggestions, formFillSmartPaste, formFillFiles -> true writes 2, false writes 1
-  //   nlSearch, nlChart, m365                                          -> true writes 1, false writes 0
-  // For the form-fill family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so
-  // `false` there means "explicitly disabled", not "unset".
-  // An explicit integer (0-1000000) is also accepted for a platform-defined value; the bound mirrors
-  // the SDK's own, so an out-of-range value is rejected here rather than aborting the build half-applied.
+  // Every one of these settings is a tri-state, and the numbers differ by setting (taken from the
+  // platform's own settings UI):
+  //   formFill, formFillSuggestions, formFillSmartPaste, formFillFiles, nlSearch, m365
+  //                                   -> 0 = Default (defer to the platform), 1 = Off, 2 = On
+  //   nlChart                         -> 0 = Off, 1 = Auto (its platform default), 2 = On
+  // The build writes `true` as 2 for every feature and `false` as that setting's Off — 1, or 0 for
+  // nlChart. (Before AB#6714731 it wrote 1 for `true` outside the form-fill family, which is Off for
+  // nlSearch and m365 and only Auto for nlChart.)
+  // An explicit integer (0-1000000) is written verbatim, e.g. to choose the platform default; the
+  // bound mirrors the SDK's own, so an out-of-range value is rejected here rather than aborting the
+  // build half-applied.
   //
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
   // preflights. The gate is NOT a precondition: every write is attempted and then verified, and a
@@ -1155,10 +1234,10 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   // DISABLING is treated identically — a `false` is written whatever the gate says, which is why an
   // incorrect `false` is the more damaging mistake of the two.
   "appFeatures": {
-    "formFill":  true,   // Copilot-assisted form fill (data entry)
-    "nlSearch":  true,   // natural-language grid/view search (data exploration)
-    "nlChart":   2,      // natural-language chart / AI data visualization — on for everyone
-    "m365":      false   // M365 Copilot integration (opt-in; defaults false)
+    "formFill":  true,   // Copilot-assisted form fill (data entry) — writes 2 (On)
+    "nlSearch":  true,   // natural-language grid/view search (data exploration) — writes 2 (On)
+    "nlChart":   1,      // natural-language chart / AI data visualization — 1 = Auto, the platform decides
+    "m365":      false   // M365 Copilot integration — writes 1 (Off); by default it is left at 0 (Default)
   },
   // summaries: configure the row-summary (Copilot summary card) feature per table.
   "summaries": {
@@ -1205,9 +1284,9 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 > rule described below as enforced by the *lint* is one an unlinted spec will carry into a
 > build and fail at the platform. Where it matters, the rule names its gate.
 
-- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: the **form-fill family** (`formFill` and its siblings) writes `2` for `true` and **`1` for `false`**, where `1` means *disabled* and `0` means *platform default*; `nlSearch`/`nlChart`/`m365` write `1`/`0`. Use an explicit integer for a platform value like "on for everyone".
-- **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To inherit the environment's setting, omit `ai.appFeatures` entirely.
-- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
+- `ai.appFeatures` keys must be one of `formFill · formFillSuggestions · formFillSmartPaste · formFillFiles · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: `true` writes `2` (*On*) for every feature, and `false` writes that setting's *Off* — `1` for most, but **`0` for `nlChart`**, whose `1` means *Auto*. `0` means *Default* (defer to the platform) everywhere except `nlChart`. Use an explicit integer for any other state, such as the platform default.
+- **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To defer a feature to the platform, give it the setting's platform-default value instead (`0`, or `1` for `nlChart`).
+- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on (`2`) and `m365` left at its platform default (`0`), and `--verify` reconciles that whole resolved set.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).

@@ -1,14 +1,14 @@
 {
-  "commit": "0f263094d8fe3acd74049a6dfa336932682f8324",
-  "subject": "AB#39863285 Configure executive summary block UX",
+  "commit": "dac2cf1e3bed12ff733754e1045b95a1e4b180e2",
+  "subject": "cds-maker-sdk: form-embed follow-ups — per-table tokens, edit after publish, embed conversion, SQL deadlock re-send, read-back adoption",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-28T20:54:48.427Z",
-  "newestSrcAt": "2026-09-28T18:13:56.883Z",
+  "libBuiltAt": "2026-09-30T01:00:29.443Z",
+  "newestSrcAt": "2026-09-30T00:27:58.502Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-28T20:57:40.665Z",
-  "bundleSha256": "83939ecfb8c1e936c322ad71bfb60394e9ccbbe0a729452ed8f5f4eee9ce72f7",
-  "bundleBytes": 790605
+  "builtAt": "2026-09-30T01:01:39.005Z",
+  "bundleSha256": "e3bb276bd822c35609a18f3730d11e0430ca7cf38ea07f341c454f803f576b59",
+  "bundleBytes": 818077
 }
