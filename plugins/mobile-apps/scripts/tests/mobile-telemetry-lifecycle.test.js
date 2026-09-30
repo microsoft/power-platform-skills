@@ -271,7 +271,7 @@ test('command runner preserves exit code and propagates measured span context', 
   assert.equal(commandEnv.runId, root.runId);
   assert.match(commandEnv.spanId, /^[0-9a-f-]{36}$/);
   assert.equal(commandEnv.parentSpanId, root.spanId);
-  assert.equal(commandEnv.projectRoot, projectRoot);
+  assert.equal(path.resolve(commandEnv.projectRoot), path.resolve(projectRoot));
 
   const report = lifecycle.reportRun({
     projectRoot,
