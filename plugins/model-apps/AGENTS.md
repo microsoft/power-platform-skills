@@ -1230,9 +1230,15 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   telemetry-emitting hook or script.
   PCF generated-project CI is intentionally split into `.github/workflows/model-apps-pcf-projects.yml`
   because template/recipe installs need npm registry access. ubuntu builds every template and
-  available recipe (`--all`); Windows builds the templates only (`--templates`), because recipes add
-  platform-independent code on top of a template and one `npm ci` per target made the full set take
-  about an hour there. Matrix drift runs weekly in `.github/workflows/model-apps-pcf-matrix-drift.yml`.
+  available recipe (`--all`) in one job; Windows builds each template in its own job
+  (`--template <id>`), because every generated project pays a full `npm ci`, which is I/O-bound there,
+  and building the templates one after another outlasted the 45-minute job cap on a slow runner.
+  Recipes add platform-independent code on top of a template, so they build on ubuntu only, and
+  `pcf-ci-build.test.js` fails when a catalog template has no Windows job. The build step points
+  `TEMP`/`TMP` at `runner.temp` so Windows generates projects on the runner's local temporary disk
+  (D:) instead of the OS disk, and `pcf-ci-build.js` prints each step's start, end and duration to
+  stderr so a slow step shows in the log before the job ends. Matrix drift runs weekly in
+  `.github/workflows/model-apps-pcf-matrix-drift.yml`.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners

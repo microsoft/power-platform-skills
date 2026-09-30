@@ -24,6 +24,8 @@ test.after(() => {
 
 function deps(overrides = {}) {
   const calls = [];
+  // Progress lines are captured rather than written to the test runner's stderr.
+  const progressLines = [];
   const templates = [
     { id: 'field-standard', controlType: 'standard', kind: 'field', hosts: ['model', 'pages'] },
     { id: 'field-virtual', controlType: 'virtual', kind: 'field', hosts: ['model'] },
@@ -42,6 +44,8 @@ function deps(overrides = {}) {
   };
   return {
     calls,
+    progressLines,
+    progress: (line) => progressLines.push(line),
     fs,
     os: { tmpdir: () => overrides.tmp || tmpRoot() },
     listTemplates: () => templates,
@@ -137,6 +141,91 @@ test('the CLI accepts --templates and still requires exactly one selector', () =
   assert.match(both.stderr, /Choose exactly one of --all, --templates, --template <id>, --recipe <id>, or --package\./);
   const valued = spawnSync(process.execPath, [cli, '--templates=field-standard'], { encoding: 'utf8' });
   assert.equal(valued.status, 1);
+});
+
+// Durations are wall-clock, so they are normalized before comparing.
+const normalizeSeconds = (line) => line.replace(/\(\d+s\)$/, '(Ns)');
+
+test('reports each step as it starts and ends, then each target with its position and outcome', () => {
+  const d = deps();
+
+  const result = runCiBuild({ templates: true }, d);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(d.progressLines.filter((line) => line.includes('dataset-standard')).map(normalizeSeconds), [
+    '[pcf-ci-build] [1/3] dataset-standard (template): npm ci ...',
+    '[pcf-ci-build] [1/3] dataset-standard (template): npm ci ok (Ns)',
+    '[pcf-ci-build] [1/3] dataset-standard (template): gates ...',
+    '[pcf-ci-build] [1/3] dataset-standard (template): gates ok (Ns)',
+    '[pcf-ci-build] [1/3] dataset-standard (template) ok (Ns)',
+  ]);
+  assert.equal(d.progressLines.length, 15);
+  assert.equal(normalizeSeconds(d.progressLines.at(-1)), '[pcf-ci-build] [3/3] field-virtual (template) ok (Ns)');
+});
+
+test('progress marks a failed step and its target, including a step that throws', () => {
+  const gatesFail = deps({
+    runGates: () => ({ status: 1, stdout: JSON.stringify({ ok: false, gates: [{ id: 'lint', ok: false }] }), stderr: '' }),
+  });
+  runCiBuild({ template: 'field-standard' }, gatesFail);
+  assert.deepEqual(gatesFail.progressLines.slice(-2).map(normalizeSeconds), [
+    '[pcf-ci-build] [1/1] field-standard (template): gates failed (Ns)',
+    '[pcf-ci-build] [1/1] field-standard (template) FAILED (Ns)',
+  ]);
+
+  // probeLatestDependencies throws when an install fails; the step still gets its closing line.
+  const latestFails = deps({
+    runNpm: (args) => (String(args[0]) === 'install' ? { status: 1, stdout: '', stderr: 'registry unavailable' } : { status: 0, stdout: '', stderr: '' }),
+  });
+  const result = runCiBuild({ template: 'field-standard', latest: true }, latestFails);
+  assert.equal(result.ok, false);
+  assert.deepEqual(latestFails.progressLines.slice(-3).map(normalizeSeconds), [
+    '[pcf-ci-build] [1/1] field-standard (template): npm install @latest ...',
+    '[pcf-ci-build] [1/1] field-standard (template): npm install @latest failed (Ns)',
+    '[pcf-ci-build] [1/1] field-standard (template) FAILED (Ns)',
+  ]);
+});
+
+test('progress goes to stderr by default, one line per write', () => {
+  const d = deps();
+  delete d.progress;
+  const written = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    written.push(String(chunk));
+    return true;
+  };
+  try {
+    runCiBuild({ template: 'field-standard' }, d);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(written.length, 5);
+  assert.ok(written.every((chunk) => /^\[pcf-ci-build\] [^\n]+\n$/.test(chunk)), JSON.stringify(written));
+});
+
+// The Windows leg of model-apps-pcf-projects.yml builds each template in its own job, because building
+// them one after another outlasted the job timeout on a slow runner. That job list is static YAML, so a
+// template added to the catalog would silently get no Windows build; this pins the list to the catalog.
+// Text assertions, as in run-tests.test.js, because the repo ships no YAML parser. Entries look like:
+//   - os: windows-latest
+//     selector: --template field-standard
+test('the PCF projects workflow builds everything on ubuntu and each catalog template in its own Windows job', () => {
+  const { listTemplates } = require('../lib/pcf-scaffold.js');
+  const workflowPath = path.resolve(__dirname, '..', '..', '..', '..', '.github', 'workflows', 'model-apps-pcf-projects.yml');
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const entries = [...workflow.matchAll(/^\s*-\s+os:\s+(\S+)\s*\r?\n\s+selector:\s+(.+?)\s*$/gm)]
+    .map((match) => ({ os: match[1], selector: match[2] }));
+
+  assert.deepEqual(entries.filter((entry) => entry.os === 'ubuntu-latest').map((entry) => entry.selector), ['--all']);
+  const windows = entries.filter((entry) => entry.os === 'windows-latest');
+  assert.ok(windows.length > 0, 'the workflow must keep a Windows leg');
+  assert.ok(windows.every((entry) => /^--template \S+$/.test(entry.selector)), `each Windows job builds one template: ${JSON.stringify(windows)}`);
+  assert.deepEqual(
+    windows.map((entry) => entry.selector.slice('--template '.length)).sort(),
+    listTemplates().map((template) => template.id).sort(),
+  );
 });
 
 test('--latest installs every matrix package at latest and reports resolved versions', () => {

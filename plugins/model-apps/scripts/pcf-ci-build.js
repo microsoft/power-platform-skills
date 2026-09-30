@@ -18,9 +18,10 @@ const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-name
 const USAGE = `Usage:
   node scripts/pcf-ci-build.js [--all | --templates | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]
 
-  --templates builds every template and no recipes. Recipes only add platform-independent control
-  code on top of a template, so a slow runner (Windows) can cover the scripts' path, shell and npm
-  behavior with the templates while --all covers every recipe elsewhere.`;
+  --templates builds every template and no recipes; --all adds every available recipe, which only
+  layers control code on top of its template.
+
+  Progress lines go to stderr as each step starts and ends; stdout carries only the JSON result.`;
 
 const KNOWN = ['all', 'templates', 'template', 'recipe', 'latest', 'keep', 'package', 'npm-cli'];
 const BOOLEAN_FLAGS = ['all', 'templates', 'latest', 'keep', 'package'];
@@ -56,11 +57,14 @@ function runCiBuild(options = {}, deps = {}) {
       }
     }
 
-    for (const target of targets) {
+    for (const [index, target] of targets.entries()) {
       const targetStarted = Date.now();
       const projectDir = pathDep.join(createdRoot, target.id);
-      const result = runTarget(target, projectDir, options, { ...deps, root });
-      results.push({ id: target.id, kind: target.kind, ok: result.ok, gates: result.gates || [], durationMs: Date.now() - targetStarted, ...result.extra });
+      const label = `[${index + 1}/${targets.length}] ${target.id} (${target.kind})`;
+      const result = runTarget(target, projectDir, options, { ...deps, root }, label);
+      const durationMs = Date.now() - targetStarted;
+      reportProgress(deps, `${label} ${result.ok ? 'ok' : 'FAILED'} (${formatSeconds(durationMs)})`);
+      results.push({ id: target.id, kind: target.kind, ok: result.ok, gates: result.gates || [], durationMs, ...result.extra });
     }
   } finally {
     if (!options.keep) fsDep.rmSync(createdRoot, { recursive: true, force: true });
@@ -140,7 +144,7 @@ function targetFromRecipe(recipe, allTemplates) {
   };
 }
 
-function runTarget(target, projectDir, options, deps) {
+function runTarget(target, projectDir, options, deps, label = target.id) {
   const plan = (deps.planScaffold || planScaffold)({
     template: target.template,
     recipe: target.recipe,
@@ -156,7 +160,7 @@ function runTarget(target, projectDir, options, deps) {
   // pcf-scripts and Jest from the project-local node_modules, and the package smoke lets MSBuild
   // restore the referenced PCF project in place. Reusing one install would need link/copy logic
   // across Windows and Linux that is more fragile than the registry work this workflow isolates.
-  const npmResult = (deps.runNpm || runNpm)(['ci'], { cwd: projectDir, npmCli: options.npmCli });
+  const npmResult = timedStep(deps, `${label}: npm ci`, () => (deps.runNpm || runNpm)(['ci'], { cwd: projectDir, npmCli: options.npmCli }), succeeded);
   if (!succeeded(npmResult)) {
     return failure(`npm ci failed: ${toolDetail(npmResult)}`, { gates: [] });
   }
@@ -164,19 +168,47 @@ function runTarget(target, projectDir, options, deps) {
   let latest = [];
   if (options.latest) {
     try {
-      latest = probeLatestDependencies(target, projectDir, options, deps);
+      latest = timedStep(deps, `${label}: npm install @latest`, () => probeLatestDependencies(target, projectDir, options, deps));
     } catch (err) {
       return failure(`npm install latest failed for ${target.id}: ${toolDetail(err)}`, { gates: [], latest });
     }
   }
 
   if (options.package) {
-    const packaged = (deps.runPackageSmoke || runPackageSmoke)(target, projectDir, { ...options, latest }, deps);
+    const packaged = timedStep(deps, `${label}: package smoke`, () => (deps.runPackageSmoke || runPackageSmoke)(target, projectDir, { ...options, latest }, deps), (item) => Boolean(item && item.ok));
     return { ok: Boolean(packaged.ok), gates: [], extra: { latest, package: packaged } };
   }
 
-  const gates = runGates(projectDir, target.hosts, deps);
+  const gates = timedStep(deps, `${label}: gates`, () => runGates(projectDir, target.hosts, deps), (item) => item.ok);
   return { ok: gates.ok, gates: gates.gates, extra: { latest } };
+}
+
+// Every tool this runner starts (npm, pcf-gates, PAC, dotnet) runs with captured output, and CI runs
+// the whole build as one step, so without these lines a slow or hung install prints nothing until the
+// job timeout cancels it, and the log cannot say which project or step was running. A line is written
+// when each step starts and again when it ends, with its duration. They go to stderr because stdout is
+// reserved for the single JSON result.
+function reportProgress(deps, line) {
+  const write = deps.progress || ((text) => process.stderr.write(`${text}\n`));
+  write(`[pcf-ci-build] ${line}`);
+}
+
+function timedStep(deps, label, run, isOk = () => true) {
+  const started = Date.now();
+  reportProgress(deps, `${label} ...`);
+  let outcome = 'failed';
+  try {
+    const result = run();
+    if (isOk(result)) outcome = 'ok';
+    return result;
+  } finally {
+    // Also reached when run() throws, so a step that crashes still gets its closing line.
+    reportProgress(deps, `${label} ${outcome} (${formatSeconds(Date.now() - started)})`);
+  }
+}
+
+function formatSeconds(ms) {
+  return `${Math.round(ms / 1000)}s`;
 }
 
 function probeLatestDependencies(target, projectDir, options, deps) {
