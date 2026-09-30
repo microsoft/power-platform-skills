@@ -180,6 +180,7 @@ function runTarget(target, projectDir, options, deps, label = target.id) {
   }
 
   const gates = timedStep(deps, `${label}: gates`, () => runGates(projectDir, target.hosts, deps), (item) => item.ok);
+  if (!gates.ok) return failure(gates.error || 'pcf-gates failed.', { gates: gates.gates || [] });
   return { ok: gates.ok, gates: gates.gates, extra: { latest } };
 }
 
@@ -234,9 +235,18 @@ function runGates(projectDir, hosts, deps = {}) {
     ? runner(projectDir, hosts)
     : runNodeScript(path.join(SCRIPT_DIR, 'pcf-gates.js'), ['--project', projectDir, '--hosts', hosts.join(',')], { cwd: path.join(SCRIPT_DIR, '..') });
   const parsed = parseJsonLine(result.stdout);
+  if (!succeeded(result)) {
+    return { ok: false, error: `pcf-gates failed: ${toolDetail(result)}`, gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+  }
+  if (!parsed || parsed.ok !== true) {
+    return { ok: false, error: `pcf-gates did not emit valid JSON success output: ${toolDetail(result)}`, gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+  }
+  if (!Array.isArray(parsed.gates) || parsed.gates.length === 0) {
+    return { ok: false, error: 'pcf-gates did not report any gate records.', gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+  }
   return {
-    ok: succeeded(result) && (!parsed || parsed.ok !== false),
-    gates: parsed && Array.isArray(parsed.gates) ? parsed.gates : [],
+    ok: true,
+    gates: parsed.gates,
     stdout: result.stdout || '',
     stderr: result.stderr || '',
   };
@@ -282,6 +292,8 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   const inspected = inspectSolutionZip(zip, PACKAGE_VERSION, {
     productionBytes: bundleBytes(prodBuild),
     developmentBytes: bundleBytes(devBuild),
+    productionBundles: buildBundles(prodBuild, deps),
+    developmentBundles: buildBundles(devBuild, deps),
   }, deps);
   return { ok: inspected.ok, zip, checks: inspected.checks };
 }
@@ -302,7 +314,8 @@ function inspectSolutionZip(zipPath, manifestVersion, sizes = {}, deps = {}) {
   const entries = readZipEntries(zipPath, deps);
   const solutionXml = textEntry(entries, /(^|\/)solution\.xml$/i);
   const customizationsXml = textEntry(entries, /(^|\/)customizations\.xml$/i);
-  const manifestXml = textEntry(entries, /ControlManifest\.xml$/i);
+  const manifest = entry(entries, /ControlManifest\.xml$/i);
+  const manifestXml = manifest ? manifest.content.toString('utf8') : '';
   const checks = [
     { id: 'managed', ok: /<Managed>1<\/Managed>/.test(solutionXml), detail: 'solution.xml Managed=1' },
     { id: 'root-component-66', ok: /<RootComponent\b[^>]*type="66"/i.test(solutionXml), detail: 'solution.xml RootComponent type 66' },
@@ -310,6 +323,8 @@ function inspectSolutionZip(zipPath, manifestVersion, sizes = {}, deps = {}) {
     { id: 'manifest-version', ok: new RegExp(`\\bversion=["']${escapeRegExp(manifestVersion)}["']`).test(manifestXml), detail: 'embedded ControlManifest.xml version' },
     { id: 'production-bundle-smaller', ok: Number(sizes.productionBytes) > 0 && Number(sizes.developmentBytes) > 0 && Number(sizes.productionBytes) < Number(sizes.developmentBytes), detail: 'production bundle smaller than development bundle' },
   ];
+  const bundleCheck = embeddedBundleCheck(entries, manifest, sizes);
+  if (bundleCheck) checks.push(bundleCheck);
   return { ok: checks.every((check) => check.ok), checks };
 }
 
@@ -317,6 +332,12 @@ function readZipEntries(zipPath, deps = {}) {
   const fsDep = deps.fs || fs;
   const buffer = fsDep.readFileSync(zipPath);
   const eocd = findEocd(buffer);
+  // Minimal ZIP reader for PAC/dotnet solution packages. ZIP stores file metadata twice:
+  //   [local header 0x04034b50][file bytes] ... [central header 0x02014b50] ... [EOCD 0x06054b50]
+  // The central directory gives each local-header offset plus compressed/uncompressed sizes. PAC's
+  // packages use either method 0 (stored) or method 8 (raw DEFLATE); encrypted, data-descriptor-only
+  // and ZIP64 packages are intentionally rejected because silently skipping an entry would let a
+  // package smoke pass without proving the embedded PCF bundle.
   const count = buffer.readUInt16LE(eocd + 10);
   const centralSize = buffer.readUInt32LE(eocd + 12);
   let offset = buffer.readUInt32LE(eocd + 16);
@@ -361,10 +382,82 @@ function findEocd(buffer) {
 }
 
 function textEntry(entries, pattern) {
+  const found = entry(entries, pattern);
+  return found ? found.content.toString('utf8') : '';
+}
+
+function entry(entries, pattern) {
   for (const [name, content] of entries) {
-    if (pattern.test(name)) return content.toString('utf8');
+    if (pattern.test(name)) return { name, content };
   }
-  return '';
+  return null;
+}
+
+function embeddedBundleCheck(entries, manifest, sizes = {}) {
+  if (!manifest) return { id: 'embedded-bundle-resources', ok: false, detail: 'ControlManifest.xml was not embedded in the package.' };
+  const resources = codeResources(manifest.content.toString('utf8'));
+  const expected = (sizes.productionBundles || []).filter((item) => item && Buffer.isBuffer(item.content));
+  const devHashes = new Set((sizes.developmentBundles || []).filter((item) => item && Buffer.isBuffer(item.content)).map((item) => sha256(item.content)));
+  if (resources.length === 0 && expected.length === 0) return null;
+  if (expected.length === 0) {
+    return { id: 'embedded-bundle-resources', ok: false, detail: 'The production build did not expose any JavaScript bundle bytes to compare against the package.' };
+  }
+  const manifestDir = path.posix.dirname(manifest.name.replace(/\\/g, '/'));
+  const expectedByPath = new Map(expected.map((item) => [normalizeZipPath(item.path), item]));
+  const expectedByBase = new Map(expected.map((item) => [path.posix.basename(normalizeZipPath(item.path)), item]));
+  for (const resourcePath of resources) {
+    const zipName = normalizeZipPath(path.posix.join(manifestDir === '.' ? '' : manifestDir, resourcePath));
+    const packaged = entries.get(zipName);
+    if (!packaged) return { id: 'embedded-bundle-resources', ok: false, detail: `Manifest code resource '${resourcePath}' is missing from the package.` };
+    const expectedBundle = expectedByPath.get(normalizeZipPath(resourcePath)) || expectedByBase.get(path.posix.basename(normalizeZipPath(resourcePath)));
+    if (!expectedBundle) return { id: 'embedded-bundle-resources', ok: false, detail: `No production build bundle was found for manifest code resource '${resourcePath}'.` };
+    const packagedHash = sha256(packaged);
+    if (packagedHash !== sha256(expectedBundle.content)) {
+      return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' does not match the production build bundle.` };
+    }
+    if (devHashes.has(packagedHash) && packagedHash !== sha256(expectedBundle.content)) {
+      return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' matches a development bundle instead of the production bundle.` };
+    }
+  }
+  return { id: 'embedded-bundle-resources', ok: true, detail: `${resources.length} embedded code resource(s) match the production build.` };
+}
+
+function codeResources(manifestXml) {
+  const resources = [];
+  // Processed PCF manifests list package code artifacts as XML elements like:
+  //   <code path="bundle.js" order="1" />
+  // Attribute order can vary, and the source manifest can reference TypeScript (`index.ts`) before
+  // pcf-scripts rewrites it to JavaScript, so this smoke accepts any JS/TS code resource and then
+  // checks that the package carries bytes identical to the production build output.
+  const re = /<code\b[^>]*\bpath=(["'])(.*?)\1[^>]*>/gi;
+  for (const match of manifestXml.matchAll(re)) {
+    const resourcePath = String(match[2] || '').trim();
+    if (resourcePath && /\.(?:js|jsx|ts|tsx)$/i.test(resourcePath)) resources.push(resourcePath);
+  }
+  return resources;
+}
+
+function buildBundles(result, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const bundles = [];
+  for (const control of (result && result.controls) || []) {
+    for (const rel of control.referenced || []) {
+      if (!/\.(?:js|jsx|ts|tsx)$/i.test(rel)) continue;
+      const file = control.controlDir ? pathDep.join(control.controlDir, rel) : null;
+      if (!file || !fsDep.existsSync(file)) continue;
+      bundles.push({ path: rel, content: fsDep.readFileSync(file) });
+    }
+  }
+  return bundles;
+}
+
+function normalizeZipPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 function setManifestVersion(projectDir, version, deps = {}) {

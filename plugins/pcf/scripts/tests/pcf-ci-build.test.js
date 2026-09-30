@@ -186,6 +186,31 @@ test('progress marks a failed step and its target, including a step that throws'
   ]);
 });
 
+test('gates fail when pcf-gates emits no parseable JSON result', () => {
+  for (const [label, stdout] of [
+    ['empty stdout', ''],
+    ['non-JSON stdout', 'gates passed\n'],
+    ['truncated JSON stdout', '{"ok":true,"gates":['],
+  ]) {
+    const d = deps({ runGates: () => ({ status: 0, stdout, stderr: `${label} diagnostic` }) });
+
+    const result = runCiBuild({ template: 'field-standard' }, d);
+
+    assert.equal(result.ok, false, label);
+    assert.match(result.results[0].error, /pcf-gates did not emit valid JSON/i);
+    assert.equal(result.results[0].gates.length, 0);
+  }
+});
+
+test('gates fail when pcf-gates omits expected gate records', () => {
+  const d = deps({ runGates: () => ({ status: 0, stdout: JSON.stringify({ ok: true, gates: [] }), stderr: '' }) });
+
+  const result = runCiBuild({ template: 'field-standard' }, d);
+
+  assert.equal(result.ok, false);
+  assert.match(result.results[0].error, /pcf-gates did not report any gate records/i);
+});
+
 test('progress goes to stderr by default, one line per write', () => {
   const d = deps();
   delete d.progress;
@@ -331,9 +356,18 @@ test('package smoke runs pac solution init, add-reference, then managed dotnet b
 });
 
 test('inspectSolutionZip accepts a valid managed PCF solution package', () => {
-  const zip = writeSmokeZip();
+  const productionBundle = Buffer.from('(()=>{"use strict";console.log("production");})();');
+  const zip = writeSmokeZip({
+    'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path="bundle.js" order="1" /></resources></control>',
+    'Controls/bundle.js': productionBundle,
+  });
 
-  const result = inspectSolutionZip(zip, '1.0.0', { productionBytes: 10, developmentBytes: 20 });
+  const result = inspectSolutionZip(zip, '1.0.0', {
+    productionBytes: productionBundle.length,
+    developmentBytes: productionBundle.length + 10,
+    productionBundles: [{ path: 'bundle.js', content: productionBundle }],
+    developmentBundles: [{ path: 'bundle.js', content: Buffer.from('development bundle with source maps') }],
+  });
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.checks.map((check) => [check.id, check.ok]), [
@@ -342,7 +376,45 @@ test('inspectSolutionZip accepts a valid managed PCF solution package', () => {
     ['custom-controls', true],
     ['manifest-version', true],
     ['production-bundle-smaller', true],
+    ['embedded-bundle-resources', true],
   ]);
+});
+
+test('inspectSolutionZip rejects a package whose manifest references a missing bundle', () => {
+  const zip = writeSmokeZip({
+    'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path="bundle.js" order="1" /></resources></control>',
+  });
+
+  const result = inspectSolutionZip(zip, '1.0.0', {
+    productionBytes: 10,
+    developmentBytes: 20,
+    productionBundles: [{ path: 'bundle.js', content: Buffer.from('production') }],
+    developmentBundles: [{ path: 'bundle.js', content: Buffer.from('development') }],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((check) => check.id === 'embedded-bundle-resources').ok, false);
+  assert.match(result.checks.find((check) => check.id === 'embedded-bundle-resources').detail, /missing/i);
+});
+
+test('inspectSolutionZip rejects a package whose embedded bundle differs from the production build', () => {
+  const productionBundle = Buffer.from('production bundle');
+  const developmentBundle = Buffer.from('development bundle');
+  const zip = writeSmokeZip({
+    'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path="bundle.js" order="1" /></resources></control>',
+    'Controls/bundle.js': developmentBundle,
+  });
+
+  const result = inspectSolutionZip(zip, '1.0.0', {
+    productionBytes: productionBundle.length,
+    developmentBytes: developmentBundle.length,
+    productionBundles: [{ path: 'bundle.js', content: productionBundle }],
+    developmentBundles: [{ path: 'bundle.js', content: developmentBundle }],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((check) => check.id === 'embedded-bundle-resources').ok, false);
+  assert.match(result.checks.find((check) => check.id === 'embedded-bundle-resources').detail, /does not match the production build/i);
 });
 
 test('inspectSolutionZip reports package content failures independently', () => {
@@ -403,7 +475,7 @@ function writeZip(file, entries) {
   let offset = 0;
   for (const [name, text] of Object.entries(entries)) {
     const nameBytes = Buffer.from(name, 'utf8');
-    const content = Buffer.from(text, 'utf8');
+    const content = Buffer.isBuffer(text) ? text : Buffer.from(text, 'utf8');
     const local = Buffer.alloc(30 + nameBytes.length + content.length);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
