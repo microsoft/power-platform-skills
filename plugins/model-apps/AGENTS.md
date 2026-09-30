@@ -4,8 +4,8 @@ This file provides guidance to AI Agents when working with the **model-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building Power Apps for **model-driven apps**. Two **authoring** skills do the work
-(plus `/report-issue` and `/telemetry` — four user-invocable skills in total):
+A plugin for building Power Apps for **model-driven apps**. Three **authoring** skills do the work
+(plus `/report-issue` and `/telemetry` — five user-invocable skills in total):
 
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
@@ -13,15 +13,18 @@ A plugin for building Power Apps for **model-driven apps**. Two **authoring** sk
 - **`/app-builder`** — build and edit a **whole model-driven app** (tables, columns,
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
+- **`/pcf`** — build, test, diagnose, upgrade, deploy, bind, verify and inventory PCF code
+  components for model-driven apps and Power Pages.
 
-**The two authoring skills are independent entry points — neither requires the other.** Use `/genpage`
-to add pages to an app that already exists; use `/app-builder` to build or edit a whole app.
+**The three authoring skills are independent entry points — none requires another.** Use `/genpage`
+to add pages to an app that already exists; use `/app-builder` to build or edit a whole app; use
+`/pcf` for code components.
 `/app-builder` does *reuse* `genpage-page-builder` to generate its page `.tsx` (Phase 1.5), but that
 is an implementation detail of code generation, not a dependency: `/genpage` never invokes
 `/app-builder`, and `/app-builder` never invokes the `/genpage` skill. They install together (the
-marketplace copies the whole plugin directory), but **either can be invoked without the other, and
-neither leaves state the other depends on**. Keep it that way — shared **agents and libraries** are
-fine, a skill-to-skill call is not, and neither may write a file the other treats as authoritative
+marketplace copies the whole plugin directory), but **any authoring skill can be invoked without
+another, and none leaves state another depends on**. Keep it that way — shared **agents and libraries** are
+fine, a skill-to-skill call is not, and no skill may write a file another treats as authoritative
 (this is why `write-page-plan.js` emits `app-builder-page-plan.md`, not `genpage-plan.md`).
 
 Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
@@ -111,7 +114,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   to prevent confusion must not *contain* the name it guards against — see
   `scripts/write-page-plan.js` for why the app-builder page plan is not `genpage-*`.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
-  warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
+  warnings }`): errors block approval (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
@@ -579,7 +582,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (sample data, publish, generated icons) stay `▢` unprobed and are counted separately in the
   summary. The probe reuses the build's OWN discovery helpers (`findExistingTable`,
   `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
-  implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
+  implementation, so the rendered preview cannot disagree with what the apply then does; it is read-only, and
   `--no-live-plan` restores the offline, spec-only listing.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
@@ -599,21 +602,21 @@ Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`refe
 
 Behavioral spec per script:
 
-- **`scripts/write-pcf-plan.js` → `scripts/lib/pcf-intent.js`** — validates `pcf-intent.json`, lints binding intent (`PCF_INTENT_*`) and renders `pcf-plan.md`. It is the only writer for the readable PCF plan; do not hand-author the plan after the intent changes.
-- **`scripts/pcf-scaffold.js` → `scripts/lib/pcf-scaffold.js`** — lists templates/recipes and renders selected projects from `pcf/templates/`, `pcf/shared/`, `pcf/recipes/`, the compatibility matrix and committed lock sets. It validates namespace/name/path containment before writing, optionally runs `npm install`, and emits JSON.
+- **`scripts/write-pcf-plan.js` → `scripts/lib/pcf-intent.js`** — validates `pcf-intent.json`, lints binding intent (`PCF_INTENT_*`) and renders `pcf-plan.md`. It is the only writer for the readable PCF summary; do not hand-author that summary after the intent changes.
+- **`scripts/pcf-scaffold.js` → `scripts/lib/pcf-scaffold.js`** — lists templates/recipes and renders selected projects from `pcf/templates/`, `pcf/shared/`, `pcf/recipes/`, the compatibility matrix and committed lock sets. Generated `package.json` files include the `pcf-scripts` npm commands `build`, `clean`, `rebuild`, `lint`, `lint:fix`, `start`, `start:watch`, `refreshTypes` and `test`, including the build/clean hooks that `pac pcf push` expects. It validates namespace/name/path containment before writing, optionally runs `npm install`, and emits JSON.
 - **`scripts/lint-pcf.js` → `scripts/lib/pcf-manifest.js` + `pcf-matrix.js`** — parses `ControlManifest.Input.xml`, enforces manifest and host policy (`PCF_*`, `PCF_PAGES_*`, `PCF_PLATFORM_LIB_*`, `PCF_FLUENT_*`), and optionally diffs against a previous manifest (`PCF_DIFF_*`).
 - **`scripts/pcf-gates.js`** — one-command gate: manifest, source, lint, test and production build. Gate finding families include manifest/source codes above plus `PCF_TEST_*` and `PCF_BUILD_*`; `--skip` is only for an explicitly irrelevant gate and must be explained by the skill.
 - **`scripts/pcf-build.js` → `scripts/lib/pcf-build.js`** — finds one `.pcfproj`, cleans by default, invokes the project-local `pcf-scripts` bin through `process.execPath`, checks `PcfBuildMode`, bundle size and unexplained outputs (`PCF_BUILD_*`, `PCF_BUNDLE_*`, `PCF_OUT_*`). `PcfBuildMode` only takes effect after the `Microsoft.Common.props` import.
 - **`scripts/pcf-doctor.js` → `scripts/lib/pcf-doctor.js`** — checks local tools and project health for the requested needs. Finding ids use `TOOL_*` and `PROJ_*`, plus matrix/host findings reused from manifest policy.
 - **`scripts/pcf-upgrade.js` → `scripts/lib/pcf-upgrade.js`** — plans and optionally applies bounded repairs: dependency alignment, build-mode placement and platform-library declaration alignment. Step ids include `DEPS_TO_MATRIX`, `REINSTALL`, `BUILDMODE_PRODUCTION`, `PLATFORM_LIB_VERSION`, and manual migration ids for non-automatic changes. It refuses dirty trees unless `--allow-dirty` is explicit.
 - **`scripts/pcf-push.js`** — wraps `pac pcf push --environment` for developer verification. The skill must obtain consent before calling it because PAC publishes all pending customizations. It validates solution/publisher/control names before passing values to PAC, allows dev bundles only with `--allow-dev-bundle`, and verifies registration unless `--no-verify` is explicit.
-- **`scripts/verify-pcf.js` → `scripts/lib/pcf-dataverse.js` + `pcf-binding-verify.js`** — reads registration and FormXML metadata, then reports evidence (`registered`, `bound(draft)`, `bound(published)` or `runtime-not-checked`). Binding findings use `PCF_BIND_*`; semantic clients are `phone`, `tablet`, `web`, mapped to FormXML factors only in `pcf-binding-verify.js`.
-- **`scripts/pcf-inventory.js` → `scripts/lib/pcf-dataverse.js`** — lists registered controls and optional where-used dependencies. It warns that dependency results are registered solution dependencies only and are not proof of Liquid or arbitrary text references.
+- **`scripts/verify-pcf.js` → `scripts/lib/pcf-dataverse.js` + `pcf-binding-verify.js`** — reads registration and FormXML metadata, then reports metadata evidence (`registered`, `bound(draft)`, `bound(published)`). `--intent` reads the canonical binding target from `bindings[].target` (`column` or `controlId`), with compatibility handling for older flat fields. The `/pcf` skill reports `runtime-not-checked` when no browser or manual runtime check was run. Binding findings use `PCF_BIND_*`; semantic clients are `phone`, `tablet`, `web`, mapped to FormXML factors only in `pcf-binding-verify.js`.
+- **`scripts/pcf-inventory.js` → `scripts/lib/pcf-dataverse.js`** — lists registered controls and optional where-used dependencies such as the bound `SystemForm` rows returned by Dataverse dependency APIs. It warns that dependency results are registered solution dependencies only and are not proof of Liquid or arbitrary text references.
 - **`scripts/pcf-ci-build.js`** — generated-project CI helper. `--all` scaffolds templates and available recipes, runs installs and gates; `--latest` probes published dependency drift; `--package` builds a small package smoke through PAC solution packaging.
 
 Rules that make the scripts safe to run from agents:
 
-- Every CLI starts with `parseArgs(argv)` and `validateFlags(argv, { known, needValue, hints })`, prints its `USAGE` on usage errors, exits 1, and emits one JSON result on stdout.
+- Every CLI starts with `parseArgs(argv)` and `validateFlags(argv, { known, needValue, hints })`. Usage errors print `USAGE`; non-usage failures exit 1 and emit one JSON result object on stdout so callers can parse failures consistently.
 - Scripts are dependency-free CommonJS and run on Node 20 and 22 across the CI matrix.
 - Process execution uses `spawn`/`spawnSync` with argv arrays and `shell:false`, except the documented Windows `pac.cmd` wrapper in `scripts/lib/pac-exec.js`.
 - Versions come only from `pcf/compatibility-matrix.json` and lockfiles under `pcf/lock/`; no other PCF toolchain version source is allowed.
@@ -670,7 +673,7 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-customapi-builder.md ← Single owner of the custom-api gate; discovers bound Custom APIs, writes ## Custom API Bindings + actions.json (create & edit flows)
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
-  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
+  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when generated requirements include ## Custom API Bindings)
   page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
@@ -731,8 +734,8 @@ scripts/
   pcf-ci-build.js              ← /pcf: generated-template/recipe CI and package-smoke runner
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
-  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
-  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before planner output is written, then verify the written plan targets the pages the approval named
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names from the single ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
@@ -836,8 +839,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
-| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into planner or edit-planner prompts. |
+| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into planner or edit-planner prompts. |
 
 ## Key Concepts
 
@@ -906,13 +909,13 @@ once here and only the per-feature specifics are tabled below:
 3. **Deploy** — the SKILL phase **re-probes** the flag and treats an absent/malformed bindings
    section as *no bindings*, so a plan authored while the flag was ON cannot deploy after it goes OFF.
 4. **ALM** — solution packaging honours the flag (or documents why it needs no gate).
-5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
+5. **Codegen** — `genpage-page-builder` emits feature code **only** when generated requirements carry an actual
    binding table, never on an absent/sentinel section.
 
 | | `connectors` | `custom-api` | `custom-telemetry` |
 |---|---|---|---|
 | **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not generated requirements |
 | **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
 | **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
 | **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
@@ -920,12 +923,12 @@ once here and only the per-feature specifics are tabled below:
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
-the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
+the generated plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
 difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
 binding table both yield `none`, because the page-builder only needs to know how many bindings it
 may call — which keeps the dispatch stable when the flag is eventually removed.
 
-`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
+`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no generated plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
 checklist above are N/A, and its Phase 4.7 "deploy phase" is nothing but the re-probe that
 produces the dispatch line. It also carries a second gate the other flags do not have: even

@@ -52,9 +52,9 @@ build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
 
 The orchestrator dispatches planner/builder work via `Task` and waits for the agent
 to return, rather than reimplementing it. The one documented exception is the
-**single-page fast path** (SKILL Phase 5b): when the plan has exactly one page, the
+**single-page fast path** (SKILL Phase 5b): when generated requirements have exactly one page, the
 orchestrator inlines the page-builder workflow instead of paying for a subagent.
-The plan document is the contract either way: the planner writes it; subsequent
+The generated plan document is the contract either way: planner output creates it; subsequent
 phases (and other agents) read it.
 
 ## /genpage — edit flow
@@ -115,7 +115,7 @@ The deployed artifact is just `<page>.tsx`. Everything else is local-dev
 scaffolding that helps the developer keep iterating without re-running the
 full skill.
 
-## /genpage — the plan document as a contract
+## /genpage — generated plan document contract
 
 The planner writes `genpage-plan.md` once. Every later phase reads it; nothing
 else passes state.
@@ -282,6 +282,10 @@ User invokes /pcf
 └──────────────┬───────────────┘
                v
 ┌──────────────────────────────┐
+│ Pages compatibility gate     │  for Pages targets: standard field only + pcf-gates.js --hosts pages
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
 │ Deploy                       │  pcf-push.js wraps pac pcf push --environment after recorded consent
 └──────────────┬───────────────┘
                v
@@ -291,6 +295,10 @@ User invokes /pcf
                v
 ┌──────────────────────────────┐
 │ Verify                       │  verify-pcf.js: registration + draft/published FormXML + optional runtime smoke
+└──────────────┬───────────────┘
+               v
+┌──────────────────────────────┐
+│ Pages site configuration     │  after deploy: guided site setup + runtime evidence if reachable
 └──────────────┬───────────────┘
                v
 ┌──────────────────────────────┐

@@ -139,6 +139,50 @@ test('/pcf flow files are linked from SKILL.md', () => {
   }
 });
 
+test('/pcf skill links troubleshooting guidance for repair flows', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+
+  assert.match(
+    skill,
+    /\.\.\/\.\.\/references\/pcf-troubleshooting\.md/,
+    'SKILL.md must link references/pcf-troubleshooting.md for build/import/render repair paths',
+  );
+});
+
+test('/pcf Pages compatibility gate precedes deploy phase', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+  const pagesGate = skill.indexOf('## Phase 5 — Pages compatibility gate');
+  const deploy = skill.indexOf('## Phase 6 — deploy');
+
+  assert.notEqual(pagesGate, -1, 'SKILL.md must have a pre-deploy Pages compatibility phase');
+  assert.notEqual(deploy, -1, 'SKILL.md must have a deploy phase');
+  assert.ok(pagesGate < deploy, 'Pages compatibility gate must run before deploy');
+});
+
+test('/pcf docs use boolean apply plus --steps for scoped upgrades', () => {
+  const offenders = [];
+  const badApplyValue = /--apply(?:=|\s+)(?!-|\[|authority\b)([A-Za-z0-9_.,-]+)/g;
+
+  for (const relativePath of PCF_DOC_FILES) {
+    const text = readPluginFile(relativePath);
+    for (const match of text.matchAll(badApplyValue)) {
+      offenders.push(`${relativePath}: ${match[0]}`);
+    }
+  }
+
+  assert.deepEqual(offenders, []);
+});
+
+test('gated evidence definition includes the production build', () => {
+  const testing = readPluginFile('references/pcf-testing.md');
+
+  assert.match(
+    testing,
+    /`gated`[^\n]*pcf-gates\.js[^\n]*production build/i,
+    '`gated` evidence must mean all pcf-gates.js gates including the production build',
+  );
+});
+
 function scriptUsage(scriptPath) {
   const source = fs.readFileSync(scriptPath, 'utf8');
   const usageConst = source.match(/const USAGE\s*=\s*(?:`([\s\S]*?)`|'([^']*)'|"([^"]*)")/);
@@ -259,7 +303,7 @@ test('every pcf-upgrade manual note has a guide heading', () => {
   }
 });
 
-test('every troubleshooting entry uses the A30 diagnostic format', () => {
+test('every troubleshooting entry uses the symptom-led diagnostic format', () => {
   const text = readPluginFile('references/pcf-troubleshooting.md');
   const entries = parseTroubleshootingEntries(text);
   assert.ok(entries.length > 10, 'expected multiple troubleshooting entries under ### headings');
@@ -290,6 +334,7 @@ test('troubleshooting covers the required PCF failure modes', () => {
     { title: 'Pages virtual control does not render', body: 'Power Pages does not support platform-library declarations' },
     { title: 'Pages list falls back to the default grid', body: 'Use a configured code component' },
     { title: 'Bound control cannot be deleted', body: 'The CustomControl({…}) component cannot be deleted because it is referenced' },
+    { title: 'Dataverse rejects an OData `in` operator', body: 'The query node In is not supported' },
   ];
 
   for (const required of requiredEntries) {

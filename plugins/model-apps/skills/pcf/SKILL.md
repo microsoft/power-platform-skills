@@ -29,6 +29,7 @@ Build, repair, upgrade, deploy, bind, verify and inventory Power Apps component 
 | User intent | Route |
 | --- | --- |
 | Build, fix, upgrade, deploy, bind, verify, inventory a PCF code component | Stay in `/model-apps:pcf`. |
+| Why a PCF control will not build, import, update or render | Stay in `/model-apps:pcf`; start with [../../references/pcf-troubleshooting.md](../../references/pcf-troubleshooting.md) and the doctor output. |
 | Whole custom page / generative page | Use `/model-apps:genpage`. |
 | Whole model-driven app with tables/forms/views/pages | Use `/model-apps:app-builder`. |
 | Use an existing control without code changes | Guide Maker binding and verification; do not scaffold. |
@@ -38,10 +39,10 @@ Build, repair, upgrade, deploy, bind, verify and inventory Power Apps component 
 - **new**: no PCF project exists or the user asks to create one. Follow [create-flow.md](create-flow.md).
 - **existing project**: one `*.pcfproj` found. Iterate, gates, deploy-only or bind as requested. If several are found, ask which unless unattended supplied a path.
 - **verify**: existing control already registered/bound. Run `verify-pcf.js` or `pcf-inventory.js` as appropriate.
-- **pages**: user targets Power Pages. Follow [pages-flow.md](pages-flow.md) before deploy or acceptance.
+- **pages**: user targets Power Pages. Run the Pages compatibility gate before deploy or acceptance, then guide site configuration after deploy. Follow [pages-flow.md](pages-flow.md).
 - **doctor**: run `pcf-doctor.js` and stop with fixes unless user asked to apply a repair.
 - **upgrade**: follow [upgrade-flow.md](upgrade-flow.md).
-- **inventory**: run `pcf-inventory.js`; always include the where-used warning from `pcf-testing.md`.
+- **inventory / "is this control still used?"**: run `pcf-inventory.js --where-used`; always include the where-used warning from `pcf-testing.md` because dependency results are registered solution dependencies only, not proof of Liquid or arbitrary text references.
 
 ## Phase 0 — preflight
 
@@ -59,17 +60,19 @@ node "${PLUGIN_ROOT}/scripts/check-auth.js" --env <envUrl> [--require-pac]
 
 Use `--require-pac` for push, binding verification and any path that calls PAC. If auth or tools block, report the script's JSON message and stop.
 
+For repair work, read [../../references/pcf-troubleshooting.md](../../references/pcf-troubleshooting.md) before choosing fixes. It maps build/import/update/render symptoms to the checks and scripts that produce actionable evidence.
+
 ## Phase 1 — design → intent → plan approval
 
 Ask only the missing decisions: host(s), field vs dataset, template family, properties, required features, target solution/publisher, binding target, clients, and Pages journey. For new controls follow [create-flow.md](create-flow.md).
 
-Write `pcf-intent.json` with schema version 1, then render the plan:
+Write `pcf-intent.json` with schema version 1, then render the intent summary:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/write-pcf-plan.js" --intent @pcf-intent.json [--manifest ControlManifest.Input.xml] [--out pcf-plan.md]
 ```
 
-In attended mode, show the rendered plan in plan mode and continue only after approval. In unattended mode, treat a green plan plus explicit non-destructive defaults as approved and log that default.
+In attended mode, show the rendered summary in plan mode and continue only after approval. In unattended mode, treat a green summary plus explicit non-destructive defaults as approved and log that default.
 
 ## Phase 2 — scaffold
 
@@ -105,7 +108,17 @@ Use `--skip` only for an explicitly irrelevant gate, and explain why. Never weak
 node "${PLUGIN_ROOT}/scripts/pcf-build.js" --project <dir> [--mode production|development] [--no-clean]
 ```
 
-## Phase 5 — deploy
+## Phase 5 — Pages compatibility gate
+
+For controls targeting Power Pages, run the pre-deploy Pages gate before `pcf-push.js`:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/pcf-gates.js" --project <dir> --hosts pages
+```
+
+This release supports Pages only for standard field controls. Reject unsupported control types, unsupported manifest features and source patterns documented in [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md) before deploy. Keep the site-configuration journey for after deployment.
+
+## Phase 6 — deploy
 
 Follow [deploy-flow.md](deploy-flow.md). Before running `pcf-push.js`, obtain and record consent naming: environment origin, solution or publisher prefix, and the fact that `pac pcf push` publishes all pending customizations in that environment.
 
@@ -113,11 +126,11 @@ Follow [deploy-flow.md](deploy-flow.md). Before running `pcf-push.js`, obtain an
 node "${PLUGIN_ROOT}/scripts/pcf-push.js" --project <dir> --env <url> (--solution <uniqueName> | --publisher-prefix <p>) [--incremental] [--verbosity minimal|normal|detailed|diagnostic] [--allow-dev-bundle] [--no-verify]
 ```
 
-## Phase 6 — bind
+## Phase 7 — bind
 
 Follow [bind-flow.md](bind-flow.md). Use Maker for binding unless the user explicitly brought their own binding automation. Publish after binding before claiming a published level.
 
-## Phase 7 — verify and optional runtime check
+## Phase 8 — verify and optional runtime check
 
 Verify metadata:
 
@@ -128,9 +141,9 @@ node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.cto
 
 Offer a browser runtime check with Playwright MCP when a reachable app or Pages site exists. If skipped or unavailable, report `runtime-not-checked` honestly.
 
-## Phase 8 — Pages
+## Phase 9 — Pages site configuration
 
-For Power Pages, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix. Pages configuration is guided in this release; do not claim Pages runtime certification without opening the site and recording behavior.
+After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix to guide site configuration. Pages configuration is guided in this release; do not claim Pages runtime certification without opening the site and recording behavior.
 
 ## Upgrade and inventory shortcuts
 
@@ -157,5 +170,3 @@ For Power Pages, follow [pages-flow.md](pages-flow.md), [../../references/pcf-po
 | `runtime-not-checked` | Metadata was checked but runtime was not. | State explicitly; do not round up. |
 
 Final report: control identity, hosts, version, gates, deploy target as a safe placeholder such as `https://contoso.crm.dynamics.com`, evidence level, runtime status, Pages status, and inventory warning.
-
-

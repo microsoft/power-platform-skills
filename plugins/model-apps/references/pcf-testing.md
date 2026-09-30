@@ -9,7 +9,7 @@ Sources: [debugging custom controls](https://learn.microsoft.com/en-us/power-app
 | Level | Meaning | Typical proof |
 | --- | --- | --- |
 | `built` | Production build completed locally. | `pcf-build.js` or equivalent production build output. |
-| `gated` | Manifest, host, source, lint and unit gates passed. | `pcf-gates.js` JSON or test output. |
+| `gated` | All `pcf-gates.js` gates passed, including manifest, host, source, lint, unit tests and the production build. | `pcf-gates.js` JSON or test output. |
 | `registered` | Dataverse has the expected custom control and manifest version. | Registration read-back after push/import. |
 | `bound(draft)` | Draft form or grid metadata contains the expected binding. | `verify-pcf.js` draft read. |
 | `bound(published)` | Published metadata contains the expected binding. | Published layer read after publish. |

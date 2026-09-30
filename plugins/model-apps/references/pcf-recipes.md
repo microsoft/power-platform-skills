@@ -29,7 +29,7 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `field-standard`.
 - Hosts: model-driven apps; Power Pages not certified in this release.
 - Key properties: `entityId`, `entityName`, `fetchXmlTemplate`, optional `pageSize`.
-- Limits: requires saved record id, online Web API, one loaded page plus load-more behavior.
+- Limits: requires saved record id, online Web API, one loaded page plus load-more behavior. Reloads only when the query-defining inputs change: record id, table name or FetchXML template.
 
 ## Grid customizer
 
@@ -38,7 +38,7 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `field-virtual`.
 - Hosts: model-driven apps; Power Pages not certified in this release.
 - Key property: `EventName`.
-- Limits: one customizer per grid, model-driven only, pure renderers/editors.
+- Limits: one customizer per grid, model-driven only, pure renderers/editors. The editor preserves the typed-start character from the official grid customizer `charPress` callback.
 
 ## Hierarchy Tree
 
@@ -47,7 +47,7 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `dataset-standard`.
 - Hosts: model-driven apps; Power Pages not certified in this release.
 - Key property sets: `primaryName`, optional `parentRecord` on `sampleDataSet`.
-- Limits: current loaded dataset page only, parent-not-loaded indicators, cycle handling, explicit load limit.
+- Limits: current loaded dataset page only, parent-not-loaded indicators, cycle handling, explicit load limit. Keyboard Left/Right behavior follows the host RTL setting.
 
 ## Lookup dropdown
 
@@ -56,7 +56,7 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `field-standard`.
 - Hosts: model-driven apps; Power Pages not certified in this release.
 - Key properties: `lookupValue`, `targetTable`, optional `selectableFilter`.
-- Limits: single-table lookup, online model-driven apps, no offline claim.
+- Limits: single-table lookup, online model-driven apps, no offline claim. Reloads only when target table or selectable filter changes, caps lookup paging, and tells the user when more matching rows exist.
 
 ## Star rating
 
@@ -65,4 +65,4 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `field-standard`.
 - Hosts: model-driven apps and Power Pages; not certified in this release for either host.
 - Key properties: `value`, optional `max`.
-- Limits: whole numbers only, no network/file/navigation APIs.
+- Limits: whole numbers only, no network/file/navigation APIs. Keyboard Left/Right behavior follows the host RTL setting.

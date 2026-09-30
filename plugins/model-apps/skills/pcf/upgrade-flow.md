@@ -10,14 +10,19 @@ Use this flow for an existing PCF project. It keeps upgrade automation narrow an
    ```
 2. Plan:
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" [--project <dir>] [--hosts model,pages] [--allow-dirty] [--no-install] [--npm-cli <path>]
+   node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" [--project <dir>] [--hosts model,pages] [--steps <id,...>] [--allow-dirty] [--no-install] [--npm-cli <path>]
    ```
 3. Show the JSON plan. Separate automatic steps from manual notes.
 4. Obtain consent before modifying files. If unattended, require explicit `--apply` authority and a clean or `--allow-dirty` workspace.
 5. Apply:
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" [--project <dir>] [--hosts model,pages] --apply [--allow-dirty] [--no-install] [--npm-cli <path>]
+   node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" [--project <dir>] [--hosts model,pages] --apply [--steps <id,...>] [--allow-dirty] [--no-install] [--npm-cli <path>]
    ```
+   For a scoped repair, use the boolean `--apply` flag plus `--steps`, for example:
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" --project <dir> --apply --steps PLATFORM_LIB_VERSION
+   ```
+   Do not pass a value to `--apply`; the CLI rejects `--apply <id>` and `--apply=<id>`.
 6. If `--no-install` is used, run the reinstall command the result names, usually `npm install` in the PCF project.
 7. Run `pcf-gates.js`, redeploy with `deploy-flow.md`, rebind if needed, and verify.
 

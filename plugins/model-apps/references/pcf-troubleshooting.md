@@ -74,7 +74,7 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Discriminating checks**: Inspect the `.pcfproj`. The effective `<PcfBuildMode>production</PcfBuildMode>` must appear after the `Microsoft.Common.props` import.
 
-**Fix**: Let the `BUILDMODE_PRODUCTION` repair from `node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" --project <dir> --apply` place the property after the import, or make the same edit manually.
+**Fix**: Let the `BUILDMODE_PRODUCTION` repair from `node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" --project <dir> --apply --steps BUILDMODE_PRODUCTION` place the property after the import, or make the same edit manually.
 
 **Verify**: Re-run the project gate; then build and confirm the bundle size and mode match a production build.
 
@@ -163,6 +163,18 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 **Fix**: Unbind the control, publish the changed artifact, verify dependencies again, then delete.
 
 **Verify**: `pcf-inventory.js` no longer reports registered dependencies, the form no longer references the control, and delete succeeds.
+
+### Dataverse rejects an OData `in` operator
+
+**Symptom**: `verify-pcf.js` fails a Dataverse read with HTTP 501 and `The query node In is not supported`.
+
+**Candidate causes**: The Dataverse endpoint rejected an OData `in` filter. Some OData surfaces accept `in`, but this metadata path requires an explicit `or` expression instead.
+
+**Discriminating checks**: Inspect the JSON failure object from `verify-pcf.js` and the emitted request filter. A failing form lookup usually shows a filter shaped like `type in (2,7)`.
+
+**Fix**: Use the current verifier, which emits `(type eq 2 or type eq 7)` for form-type filtering. If you own custom verification code, replace `in` with equivalent `or` comparisons for this Dataverse metadata query.
+
+**Verify**: Re-run `verify-pcf.js`; it should read draft and published form metadata instead of returning the HTTP 501 OData error.
 
 ## Binding
 

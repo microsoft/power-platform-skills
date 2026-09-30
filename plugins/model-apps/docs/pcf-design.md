@@ -43,7 +43,7 @@ Libraries are split by concern:
 - `pcf-build.js` executes the project-local `pcf-scripts` binary through `process.execPath`.
 - `pcf-dataverse.js` performs read-only verification/inventory through the vendored SDK plus documented raw Dataverse reads for surfaces the SDK does not model.
 - `pcf-binding-verify.js` validates model-driven FormXML binding shape.
-- `pcf-intent.js` validates the skill's machine-readable intent and renders the plan.
+- `pcf-intent.js` validates the skill's machine-readable intent and renders the approval summary.
 - `pcf-doctor.js` and `pcf-upgrade.js` diagnose and repair common project drift.
 
 ## Compatibility matrix
@@ -78,6 +78,8 @@ Templates are minimal, tested PCF project families:
 | `dataset-standard` | Dataset | Bundled | Model-driven apps, Power Pages guidance |
 | `field-virtual` | Field | Platform libraries | Model-driven apps |
 | `dataset-virtual` | Dataset | Platform libraries | Model-driven apps |
+
+Scaffolds include the `pcf-scripts` npm commands `build`, `clean`, `rebuild`, `lint`, `lint:fix`, `start`, `start:watch`, `refreshTypes` and `test`. The build/clean hooks are part of the generated contract because `pac pcf push` invokes the project package scripts during developer registration.
 
 Recipes overlay a template with task-focused behavior. The recipe catalog in [`../references/pcf-recipes.md`](../references/pcf-recipes.md) is rendered from `pcf/recipes/*/recipe.json` and separates **designed for** hosts from **certified** runtime evidence. Current recipes are available but not certified in this release unless that rendered catalog names a certification date.
 
@@ -115,7 +117,7 @@ Live-verified binding facts:
 - A designer-shaped FormXML binding with a custom-control cell class id, matching `uniqueid`/`forControl`, a fallback `<customControl id>`, and all three client factors survived draft and published reads after targeted publish.
 - A web-only declaration (`formFactor="2"`) was rejected at form write with `Custom control declaration for form factor(s) 0,1 is missing...`; `PCF_BIND_FACTOR_UNDECLARED` is an error and every binding must declare phone, tablet and web factors.
 - A bound control cannot be deleted until the binding is removed and the artifact is published.
-- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, with a text-search fallback for forms. Inventory still warns that registered dependencies are not proof of Liquid or arbitrary text references.
+- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, including the bound `SystemForm` dependency row for a form-bound control, with a text-search fallback for forms. Inventory still warns that registered dependencies are not proof of Liquid or arbitrary text references.
 
 ## Power Pages journeys
 

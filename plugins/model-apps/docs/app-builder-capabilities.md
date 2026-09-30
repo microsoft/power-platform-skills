@@ -208,7 +208,7 @@ apart deliberately.
   flow as `new_<name lower-cased, non-alphanumerics stripped>` — the derivation ignores the table
   *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
   logical name. So the name collides with three things, not one: another flow, a table the spec
-  declares, and anything already in the environment. The first two are rejected at the plan gate; the
+  declares, and anything already in the environment. The first two are rejected at the approval gate; the
   third is a build-time probe that checks **both** `workflows` (by `uniquename`) and table metadata
   (by logical name) and **halts** naming whichever owns it, instead of letting the create fail with a
   platform error about a table the author never mentioned. It runs only on the create path, never on
