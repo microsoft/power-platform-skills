@@ -49,7 +49,6 @@ const {
   reportPartialPush,
   errorCodeChain,
   RESET_WORKSPACE,
-  projectionRecovery,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -1761,9 +1760,7 @@ async function runSdkBuild(spec, opts = {}) {
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
-  // A push of a workspace copy an earlier plugin version left holding unpushed edits is refused by the SDK
-  // (ARTIFACT_PROJECTION_STALE); the runner then resets that one copy itself, and the halt says so.
-  const runner = makeRunner({ emit, total: plan.length, recover: projectionRecovery(provision) });
+  const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 
   // 1. Solution (idempotent; header-less provisioning client).

@@ -30,16 +30,16 @@ rewrites its navigation, and the vendored SDK is refreshed.
 - **`appShell` keys the build does not read are errors** ([#631]). A `title` on an area or group (they
   take `label`) used to deploy an untitled one while lint, the build and `--verify` passed.
 - **A SQL deadlock no longer fails a delete or a build.** A request SQL rolled back as a deadlock
-  victim is re-sent (up to three times): a record delete by the plugin; a read, an app create or a
-  publish by the refreshed SDK. A build that halts on one runs again like one that halts on a SQL
-  timeout; a teardown used to stop on it.
+  victim is re-sent (up to three times): a record delete, or an app delete's change set, by the
+  plugin; a read, an app create or a publish by the refreshed SDK. A build that halts on one runs
+  again like one that halts on a SQL timeout; a teardown used to stop on it.
 
 ### Changed
 
 - **The vendored SDK is refreshed.** A workspace saved by an earlier version is re-read on the next
-  build; a copy an interrupted build left holding unpushed edits is reset by the build, which asks
-  you to re-run. A remedy that asks you to clear `.maker-workspace` now says to stop other runs on it
-  first and to keep `last-applied.json` and `destructive-approval.json`.
+  build; a copy an interrupted build left holding unpushed edits halts it with the reset to make. A
+  remedy that asks you to clear `.maker-workspace` now says to stop other runs on it first and to
+  keep `last-applied.json` and `destructive-approval.json`.
 - **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
   default (`0`). A spec that omits `m365` still leaves it at `0`.
 

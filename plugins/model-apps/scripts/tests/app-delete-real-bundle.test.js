@@ -350,3 +350,43 @@ test('REAL BUNDLE + REAL TRANSPORT: the plugin HttpClient satisfies the SDK atom
   assert.strictEqual(sitemapIfMatch && sitemapIfMatch[1], SITEMAP_ROW_ETAG,
     'the header-borne row token must reach the SDK through the real transport');
 });
+
+// Measured live: a teardown's app delete — this change set — lost a SQL deadlock, and the whole teardown
+// stopped with nothing removed. A change set is atomic, so that answer proves nothing committed, and the
+// transport re-sends the same batch (sdk-http-client.js, isBatchDeadlockVictim). The first answer below is
+// the captured one: HTTP 500 for the batch, and only the failing operation answered inside it.
+test('REAL BUNDLE + REAL TRANSPORT: an app delete whose change set lost a SQL deadlock is re-sent and succeeds', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appdel-'));
+  tempDirs.push(dir);
+  const batches = [];
+  const slept = [];
+  const deadlocked = [
+    '--batchresponse_x', 'Content-Type: multipart/mixed; boundary=changesetresponse_x', '',
+    '--changesetresponse_x', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', 'Content-ID: 1', '',
+    'HTTP/1.1 500 Internal Server Error', 'Content-Type: application/json; odata.metadata=minimal; odata.streaming=true', 'OData-Version: 4.0', '',
+    JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } }),
+    '--changesetresponse_x--', '--batchresponse_x--', '',
+  ].join('\r\n');
+  const request = async ({ url, body }) => {
+    const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+    if (meta) return { statusCode: 200, headers: {}, body: JSON.stringify({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` }) };
+    if (/\/\$batch$/.test(url)) {
+      batches.push(body);
+      return batches.length === 1 ? { statusCode: 500, headers: {}, body: deadlocked } : { statusCode: 200, headers: {}, body: batchResponseFor(body) };
+    }
+    if (/\/appmodules\([^)]+\)/.test(url)) return { statusCode: 200, headers: {}, body: JSON.stringify(appRow()) };
+    if (SITEMAP_BY_ID.test(url)) return { statusCode: 200, headers: { etag: SITEMAP_ROW_ETAG }, body: JSON.stringify({ sitemapid: SITEMAP_ID }) };
+    if (url.includes('/sitemaps')) return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [sitemapRow()] }) };
+    return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [] }) };
+  };
+  const httpClient = createAzHttpClient('https://example.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+
+  const r = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE_ID);
+  assert.ok(r.success, `cascade reported failure: ${JSON.stringify(r.failures)}`);
+  assert.strictEqual(batches.length, 2, 'the deadlocked change set was sent once more');
+  assert.strictEqual(batches[1], batches[0], 'the same change set, byte for byte (the same conditional DELETEs)');
+  assert.deepStrictEqual(slept, [1000]);
+});

@@ -10,8 +10,8 @@
 //   1. a plain fetch RE-READS a clean old copy (no unpushed edits) and stamps it current — and the build
 //      fetches every existing form, view, chart and app before it edits one;
 //   2. a plain fetch KEEPS a copy that still holds unpushed edits (an interrupted build's) while the
-//      server has not moved, so that copy is refused at push — and the build then resets that one copy
-//      itself (or, when it cannot, names a manual reset), instead of the SDK's own `fetchArtifact(...)` advice.
+//      server has not moved, so that copy is refused at push — and the build then names a manual reset an
+//      operator can make safely (stop other runs first), instead of the SDK's own `fetchArtifact(...)` advice.
 // Driven against the app artifact over a fake Dataverse (the same shape as
 // app-ai-description-real-bundle.test.js), because the projection check is the same for every type.
 const test = require('node:test');
@@ -19,7 +19,7 @@ const assert = require('node:assert');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
-const { makeRunner, projectionRecovery, BuildHalt } = require('../lib/entity-provision.js');
+const { makeRunner, BuildHalt } = require('../lib/entity-provision.js');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const APP_ID = '11111111-1111-1111-1111-111111111111';
@@ -109,68 +109,40 @@ async function interruptedCopy() {
   stampOlderProjection(made.dir, APP_ID);
   const kept = await made.sdk.fetchArtifact('app', APP_ID);
   assert.strictEqual(kept.description, 'Edited by an interrupted build', 'the server has not moved, so the plain fetch keeps the unpushed copy');
-  // The two files in a workspace that no re-run can rebuild; a reset must leave them alone.
-  fs.writeFileSync(path.join(made.dir, 'last-applied.json'), '{"baseline":true}');
-  fs.writeFileSync(path.join(made.dir, 'destructive-approval.json'), '{"approved":[]}');
   return made;
 }
-const refusedPush = (runner, sdk, check) => assert.rejects(() => runner.run('app-shell', 'app "Probe"', () => sdk.pushArtifact('app', APP_ID)), (err) => {
-  assert.ok(err instanceof BuildHalt, 'the refusal halts the build');
-  assert.strictEqual(err.code, 'ARTIFACT_PROJECTION_STALE', 'with the SDK code kept for the caller');
-  assert.match(err.message, /Refusing to push app/, 'the SDK reason stays in the message');
-  assert.match(err.message, /earlier version of this plugin/, 'it says where the copy came from');
-  check(err);
-  return true;
-});
 
-test('REAL BUNDLE: the build resets a refused old copy itself, and the re-run pushes the spec\u2019s edits', async () => {
-  const { sdk, dir, writes } = await interruptedCopy();
+test('REAL BUNDLE: an old copy holding unpushed edits is refused at push, and the halt names a reset that stops other runs and keeps the baseline and approvals', async () => {
+  const { sdk, writes } = await interruptedCopy();
   const events = [];
-  const runner = makeRunner({ emit: (e) => events.push(e), total: 1, recover: projectionRecovery(sdk) });
-  await refusedPush(runner, sdk, (err) => {
-    assert.match(err.message, /The build has reset it to the environment's copy; re-run it, and it re-applies every edit from the spec\./);
-    assert.doesNotMatch(err.message, /delete everything/, 'no manual reset is asked for');
+  const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
+  await assert.rejects(() => runner.run('app-shell', 'app "Probe"', () => sdk.pushArtifact('app', APP_ID)), (err) => {
+    assert.ok(err instanceof BuildHalt, 'the refusal halts the build');
+    assert.strictEqual(err.code, 'ARTIFACT_PROJECTION_STALE', 'with the SDK code kept for the caller');
+    assert.match(err.message, /Refusing to push app/, 'the SDK reason stays in the message');
+    assert.match(err.message, /earlier version of this plugin/, 'it says where the copy came from');
+    assert.match(err.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/,
+      'and names the step an operator can take, keeping the navigation baseline and the approval record');
+    return true;
   });
-  assert.strictEqual(writes.length, 0, 'the refused push wrote nothing');
+  assert.strictEqual(writes.length, 0, 'nothing was written');
   assert.ok(events.some((e) => e.status === 'error' && e.phase === 'app-shell'), 'the failure is reported on the phase');
-  assert.strictEqual(fs.readFileSync(path.join(dir, 'last-applied.json'), 'utf8'), '{"baseline":true}', 'the baseline is untouched');
-  assert.strictEqual(fs.readFileSync(path.join(dir, 'destructive-approval.json'), 'utf8'), '{"approved":[]}', 'so is the approval record');
-  // The re-run: a plain fetch now reads the environment's copy, and the spec's edit pushes.
-  const fresh = await sdk.fetchArtifact('app', APP_ID);
-  assert.strictEqual(fresh.description, 'Tickets', 'the interrupted build\u2019s edit is gone');
-  await sdk.updateElement('app', APP_ID, '/description', 'Tickets and orders');
-  const pushed = await sdk.pushArtifact('app', APP_ID);
-  assert.strictEqual(pushed.saved, true);
-  assert.strictEqual(appWrites(writes)[0].body.description, 'Tickets and orders');
-});
-
-test('REAL BUNDLE: when the copy cannot be reset, the halt names a manual reset that keeps the baseline and the approval record', async () => {
-  const { sdk } = await interruptedCopy();
-  const manual = /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/;
-  // No recovery at all, a recovery whose reset fails, and one given an error it does not recognise.
-  const failing = { fetchArtifact: async () => { throw new Error('offline'); } };
-  for (const recover of [undefined, projectionRecovery(failing), projectionRecovery(null)]) {
-    const runner = makeRunner({ emit: () => {}, total: 1, recover });
-    await refusedPush(runner, sdk, (err) => assert.match(err.message, manual));
-  }
-  // Another refusal phrased the same way is not this one. A language mismatch names its artifact exactly
-  // like a stale projection does, but resetting that copy is not the plugin's call: nothing is fetched, and
-  // the SDK's own remedy stands.
-  let fetched = 0;
-  const counting = { fetchArtifact: async () => { fetched += 1; } };
-  const mismatch = Object.assign(new Error(`Refusing to push form '${APP_ID}': it was fetched with languageCode 1036 but this SDK is configured with 1033.`), { code: 'ARTIFACT_LANGUAGE_MISMATCH' });
-  assert.strictEqual(await projectionRecovery(counting)(mismatch), '');
-  assert.strictEqual(await projectionRecovery(counting)(new Error('something else')), '');
-  assert.strictEqual(fetched, 0, 'only a stale projection is reset');
+  // The build does not reset the copy itself (an overwrite could discard another build's newer edits):
+  // after the halt it still holds the interrupted build's edit, for the manual reset to remove.
+  assert.strictEqual((await sdk.getArtifact('app', APP_ID)).description, 'Edited by an interrupted build');
 });
 test('the runner adds no remedy to an SDK error it has none for', async () => {
   const { SdkError } = require(BUNDLE);
   const runner = makeRunner({ emit: () => {}, total: 1 });
-  await assert.rejects(
-    () => runner.run('forms', 'form "Customer"', async () => { throw new SdkError('PATH_NOT_FOUND', 'No node at /tabs/9'); }),
-    (err) => {
-      assert.strictEqual(err.message, 'forms failed: No node at /tabs/9');
-      assert.strictEqual(err.code, 'PATH_NOT_FOUND');
-      return true;
-    });
+  // Including another refusal phrased like a stale projection: a language mismatch keeps the SDK's remedy.
+  const mismatch = `Refusing to push form '${APP_ID}': it was fetched with languageCode 1036 but this SDK is configured with 1033.`;
+  for (const [code, message] of [['PATH_NOT_FOUND', 'No node at /tabs/9'], ['ARTIFACT_LANGUAGE_MISMATCH', mismatch]]) {
+    await assert.rejects(
+      () => runner.run('forms', 'form "Customer"', async () => { throw new SdkError(code, message); }),
+      (err) => {
+        assert.strictEqual(err.message, `forms failed: ${message}`);
+        assert.strictEqual(err.code, code);
+        return true;
+      });
+  }
 });

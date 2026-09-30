@@ -522,9 +522,7 @@ async function mapLimit(items, limit, fn) {
 // A Runner owns the emit/counter/BuildHalt machinery so both consumers produce the
 // identical { phase, status, label, n, total } event stream. `total` is supplied by the
 // consumer (each computes its own plan length), so counting stays consumer-scoped.
-// `recover(err)` (optional) may repair what a failed step left behind and return what the halt should
-// say about it; when it returns nothing, the halt names the operator's own step where one is known.
-function makeRunner({ emit, total, recover }) {
+function makeRunner({ emit, total }) {
   let n = 0;
   const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
     const myN = (n += 1);
@@ -548,11 +546,7 @@ function makeRunner({ emit, total, recover }) {
         return undefined;
       }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      let repaired = '';
-      if (typeof recover === 'function') {
-        try { repaired = (await recover(err)) || ''; } catch { repaired = ''; }
-      }
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${repaired || operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
+      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
@@ -578,8 +572,14 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // ARTIFACT_PROJECTION_STALE: the SDK refuses to push a workspace copy projected by a different version of its
 // parsers — one an earlier version of this plugin saved. The build's plain fetch re-reads every CLEAN copy
 // before it edits one, so the refusal is reached only by a copy still holding edits an earlier build never
-// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The build
-// resets that copy itself (projectionRecovery); this is what the halt says when it could not.
+// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The edits
+// were projected from the spec, so the re-run after a reset re-applies them.
+//
+// The build does NOT reset the copy itself, although `fetchArtifact(..., { overwrite: true })` would. The
+// SDK's per-artifact lock is per process, so an overwrite here could replace the copy a second build on
+// the same workspace has just re-read and edited, and that build would then push without its edit —
+// reporting success. The manual reset starts by stopping every other run, which is what makes it safe.
+// Pinned against the real bundle in workspace-projection-real-bundle.test.js.
 function operatorRemedy(err) {
   if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
     return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE}, and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
@@ -587,27 +587,6 @@ function operatorRemedy(err) {
   return '';
 }
 
-// The build's `recover` for ARTIFACT_PROJECTION_STALE: reset the refused copy to the environment's —
-// `fetchArtifact` with `overwrite`, the very step the SDK's message names — instead of asking for a manual
-// reset. Only that artifact's files change (under the SDK's own per-artifact lock); the approval record, the
-// navigation baseline and every lease are left alone. The discarded edits were projected from the spec, so
-// the re-run re-applies them. The SDK names the artifact in its message, e.g.
-//   Refusing to push form '0f2c…': its workspace copy was produced by projection version 3, but this SDK …
-// (pinned against the real bundle in workspace-projection-real-bundle.test.js). Returns '' for any other
-// error, or when the reset itself fails — the halt then names the manual reset.
-function projectionRecovery(provision) {
-  return async (err) => {
-    if (!err || err.code !== 'ARTIFACT_PROJECTION_STALE' || !provision || typeof provision.fetchArtifact !== 'function') return '';
-    const named = /Refusing to push (\w+) '([^']+)'/.exec(String(err.message || ''));
-    if (!named) return '';
-    try {
-      await provision.fetchArtifact(named[1], named[2], { overwrite: true });
-    } catch {
-      return '';
-    }
-    return ` — that ${named[1]}'s workspace copy was saved by an earlier version of this plugin and still held edits no build pushed (an interrupted build, say). The build has reset it to the environment's copy; re-run it, and it re-applies every edit from the spec.`;
-  };
-}
 // Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see
 // requireSuccessfulPush below for which, and why both spellings of the commit flag are read). Shared so
 // every caller that reacts to a failed push decides "failed" exactly as the halt does.
@@ -1407,4 +1386,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, projectionRecovery, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

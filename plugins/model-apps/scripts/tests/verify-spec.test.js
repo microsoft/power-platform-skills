@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement, parseFetchXml } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml, liveNavEntries } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
@@ -251,10 +251,24 @@ test('verifySpec: a kept icon is judged on real SubArea elements, fully XML-deco
   for (const other of [
     `<SubArea-Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
     `<SubArea:Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubAreaÜ Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<保存>${entry(url)}</保存>`,
     `<Descriptions>${entry(url)}</Descriptions>`,
     `<SubArea Id="outer" Entity="account">${entry(url)}</SubArea>`,
   ]) {
     assert.strictEqual(vec(await verifySpec(spec, liveOf(other), { baselineSpec })).present, false, other);
+  }
+  // A document the walk cannot account for completely grants no exemption at all: a document type
+  // declaration, a `<` that starts no tag, a closing tag out of order.
+  for (const xml of [
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${entry(url)}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)} a < b</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}</Area></Group></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}`,
+  ]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, xml);
+    assert.strictEqual(liveNavEntries(xml), null, `unreadable: ${xml}`);
   }
   // ...while the real entry after such a sibling is still found: the walk returns to the Group level.
   assert.strictEqual(vec(await verifySpec(spec, liveOf(`<Descriptions><Description LCID="1033" Description="x" /></Descriptions>${entry(url)}`), { baselineSpec })).present, true);

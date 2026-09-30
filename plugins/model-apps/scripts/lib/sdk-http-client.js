@@ -29,6 +29,33 @@ function isSqlDeadlockVictim(res) {
 }
 
 /**
+ * True when a `$batch` answer PROVES nothing in it committed because SQL rolled it back as a deadlock
+ * victim. The vendored SDK sends one change set per `$batch` (an app and its sitemap deleted together; a
+ * table's columns added together), and a change set is atomic: when an operation in it fails, the whole
+ * set is rolled back and only the failing operation is answered. Captured live, a teardown's app delete
+ * (HTTP 500 for the batch, abridged):
+ *   --batchresponse_<id>
+ *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
+ *   --changesetresponse_<id>
+ *   Content-Type: application/http
+ *   Content-ID: 1
+ *   HTTP/1.1 500 Internal Server Error
+ *   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. … Sql Number: 1205"}}
+ *   --changesetresponse_<id>--
+ *   --batchresponse_<id>--
+ * Only an answer that shows it is accepted: at least one operation result, EVERY result a 500, and a
+ * deadlock marker for each one. A single 2xx anywhere — an operation outside a change set commits on its
+ * own — or any other failure, and the batch is not re-sent.
+ */
+function isBatchDeadlockVictim(res) {
+  if (!res || typeof res.body !== 'string') return false;
+  const statuses = [...res.body.matchAll(/^HTTP\/1\.1 (\d{3})\b/gm)].map((m) => Number(m[1]));
+  if (!statuses.length || statuses.some((s) => s !== 500)) return false;
+  const victims = (res.body.match(new RegExp(SQL_DEADLOCK_VICTIM.source, 'gi')) || []).length;
+  return victims >= statuses.length;
+}
+
+/**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
  * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }
@@ -139,7 +166,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
     //    its sitemap in one atomic change set), so it inherits the record-delete hazard above. It is
     //    also ambiguous on failure: the server may have committed while the response was lost, so a
     //    blind re-issue is exactly the racing retry that wedges the row. Issue it once and let the
-    //    SDK surface the unknown outcome to the caller.
+    //    SDK surface the unknown outcome to the caller — unless its answer proves every operation was
+    //    rolled back as a deadlock victim (isBatchDeadlockVictim; see the re-send below).
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
@@ -196,13 +224,15 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(backoffMs(attempt));
         continue;
       }
-      // A record DELETE is otherwise never re-sent (see noRetry). A SQL deadlock VICTIM is the one
-      // exception, because the server has ANSWERED, and the answer is that it rolled this request's
-      // transaction back: nothing is still in flight to race the concurrent-delete guard, and nothing
-      // was deleted. Measured live, a teardown's process-flow delete failed exactly this way and was
-      // clean on a re-run. A `$batch` stays excluded: its failure can be ambiguous, and the SDK
-      // settles a change set's outcome itself.
-      if (recordDelete && attempt < DEADLOCK_RESENDS && isSqlDeadlockVictim(res)) {
+      // A record DELETE or a `$batch` is otherwise never re-sent (see noRetry). A SQL deadlock VICTIM is
+      // the one exception, because the server has ANSWERED, and the answer is that it rolled this
+      // request's transaction back: nothing is still in flight to race the concurrent-delete guard, and
+      // nothing was deleted. Measured live: a teardown's process-flow delete failed exactly this way,
+      // and so did a teardown's app delete — a change set — which stopped the whole teardown with
+      // nothing removed; both were clean on a re-run. A batch is re-sent only when its answer shows
+      // every operation was rolled back that way (isBatchDeadlockVictim).
+      const deadlocked = (recordDelete && isSqlDeadlockVictim(res)) || (isBatch && isBatchDeadlockVictim(res));
+      if (deadlocked && attempt < DEADLOCK_RESENDS) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }
@@ -235,4 +265,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim };

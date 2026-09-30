@@ -1012,10 +1012,10 @@ test('#583 any other thrown push error propagates unchanged, and resets the copy
 });
 
 // The vendored SDK refuses to push a copy an earlier plugin version projected and an interrupted build
-// left holding unpushed edits (workspace-projection-real-bundle.test.js pins the real refusal). The build's
-// runner resets that copy itself — the approval record and the navigation baseline are not touched — and
-// the halt says a re-run is all that is left.
-test('a push refused for an earlier version\u2019s workspace copy is reset by the build itself', async () => {
+// left holding unpushed edits (workspace-projection-real-bundle.test.js pins the real refusal). From a real
+// build the halt names the manual reset, which starts by stopping every other run on the workspace: the
+// build does not overwrite the copy itself, because another build on the same workspace may hold newer edits.
+test('a push refused for an earlier version\u2019s workspace copy halts with the manual reset', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true });
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (t, id) => {
@@ -1025,12 +1025,9 @@ test('a push refused for an earlier version\u2019s workspace copy is reset by th
   };
   await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'ARTIFACT_PROJECTION_STALE', e.message);
-    assert.match(e.message, /The build has reset it to the environment's copy; re-run it, and it re-applies every edit from the spec\./);
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/);
     return true;
   });
-  const resets = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
-  assert.ok(resets.length >= 1, 'the refused copy is reset');
-  assert.ok(calls.indexOf(resets[resets.length - 1]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the refused push');
 });
 
 test('#583 a returned push failure resets the copy, but a concurrent edit keeps it as the fence', async () => {

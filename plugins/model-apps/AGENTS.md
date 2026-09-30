@@ -1265,14 +1265,13 @@ push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_
 re-vendor that raises it makes every existing `.maker-workspace` old. Upgrades stay invisible only
 because a plain fetch re-reads a clean old copy (and the build fetches every existing form, view,
 chart and app before editing it); a copy still holding an interrupted build's edits is kept by that
-fetch and refused at push. The build's runner then resets that one copy itself (`projectionRecovery`
-in `lib/entity-provision.js`: `fetchArtifact` with `overwrite`, only when the code is
-`ARTIFACT_PROJECTION_STALE` — other refusals phrased the same way keep their own remedy) and halts
-asking for a re-run. When it cannot, the halt names the manual reset every workspace-reset remedy
-shares (`RESET_WORKSPACE`): stop other builds and teardowns on the workspace first — the changed-only
-snapshot holds their leases and a running teardown's registration — then delete everything except
-`last-applied.json` (the navigation baseline) and `destructive-approval.json` (the approved removals),
-which no re-run can rebuild.
+fetch and refused at push. The runner then names the manual reset every workspace-reset remedy shares
+(`RESET_WORKSPACE` in `lib/entity-provision.js`): stop other builds and teardowns on the workspace
+first — the changed-only snapshot holds their leases and a running teardown's registration — then
+delete everything except `last-applied.json` (the navigation baseline) and `destructive-approval.json`
+(the approved removals), which no re-run can rebuild. The build does not reset the copy itself: the
+SDK's per-artifact lock is per process, so an overwrite could discard another build's newer edits on
+the same workspace.
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/

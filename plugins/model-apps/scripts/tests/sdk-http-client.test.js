@@ -179,7 +179,7 @@ test('a 500 that is NOT a deadlock victim, or a $batch, still gets exactly one r
   const { request, calls } = fakeTransport(DEADLOCK_500);
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
   await http.postRaw('https://org.crm.dynamics.com/api/data/v9.0/$batch', '--b\r\n', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
-  assert.strictEqual(calls.length, 1, 'a change set settles its own outcome in the SDK');
+  assert.strictEqual(calls.length, 1, 'a $batch answer that does not show its operations\u2019 results is not re-sent');
 });
 
 test('DOES retry a METADATA delete (EntityDefinitions) on a network error — async-idempotent, gets cosmetic 404', async () => {
@@ -340,6 +340,71 @@ test('postRaw does NOT retry a $batch on a network error either', async () => {
     /Request failed/
   );
   assert.strictEqual(calls.length, 1, 'an ambiguous batch outcome is never re-issued blindly');
+});
+
+// An ANSWERED batch whose change set lost a SQL deadlock is the exception: a change set is atomic, so
+// the answer proves nothing in it committed. Captured live on a teardown's app delete (the app and its
+// sitemap in one change set); the whole teardown stopped on it with nothing removed.
+const batchAnswer = (...parts) => [
+  '--batchresponse_b1',
+  'Content-Type: multipart/mixed; boundary=changesetresponse_c1',
+  '',
+  ...parts.flatMap(([status, json], i) => [
+    '--changesetresponse_c1', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${i + 1}`, '',
+    status, 'REQ_ID: 00000000-0000-0000-0000-000000000000', 'Content-Type: application/json; odata.metadata=minimal', 'OData-Version: 4.0', '',
+    json || '',
+  ]),
+  '--changesetresponse_c1--',
+  '--batchresponse_b1--',
+  '',
+].join('\r\n');
+const DEADLOCK_PART = ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } })];
+const BATCH_DEADLOCK_500 = { statusCode: 500, headers: {}, body: batchAnswer(DEADLOCK_PART) };
+const postBatch = (http) => http.postRaw('https://org.crm.dynamics.com/api/data/v9.0/$batch', '--b\r\n', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+
+test('postRaw DOES re-send a $batch whose change set lost a SQL deadlock, at most three times, 1 s / 2 s / 4 s', async () => {
+  const slept = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? BATCH_DEADLOCK_500 : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+  const res = await postBatch(http);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body, BATCH_RESPONSE, 'the SDK reads the re-sent batch\u2019s own answer, raw');
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[1].body, calls[0].body, 'the same change set, byte for byte');
+  assert.deepStrictEqual(slept, [1000]);
+
+  const { request: always, calls: calls2 } = fakeTransport(BATCH_DEADLOCK_500);
+  const slept2 = [];
+  const http2 = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: always, sleep: async (ms) => { slept2.push(ms); } });
+  const gaveUp = await postBatch(http2);
+  assert.strictEqual(gaveUp.status, 500, 'after the last re-send the deadlock surfaces unchanged');
+  assert.strictEqual(gaveUp.body, BATCH_DEADLOCK_500.body);
+  assert.strictEqual(calls2.length, 4, 'four attempts in all');
+  assert.deepStrictEqual(slept2, [1000, 2000, 4000]);
+});
+
+test('postRaw re-sends a $batch ONLY when its answer proves every operation was rolled back as a deadlock victim', async () => {
+  const answers = {
+    'an operation that committed beside the deadlocked one': batchAnswer(['HTTP/1.1 204 No Content'], DEADLOCK_PART),
+    // A nested SQL error can repeat the marker, so counting markers alone is not the proof: a committed
+    // operation beside it still means the batch must not be sent again.
+    'an operation that committed beside a failure that names the deadlock twice': batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Sql Number: 1205 (inner: Sql Number: 1205)' } })]),
+    'a failure that is not a deadlock': batchAnswer(['HTTP/1.1 412 Precondition Failed', JSON.stringify({ error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match' } })]),
+    'a 500 without the deadlock number': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Sql error: Generic SQL error. Sql Number: 12050' } })]),
+    'two failed operations, only one of them a deadlock': batchAnswer(DEADLOCK_PART, ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Generic SQL error' } })]),
+  };
+  for (const [what, body] of Object.entries(answers)) {
+    const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const res = await postBatch(http);
+    assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
+    assert.strictEqual(res.body, body, `and the answer reaches the SDK as it came: ${what}`);
+  }
+  // The same deadlocked answer to anything but a $batch or a record delete is left to the status retry.
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? BATCH_DEADLOCK_500 : { statusCode: 200, headers: {}, body: '{}' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await http.get('https://org.crm.dynamics.com/api/data/v9.0/accounts');
+  assert.strictEqual(calls.length, 2, 'a GET keeps its ordinary transient retry');
 });
 
 test('postRaw still refreshes the token once on 401 (rejected before processing, so it is safe)', async () => {

@@ -730,7 +730,8 @@ async function verifySpec(spec, read, opts = {}) {
     })();
     const { ids, live, base } = await keepContext;
     const key = specSubAreaTargetKey(sa, ids);
-    const entries = key ? live.get(key) : undefined;
+    // An unreadable sitemap (liveNavEntries answered null) proves nothing was kept.
+    const entries = key && live ? live.get(key) : undefined;
     if (!entries || entries.length !== 1) return false;
     return keepsLiveValue(field, sa[field], entries[0][field], base.get(key));
   };
@@ -1650,29 +1651,40 @@ function subareaDashboardHasLauncher(xml, dashId) {
 // An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
 // DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
 // Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
-// name — not `SubArea-Archived`) directly under `SiteMap/Area/Group`. A SubArea anywhere else is kept by
-// the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA section or a
-// processing instruction is text — so those three are removed first, and the remaining tags are walked
-// with an element stack. A value may hold a raw `>`, so a tag is matched quote by quote. Values are fully
-// XML-decoded (`&amp;`, and numeric references such as `&#38;`), in either quote style, before they are
-// compared with the spec's.
+// name — not `SubArea-Archived`, not `SubAreaÜ`) directly under `SiteMap/Area/Group`. A SubArea anywhere
+// else is kept by the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA
+// section or a processing instruction is text — so those three are removed first, and the remaining tags
+// are walked with an element stack. A name is read whole, whatever its characters (XML names may be
+// Unicode), so every element boundary is on the stack. A value may hold a raw `>`, so a tag is matched
+// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
+// either quote style, before they are compared with the spec's.
+//
+// FAIL-CLOSED: the answer is null — no entries, so verify grants no "kept" exemption and the icon check
+// stands as it would without a baseline — for anything this walk cannot account for completely: a `<`
+// that starts no element tag (which is also how a document type declaration, whose entities could expand
+// into elements, is turned away), or a closing tag that does not close the innermost open element.
 const NAV_PATH = ['SiteMap', 'Area', 'Group'];
+const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 function liveNavEntries(xml) {
-  const byKey = new Map();
   const markup = String(xml || '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
     .replace(/<\?[\s\S]*?\?>/g, '');
+  const tags = [...markup.matchAll(XML_TAG)];
+  // In well-formed XML every remaining `<` starts a tag: text escapes it, and an attribute value cannot hold one.
+  if (tags.length !== (markup.match(/</g) || []).length) return null;
+  const byKey = new Map();
   const open = [];
-  for (const [, closing, name, body, selfClosing] of markup.matchAll(/<(\/?)([A-Za-z_][\w.:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g)) {
+  for (const [, closing, name, body, selfClosing] of tags) {
     if (closing) {
-      const at = open.lastIndexOf(name);
-      if (at >= 0) open.length = at;
+      if (open[open.length - 1] !== name) return null;
+      open.pop();
       continue;
     }
     if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
       const attrs = Object.create(null);
-      for (const m of body.matchAll(/\s([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
+      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
       const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
       const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
       if (key) {
@@ -1682,9 +1694,8 @@ function liveNavEntries(xml) {
     }
     if (!selfClosing) open.push(name);
   }
-  return byKey;
+  return open.length ? null : byKey;
 }
-
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the
