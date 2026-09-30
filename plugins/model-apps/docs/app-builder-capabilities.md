@@ -22,7 +22,7 @@ apart deliberately.
 - Deterministic, **idempotent** build engine — discovers via the SDK (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing; new / existing / mixed envs all work.
 - **All Dataverse access via the vendored headless SDK**; metadata cached under `<app-folder>/.maker-workspace/` for reuse.
 - Phase selection (`--only`/`--skip`/`--from`/`--to`), `[n/total]` narration, `BuildHalt` gate, dry-run by default, `--sample-data` / `--publish` opt-in.
-- Bounded-concurrency for independent ops; one publish round-trip per entity + the app. `az`-token HttpClient with transient (429 / 5xx) retry; a record delete or an atomic `$batch` change set is sent once, unless SQL rolled it back as a deadlock victim (`Sql Number: 1205` — for a change set, on every operation it answers), which is re-sent up to three times.
+- Bounded-concurrency for independent ops; one publish round-trip per entity + the app. `az`-token HttpClient with transient (429 / 5xx) retry; a record delete, or a change set of conditional deletes (an app and its sitemap), is sent once unless SQL rolled it back as a deadlock victim (`Sql Number: 1205` — for a change set, on every operation it answers), and then re-sent up to three times.
 - Guardrail lint (`spec-lint.js`) + hard validator (`app-spec.js`). 🧪 full `node:test` suite + the vendored SDK's Jest suite green (`node scripts/run-tests.js --with-sdk <ppux>`).
 
 ### Data model (Tier 1) — ✅ verified live

@@ -342,9 +342,10 @@ test('postRaw does NOT retry a $batch on a network error either', async () => {
   assert.strictEqual(calls.length, 1, 'an ambiguous batch outcome is never re-issued blindly');
 });
 
-// An ANSWERED batch whose change set lost a SQL deadlock is the exception: a change set is atomic, so
-// the answer proves nothing in it committed. Captured live on a teardown's app delete (the app and its
-// sitemap in one change set); the whole teardown stopped on it with nothing removed.
+// An ANSWERED batch whose change set lost a SQL deadlock is the exception, when the batch is made of
+// conditional deletes: a change set is atomic, so the answer proves nothing in it committed, and a second
+// send meets the rows as the first did or is refused with 412. Captured live on a teardown's app delete
+// (the app and its sitemap in one change set); the whole teardown stopped on it with nothing removed.
 const batchAnswer = (...parts) => [
   '--batchresponse_b1',
   'Content-Type: multipart/mixed; boundary=changesetresponse_c1',
@@ -360,7 +361,18 @@ const batchAnswer = (...parts) => [
 ].join('\r\n');
 const DEADLOCK_PART = ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } })];
 const BATCH_DEADLOCK_500 = { statusCode: 500, headers: {}, body: batchAnswer(DEADLOCK_PART) };
-const postBatch = (http) => http.postRaw('https://org.crm.dynamics.com/api/data/v9.0/$batch', '--b\r\n', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+// A batch request as the SDK renders one: `ops` are [method, url, extra header lines].
+const batchRequest = (...ops) => [
+  '--batch_b', 'Content-Type: multipart/mixed;boundary=changeset_c', '',
+  ...ops.flatMap(([method, url, headers = []], i) => ['--changeset_c', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${i + 1}`, '', `${method} ${url} HTTP/1.1`, ...headers, '']),
+  '--changeset_c--', '--batch_b--', '',
+].join('\r\n');
+// The SDK's atomic app delete: the app and its sitemap, each conditioned on the row version it read.
+const APP_DELETE = batchRequest(
+  ['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(11111111-1111-1111-1111-111111111111)', ['If-Match: W/"1001"']],
+  ['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/sitemaps(33333333-3333-3333-3333-333333333333)', ['If-Match: W/"2002"']],
+);
+const postBatch = (http, body = APP_DELETE) => http.postRaw('https://org.crm.dynamics.com/api/data/v9.0/$batch', body, { headers: { 'Content-Type': 'multipart/mixed;boundary=batch_b' } });
 
 test('postRaw DOES re-send a $batch whose change set lost a SQL deadlock, at most three times, 1 s / 2 s / 4 s', async () => {
   const slept = [];
@@ -392,6 +404,13 @@ test('postRaw re-sends a $batch ONLY when its answer proves every operation was 
     'a failure that is not a deadlock': batchAnswer(['HTTP/1.1 412 Precondition Failed', JSON.stringify({ error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match' } })]),
     'a 500 without the deadlock number': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Sql error: Generic SQL error. Sql Number: 12050' } })]),
     'two failed operations, only one of them a deadlock': batchAnswer(DEADLOCK_PART, ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Generic SQL error' } })]),
+    // Each operation must name the deadlock in its OWN part: one part repeating the marker proves nothing
+    // about the other (independent operations can be answered separately).
+    'the marker twice in one operation, none in the other': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Sql Number: 1205 (inner: Sql Number: 1205)' } })], ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Generic SQL error' } })]),
+    'a truncated answer (no closing delimiter)': batchAnswer(DEADLOCK_PART).replace(/--batchresponse_b1--\r\n$/, ''),
+    // Only a 500 is a rolled-back deadlock victim; another status whose message quotes one is not.
+    'another status whose error quotes the deadlock': batchAnswer(['HTTP/1.1 400 Bad Request', JSON.stringify({ error: { message: 'Validation failed (inner: Sql Number: 1205)' } })]),
+    'a complete answer with no operation results': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
   };
   for (const [what, body] of Object.entries(answers)) {
     const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body });
@@ -399,6 +418,25 @@ test('postRaw re-sends a $batch ONLY when its answer proves every operation was 
     const res = await postBatch(http);
     assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
     assert.strictEqual(res.body, body, `and the answer reaches the SDK as it came: ${what}`);
+  }
+  // A batch that is not made of conditional deletes is never sent again, whatever its answer. The SDK
+  // updates a generative page's files with `If-Match: *` after checking their versions itself: a second
+  // send after the backoff would skip that check and overwrite another maker's edit.
+  const requests = {
+    'unconditional writes (a generative page update)': batchRequest(['PATCH', 'https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)', ['If-Match: *']]),
+    'a DELETE with no condition (the SDK\u2019s create rollback)': batchRequest(['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)']),
+    'a DELETE conditioned on anything': batchRequest(['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)', ['If-Match: *']]),
+    'a conditional DELETE beside a write': batchRequest(['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)', ['If-Match: W/"1"']], ['POST', 'https://org.crm.dynamics.com/api/data/v9.0/sitemaps', []]),
+    // Deliberately only DELETEs: a write conditioned on its own row can still rest on rows the batch does
+    // not condition on, which a second send would not look at again.
+    'writes each conditioned on a row version': batchRequest(['PATCH', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)', ['If-Match: W/"1"']], ['PATCH', 'https://org.crm.dynamics.com/api/data/v9.0/sitemaps(2)', ['If-Match: W/"2"']]),
+    'no operation at all': '--b\r\n',
+  };
+  for (const [what, body] of Object.entries(requests)) {
+    const { request, calls } = fakeTransport(BATCH_DEADLOCK_500);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await postBatch(http, body);
+    assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
   }
   // The same deadlocked answer to anything but a $batch or a record delete is left to the status retry.
   const { request, calls } = fakeTransport(() => (calls.length <= 1 ? BATCH_DEADLOCK_500 : { statusCode: 200, headers: {}, body: '{}' }));

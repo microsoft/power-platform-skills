@@ -29,32 +29,88 @@ function isSqlDeadlockVictim(res) {
 }
 
 /**
- * True when a `$batch` answer PROVES nothing in it committed because SQL rolled it back as a deadlock
- * victim. The vendored SDK sends one change set per `$batch` (an app and its sitemap deleted together; a
- * table's columns added together), and a change set is atomic: when an operation in it fails, the whole
- * set is rolled back and only the failing operation is answered. Captured live, a teardown's app delete
- * (HTTP 500 for the batch, abridged):
+ * True when a `$batch` REQUEST may be sent again after a proven rollback: every operation in it is a
+ * DELETE conditioned on the exact row version its caller read. That is the vendored SDK's atomic app
+ * delete, the app and its sitemap in one change set (abridged):
+ *   --batch_<id>
+ *   Content-Type: multipart/mixed;boundary=changeset_<id>
+ *
+ *   --changeset_<id>
+ *   Content-Type: application/http
+ *   Content-ID: 1
+ *
+ *   DELETE https://contoso.crm.dynamics.com/api/data/v9.0/appmodules(<id>) HTTP/1.1
+ *   If-Match: W/"1001"
+ *
+ *   --changeset_<id>--
+ *   --batch_<id>--
+ * A second send of such a batch meets the rows exactly as the first did, or is refused with 412: it cannot
+ * remove anything its caller did not read. No other batch qualifies. Notably the SDK updates a generative
+ * page's files in a batch of `If-Match: *` writes after checking their versions itself; sent again after
+ * a backoff, that batch would skip the check and overwrite another maker's edit. An unconditional DELETE
+ * does not qualify either (the SDK's create rollback sends those; it is sent once, as before).
+ */
+function isConditionalDeleteBatch(body) {
+  if (typeof body !== 'string') return false;
+  const lines = body.split(/\r?\n/);
+  const ops = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const request = /^([A-Z]+) \S+ HTTP\/1\.1$/.exec(lines[i]);
+    if (!request) continue;
+    let ifMatch;
+    for (let j = i + 1; j < lines.length && lines[j] !== ''; j += 1) {
+      const m = /^If-Match:\s*(\S.*?)\s*$/i.exec(lines[j]);
+      if (m) ifMatch = m[1];
+    }
+    ops.push({ method: request[1], ifMatch });
+  }
+  return ops.length > 0 && ops.every((op) => op.method === 'DELETE' && op.ifMatch && op.ifMatch !== '*');
+}
+
+/**
+ * True when a `$batch` ANSWER proves nothing in it committed, because SQL rolled every operation back as a
+ * deadlock victim. A change set is atomic: when an operation in it fails, the whole set is rolled back and
+ * only the failing operation is answered. Captured live on a teardown's app delete (HTTP 500 for the
+ * batch, abridged):
  *   --batchresponse_<id>
  *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
+ *
  *   --changesetresponse_<id>
  *   Content-Type: application/http
  *   Content-ID: 1
+ *
  *   HTTP/1.1 500 Internal Server Error
- *   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. … Sql Number: 1205"}}
+ *   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. ... Sql Number: 1205"}}
  *   --changesetresponse_<id>--
  *   --batchresponse_<id>--
- * Only an answer that shows it is accepted: at least one operation result, EVERY result a 500, and a
- * deadlock marker for each one. A single 2xx anywhere — an operation outside a change set commits on its
- * own — or any other failure, and the batch is not re-sent.
+ * The answer is read part by part (the text between delimiter lines, `--<boundary>`), and it proves the
+ * rollback only when it is complete (it closes the boundary it opened with: first line `--<boundary>`,
+ * last line `--<boundary>--`), it answers at least one operation, and EVERY operation's own part is a 500
+ * carrying the deadlock marker. Anything
+ * else (one success, another failure, an operation whose part does not name the deadlock itself, a
+ * truncated answer) is returned as it came.
  */
 function isBatchDeadlockVictim(res) {
   if (!res || typeof res.body !== 'string') return false;
-  const statuses = [...res.body.matchAll(/^HTTP\/1\.1 (\d{3})\b/gm)].map((m) => Number(m[1]));
-  if (!statuses.length || statuses.some((s) => s !== 500)) return false;
-  const victims = (res.body.match(new RegExp(SQL_DEADLOCK_VICTIM.source, 'gi')) || []).length;
-  return victims >= statuses.length;
+  const lines = res.body.split(/\r?\n/);
+  const nonEmpty = lines.map((l) => l.trim()).filter(Boolean);
+  const outer = /^--(\S+)$/.exec(nonEmpty[0] || '');
+  if (!outer || nonEmpty[nonEmpty.length - 1] !== `--${outer[1]}--`) return false;
+  const parts = [];
+  let part = null;
+  for (const line of lines) {
+    if (/^--\S/.test(line)) {
+      if (part) parts.push(part);
+      part = [];
+    } else if (part) {
+      part.push(line);
+    }
+  }
+  const results = parts
+    .map((p) => ({ status: p.map((l) => /^HTTP\/1\.1 (\d{3})\b/.exec(l)).find(Boolean), text: p.join('\n') }))
+    .filter((r) => r.status);
+  return results.length > 0 && results.every((r) => r.status[1] === '500' && SQL_DEADLOCK_VICTIM.test(r.text));
 }
-
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
@@ -166,8 +222,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
     //    its sitemap in one atomic change set), so it inherits the record-delete hazard above. It is
     //    also ambiguous on failure: the server may have committed while the response was lost, so a
     //    blind re-issue is exactly the racing retry that wedges the row. Issue it once and let the
-    //    SDK surface the unknown outcome to the caller — unless its answer proves every operation was
-    //    rolled back as a deadlock victim (isBatchDeadlockVictim; see the re-send below).
+    //    SDK surface the unknown outcome to the caller — unless it is a batch of conditional deletes and
+    //    its answer proves every operation was rolled back as a deadlock victim (see the re-send below).
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
@@ -229,9 +285,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
       // request's transaction back: nothing is still in flight to race the concurrent-delete guard, and
       // nothing was deleted. Measured live: a teardown's process-flow delete failed exactly this way,
       // and so did a teardown's app delete — a change set — which stopped the whole teardown with
-      // nothing removed; both were clean on a re-run. A batch is re-sent only when its answer shows
-      // every operation was rolled back that way (isBatchDeadlockVictim).
-      const deadlocked = (recordDelete && isSqlDeadlockVictim(res)) || (isBatch && isBatchDeadlockVictim(res));
+      // nothing removed; both were clean on a re-run. A batch is re-sent only when it is made of
+      // conditional deletes (isConditionalDeleteBatch) and its answer shows every operation was rolled
+      // back that way (isBatchDeadlockVictim).
+      const deadlocked = (recordDelete && isSqlDeadlockVictim(res))
+        || (isBatch && isConditionalDeleteBatch(bodyStr) && isBatchDeadlockVictim(res));
       if (deadlocked && attempt < DEADLOCK_RESENDS) {
         await sleep(1000 * 2 ** attempt);
         continue;
@@ -265,4 +323,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isConditionalDeleteBatch };
