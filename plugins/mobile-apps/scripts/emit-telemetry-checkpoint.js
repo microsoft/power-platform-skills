@@ -60,7 +60,10 @@ function emitCheckpoint(payload, opts = {}) {
 
     const createContext = opts.createTelemetryContext || telemetry.createTelemetryContext;
     const cwd = opts.cwd || process.cwd();
-    const context = createContext({}, { cwd });
+    const context = createContext({}, {
+      cwd,
+      ...(opts.runId ? { readProcessScope: () => '' } : {}),
+    });
     if (!context) return null;
 
     if (opts.runId) return emitTrackedCheckpoint(payload, context, { ...opts, cwd });

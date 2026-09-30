@@ -361,6 +361,25 @@ test('checkpoint command emits directly and remains fail-open', () => {
   }), null);
 });
 
+test('tracked checkpoint context skips host process discovery', () => {
+  let contextOptions;
+  const result = emitCheckpointCommand(
+    'create-mobile-app|gather_app_requirements|started',
+    {
+      cwd: '/private-project',
+      runId: '11111111-1111-4111-8111-111111111111',
+      parentSpanId: '22222222-2222-4222-8222-222222222222',
+      createTelemetryContext: (_payload, options) => {
+        contextOptions = options;
+        return null;
+      },
+    },
+  );
+  assert.equal(result, null);
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
 test('checkpoint event carries only static checkpoint enrichment', (t) => {
   const context = contextFor(provisioned);
   const event = emitCheckpointEvent(context, {
