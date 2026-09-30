@@ -26,6 +26,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private readable = true;
     private editable = true;
     private disabled = false;
+    private isRTL = false;
 
     public init(
         context: ComponentFramework.Context<IInputs>,
@@ -36,10 +37,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.container = container;
         this.context = context;
         this.notifyOutputChanged = notifyOutputChanged;
-
-        // Field controls must opt in before hosts send allocated width and height changes.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
-        context.mode.trackContainerResize(true);
 
         const doc = container.ownerDocument;
         this.root = doc.createElement("div");
@@ -54,6 +51,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.readable = valueParameter?.security?.readable ?? true;
         this.editable = valueParameter?.security?.editable ?? true;
         this.disabled = context.mode.isControlDisabled;
+        this.isRTL = context.userSettings?.isRTL ?? false;
         this.max = this.readConfiguredMax(context);
         this.value = this.normalizeRating(valueParameter?.raw);
         this.render();
@@ -89,6 +87,9 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private render(): void {
         if (!this.root || !this.context) return;
+        const focusedRating = this.root.contains(this.root.ownerDocument.activeElement)
+            ? this.value
+            : null;
         this.root.replaceChildren();
 
         if (!this.readable) {
@@ -109,6 +110,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         }
 
         this.root.append(group);
+        if (focusedRating != null) this.focusRating(focusedRating);
     }
 
     private createRadio(rating: number): HTMLSpanElement {
@@ -154,11 +156,13 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private nextRating(key: string, rating: number): number | null {
         switch (key) {
             case "ArrowRight":
-            case "ArrowDown":
-                return rating >= this.max ? 1 : rating + 1;
+                return this.isRTL ? this.previousRating(rating) : this.nextSequentialRating(rating);
             case "ArrowLeft":
+                return this.isRTL ? this.nextSequentialRating(rating) : this.previousRating(rating);
+            case "ArrowDown":
+                return this.nextSequentialRating(rating);
             case "ArrowUp":
-                return rating <= 1 ? this.max : rating - 1;
+                return this.previousRating(rating);
             case "Home":
                 return 1;
             case "End":
@@ -166,6 +170,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             default:
                 return null;
         }
+    }
+
+    private nextSequentialRating(rating: number): number {
+        return rating >= this.max ? 1 : rating + 1;
+    }
+
+    private previousRating(rating: number): number {
+        return rating <= 1 ? this.max : rating - 1;
     }
 
     private focusRating(rating: number): void {

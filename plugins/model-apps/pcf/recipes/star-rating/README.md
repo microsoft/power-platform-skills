@@ -54,5 +54,5 @@ A maker can bind it in either designer path:
 - Bound outputs: Learn states `getOutputs()` returns values for properties with `usage="bound"`, including a property named `value`.
 - Manifest properties and resources: [`property`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/property) and [`resources`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/resources).
 - Localized strings: [`context.resources.getString`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/resources) reads strings from manifest `.resx` resources.
-- Disabled and layout context: [`mode`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/mode) and [`trackContainerResize`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/mode/trackcontainerresize).
+- Disabled context: [`mode`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/mode). This recipe does not opt into resize tracking because it does not consume allocated width or height.
 - PCF support boundaries: [Code components best practices](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/code-components-best-practices).

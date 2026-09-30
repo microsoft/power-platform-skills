@@ -355,15 +355,21 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             this.focusVisibleItem(this.visibleItems.length - 1);
             event.preventDefault();
         } else if (event.key === "ArrowRight") {
-            this.moveRight(item, index);
+            if (this.isRTL()) this.moveLeft(item);
+            else this.moveRight(item, index);
             event.preventDefault();
         } else if (event.key === "ArrowLeft") {
-            this.moveLeft(item);
+            if (this.isRTL()) this.moveRight(item, index);
+            else this.moveLeft(item);
             event.preventDefault();
         } else if (event.key === "Enter" && item.node) {
             openRecord(this.dataSet, item.node.record);
             event.preventDefault();
         }
+    }
+
+    private isRTL(): boolean {
+        return this.context?.userSettings?.isRTL ?? false;
     }
 
     private moveRight(item: VisibleTreeItem, index: number): void {

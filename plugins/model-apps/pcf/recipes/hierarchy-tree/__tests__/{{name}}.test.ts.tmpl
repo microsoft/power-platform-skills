@@ -25,6 +25,15 @@ function mount(dataSet?: IInputs["sampleDataSet"]) {
     return { control, container, dataSet };
 }
 
+function mountRtl(dataSet?: IInputs["sampleDataSet"]) {
+    const control = new {{name}}();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const context = mockContext<IInputs>(dataSet ? { sampleDataSet: dataSet } : {}, { rtl: true });
+    control.init(context, jest.fn(), {}, container);
+    return { control, container, dataSet };
+}
+
 test("renders an accessible tree from sorted dataset records", () => {
     const { container } = mount(hierarchyDataSet());
 
@@ -167,6 +176,18 @@ test("right and left expand collapse and move through the tree hierarchy", () =>
 
     (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+});
+
+test("right and left expand collapse behavior reverses in RTL", () => {
+    const { container } = mountRtl(hierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("true");
 });
 
 test("enter opens record nodes but not the synthetic parent-not-loaded group", () => {

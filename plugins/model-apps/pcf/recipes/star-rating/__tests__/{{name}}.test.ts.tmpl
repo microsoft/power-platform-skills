@@ -94,6 +94,33 @@ test("arrow keys and Home End move the roving selected radio", () => {
     expect(radios(container).map((item) => item.tabIndex)).toEqual([-1, -1, -1, 0, -1]);
 });
 
+test("left and right arrow behavior reverses in RTL", () => {
+    const control = new {{name}}();
+    const notify = jest.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const context = withStrings(mockContext<IInputs>({ value: mockProperty(3) as IInputs["value"] }, { rtl: true }));
+    control.init(context, notify, {}, container);
+
+    pressRadio(container, 2, "ArrowRight");
+    pressRadio(container, 1, "ArrowLeft");
+
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(control.getOutputs()).toEqual({ value: 3 });
+});
+
+test("host update after keyboard selection keeps focus on the selected radio", () => {
+    const { control, container, context } = mount({ value: mockProperty(2) as IInputs["value"] });
+    document.body.append(container);
+
+    radios(container)[1].focus();
+    pressRadio(container, 1, "ArrowRight");
+    context.parameters.value = mockProperty(3) as IInputs["value"];
+    control.updateView(context);
+
+    expect(document.activeElement).toBe(radios(container)[2]);
+});
+
 test("disabled and non-editable states prevent output changes", () => {
     const disabled = mount({ value: mockProperty(1) as IInputs["value"] }, { disabled: true });
     clickRadio(disabled.container, 2);

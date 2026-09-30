@@ -219,6 +219,70 @@ test("omits the selectable row filter when the maker leaves configuration blank"
     );
 });
 
+test("unchanged updateView keeps loaded lookup options and does not restart the query", async () => {
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _query?: string, _maxPageSize?: number) => createResponse([
+        { accountid: "11111111-1111-4111-8111-111111111111", accountname: "Alpha" },
+    ]));
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(1);
+    expect(Array.from(mounted.select().options).map((option) => option.textContent)).toContain("Alpha");
+});
+
+test("changed lookup query inputs restart lookup loading exactly once", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(createResponse([{ accountid: "11111111-1111-4111-8111-111111111111", accountname: "Alpha" }]))
+        .mockResolvedValueOnce(createResponse([{ accountid: "22222222-2222-4222-8222-222222222222", accountname: "Beta" }]));
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+
+    await flushPromises();
+    mounted.context.parameters.selectableFilter.raw = "name ne null";
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(Array.from(mounted.select().options).map((option) => option.textContent)).toContain("Beta");
+    expect(Array.from(mounted.select().options).map((option) => option.textContent)).not.toContain("Alpha");
+});
+
+test("lookup loading stops at the documented page cap and reports that more rows exist", async () => {
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _query?: string, _maxPageSize?: number) => createResponse([
+        { accountid: "11111111-1111-4111-8111-111111111111", accountname: "Alpha" },
+    ], "https://contoso.crm.dynamics.com/api/data/v9.2/accounts?$skiptoken=next"));
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(4);
+    expect(mounted.status().textContent).toContain("More rows exist");
+});
+
+test("unchanged updateView keeps the capped lookup warning without restarting the query", async () => {
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _query?: string, _maxPageSize?: number) => createResponse([
+        { accountid: "11111111-1111-4111-8111-111111111111", accountname: "Alpha" },
+    ], "https://contoso.crm.dynamics.com/api/data/v9.2/accounts?$skiptoken=next"));
+    const mounted = mount(lookupProperty(), {
+        webAPI: mockWebApi({ retrieveMultipleRecords }),
+    });
+
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(4);
+    expect(mounted.status().textContent).toContain("More rows exist");
+});
+
 test("clearing the dropdown returns undefined and unchanged values do not notify", async () => {
     const mounted = mount(lookupProperty([
         { id: "11111111-1111-4111-8111-111111111111", name: "Alpha", entityType: "account" },

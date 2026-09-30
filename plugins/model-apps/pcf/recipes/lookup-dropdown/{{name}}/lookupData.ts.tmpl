@@ -12,10 +12,16 @@ interface LookupMetadata {
 }
 
 const PAGE_SIZE = 25;
+const MAX_LOOKUP_PAGES = 4;
+
+export interface LookupLoadResult {
+    options: LookupOption[];
+    moreRowsExist: boolean;
+}
 
 export async function loadLookupOptions(
     context: ComponentFramework.Context<IInputs>,
-): Promise<LookupOption[]> {
+): Promise<LookupLoadResult> {
     const metadata = await readLookupMetadata(context);
     const select = `$select=${[metadata.idColumn, metadata.nameColumn].map(encodeURIComponent).join(",")}`;
     const selectableFilter = metadata.selectableFilter.trim();
@@ -23,8 +29,10 @@ export async function loadLookupOptions(
     const orderBy = `$orderby=${encodeURIComponent(`${metadata.nameColumn} asc`)}`;
     const results: LookupOption[] = [];
     let options: string | undefined = `?${select}${filter}&${orderBy}`;
+    let pageCount = 0;
 
-    while (options) {
+    while (options && pageCount < MAX_LOOKUP_PAGES) {
+        pageCount += 1;
         const page = await context.webAPI.retrieveMultipleRecords(metadata.tableName, options, PAGE_SIZE);
         for (const row of page.entities) {
             const id = stringField(row, metadata.idColumn);
@@ -38,7 +46,10 @@ export async function loadLookupOptions(
         options = nextLinkOptions(page.nextLink);
     }
 
-    return results;
+    // Lookup editors run inside form update cycles. A broad table can contain thousands of rows, so
+    // stop after a small documented cap and tell makers to narrow the selectable filter instead of
+    // blocking the form while a sample control pages an entire table.
+    return { options: results, moreRowsExist: Boolean(options) };
 }
 
 async function readLookupMetadata(

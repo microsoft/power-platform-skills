@@ -287,6 +287,39 @@ test("load more follows documented nextLink paging", async () => {
     expect(mounted.container.textContent).toContain("Second");
 });
 
+test("unchanged updateView keeps loaded rows and does not restart the query", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Second" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.container.textContent).toContain("First");
+    expect(mounted.container.textContent).toContain("Second");
+});
+
+test("changed query inputs restart contextual grid exactly once", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }]))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Changed" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.context.parameters.entityId = mockProperty("{00000000-0000-4000-8000-000000000002}") as IInputs["entityId"];
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.container.textContent).toContain("Changed");
+    expect(mounted.container.textContent).not.toContain("First");
+});
+
 test("two instances keep independent state and paging", async () => {
     const first = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "1", fullname: "First" }])) }) });
     const second = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "2", fullname: "Second" }])) }) });

@@ -93,6 +93,39 @@ test("text editor calls the grid change callback without mutating params", () =>
     expect(rowData).toEqual({ __rec_id: "row-2" });
 });
 
+test("text editor seeds typed-start characters, labels the input and preserves RTL direction", () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([{ name: "name", displayName: "Account name", dataType: "Text" }]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-3" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    const element = editor?.({
+        value: "Old",
+        charPress: "Z",
+        isRTLMode: true,
+        onChange,
+        columnDataType: "Text",
+    }, params) as React.ReactElement<{
+        "aria-label": string;
+        defaultValue: string;
+        dir?: string;
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    }>;
+    element.props.onChange({ currentTarget: { value: "Zed" } } as React.ChangeEvent<HTMLInputElement>);
+
+    expect(element.props.defaultValue).toBe("Z");
+    expect(element.props["aria-label"]).toBe("Account name");
+    expect(element.props.dir).toBe("rtl");
+    expect(onChange).toHaveBeenCalledWith("Zed");
+    expect(onCellValueChanged).toHaveBeenCalledWith("Zed");
+});
+
 test("two instances on one page publish independent event names", () => {
     const firstFactory = { fireEvent: jest.fn() };
     const secondFactory = { fireEvent: jest.fn() };
@@ -103,4 +136,3 @@ test("two instances on one page publish independent event names", () => {
     expect(firstFactory.fireEvent).toHaveBeenCalledWith("FirstGrid", expect.any(Object));
     expect(secondFactory.fireEvent).toHaveBeenCalledWith("SecondGrid", expect.any(Object));
 });
-

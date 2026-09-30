@@ -81,11 +81,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.context = context;
         this.destroyed = false;
 
-        // The upload affordance is content-sized, but resize tracking lets hosts reflow status text
-        // predictably when form columns collapse.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/mode/trackcontainerresize
-        context.mode.trackContainerResize(true);
-
         this.root = container.ownerDocument.createElement("div");
         this.root.className = "{{cssClass}}";
         container.append(this.root);
@@ -346,4 +341,3 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         return context?.resources?.getString(key) || key;
     }
 }
-

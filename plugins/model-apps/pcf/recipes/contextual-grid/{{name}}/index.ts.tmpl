@@ -46,6 +46,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private state: State = "idle";
     private message = "";
     private strings = FALLBACKS;
+    private currentQueryKey = "";
 
     private readonly onLoadMore = (): void => {
         if (!this.context || !this.nextOptions || this.state === "loading") return;
@@ -62,8 +63,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.strings = Object.fromEntries(
             Object.entries(FALLBACKS).map(([key, fallback]) => [key, stringResource(context, key, fallback)]),
         );
-
-        context.mode.trackContainerResize(true);
 
         this.root = document.createElement("div");
         this.root.className = "{{cssClass}}";
@@ -93,10 +92,17 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             this.rows = [];
             this.nextOptions = undefined;
             this.loadToken += 1;
+            this.currentQueryKey = "";
             this.render(config.state, config.message);
             return;
         }
 
+        const queryKey = gridQueryKey(config);
+        if (queryKey === this.currentQueryKey) {
+            this.render(this.rows.length ? "ready" : this.state, this.rows.length ? "" : this.message);
+            return;
+        }
+        this.currentQueryKey = queryKey;
         this.rows = [];
         this.nextOptions = undefined;
         this.startLoad(context, undefined, true);
@@ -122,6 +128,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         if (!config.ok) {
             this.rows = [];
             this.nextOptions = undefined;
+            this.currentQueryKey = "";
             this.render(config.state, config.message);
             return;
         }
@@ -201,6 +208,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.loadMoreButton.hidden = !this.nextOptions;
         this.loadMoreButton.disabled = this.context.mode.isControlDisabled || state === "loading";
     }
+}
+
+function gridQueryKey(config: { entityName: string; fetchXmlTemplate: string; recordId: string }): string {
+    return [
+        config.entityName.trim().toLowerCase(),
+        normalizeGuid(config.recordId) ?? config.recordId.trim().toLowerCase(),
+        config.fetchXmlTemplate,
+    ].join("\n");
 }
 
 function stringResource(context: ComponentFramework.Context<IInputs>, key: string, fallback: string): string {
