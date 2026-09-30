@@ -222,3 +222,15 @@ test('nothing live (a first write, or an unreadable copy) leaves the desired tre
     assert.deepStrictEqual(notes, []);
   }
 });
+
+// Every target type the SDK's duplicate check keys has a key here too, and nothing else gets one: a
+// subarea without a target cannot be lined up with a live entry by anything but position.
+test('subAreaTargetKey: a CustomPage is keyed by its page name, case-folded; no target or an unknown type has no key', () => {
+  assert.strictEqual(subAreaTargetKey({ type: 'CustomPage', page: 'new_Board_Abc12' }), 'CustomPage:new_board_abc12');
+  assert.strictEqual(subAreaTargetKey({ type: 'CustomPage' }), undefined);
+  assert.strictEqual(subAreaTargetKey({ type: 'WebResource', url: '/WebResources/x.htm' }), undefined);
+  assert.strictEqual(subAreaTargetKey({ type: 'Entity' }), undefined);
+  assert.strictEqual(subAreaTargetKey(null), undefined);
+  assert.strictEqual(specSubAreaTargetKey({ title: 'Only a title' }), undefined);
+  assert.strictEqual(specSubAreaTargetKey(null), undefined);
+});

@@ -831,6 +831,32 @@ function assertSnapshotInvalidated(store, workspaceDir) {
   return inv;
 }
 
+// #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
+// what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
+// state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
+// re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
+// the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
+// found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort:
+// returns whether the baseline was written, and never throws.
+//
+// The spec is persisted ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
+// detect a .tsx / contentPath byte edit, not just a spec-JSON change. It records the content that was
+// actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
+// dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
+// them, and a spec downloaded elsewhere carries another environment's). `write` is a test seam.
+function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity }, write = writeBaseline) {
+  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
+  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
+  const effectiveSuccess = !!(r && r.ok && (!r.verify || r.verify.ok));
+  if (!(effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied))) return false;
+  try {
+    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
@@ -1045,23 +1071,7 @@ async function main() {
   } finally {
     cleanup();
   }
-  // #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
-  // what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
-  // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
-  // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
-  // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
-  // found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort.
-  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
-  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
-  const effectiveSuccess = r.ok && (!r.verify || r.verify.ok);
-  if (effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
-    // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
-    // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
-    // actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
-    // dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
-    // them, and a spec downloaded elsewhere carries another environment's).
-    try { writeBaseline(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec }); } catch { /* non-fatal */ }
-  }
+  persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
   // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
   // to raise), while r still carries the full build + verify detail.
@@ -1072,4 +1082,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline };

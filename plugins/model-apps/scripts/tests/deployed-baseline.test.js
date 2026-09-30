@@ -109,3 +109,27 @@ test('the baseline is written with its deployed ids and read back as schemaVersi
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// readBaseline runs on EVERY build in a folder that has a baseline, so one the migrator cannot read must
+// degrade to "no baseline" (the build then reports each nav change it makes) — never throw out of the
+// build. The migrator is defensive enough that parsed JSON cannot make it throw, so the module is loaded
+// here against one that does.
+test('a baseline the migrator cannot read is no baseline, not a crash', () => {
+  const dir = tmp();
+  const modPath = require.resolve('../lib/deployed-baseline.js');
+  const specPath = require.resolve('../lib/app-spec.js');
+  const saved = { mod: require.cache[modPath], spec: require.cache[specPath] };
+  try {
+    const ws = path.join(dir, '.maker-workspace');
+    writeBaseline(ws, { ...spec(), pages: [] }, { appDir: dir, environment: ENV, appUniqueName: 'new_a' });
+    assert.ok(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }), 'readable with the real migrator');
+    delete require.cache[modPath];
+    require.cache[specPath] = { ...saved.spec, exports: { ...saved.spec.exports, migrateAppSpec: () => { throw new Error('unreadable'); } } };
+    const fresh = require('../lib/deployed-baseline.js');
+    assert.strictEqual(fresh.readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }), null);
+  } finally {
+    require.cache[specPath] = saved.spec;
+    if (saved.mod) require.cache[modPath] = saved.mod; else delete require.cache[modPath];
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

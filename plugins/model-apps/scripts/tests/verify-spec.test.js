@@ -2111,6 +2111,32 @@ test('verify checks dashboard EXISTENCE only when the reader cannot read tiles (
   assert.strictEqual(chk.present, true);
 });
 
+// A pinned dashboardId is what the build binds first, so a read of it that FAILS leaves the dashboard
+// unverified — it must not fall through to the name (which may find another app's namesake) or pass.
+test('verifySpec: a pinned dashboardId whose read fails is reported unverified, not proven', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Operations', title: 'Operations' }] }] }] } };
+  let byName = 0;
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) throw new Error('read refused (403)');
+      byName += 1;
+      return [{ formid: 'bbbb1111-2222-3333-4444-555566667777', name: 'Operations', type: 0 }];
+    },
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{BBBB1111-2222-3333-4444-555566667777}" /></Group></Area></SiteMap>',
+  };
+  const r = await verifySpec(spec, read);
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk && !chk.present, JSON.stringify(chk));
+  assert.match(chk.detail, /its dashboardId could not be resolved \(read refused \(403\)\) — unverified, not proven correct/);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(byName, 0, 'the name is not tried after the pinned read failed — it could find another app\u2019s namesake');
+});
+
 test('verify ignores non-chart tiles when proving a dashboard', async () => {
   const chk = await dashCheck({ components: [{ type: 'list', name: 'L', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW } }, { type: 'iframe', name: 'I', parameters: { Url: 'https://x' } }] });
   assert.strictEqual(chk.present, true, chk.detail);

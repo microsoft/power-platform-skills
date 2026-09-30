@@ -113,6 +113,29 @@ function runPreflight(readiness, effective = {}) {
   return { features, adminActions };
 }
 
+/**
+ * One feature's line of the readiness report. "Not enabled" is not one state, so there are four:
+ * ✓ in effect through a setting the readiness gate does not read; ? at the platform default (the
+ * platform decides); ? a value this plugin does not recognise; otherwise ✓ or ✗ from the gate.
+ */
+function featureLine(f) {
+  const label = FEATURE_META[f.feature]?.label || f.feature;
+  if (f.inEffect && !f.enabled) {
+    // The distinction that matters: running, but not because of anything this app declares.
+    return `  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`;
+  }
+  if (f.effectiveDefault) {
+    // "Platform default" is not off. `0` (Default) for most of these settings and `1` (Auto) for
+    // charts defer to the platform, so the feature may well be running; printing ✗ would assert
+    // something we cannot see.
+    return `  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by the platform, not by this environment\n`;
+  }
+  if (f.effectiveIndeterminate) {
+    return `  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`;
+  }
+  return `  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { flags } = parseArgs(argv);
@@ -174,22 +197,7 @@ async function main() {
 
     process.stderr.write('\nAI Feature Readiness\n');
     process.stderr.write('====================\n');
-    for (const f of report.features) {
-      const label = FEATURE_META[f.feature]?.label || f.feature;
-      if (f.inEffect && !f.enabled) {
-        // The distinction that matters: running, but not because of anything this app declares.
-        process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
-      } else if (f.effectiveDefault) {
-        // "Platform default" is not off. `0` (Default) for most of these settings and `1` (Auto) for
-        // charts defer to the platform, so the feature may well be running; printing ✗ would assert
-        // something we cannot see.
-        process.stderr.write(`  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by the platform, not by this environment\n`);
-      } else if (f.effectiveIndeterminate) {
-        process.stderr.write(`  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`);
-      } else {
-        process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
-      }
-    }
+    for (const f of report.features) process.stderr.write(featureLine(f));
     if (report.adminActions.length) {
       process.stderr.write('\nAdmin actions required:\n');
       for (const a of report.adminActions) {
@@ -211,7 +219,7 @@ async function main() {
   emitResult(true, { ok: true, ...report });
 }
 
-module.exports = { runPreflight };
+module.exports = { runPreflight, featureLine };
 
 if (require.main === module) {
   main().catch((err) => {

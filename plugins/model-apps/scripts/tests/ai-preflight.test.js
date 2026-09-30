@@ -403,3 +403,24 @@ test('an invalid ai.appFeatures value names that setting\u2019s own platform def
   // For charts 0 is Off; the platform default is 1 (Auto).
   assert.ok(errs({ nlChart: 'on' }).some((e) => /ai\.appFeatures\.nlChart: .*or 1 to leave it to the platform default/.test(e)));
 });
+
+// Each verdict the readiness report can print (featureLine). "Not enabled" is not one state: a feature
+// can be in effect through a setting the readiness gate does not read, deferred to the platform, or
+// hold a value this plugin does not recognise — and printing ✗ for any of them would assert something
+// the preflight cannot see.
+test('featureLine prints one of four verdicts, in that precedence, and falls back to the feature key', () => {
+  const { featureLine } = require('../ai-preflight.js');
+  assert.strictEqual(featureLine({ feature: 'nlSearch', setting: 'NLGridSearchSetting', enabled: false, inEffect: true, effectiveScope: 'app', effectiveValue: '2' }),
+    '  ✓ Natural language search (NLGridSearchSetting) — in effect via the app setting (value "2"), though the readiness gate reads off\n');
+  assert.strictEqual(featureLine({ feature: 'nlChart', setting: 'NLChartDataVisualizationSetting', enabled: false, effectiveDefault: true, effectiveValue: '1' }),
+    '  ? Natural language charts (NLChartDataVisualizationSetting) — set to the platform default ("1"), so whether it runs is decided by the platform, not by this environment\n');
+  assert.strictEqual(featureLine({ feature: 'm365', setting: 'm365copilotmodelappenabled', enabled: false, effectiveIndeterminate: true, effectiveValue: '7' }),
+    '  ? M365 Copilot integration (m365copilotmodelappenabled) — holds an unrecognised value ("7"), so its state cannot be determined from here\n');
+  assert.strictEqual(featureLine({ feature: 'formFill', setting: 'FormFillBarUXEnabled', enabled: true }), '  ✓ Form fill assist toolbar (FormFillBarUXEnabled)\n');
+  assert.strictEqual(featureLine({ feature: 'formFill', setting: 'FormFillBarUXEnabled', enabled: false }), '  ✗ Form fill assist toolbar (FormFillBarUXEnabled)\n');
+  assert.strictEqual(featureLine({ feature: 'somethingNew', setting: 'X', enabled: true }), '  ✓ somethingNew (X)\n');
+  // In effect wins over "platform default"; an enabled gate does not hide that the setting defers.
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: false, inEffect: true, effectiveDefault: true, effectiveScope: 'organization', effectiveValue: '0' }), /^ {2}✓ .*in effect via the organization setting/);
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: true, effectiveDefault: true, effectiveValue: '0' }), /^ {2}\? .*platform default/);
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: true, inEffect: true, effectiveValue: '2' }), /^ {2}✓ Natural language search \(S\)\n$/, 'in effect AND enabled is the plain ✓');
+});
