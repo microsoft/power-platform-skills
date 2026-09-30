@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, isBatchThrottled, batchRetryAfterMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
 
 // A fake transport that records the last request and returns a scripted response.
 function fakeTransport(scripted) {
@@ -443,6 +443,142 @@ test('postRaw re-sends a $batch ONLY when its answer proves every operation was 
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
   await http.get('https://org.crm.dynamics.com/api/data/v9.0/accounts');
   assert.strictEqual(calls.length, 2, 'a GET keeps its ordinary transient retry');
+});
+
+// A 429 is the other answer that proves a delete did not run: the server refused to START it. Captured live
+// at the end of two teardowns — the solution delete, refused while the platform was still finishing the
+// teardown's own table delete — and both teardowns stopped with the solution left behind.
+const UNINSTALL_429 = { statusCode: 429, headers: {}, body: JSON.stringify({ error: { code: '0x80071151', message: 'Cannot start the requested operation [Uninstall] because there is another [EntityCustomization] running at this moment. Use Solution History for more details. -- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.' } }) };
+test('DOES re-send a RECORD delete refused with 429 (it was never started), on the throttle schedule', async () => {
+  const slept = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 2 ? UNINSTALL_429 : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, sleep: async (ms) => { slept.push(ms); } });
+  const res = await http.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)');
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(calls.length, 3);
+  assert.deepStrictEqual(slept, [1125, 2250], 'the jittered backoff every other throttled request gets');
+
+  const { request: always, calls: calls2 } = fakeTransport(UNINSTALL_429);
+  const http2 = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: always, sleep: async () => {} });
+  const gaveUp = await http2.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)');
+  assert.strictEqual(gaveUp.status, 429, 'after the last attempt the refusal surfaces unchanged');
+  assert.strictEqual(gaveUp.body.error.code, '0x80071151');
+  assert.strictEqual(calls2.length, 6, 'six attempts in all, like any other throttled request');
+});
+
+test('postRaw DOES re-send a $batch of conditional deletes that was refused with 429, in either shape', async () => {
+  const answers = {
+    // Service protection refuses the whole request before reading an operation: a plain error answer.
+    'the whole request refused': { statusCode: 429, headers: {}, body: JSON.stringify({ error: { code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' } }) },
+    'the whole request refused, no body': { statusCode: 429, headers: {}, body: '' },
+    'its change set refused': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', UNINSTALL_429.body]) },
+    'every operation refused, whatever the outer status': { statusCode: 200, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 429 Too Many Requests', '{}']) },
+  };
+  for (const [what, refused] of Object.entries(answers)) {
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? refused : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const res = await postBatch(http);
+    assert.strictEqual(calls.length, 2, `re-sent: ${what}`);
+    assert.strictEqual(calls[1].body, calls[0].body, `the same change set, byte for byte: ${what}`);
+    assert.strictEqual(res.body, BATCH_RESPONSE, `the SDK reads the re-sent batch's own answer: ${what}`);
+  }
+});
+
+test('postRaw re-sends a 429 $batch ONLY when it is made of conditional deletes and the answer proves nothing ran', async () => {
+  const answers = {
+    'an operation that committed beside the refused one': batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 429 Too Many Requests', '{}']),
+    'a refusal beside another failure': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']),
+    'a multipart answer cut short': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']).replace(/--batchresponse_b1--\r\n$/, ''),
+    'a complete answer with no operation results': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
+  };
+  for (const [what, body] of Object.entries(answers)) {
+    const { request, calls } = fakeTransport({ statusCode: 429, headers: {}, body });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const res = await postBatch(http);
+    assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
+    assert.strictEqual(res.body, body, `and the answer reaches the SDK as it came: ${what}`);
+  }
+  // A 429 cannot make an unsafe batch safe: a second send of a generative page's `If-Match: *` update
+  // after the wait would skip the version check the SDK made before the first.
+  const requests = {
+    'unconditional writes (a generative page update)': batchRequest(['PATCH', 'https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)', ['If-Match: *']]),
+    'a DELETE with no condition (the SDK\u2019s create rollback)': batchRequest(['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)']),
+  };
+  for (const [what, body] of Object.entries(requests)) {
+    const { request, calls } = fakeTransport({ statusCode: 429, headers: {}, body: '' });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await postBatch(http, body);
+    assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
+  }
+  // Only a 429 proves the record delete was not started; the other throttling-like statuses do not.
+  for (const status of [500, 502, 503, 504]) {
+    const { request, calls } = fakeTransport({ statusCode: status, headers: {}, body: '' });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await http.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)');
+    assert.strictEqual(calls.length, 1, `a record delete answered ${status} is sent once`);
+  }
+});
+
+test('a throttled answer\u2019s Retry-After is honoured, up to a cap, when it asks for longer than the backoff', async () => {
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const cases = [
+    ['20', 20000],
+    ['600', RETRY_AFTER_CAP_MS],
+    ['Wed, 30 Sep 2026 10:00:30 GMT', 30000],
+    ['Wed, 30 Sep 2026 09:59:00 GMT', 1125], // already past: the backoff
+    ['0', 1125],
+    ['soon', 1125],
+    ['1', 1125], // shorter than the backoff: the backoff
+  ];
+  for (const [value, want] of cases) {
+    for (const [what, send] of [['a GET', (h) => h.get('https://org.crm.dynamics.com/x')], ['a record delete', (h) => h.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)')]]) {
+      const slept = [];
+      const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 429, headers: { 'retry-after': value }, body: '' } : { statusCode: 204, headers: {}, body: '' }));
+      const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } });
+      await send(http);
+      assert.deepStrictEqual(slept, [want], `${what}, Retry-After: ${value}`);
+    }
+  }
+  assert.strictEqual(retryAfterMs({ 'Retry-After': '7' }), 7000, 'the header name is matched case-insensitively');
+  assert.strictEqual(retryAfterMs({ 'retry-after': ['9'] }), 9000);
+  assert.strictEqual(retryAfterMs({}), 0);
+  assert.strictEqual(retryAfterMs(undefined), 0);
+  assert.strictEqual(retryAfterMs({ 'retry-after': '-5' }), 0);
+});
+
+// An operation refused inside a batch is answered with its own headers, so its Retry-After can sit in the
+// part rather than on the outer response. Ignoring it spent the six attempts in ~23 s while the server had
+// asked for 30.
+test('a batch refused operation by operation waits for the Retry-After in the refused operation\u2019s own headers', async () => {
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const part = (retryAfter) => ['HTTP/1.1 429 Too Many Requests' + (retryAfter ? `\r\nRetry-After: ${retryAfter}` : ''), '{}'];
+  const cases = [
+    ['30 in the part, none outside', { headers: {}, parts: [part('30')] }, 30000],
+    ['an HTTP date in the part', { headers: {}, parts: [part('Wed, 30 Sep 2026 10:00:45 GMT')] }, 45000],
+    ['the longest of two parts', { headers: {}, parts: [part('5'), part('40')] }, 40000],
+    ['capped', { headers: {}, parts: [part('600')] }, RETRY_AFTER_CAP_MS],
+    ['the outer header when it asks for longer', { headers: { 'retry-after': '50' }, parts: [part('10')] }, 50000],
+    ['the backoff when neither asks for longer', { headers: {}, parts: [part()] }, 1125],
+  ];
+  for (const [what, { headers, parts }, want] of cases) {
+    const slept = [];
+    const refused = { statusCode: 429, headers, body: batchAnswer(...parts) };
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? refused : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } });
+    await postBatch(http);
+    assert.deepStrictEqual(slept, [want], what);
+  }
+  assert.strictEqual(batchRetryAfterMs({ body: batchAnswer(['HTTP/1.1 204 No Content\r\nRetry-After: 30']) }), 0, 'only a refused operation\u2019s wait counts');
+  assert.strictEqual(batchRetryAfterMs({ body: '{"error":{}}' }), 0, 'a plain answer has no parts');
+  assert.strictEqual(batchRetryAfterMs(undefined), 0);
+});
+
+test('isBatchThrottled reads the answer, not the outer status alone', () => {
+  assert.strictEqual(isBatchThrottled({ statusCode: 429, body: '{"error":{}}' }), true);
+  assert.strictEqual(isBatchThrottled({ statusCode: 503, body: '{"error":{}}' }), false);
+  assert.strictEqual(isBatchThrottled({ statusCode: 429, body: batchAnswer(['HTTP/1.1 204 No Content']) }), false);
+  assert.strictEqual(isBatchThrottled({ statusCode: 500, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']) }), true);
+  assert.strictEqual(isBatchThrottled(undefined), false);
 });
 
 test('postRaw still refreshes the token once on 401 (rejected before processing, so it is safe)', async () => {

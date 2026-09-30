@@ -411,8 +411,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   412 every time). This is why
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
-  that file for the wire contract, why a `$batch` is never retried, and why a conditional write that
-  gets no answer is never re-sent). Pinned by
+  that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
+  ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
   The empty solution container goes last — but a **built-in

@@ -390,3 +390,81 @@ test('REAL BUNDLE + REAL TRANSPORT: an app delete whose change set lost a SQL de
   assert.strictEqual(batches[1], batches[0], 'the same change set, byte for byte (the same conditional DELETEs)');
   assert.deepStrictEqual(slept, [1000]);
 });
+
+// A 429 is the other answer that proves nothing ran: the server refused to START the request. Two shapes
+// are re-sent (sdk-http-client.js, isBatchThrottled): the whole batch refused before any operation was read
+// (service protection answers with a plain error), and a change set whose one answered operation is a 429
+// (the customization lock the platform holds right after a table delete).
+for (const [shape, refusal] of [
+  ['the whole request refused (service protection)', { statusCode: 429, headers: { 'retry-after': '3' }, body: JSON.stringify({ error: { code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' } }) }],
+  ['its change set refused (customization lock)', { statusCode: 429, headers: {}, body: [
+    '--batchresponse_y', 'Content-Type: multipart/mixed; boundary=changesetresponse_y', '',
+    '--changesetresponse_y', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', 'Content-ID: 1', '',
+    'HTTP/1.1 429 Too Many Requests', 'Content-Type: application/json; odata.metadata=minimal', 'OData-Version: 4.0', '',
+    JSON.stringify({ error: { code: '0x80071151', message: 'Cannot start the requested operation [Delete] because there is another [EntityCustomization] running at this moment.' } }),
+    '--changesetresponse_y--', '--batchresponse_y--', '',
+  ].join('\r\n') }],
+]) {
+  test(`REAL BUNDLE + REAL TRANSPORT: an app delete refused with 429 — ${shape} — is re-sent and succeeds`, async () => {
+    const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appdel-'));
+    tempDirs.push(dir);
+    const batches = [];
+    const slept = [];
+    const request = async ({ url, body }) => {
+      const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (meta) return { statusCode: 200, headers: {}, body: JSON.stringify({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` }) };
+      if (/\/\$batch$/.test(url)) {
+        batches.push(body);
+        return batches.length === 1 ? refusal : { statusCode: 200, headers: {}, body: batchResponseFor(body) };
+      }
+      if (/\/appmodules\([^)]+\)/.test(url)) return { statusCode: 200, headers: {}, body: JSON.stringify(appRow()) };
+      if (SITEMAP_BY_ID.test(url)) return { statusCode: 200, headers: { etag: SITEMAP_ROW_ETAG }, body: JSON.stringify({ sitemapid: SITEMAP_ID }) };
+      if (url.includes('/sitemaps')) return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [sitemapRow()] }) };
+      return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [] }) };
+    };
+    const httpClient = createAzHttpClient('https://example.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0, sleep: async (ms) => { slept.push(ms); } });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+
+    const r = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE_ID);
+    assert.ok(r.success, `cascade reported failure: ${JSON.stringify(r.failures)}`);
+    assert.strictEqual(batches.length, 2, 'the refused change set was sent once more');
+    assert.strictEqual(batches[1], batches[0], 'the same change set, byte for byte');
+    assert.deepStrictEqual(slept, [refusal.headers['retry-after'] ? 3000 : 1000], 'the throttle backoff, or longer when Retry-After asks');
+  });
+}
+
+// Measured live, in two teardowns: the solution delete that ends a teardown was refused with
+// `[Uninstall] … another [EntityCustomization] running … Please try again later`, and both finished with the
+// solution left behind. The same answer, through the real SDK's deleteSolution and the plugin transport.
+test('REAL BUNDLE + REAL TRANSPORT: a solution delete refused with 429 is re-sent; one refused every time surfaces as the failure it is', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const SOLUTION_ID = '44444444-4444-4444-4444-444444444444';
+  const refused = { statusCode: 429, headers: {}, body: JSON.stringify({ error: { code: '0x80071151', message: 'Cannot start the requested operation [Uninstall] because there is another [EntityCustomization] running at this moment. Use Solution History for more details. -- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.' } }) };
+  const run = async (answers) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soldel-'));
+    tempDirs.push(dir);
+    const deletes = [];
+    const request = async ({ url, method }) => {
+      if (method === 'DELETE') { deletes.push(url); return answers(deletes.length); }
+      return { statusCode: 200, headers: {}, body: JSON.stringify({ value: [] }) };
+    };
+    const httpClient = createAzHttpClient('https://example.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    let error = null;
+    try { await sdk.deleteSolution(SOLUTION_ID); } catch (e) { error = e; }
+    return { deletes, error };
+  };
+
+  const recovered = await run((n) => (n <= 2 ? refused : { statusCode: 204, headers: {}, body: '' }));
+  assert.strictEqual(recovered.error, null, recovered.error && recovered.error.message);
+  assert.strictEqual(recovered.deletes.length, 3, 'two refusals, then the delete that ran');
+  assert.ok(recovered.deletes.every((u) => u.includes(`solutions(${SOLUTION_ID})`)));
+
+  const stuck = await run(() => refused);
+  assert.ok(stuck.error, 'a lock that never clears is still reported, not swallowed');
+  assert.match(String(stuck.error.message), /429|EntityCustomization/);
+  assert.strictEqual(stuck.deletes.length, 6, 'six attempts, like any other throttled request');
+});

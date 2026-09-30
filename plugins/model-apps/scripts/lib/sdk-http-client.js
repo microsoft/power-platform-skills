@@ -21,6 +21,34 @@ const { dataverseOrigin, getAuthToken, makeRequest } = require('./dataverse-auth
 const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b/i;
 // At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
 const DEADLOCK_RESENDS = 3;
+// The longest `Retry-After` honoured in full. Dataverse's service protection limits answer 429 with
+// `Retry-After` in seconds and ask the caller to wait that long; a request sent sooner is refused again
+// and spends one of the few attempts. The cap keeps a large value from stalling a build or a teardown
+// for minutes per attempt.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations
+const RETRY_AFTER_CAP_MS = 60000;
+
+/**
+ * The wait a response asks for in `Retry-After`, in milliseconds, capped at RETRY_AFTER_CAP_MS; 0 when
+ * the header is absent or unreadable. RFC 9110 allows two forms, delay-seconds and an HTTP date:
+ *   Retry-After: 20
+ *   Retry-After: Wed, 30 Sep 2026 10:00:20 GMT
+ * Node lowercases response header names; a test double may not, so the name is matched case-insensitively.
+ * See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after
+ */
+function retryAfterMs(headers, now = Date.now()) {
+  if (!headers || typeof headers !== 'object') return 0;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
+  if (key === undefined) return 0;
+  const raw = String(Array.isArray(headers[key]) ? headers[key][0] : headers[key]).trim();
+  let ms = 0;
+  if (/^\d+$/.test(raw)) ms = Number(raw) * 1000;
+  else if (raw) {
+    const at = Date.parse(raw);
+    if (Number.isFinite(at)) ms = at - now;
+  }
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, RETRY_AFTER_CAP_MS) : 0;
+}
 
 /** True when a raw transport response says SQL rolled this request back as a deadlock victim. */
 function isSqlDeadlockVictim(res) {
@@ -91,11 +119,22 @@ function isConditionalDeleteBatch(body) {
  * truncated answer) is returned as it came.
  */
 function isBatchDeadlockVictim(res) {
-  if (!res || typeof res.body !== 'string') return false;
+  const results = batchResults(res);
+  return !!results && results.length > 0 && results.every((r) => r.status === '500' && SQL_DEADLOCK_VICTIM.test(r.text));
+}
+
+/**
+ * The operations a complete multipart `$batch` answer reports, as `{ status, text }` per part (the text
+ * between delimiter lines, `--<boundary>`), or null when the answer is not a complete multipart envelope
+ * (its first line `--<boundary>`, its last `--<boundary>--`). Parts without an `HTTP/1.1 <status>` line
+ * (the change-set headers) are not operations and are left out.
+ */
+function batchResults(res) {
+  if (!res || typeof res.body !== 'string') return null;
   const lines = res.body.split(/\r?\n/);
   const nonEmpty = lines.map((l) => l.trim()).filter(Boolean);
   const outer = /^--(\S+)$/.exec(nonEmpty[0] || '');
-  if (!outer || nonEmpty[nonEmpty.length - 1] !== `--${outer[1]}--`) return false;
+  if (!outer || nonEmpty[nonEmpty.length - 1] !== `--${outer[1]}--`) return null;
   const parts = [];
   let part = null;
   for (const line of lines) {
@@ -106,10 +145,50 @@ function isBatchDeadlockVictim(res) {
       part.push(line);
     }
   }
-  const results = parts
-    .map((p) => ({ status: p.map((l) => /^HTTP\/1\.1 (\d{3})\b/.exec(l)).find(Boolean), text: p.join('\n') }))
+  return parts
+    .map((p) => ({ status: (p.map((l) => /^HTTP\/1\.1 (\d{3})\b/.exec(l)).find(Boolean) || [])[1], text: p.join('\n') }))
     .filter((r) => r.status);
-  return results.length > 0 && results.every((r) => r.status[1] === '500' && SQL_DEADLOCK_VICTIM.test(r.text));
+}
+
+/**
+ * True when a `$batch` ANSWER proves the server refused to START it (HTTP 429), so nothing in it ran.
+ * Two shapes qualify:
+ *   - the whole request refused before any operation was read: a plain error answer with status 429, not
+ *     a multipart one — service protection limits answer this way, e.g.
+ *       HTTP 429  {"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}
+ *   - a complete multipart answer in which EVERY operation it answers is a 429 (read part by part, as
+ *     isBatchDeadlockVictim reads a deadlock).
+ * An answer that starts as a multipart envelope but is cut short proves nothing and is returned as it came.
+ * See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits
+ */
+function isBatchThrottled(res) {
+  if (!res) return false;
+  const body = typeof res.body === 'string' ? res.body : '';
+  const first = body.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+  if (!/^--\S/.test(first)) return res.statusCode === 429;
+  const results = batchResults(res);
+  return !!results && results.length > 0 && results.every((r) => r.status === '429');
+}
+
+/**
+ * The longest `Retry-After` the throttled operations of a multipart `$batch` answer carry in their OWN
+ * headers, in milliseconds (capped as retryAfterMs caps it); 0 when none does. An operation refused
+ * inside a batch is answered with its own status line and headers, which the outer response need not
+ * repeat:
+ *   HTTP/1.1 429 Too Many Requests
+ *   Retry-After: 30
+ *   Content-Type: application/json; odata.metadata=minimal
+ */
+function batchRetryAfterMs(res, now = Date.now()) {
+  const results = batchResults(res);
+  if (!results) return 0;
+  let longest = 0;
+  for (const r of results) {
+    if (r.status !== '429') continue;
+    const m = /^Retry-After:[ \t]*(\S.*?)[ \t]*$/im.exec(r.text);
+    if (m) longest = Math.max(longest, retryAfterMs({ 'retry-after': m[1] }, now));
+  }
+  return longest;
 }
 /**
  * Build an HttpClient bound to one Dataverse org.
@@ -139,6 +218,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const request = deps.request || makeRequest;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const random = deps.random || Math.random;
+  const now = deps.now || Date.now;
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
   // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
   //
@@ -179,6 +259,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const base = Math.min(1000 * 2 ** attempt, 8000);
     return base + Math.floor(random() * base * 0.25);
   };
+  // The wait before re-sending an answered request: the backoff above, or longer when the answer asks
+  // for longer in `Retry-After` (retryAfterMs, capped).
+  const retryWaitMs = (res, attempt) => Math.max(backoffMs(attempt), retryAfterMs(res.headers, now()));
 
   let token = null;
   function ensureToken(options = {}) {
@@ -217,13 +300,14 @@ function createAzHttpClient(orgUrl, deps = {}) {
     //  - RECORD deletes (webresourceset, appmodule, savedquery, appaction, solutions, …) must NOT
     //    retry: Dataverse's "More than one concurrent Delete requests detected" guard PERMANENTLY
     //    wedges the record when a retry races the still-in-flight first delete (web-resource deletes
-    //    SQL-time-out under load and trip exactly this). One delete keeps the failure re-runnable.
+    //    SQL-time-out under load and trip exactly this). One delete keeps the failure re-runnable —
+    //    unless the server ANSWERS that it did not run it (see the re-sends below).
     //  - A `$batch` change set is a POST, but it CARRIES record deletes (the SDK deletes an app and
     //    its sitemap in one atomic change set), so it inherits the record-delete hazard above. It is
     //    also ambiguous on failure: the server may have committed while the response was lost, so a
     //    blind re-issue is exactly the racing retry that wedges the row. Issue it once and let the
     //    SDK surface the unknown outcome to the caller — unless it is a batch of conditional deletes and
-    //    its answer proves every operation was rolled back as a deadlock victim (see the re-send below).
+    //    its answer proves no operation in it ran (see the re-sends below).
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
@@ -277,19 +361,33 @@ function createAzHttpClient(orgUrl, deps = {}) {
         continue;
       }
       if (TRANSIENT.has(res.statusCode) && !last && !noRetry) {
-        await sleep(backoffMs(attempt));
+        await sleep(retryWaitMs(res, attempt));
         continue;
       }
-      // A record DELETE or a `$batch` is otherwise never re-sent (see noRetry). A SQL deadlock VICTIM is
-      // the one exception, because the server has ANSWERED, and the answer is that it rolled this
-      // request's transaction back: nothing is still in flight to race the concurrent-delete guard, and
-      // nothing was deleted. Measured live: a teardown's process-flow delete failed exactly this way,
-      // and so did a teardown's app delete — a change set — which stopped the whole teardown with
-      // nothing removed; both were clean on a re-run. A batch is re-sent only when it is made of
-      // conditional deletes (isConditionalDeleteBatch) and its answer shows every operation was rolled
-      // back that way (isBatchDeadlockVictim).
+      // A record DELETE or a `$batch` is otherwise never re-sent (see noRetry). Two ANSWERS are the
+      // exceptions, because in each the server says it did not run the request: nothing is still in
+      // flight to race the concurrent-delete guard, and nothing was deleted.
+      //  - HTTP 429: the server refused to START the request. Measured live, in two teardowns: the
+      //    solution delete that ends a teardown, sent right after the teardown's own table delete, was
+      //    refused with
+      //      HTTP 429 … solutions(<id>): Cannot start the requested operation [Uninstall] because there is
+      //      another [EntityCustomization] running at this moment. … Please try again later.
+      //    and both teardowns finished with the solution left behind. It is re-sent on the schedule of any
+      //    other throttled request, honouring `Retry-After`.
+      //  - A SQL deadlock VICTIM: SQL rolled the request's transaction back. Measured live: a teardown's
+      //    process-flow delete failed exactly this way, and so did a teardown's app delete — a change set —
+      //    which stopped the whole teardown with nothing removed; both were clean on a re-run.
+      // A batch is re-sent only when it is made of conditional deletes (isConditionalDeleteBatch) and its
+      // answer shows that no operation in it ran (isBatchThrottled, isBatchDeadlockVictim).
+      const conditionalDeleteBatch = isBatch && isConditionalDeleteBatch(bodyStr);
+      const throttled = (recordDelete && res.statusCode === 429) || (conditionalDeleteBatch && isBatchThrottled(res));
+      if (throttled && !last) {
+        // A batch refused operation by operation may carry the wait in that operation's own headers.
+        await sleep(Math.max(retryWaitMs(res, attempt), isBatch ? batchRetryAfterMs(res, now()) : 0));
+        continue;
+      }
       const deadlocked = (recordDelete && isSqlDeadlockVictim(res))
-        || (isBatch && isConditionalDeleteBatch(bodyStr) && isBatchDeadlockVictim(res));
+        || (conditionalDeleteBatch && isBatchDeadlockVictim(res));
       if (deadlocked && attempt < DEADLOCK_RESENDS) {
         await sleep(1000 * 2 ** attempt);
         continue;
@@ -323,4 +421,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isConditionalDeleteBatch };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, retryAfterMs, RETRY_AFTER_CAP_MS };
