@@ -7,6 +7,11 @@ const path = require('node:path');
 
 const HOOK = path.join(__dirname, '..', '..', 'hooks', 'validate-write-safety.js');
 
+function isInsideOrSame(root, target) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function runHook(payload, env) {
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
@@ -171,7 +176,8 @@ test('PCF_DISABLE_HOOKS=1 disables the guard (exit 0 for an outside write)', () 
 });
 
 test('PCF_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => {
-  const preload = path.join(__dirname, 'hook-readdir-throw-preload.js');
+  const preload = path.join(cwd, 'hook-readdir-throw-preload.js');
+  assert.equal(isInsideOrSame(__dirname, preload), false);
   fs.writeFileSync(preload, [
     "const fs = require('node:fs');",
     'const real = fs.readdirSync;',
@@ -201,7 +207,8 @@ test('PCF_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => 
 test('write-safety guard: an unreadable skills folder cannot crash the ENABLED hook', () => {
   // The hook needs only the stdin reader, not skill discovery. Loading discovery would scan the skills
   // folder at require time, so an EACCES there would crash the hook even though it never uses it.
-  const preload = path.join(__dirname, 'hook-readdir-throw-preload-enabled.js');
+  const preload = path.join(cwd, 'hook-readdir-throw-preload-enabled.js');
+  assert.equal(isInsideOrSame(__dirname, preload), false);
   fs.writeFileSync(preload, [
     "const fs = require('node:fs');",
     'const real = fs.readdirSync;',

@@ -37,6 +37,14 @@ function deepestExistingAncestor(target) {
   return current;
 }
 
+function physicalPath(target) {
+  const resolved = path.resolve(target);
+  const ancestor = deepestExistingAncestor(resolved);
+  const realAncestor = fs.realpathSync(ancestor);
+  const suffix = path.relative(ancestor, resolved);
+  return comparablePath(suffix ? path.join(realAncestor, suffix) : realAncestor);
+}
+
 function assertInsideFixtures(target, options = {}) {
   const fixturesRoot = options.fixturesRoot ? path.resolve(options.fixturesRoot) : FIXTURES;
   const resolvedTarget = path.resolve(target);
@@ -48,6 +56,14 @@ function assertInsideFixtures(target, options = {}) {
   const realAncestor = fs.realpathSync(deepestExistingAncestor(resolvedTarget));
   if (!isInsideOrSame(realFixtures, realAncestor)) {
     throw new Error(`Refusing to write outside ${fixturesRoot}: ${target}`);
+  }
+}
+
+function assertNonOverlappingTrees(source, destination) {
+  const realSource = physicalPath(source);
+  const realDestination = physicalPath(destination);
+  if (isInsideOrSame(realSource, realDestination) || isInsideOrSame(realDestination, realSource)) {
+    throw new Error(`Refusing to capture overlapping source and fixture trees: ${source} -> ${destination}`);
   }
 }
 
@@ -78,7 +94,7 @@ function copyTree(src, dest) {
   }
 }
 
-function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2), options = {}) {
   if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(`${usage()}\n`);
     return 0;
@@ -90,7 +106,8 @@ function main(argv = process.argv.slice(2)) {
   const projectDir = path.resolve(argv[0]);
   const fixtureDir = path.resolve(argv[1]);
   if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) throw new Error(`Project directory does not exist: ${projectDir}`);
-  assertInsideFixtures(fixtureDir);
+  assertInsideFixtures(fixtureDir, options);
+  assertNonOverlappingTrees(projectDir, fixtureDir);
   if (fs.existsSync(fixtureDir)) fs.rmSync(fixtureDir, { recursive: true, force: true });
   copyTree(projectDir, fixtureDir);
   process.stdout.write(`${JSON.stringify({ ok: true, fixtureDir })}\n`);
@@ -101,4 +118,4 @@ if (require.main === module) {
   try { process.exitCode = main(); }
   catch (err) { process.stderr.write(`error: ${err.message}\n`); process.exitCode = 1; }
 }
-module.exports = { main, copyTree, assertInsideFixtures };
+module.exports = { main, copyTree, assertInsideFixtures, assertNonOverlappingTrees };
