@@ -176,8 +176,14 @@ function applyStep(state, { id, status, note }) {
     throw new Error(`Unknown status '${status}'. Known: ${[...STATUSES].join(', ')}`);
   }
 
-  phase.status = status;
+  // A note describes the status it was written with, so it must not outlive it. A gate opens
+  // with "Gate 1 — awaiting your approval" and is later closed by a bare `--status done`;
+  // without this the approved step kept asking for an approval the user had already given.
+  // A repeated status keeps its note, so progress updates like "3 of 12 screens built" survive
+  // an `active` -> `active` refresh.
   if (note !== undefined) phase.note = String(note);
+  else if (status !== phase.status) phase.note = '';
+  phase.status = status;
 
   // Only one phase is the live one; marking a new phase active resolves any earlier
   // still-active phase so a crashed or skipped step cannot leave two spinners running.
@@ -188,6 +194,20 @@ function applyStep(state, { id, status, note }) {
   }
   state.updatedAt = new Date().toISOString();
   return state;
+}
+
+const AWAITING_LABEL = {
+  architecture: 'the architecture', dataModel: 'the data model', screens: 'the screen plan',
+  design: 'the design system', offline: 'the offline profile', trust: 'the trust report',
+};
+
+function awaitingInput(state, active) {
+  const states = state.sectionStates || {};
+  for (const name of Object.keys(AWAITING_LABEL)) {
+    if (states[name] === 'proposed') return `Review ${AWAITING_LABEL[name]} above, then answer in your terminal`;
+  }
+  if (active && /awaiting/i.test(active.note || '')) return active.note;
+  return '';
 }
 
 function summarize(state) {
@@ -208,6 +228,10 @@ function summarize(state) {
     // The page reloads itself to pick up each rewrite; `settled` stops that once there is
     // nothing left to watch, so a finished plan is not reloading every five seconds forever.
     settled: finished || failed > 0,
+    // What the run is blocked on, if anything. A section held at `proposed` means the plan is
+    // showing the user something to review while the terminal waits on their answer; an active
+    // phase whose note says so covers gates that have no section of their own.
+    awaitingInput: awaitingInput(state, active),
     narrative: active
       ? `Currently ${active.title.toLowerCase()}. ${active.detail}.`
       : (finished

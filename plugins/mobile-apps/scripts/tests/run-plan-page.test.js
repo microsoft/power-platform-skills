@@ -518,6 +518,44 @@ test('a background-tracking capability does not borrow the on-demand location pi
   assert.notEqual(rows[0].children[0].innerHTML, rows[1].children[0].innerHTML);
 });
 
+test('a blocked run shows a waiting-for-input banner, and clears it when unblocked', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-await-'));
+  let state = initState(root, { appName: 'Waiting', dataPlatform: 'dataverse' });
+  // A section held at `proposed` is the plan showing something for review while the terminal
+  // waits on the answer.
+  state = setSection(state, 'dataModel', { tables: [] }, 'proposed');
+  save(root, state);
+
+  let page = runPage(outputPath(root));
+  assert.deepEqual(page.thrown.map((e) => e.message), []);
+  assert.equal(page.elements.get('inputBanner').hidden, false, 'a proposed section must raise the banner');
+  assert.match(page.elements.get('inputBannerPrompt').textContent, /Review the data model/);
+
+  // Approving it is what takes the banner down - nothing else has to remember to.
+  state = setSection(state, 'dataModel', { tables: [] }, 'approved');
+  save(root, state);
+  page = runPage(outputPath(root));
+  assert.equal(page.elements.get('inputBanner').hidden, true, 'approval must clear the banner');
+});
+
+test('dismissing the banner is scoped to the prompt that was dismissed', () => {
+  // Otherwise closing one gate's banner would silently suppress every later gate, and the user
+  // would stop being told the run is blocked.
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  assert.match(template, /banner\.hidden = !prompt \|\| dismissedPrompt === prompt/);
+  assert.match(template, /if \(!prompt\) dismissedPrompt = null/);
+});
+
+test('the topbar pills say what their numbers mean', () => {
+  const { htmlPath } = fullPlan();
+  const { elements } = runPage(htmlPath);
+  // "4 of 11" and "unknown" on their own read as unlabelled noise.
+  assert.match(elements.get('pillProgress').textContent, /^Step \d+ of \d+$/);
+
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  assert.match(template, /pill-platform">Data: __HTML_DATA_PLATFORM__/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

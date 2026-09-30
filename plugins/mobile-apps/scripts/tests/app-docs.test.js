@@ -78,6 +78,62 @@ test('a failed phase settles the page and is counted', () => {
   assert.equal(summary.settled, true);
 });
 
+test('a note does not outlive the status it was written with', () => {
+  const root = project('docs-note');
+  const state = initState(root, { appName: 'App' });
+
+  // How the gate protocol actually runs: open with an "awaiting" note, close with a bare
+  // --status done. The note used to stick, so an approved gate kept asking for approval.
+  applyStep(state, { id: 'architecture', status: 'active', note: 'Gate 1 — awaiting your approval' });
+  applyStep(state, { id: 'architecture', status: 'done' });
+  const architecture = state.phases.find((phase) => phase.id === 'architecture');
+  assert.equal(architecture.status, 'done');
+  assert.equal(architecture.note, '', 'the awaiting-approval note must not survive approval');
+
+  // An explicit note on the closing call is kept.
+  applyStep(state, { id: 'data-model', status: 'active', note: 'Gate 2 — awaiting your approval' });
+  applyStep(state, { id: 'data-model', status: 'done', note: 'Gate 2 — 6 tables approved' });
+  assert.equal(state.phases.find((p) => p.id === 'data-model').note, 'Gate 2 — 6 tables approved');
+
+  // A repeated status keeps its note, so progress updates survive a refresh.
+  applyStep(state, { id: 'screens', status: 'active', note: '3 of 12 screens built' });
+  applyStep(state, { id: 'screens', status: 'active' });
+  assert.equal(state.phases.find((p) => p.id === 'screens').note, '3 of 12 screens built');
+});
+
+test('the skill closes every gate with a fresh note', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const body = skill.slice(skill.indexOf('\n### Step '));
+  // Clearing on status change means a gate closed without a note simply goes blank, which is
+  // correct but less useful than saying it was approved.
+  for (const gate of ['architecture', 'data-model', 'screen-plan']) {
+    const closes = [...body.matchAll(new RegExp(`step --id ${gate} --status done([^\n]*)`, 'g'))];
+    assert.ok(closes.length > 0, `${gate} must be closed somewhere`);
+    for (const [, rest] of closes) {
+      assert.match(rest, /--note /, `${gate} is closed without a note`);
+    }
+  }
+});
+
+test('the trust report is written as soon as the gate it depends on closes', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const body = skill.slice(skill.indexOf('\n### Step '));
+
+  // The tab told the user it would fill after Gate 1 while the skill only wrote it at Step 10,
+  // so it sat empty for most of the run. A proposed pass lands with Gate 1 and Step 10 finalises.
+  const writes = [...body.matchAll(/set --section trust[^\n]*--state (proposed|approved)/g)].map((m) => m[1]);
+  assert.deepEqual(writes, ['proposed', 'approved'],
+    'trust must be proposed at the gate that settles capabilities, then approved once wired');
+
+  const proposedAt = body.indexOf('set --section trust');
+  const gate1Close = body.indexOf('step --id architecture --status done');
+  assert.ok(gate1Close !== -1 && proposedAt > gate1Close, 'the first pass belongs with the Gate 1 batch');
+});
+
 test('sections merge so a later step can add to an earlier one', () => {
   const root = project('docs-sections');
   const state = initState(root, { appName: 'App' });

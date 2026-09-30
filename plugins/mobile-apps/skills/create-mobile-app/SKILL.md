@@ -94,8 +94,12 @@ node "$DOCS" --working-dir "<working_dir>" step --id data-model --status active 
 # 2. point the user at that tab, then ask the gate question
 # 3. on approval
 node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — approved"
 ```
+
+Pass a fresh `--note` when you close a gate. A note belongs to the status it was written with, so
+changing status without one clears it rather than leaving "awaiting your approval" under a step the
+user has already approved.
 
 If the user asks for changes, rewrite the section with `--state proposed` again and re-ask. The
 page reloads itself, so they see the revision without touching anything.
@@ -1409,12 +1413,20 @@ was agreed:
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 node "$DOCS" --working-dir "<working_dir>" set --section architecture --json-file <tmp>/architecture.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id architecture --status done
+node "$DOCS" --working-dir "<working_dir>" step --id architecture --status done --note "Gate 1 — approved"
+node "$DOCS" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state proposed
 node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — <n> tables approved"
 node "$DOCS" --working-dir "<working_dir>" set --section screens --json-file <tmp>/screens.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id screen-plan --status done
+node "$DOCS" --working-dir "<working_dir>" step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
 ```
+
+**Write a first-pass trust report here.** Gate 1 settles the device capabilities and connectors,
+which is everything the `permissions[]` and `battery[]` lists are derived from, so the Trust report
+tab fills as soon as the user approves rather than staying empty for most of the run. Mark it
+`proposed`: it states what the approved plan intends, and Step 10 rewrites it as `approved` once
+the capabilities are actually wired. Leave `handles[]` and `notCollected[]` out for now — those
+depend on the data model and offline profile, which are not settled yet.
 
 Build each JSON from the approved `native-app-plan.md` using the shapes in the
 [Build documentation protocol](#build-documentation-protocol). Populate `dataModel.tables[]`
@@ -2329,12 +2341,13 @@ Device capabilities and connectors are both wired, so close the phase:
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status done
 ```
 
-**Write the trust report.** Everything it claims is now decided: which capabilities were wired,
-which connectors were added, and what the offline profile syncs. Record it here rather than at
-Gate 1, so it describes what the app *does* rather than what was proposed.
+**Finalise the trust report.** Gate 1 wrote a first pass from the approved plan; everything it
+claimed is now decided — which capabilities were actually wired, which connectors were added, and
+what the offline profile syncs. Rewrite it in full and mark it `approved`, so it describes what the
+app *does* rather than what was intended. `set` merges, so restate every key you want to change.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state approved
 ```
 
 `trust.json` has four keys:

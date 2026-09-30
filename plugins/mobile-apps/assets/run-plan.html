@@ -149,6 +149,19 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .boundary{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-4);}
 .boundary h4{margin:0 0 10px;font-size:13.5px;color:var(--text-bright);}
 .boundary .bullets{font-size:13px;color:var(--text-dim);}
+.input-banner{position:fixed;top:78px;right:24px;z-index:100;display:flex;align-items:center;gap:12px;
+  background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);padding:12px 14px 12px 18px;
+  border-radius:999px;font-size:13.5px;max-width:min(380px,calc(100vw - 48px));
+  box-shadow:0 6px 20px rgba(0,0,0,.12);background-color:#fff8f2;}
+.input-banner[hidden]{display:none;}
+.input-banner-icon{font-size:11px;flex-shrink:0;animation:bannerPulse 1.6s ease-in-out infinite;}
+.input-banner-text{line-height:1.35;flex:1;min-width:0;}
+.input-banner-text b{display:block;font-weight:650;}
+.input-banner-text small{display:block;font-size:12px;opacity:.85;margin-top:2px;color:var(--text-dim);}
+.input-banner-close{width:24px;height:24px;border:0;border-radius:50%;background:rgba(202,80,16,.12);
+  color:var(--warn);cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;}
+.input-banner-close:hover{background:rgba(202,80,16,.22);}
+@keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 .bullets{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
 .bullets li{line-height:1.55;}
 .bullets li::marker{color:var(--text-dim);}
@@ -236,9 +249,18 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     </div>
   </div>
   <div class="topbar-right">
-    <span class="pill pill-platform">__HTML_DATA_PLATFORM__</span>
-    <span class="pill pill-progress" id="pillProgress">0 of 0</span>
+    <span class="pill pill-platform">Data: __HTML_DATA_PLATFORM__</span>
+    <span class="pill pill-progress" id="pillProgress">Step 0 of 0</span>
   </div>
+</div>
+
+<div class="input-banner" id="inputBanner" hidden>
+  <span class="input-banner-icon">&#9679;</span>
+  <div class="input-banner-text">
+    <b>Waiting for your input</b>
+    <small id="inputBannerPrompt"></small>
+  </div>
+  <button type="button" class="input-banner-close" id="inputBannerClose" aria-label="Dismiss">&times;</button>
 </div>
 
 <div class="shell">
@@ -362,6 +384,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
     <div class="section" id="tab-trust">
       <h2>Trust report</h2>
+      <div id="approval-trust"></div>
       <div class="section-desc">
         What this app can reach on the device, what it keeps, and what it does while you are not
         looking. Every entry comes from the approved plan and the capabilities actually wired up,
@@ -685,6 +708,23 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     caption.textContent = 'Your screens appear here once the design is locked.';
   }
 
+  /**
+   * Surface a blocked run the way `/create-site` does: a persistent pill, not a toast, because
+   * the answer is wanted in the terminal and the user may be reading another tab when the prompt
+   * appears. Dismissal is keyed to the prompt text, so closing one gate's banner does not
+   * suppress the next gate's - and the plan reloads itself, so a stale dismissal cannot stick.
+   */
+  var dismissedPrompt = null;
+
+  function renderInputBanner() {
+    var banner = document.getElementById('inputBanner');
+    if (!banner) return;
+    var prompt = summary.awaitingInput || '';
+    if (!prompt) dismissedPrompt = null;
+    document.getElementById('inputBannerPrompt').textContent = prompt;
+    banner.hidden = !prompt || dismissedPrompt === prompt;
+  }
+
   function renderOverview() {
     approvalBanner('approval-architecture', 'architecture');
     document.getElementById('summaryBox').textContent = summary.narrative;
@@ -696,7 +736,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     document.getElementById('statDone').textContent = summary.done;
     document.getElementById('statRemaining').textContent = summary.total - summary.done;
     document.getElementById('statSkipped').textContent = summary.skipped;
-    document.getElementById('pillProgress').textContent = summary.done + ' of ' + summary.total;
+    document.getElementById('pillProgress').textContent =
+      'Step ' + Math.min(summary.done + 1, summary.total) + ' of ' + summary.total;
 
     var env = sections.environment || {};
     facts('environmentFacts', [
@@ -1232,13 +1273,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     container.appendChild(el('h4', null, heading));
     var entries = (items || []).filter(Boolean);
     if (!entries.length) {
-      container.appendChild(el('div', 'empty', 'Not recorded yet.'));
+      container.appendChild(el('div', 'empty', 'Recorded once the data sources are wired.'));
       return;
     }
     container.appendChild(bullets(entries));
   }
 
   function renderTrust() {
+    approvalBanner('approval-trust', 'trust');
     var trust = sections.trust || {};
 
     var permissions = document.getElementById('permissionList');
@@ -1246,7 +1288,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var entries = trust.permissions || [];
     if (!entries.length) {
       permissions.appendChild(el('div', 'empty',
-        'Permission behaviour appears here once the capabilities are approved at Gate 1.'));
+        'Permission behaviour appears here once the capabilities are approved.'));
     } else {
       entries.forEach(function (entry) {
         var name = entryLabel(entry) || 'Capability';
@@ -1278,7 +1320,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     battery.textContent = '';
     var behaviours = trust.battery || [];
     if (!behaviours.length) {
-      battery.appendChild(el('div', 'empty', 'Background behaviour appears here once capabilities are wired.'));
+      battery.appendChild(el('div', 'empty', 'Background behaviour appears here once the capabilities are approved.'));
       return;
     }
     behaviours.forEach(function (entry) {
@@ -1360,6 +1402,12 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   renderScreens();
   renderDesign();
   renderTrust();
+  renderInputBanner();
+
+  document.getElementById('inputBannerClose').addEventListener('click', function () {
+    dismissedPrompt = summary.awaitingInput || '';
+    document.getElementById('inputBanner').hidden = true;
+  });
   renderSteps();
 
   /**
