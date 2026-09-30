@@ -178,30 +178,106 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   // rule. (A new first area gets appDef's `area_0`; if it could claim the live `area_0` by id before
   // the moved area that is still labelled the same got to it, the two would swap identities.)
   //
-  // Areas and groups have no target, so they correspond by label first; then by the id this plugin
-  // gave them on an earlier build (`area_0`, `group_0_1`), which is how a relabelled node is still
-  // recognized; then — for a node with no label at the SDK's language, as a downloaded app titled only
-  // in another language has — the next unlabelled live node in document order.
+  // Areas and groups have no target of their own. They correspond, in order of the evidence:
+  //   1. by a label their level uses exactly once, in the spec and live;
+  //   2. by the navigation entries they hold: a node and a live node whose entries are each other's
+  //      strictly best overlap (the share of targets they have in common) are the same node — a relabelled
+  //      one, or one of several with a repeated label. An entry can recur across areas (first-party
+  //      sitemaps list a table under several), so it is the best overlap that counts, not any; a tie pairs
+  //      nothing;
+  //   3. by the id this plugin gave them on an earlier build (`area_0`, `group_0_1`) — how a relabelled
+  //      node with no entries to go by is recognized — but never a live node whose label an unpaired spec
+  //      node still wants, nor two nodes whose entries all differ;
+  //   4. with no label at the SDK's language (a downloaded app titled only in another language) and no
+  //      entries on either side, the next such live node in document order.
+  // A repeated label, or none, decides nothing by position where entries can speak. Taking the first
+  // live "Main", or the one whose id appDef's numbering happened to repeat, or the next unlabelled one,
+  // gave a new or reordered node another node's id and bag — with two live "Main"s and the first renamed
+  // in the spec, the one left took the renamed area's; with a leading area and a second "Main" added, the
+  // new leading `area_0` took the original's. A node none of the passes identifies is written as new
+  // rather than given another node's bag.
   const sameTitle = (a, b) => text(a) !== '' && text(a).toLowerCase() === text(b).toLowerCase();
-  const correspond = (want, have) => {
+  const labelKey = (n) => text(n && n.title).toLowerCase();
+  const sameId = (d, l) => text(l.id) !== '' && text(l.id).toLowerCase() === text(d.id).toLowerCase();
+  // How many nodes of a level carry each label (compared as sameTitle compares them).
+  const labelCounts = (list) => {
+    const counts = new Map();
+    for (const n of list) {
+      const k = n && typeof n === 'object' ? labelKey(n) : '';
+      if (k) counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    return counts;
+  };
+  // The navigation targets of the entries under a node (subAreaTargetKey), as a Set.
+  const targetsOf = (subs) => {
+    const keys = new Set();
+    for (const sub of subs) {
+      const key = subAreaTargetKey(sub);
+      if (key) keys.add(key);
+    }
+    return keys;
+  };
+  const groupTargets = (group) => targetsOf(kids(group, 'subAreas'));
+  const areaTargets = (area) => targetsOf(kids(area, 'groups').flatMap((g) => kids(g, 'subAreas')));
+  const overlap = (a, b) => [...a].some((k) => b.has(k));
+  // The share of two nodes' targets they have in common (Jaccard): 1 for the same entries, 0 for none.
+  const similarity = (a, b) => {
+    if (!a.size || !b.size) return 0;
+    let common = 0;
+    for (const k of a) if (b.has(k)) common += 1;
+    return common / (a.size + b.size - common);
+  };
+  // The candidate with the strictly highest positive score, or null (none, or a tie at the top).
+  const strictBest = (scored) => {
+    let top = 0;
+    let at = null;
+    let tied = false;
+    for (const [candidate, score] of scored) {
+      if (score > top) { top = score; at = candidate; tied = false; } else if (score > 0 && score === top) tied = true;
+    }
+    return tied ? null : at;
+  };
+  const correspond = (want, have, targetsOfNode) => {
+    const live = have.filter((n) => n && typeof n === 'object');
     const taken = new Set();
     const match = new Array(want.length);
-    const passes = [
-      (d, l) => sameTitle(l.title, d.title),
-      (d, l) => text(l.id) !== '' && text(l.id).toLowerCase() === text(d.id).toLowerCase(),
-      (d, l) => text(d.title) === '' && text(l.title) === '',
-    ];
-    for (const same of passes) {
-      want.forEach((d, i) => {
-        if (match[i] || !d) return;
-        const l = have.find((n) => n && typeof n === 'object' && !taken.has(n) && same(d, n));
-        if (l) { match[i] = l; taken.add(l); }
+    const pair = (i, l) => { match[i] = l; taken.add(l); };
+    const wantCounts = labelCounts(want);
+    const haveCounts = labelCounts(live);
+    const wantTargets = want.map((d) => (d && typeof d === 'object' ? targetsOfNode(d) : new Set()));
+    const haveTargets = new Map(live.map((l) => [l, targetsOfNode(l)]));
+    const stillWanted = (label) => label !== '' && want.some((d, i) => d && !match[i] && labelKey(d) === label);
+    const entriesDiffer = (i, l) => wantTargets[i].size > 0 && haveTargets.get(l).size > 0 && !overlap(wantTargets[i], haveTargets.get(l));
+    const unpaired = (fn) => want.forEach((d, i) => { if (!match[i] && d && typeof d === 'object') fn(d, i); });
+    unpaired((d, i) => {
+      if (wantCounts.get(labelKey(d)) !== 1 || haveCounts.get(labelKey(d)) !== 1) return;
+      const l = live.find((n) => !taken.has(n) && sameTitle(n.title, d.title));
+      if (l) pair(i, l);
+    });
+    // Repeated until nothing pairs: each pairing takes a candidate away, which can settle another's best.
+    for (let paired = true; paired;) {
+      paired = false;
+      unpaired((d, i) => {
+        if (!wantTargets[i].size) return;
+        const l = strictBest(live.filter((n) => !taken.has(n)).map((n) => [n, similarity(wantTargets[i], haveTargets.get(n))]));
+        if (!l) return;
+        const back = strictBest(want.map((o, j) => [j, !match[j] && o && typeof o === 'object' ? similarity(wantTargets[j], haveTargets.get(l)) : 0]));
+        if (back === i) { pair(i, l); paired = true; }
       });
     }
+    unpaired((d, i) => {
+      const l = live.find((n) => !taken.has(n) && sameId(d, n) && !stillWanted(labelKey(n)) && !entriesDiffer(i, n));
+      if (l) pair(i, l);
+    });
+    unpaired((d, i) => {
+      if (text(d.title) !== '' || wantTargets[i].size) return;
+      const l = live.find((n) => !taken.has(n) && text(n.title) === '' && !haveTargets.get(n).size);
+      if (l) pair(i, l);
+    });
     return match;
   };
-  const areaMatch = correspond(desiredAreas, liveAreas);
-  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups')));
+  const areaMatch = correspond(desiredAreas, liveAreas, areaTargets);
+  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups'), groupTargets));
 
   // Subareas correspond by navigation target: first within the live group their own group adopted (an
   // entry that stayed put), then anywhere (an entry that moved). Each live node is adopted at most once.

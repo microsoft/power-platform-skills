@@ -258,7 +258,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `AvailableOffline="true"`). Both existing-app writers (the app-shell write and the pages finalizer)
   therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
   subarea corresponds by navigation target (a URL keeps the case of its path and query), an area or
-  group by label, then by the id an earlier build gave it; the live `id` and `bag` are kept, and only
+  group by a label its level uses once, then by the navigation entries it holds, then by the id an
+  earlier build gave it (a node none of these identifies is written as new rather than guessed); the
+  live `id` and `bag` are kept, and only
   what the spec sets is overlaid — chrome it does not name is still removed, as before. Because the SDK
   only patches an existing `<Titles>` on a node with a bag, and reads an empty title as "no edit", a
   title added to an entry that had none, or removed from one, is reconciled in the adopted bag at the

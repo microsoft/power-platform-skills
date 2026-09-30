@@ -96,6 +96,80 @@ test('areas and groups correspond by label, then by the id an earlier build gave
   assert.ok(describeSitemapNotes(notes).some((l) => /area "Renamed live": title changes from 'Renamed live' to the spec's 'Spec label'\.$/.test(l)));
 });
 
+// Areas and groups have no target of their own. A label used once on each side identifies one; a repeated label
+// cannot say which live node is which, and neither can position once nodes are added, removed or moved: taking
+// the first live "Main", or the one whose id appDef's numbering repeated, gave a new or reordered node another
+// node's id and bag. The navigation entries a node holds can, when they point at exactly one live node. A node
+// nothing identifies is written as new rather than given another node's bag.
+test('areas and groups with a repeated label pair by the entries they hold, never by position alone', () => {
+  const entries = (prefix, entities, live) => entities.map((e) => ({ id: `${prefix}_${e}`, type: 'Entity', entity: e, title: e, ...(live ? { bag: bag(`${prefix}_${e}`) } : {}) }));
+  const liveNode = (id, title, icon, kidsKey, kidsValue) => ({ id, title, bag: bag(id, [['Icon', icon]]), [kidsKey]: kidsValue });
+  const liveArea = (id, title, icon, entities = []) => liveNode(id, title, icon, 'groups', entities.length ? [{ id: `${id}_g`, title: 'G', bag: bag(`${id}_g`), subAreas: entries(id, entities, true) }] : []);
+  const specArea = (id, title, entities = []) => ({ id, title, groups: entities.length ? [{ id: `${id}_g`, title: 'G', subAreas: entries(`w${id}`, entities, false) }] : [] });
+  const icon = (n) => (n.bag ? n.bag.a.find((p) => p[0] === 'Icon')[1] : null);
+  const areas = (desired, live) => adoptLiveSitemap(tree(desired), tree(live)).siteMap.areas.map((a) => [a.id, icon(a)]);
+  // Two live "Main"s and the first renamed in the spec: each is recognized by its entries, plugin or designer ids alike.
+  for (const [x, y] of [['area_0', 'area_1'], ['d_x', 'd_y']]) {
+    assert.deepStrictEqual(areas([specArea('area_0', 'Ops', ['a']), specArea('area_1', 'Main', ['b'])],
+      [liveArea(x, 'Main', 'first.svg', ['a']), liveArea(y, 'Main', 'second.svg', ['b'])]), [[x, 'first.svg'], [y, 'second.svg']], x);
+  }
+  // One live "Main"; the spec adds a leading area (appDef's `area_0`, the live "Main"'s id) and a second "Main".
+  assert.deepStrictEqual(areas([specArea('area_0', 'New', ['n']), specArea('area_1', 'Main', ['m']), specArea('area_2', 'Main', ['x'])],
+    [liveArea('area_0', 'Main', 'original.svg', ['m'])]), [['area_0_2', null], ['area_0', 'original.svg'], ['area_2', null]]);
+  // The original "Main" moved first, a new "Main" given the live one's `area_1`, and "Other" moved last.
+  assert.deepStrictEqual(areas([specArea('area_0', 'Main', ['m']), specArea('area_1', 'Main', ['n']), specArea('area_2', 'Other', ['o'])],
+    [liveArea('area_0', 'Other', 'other.svg', ['o']), liveArea('area_1', 'Main', 'original.svg', ['m'])]),
+  [['area_1', 'original.svg'], ['area_1_2', null], ['area_0', 'other.svg']]);
+  // Under a repeated label, nodes with no entries to go by are not guessed at — not by id, not by order.
+  assert.deepStrictEqual(areas([specArea('area_0', 'Ops'), specArea('area_1', 'Main')],
+    [liveArea('area_0', 'Main', 'first.svg'), liveArea('area_1', 'Main', 'second.svg')]), [['area_0', null], ['area_1', null]]);
+  assert.deepStrictEqual(areas([specArea('area_0', 'Main'), specArea('area_1', 'Main')],
+    [liveArea('d_x', 'Main', 'first.svg'), liveArea('d_y', 'Main', 'second.svg')]), [['area_0', null], ['area_1', null]]);
+  // An entry both hold is not enough when another spec node holds one of the live node's entries too, nor when
+  // the spec node's entries are spread over two live nodes.
+  assert.deepStrictEqual(areas([specArea('area_0', 'Left', ['a']), specArea('area_1', 'Right', ['b'])],
+    [liveArea('d_x', 'Both', 'both.svg', ['a', 'b'])]), [['area_0', null], ['area_1', null]]);
+  assert.deepStrictEqual(areas([specArea('area_0', 'Merged', ['a', 'b'])],
+    [liveArea('d_x', 'P', 'p.svg', ['a']), liveArea('d_y', 'Q', 'q.svg', ['b'])]), [['area_0', null]]);
+  // Once entries pair its namesake, a renamed "Main" without entries is recognized by its id — also when the spec
+  // gives it entries of its own.
+  assert.deepStrictEqual(areas([specArea('area_0', 'Ops'), specArea('area_1', 'Main', ['m'])],
+    [liveArea('area_0', 'Main', 'first.svg'), liveArea('area_1', 'Main', 'second.svg', ['m'])]), [['area_0', 'first.svg'], ['area_1', 'second.svg']]);
+  assert.deepStrictEqual(areas([specArea('area_0', 'Ops', ['n'])], [liveArea('area_0', 'Main', 'first.svg')]), [['area_0', 'first.svg']]);
+  // A relabelled node is recognized by its entries; an id alone never pairs nodes whose entries all differ.
+  assert.deepStrictEqual(areas([specArea('area_0', 'Ops', ['m'])], [liveArea('d_x', 'Main', 'first.svg', ['m'])]), [['d_x', 'first.svg']]);
+  assert.deepStrictEqual(areas([specArea('area_0', 'New', ['n'])], [liveArea('area_0', 'Main', 'first.svg', ['m'])]), [['area_0', null]]);
+  // Nodes with no label at the SDK's language pair by their entries too — by the best overlap, since an entry can
+  // recur across areas — and in document order only when neither side has entries. Split between two new areas,
+  // the original's entries identify neither, and the order does not hand it to the unrelated leading one.
+  assert.deepStrictEqual(areas([specArea('area_0', '', ['a', 'b', 'c']), specArea('area_1', '', ['a', 'd'])],
+    [liveArea('d_x', '', 'first.svg', ['a', 'b', 'c']), liveArea('d_y', '', 'second.svg', ['a', 'd'])]), [['d_x', 'first.svg'], ['d_y', 'second.svg']]);
+  assert.deepStrictEqual(areas([specArea('area_0', '', ['a', 'd']), specArea('area_1', '', ['a', 'b', 'c'])],
+    [liveArea('d_x', '', 'first.svg', ['a', 'b', 'c']), liveArea('d_y', '', 'second.svg', ['a', 'd'])]), [['d_y', 'second.svg'], ['d_x', 'first.svg']]);
+  assert.deepStrictEqual(areas([specArea('area_0', '', ['n']), specArea('area_1', '', ['a']), specArea('area_2', '', ['b'])],
+    [liveArea('area_0', '', 'original.svg', ['a', 'b'])]), [['area_0', null], ['area_1', null], ['area_2', null]]);
+  assert.deepStrictEqual(areas([specArea('area_0', ''), specArea('area_1', '', ['n'])],
+    [liveArea('d_x', '', 'first.svg'), liveArea('d_y', '', 'second.svg', ['m'])]), [['d_x', 'first.svg'], ['area_1', null]]);
+  // Order is the evidence only where neither side has entries: one side's entries, unmatched, identify nothing.
+  assert.deepStrictEqual(areas([specArea('area_0', '', ['n'])], [liveArea('d_x', '', 'first.svg')]), [['area_0', null]]);
+  assert.deepStrictEqual(areas([specArea('area_0', '')], [liveArea('d_x', '', 'first.svg', ['a'])]), [['area_0', null]]);
+  // A tie can settle once another node pairs: {a} is as close to {a,b} as to {a,c} until {a,b} takes its match.
+  assert.deepStrictEqual(areas([specArea('area_0', '', ['a']), specArea('area_1', '', ['a', 'b'])],
+    [liveArea('d_x', '', 'first.svg', ['a', 'b']), liveArea('d_y', '', 'second.svg', ['a', 'c'])]), [['d_y', 'second.svg'], ['d_x', 'first.svg']]);
+  // Groups follow the same rules within their area: a renamed first "G", and a reorder with a new "G" added.
+  const liveGroup = (id, title, icon, entities) => liveNode(id, title, icon, 'subAreas', entries(id, entities, true));
+  const specGroup = (id, title, entities) => ({ id, title, subAreas: entries(`w${id}`, entities, false) });
+  const groups = (desired, live) => adoptLiveSitemap(tree([{ id: 'area_0', title: 'A', groups: desired }]),
+    tree([{ id: 'area_0', title: 'A', bag: bag('area_0'), groups: live }])).siteMap.areas[0].groups.map((g) => [g.id, icon(g)]);
+  assert.deepStrictEqual(groups([specGroup('group_0_0', 'Renamed', ['a']), specGroup('group_0_1', 'G', ['b'])],
+    [liveGroup('group_0_0', 'G', 'g1.svg', ['a']), liveGroup('group_0_1', 'G', 'g2.svg', ['b'])]), [['group_0_0', 'g1.svg'], ['group_0_1', 'g2.svg']]);
+  assert.deepStrictEqual(groups([specGroup('group_0_0', 'G', ['m']), specGroup('group_0_1', 'G', ['n']), specGroup('group_0_2', 'Other', ['o'])],
+    [liveGroup('group_0_0', 'Other', 'go.svg', ['o']), liveGroup('group_0_1', 'G', 'gm.svg', ['m'])]),
+  [['group_0_1', 'gm.svg'], ['group_0_1_2', null], ['group_0_0', 'go.svg']]);
+  assert.deepStrictEqual(groups([specGroup('group_0_0', '', ['n']), specGroup('group_0_1', '', ['a']), specGroup('group_0_2', '', ['b'])],
+    [liveGroup('group_0_0', '', 'g.svg', ['a', 'b'])]), [['group_0_0', null], ['group_0_1', null], ['group_0_2', null]]);
+});
+
 test('a new node never takes an id an adopted node holds', () => {
   // appDef numbers by position, so a NEW first area is `area_0` — the id an adopted, moved area keeps.
   const live = tree([{ id: 'area_0', title: 'Existing', bag: bag('area_0'), groups: [{ id: 'group_0_0', title: 'G', bag: bag('group_0_0'), subAreas: [] }] }]);
