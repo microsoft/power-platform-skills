@@ -163,11 +163,15 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .input-banner-close:hover{background:rgba(202,80,16,.22);}
 @keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 .store-row{display:flex;gap:8px;justify-content:center;margin-top:6px;}
-.store-btn{display:flex;flex-direction:column;gap:1px;padding:7px 14px;border-radius:10px;
-  background:#1f1f1f;color:#fff;text-decoration:none;line-height:1.2;min-width:118px;}
-.store-btn:hover{background:#000;}
-.store-kicker{font-size:9px;opacity:.75;letter-spacing:.02em;}
-.store-name{font-size:13px;font-weight:600;}
+.store-btn{display:flex;align-items:center;gap:9px;padding:7px 13px;border-radius:9px;
+  background:#000;color:#fff;text-decoration:none;line-height:1.15;
+  border:1px solid rgba(255,255,255,.22);}
+.store-btn:hover{background:#141414;}
+.store-logo{flex:0 0 auto;display:grid;place-items:center;}
+.store-logo svg{width:21px;height:21px;display:block;}
+.store-text{display:flex;flex-direction:column;}
+.store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
+.store-name{font-size:14px;font-weight:600;letter-spacing:-.01em;}
 .rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
   text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
 .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
@@ -649,8 +653,26 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * bounce a reader in another market through a redirect or an unavailable page.
    */
   var STORE_LINKS = [
-    { kicker: 'Download on the', name: 'App Store', href: 'https://apps.apple.com/app/id6753083462' },
-    { kicker: 'Get it on', name: 'Google Play', href: 'https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp' }
+    {
+      kicker: 'Download on the',
+      name: 'App Store',
+      href: 'https://apps.apple.com/app/id6753083462',
+      // Apple mark, single path, filled with the button's text colour.
+      logo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.365 1.43c0 1.14-.47 2.2-1.24 2.98-.83.85-2.19 1.5-3.31 1.41-.13-1.1.44-2.26 1.2-3.01.85-.87 2.31-1.5 3.35-1.38zM20.5 17.1c-.5 1.15-.74 1.66-1.38 2.68-.9 1.42-2.16 3.19-3.73 3.2-1.39.01-1.75-.91-3.64-.9-1.89.01-2.28.92-3.67.9-1.57-.01-2.77-1.6-3.67-3.02-2.52-3.98-2.78-8.65-1.23-11.13 1.1-1.76 2.84-2.79 4.47-2.79 1.66 0 2.7.91 4.08.91 1.33 0 2.14-.91 4.06-.91 1.45 0 2.99.79 4.09 2.16-3.6 1.97-3.02 7.11.62 8.9z"/></svg>'
+    },
+    {
+      kicker: 'GET IT ON',
+      name: 'Google Play',
+      href: 'https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp',
+      // Play mark: four faces of the same folded triangle, so the colours are fixed rather
+      // than inherited - it is the mark's identity, not decoration.
+      logo: '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        + '<path fill="#00A0FF" d="M3.06 1.54A1.5 1.5 0 0 0 2.5 2.72v18.12c0 .47.22.89.56 1.18l10.24-10.24L3.06 1.54z"/>'
+        + '<path fill="#00E676" d="M3.06 1.54a1.5 1.5 0 0 1 1.5-.06l12.2 6.9-3.46 3.4L3.06 1.54z"/>'
+        + '<path fill="#FFCE00" d="M16.76 8.38l3.5 1.98c1 .57 1 1.7 0 2.27l-3.5 1.98-3.46-3.11 3.46-3.12z"/>'
+        + '<path fill="#FF3A44" d="M4.56 22.08a1.5 1.5 0 0 1-1.5-.06l10.24-10.24 3.46 3.4-12.2 6.9z"/>'
+        + '</svg>'
+    }
   ];
 
   function railPreviewLink() {
@@ -684,8 +706,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       button.setAttribute('target', '_blank');
       // noopener/noreferrer: these are the only links in the plan that leave the machine.
       button.setAttribute('rel', 'noopener noreferrer');
-      button.appendChild(el('span', 'store-kicker', store.kicker));
-      button.appendChild(el('span', 'store-name', store.name));
+      var mark = el('span', 'store-logo');
+      // Code-owned constant markup - no plan data reaches it - so it may be set as markup.
+      mark.innerHTML = store.logo;
+      button.appendChild(mark);
+      var text = el('span', 'store-text');
+      text.appendChild(el('span', 'store-kicker', store.kicker));
+      text.appendChild(el('span', 'store-name', store.name));
+      button.appendChild(text);
       stores.appendChild(button);
     });
     container.appendChild(stores);

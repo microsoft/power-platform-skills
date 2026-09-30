@@ -678,8 +678,25 @@ test('the QR is drawn in the phone and linked for scanning full size', () => {
     node.children.forEach(walk);
   })(elements.get('railPreviewLink'));
   assert.equal(stores.length, 2, 'both stores are offered at the QR stage');
-  assert.match(stores.map((b) => b.children.map((c) => c.textContent).join(' ')).join(' | '),
-    /App Store[\s\S]*Google Play/);
+
+  const flatten = (node) => (node.children.length ? node.children.map(flatten).join(' ') : node.textContent);
+  assert.match(stores.map(flatten).join(' | '), /App Store[\s\S]*Google Play/);
+
+  // Each badge leads with its store's mark - a text-only pill does not read as a store button.
+  const marks = stores.map((button) => {
+    const found = [];
+    (function walk(node) {
+      if (String(node.className).split(' ').includes('store-logo')) found.push(node.innerHTML);
+      node.children.forEach(walk);
+    })(button);
+    return found[0] || '';
+  });
+  assert.equal(marks.filter((m) => m.startsWith('<svg viewBox="0 0 24 24"')).length, 2,
+    'both badges need a drawn mark');
+  assert.notEqual(marks[0], marks[1], 'the two stores must not share a mark');
+  // The Play mark's colours are its identity, so they are fixed rather than inherited.
+  assert.match(marks[1], /fill="#/);
+  assert.match(marks[0], /fill="currentColor"/);
 });
 
 test('the store links are only offered once the app can actually be used', () => {
