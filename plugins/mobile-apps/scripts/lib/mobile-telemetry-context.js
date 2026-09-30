@@ -23,13 +23,14 @@ function guid(value) {
 function readProjectTelemetryContext(projectRoot, options = {}) {
   try {
     const target = readProjectEnvironment(projectRoot);
+    const tenantId = guid(target?.tenantId);
     if (
       !options.lifecycle ||
       !options.runId ||
       !GUID.test(options.spanId || '') ||
       !options.configDir ||
       !target?.environmentId ||
-      !target.tenantId
+      !tenantId
     ) {
       return {};
     }
@@ -45,12 +46,12 @@ function readProjectTelemetryContext(projectRoot, options = {}) {
       if (
         organization?.spanId === current.record.spanId &&
         organization.environmentId === target.environmentId &&
-        organization.tenantId === target.tenantId &&
+        guid(organization.tenantId) === tenantId &&
         guid(organization.orgId)
       ) {
         return {
           environmentId: target.environmentId,
-          tenantId: target.tenantId,
+          tenantId,
           orgId: organization.orgId,
         };
       }
@@ -96,11 +97,12 @@ function recordVerifiedDataverseOrganization(options) {
       whoAmI,
     } = options;
     const target = readProjectEnvironment(projectRoot);
+    const tenantId = guid(target?.tenantId);
     // WhoAmI supplies the organization ID while the token proves the selected
     // tenant. User claims and the Dataverse UserId are never persisted.
     if (
       !target?.environmentId ||
-      !target.tenantId ||
+      !tenantId ||
       !GUID.test(spanId || '') ||
       typeof target.environmentUrl !== 'string' ||
       target.environmentUrl.replace(/\/+$/, '').toLowerCase() !==
@@ -113,14 +115,14 @@ function recordVerifiedDataverseOrganization(options) {
     const claims = JSON.parse(
       Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'),
     );
-    if (guid(claims.tid) !== target.tenantId) return false;
+    if (guid(claims.tid) !== tenantId) return false;
 
     const orgId = guid(whoAmI?.OrganizationId);
     if (orgId) {
       writeAtomic(path.join(directory, `${span.spanId}.environment.json`), {
         spanId: span.spanId,
         environmentId: target.environmentId,
-        tenantId: target.tenantId,
+        tenantId,
         orgId,
       });
     }

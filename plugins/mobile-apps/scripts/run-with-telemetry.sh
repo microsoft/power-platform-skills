@@ -64,6 +64,9 @@ run_telemetry_bounded() {
     while kill -0 "$pid" 2>/dev/null; do
         if ((attempt >= 20)); then
             kill "$pid" 2>/dev/null || true
+            # A telemetry signal handler must not turn the final wait into a hang.
+            sleep 0.05
+            kill -KILL "$pid" 2>/dev/null || true
             wait "$pid" 2>/dev/null || true
             rm -f -- "$output_file"
             return 1

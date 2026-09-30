@@ -16,6 +16,7 @@ const { publishOwnedLock } = require('../lib/mobile-lifecycle');
 const { sanitizeData } = require('../lib/mobile-telemetry-dispatcher');
 const {
   readProjectTelemetryContext,
+  recordVerifiedDataverseOrganization,
 } = require('../lib/mobile-telemetry-context');
 const { readProjectEnvironment } = require('../lib/environment-resolution');
 const {
@@ -174,6 +175,13 @@ test('lifecycle events filter dynamic customer content before dispatch', (contex
     state: 'completed',
     now: 2500,
   });
+  const started = emitLifecycle(telemetry, root, {
+    cwd: projectRoot,
+    emit: () => {},
+    readAiAgent: () => ({}),
+  });
+  assert.equal(started.data.eventName, 'skill_started');
+  assert.equal(sanitizeData(started.data).eventName, 'skill_started');
   let captured;
   const event = emitLifecycle(telemetry, completed, {
     cwd: projectRoot,
@@ -183,6 +191,8 @@ test('lifecycle events filter dynamic customer content before dispatch', (contex
     readAiAgent: () => ({}),
   });
   assert.equal(captured, event);
+  assert.equal(event.data.eventName, 'skill_completed');
+  assert.equal(sanitizeData(event.data).eventName, 'skill_completed');
   assert.equal(event.time, '1970-01-01T00:00:02.500Z');
   assert.equal(event.data.durationMs, 1500);
   assert.equal(event.data.eventInfo.runId, root.runId);
@@ -334,20 +344,44 @@ test('command runner executes once when telemetry has syntax or import failures'
   }
 });
 
-test('command runner bounds a hung telemetry emitter', (context) => {
+test('command runner never falls back to a different execution directory', (context) => {
+  const projectRoot = tempProject(context);
+  const commandScript = path.join(projectRoot, 'wrong-directory-command.js');
+  fs.writeFileSync(commandScript, "require('node:fs').writeFileSync('ran.txt', 'x');");
+  const result = spawnSync('bash', [
+    COMMAND_RUNNER,
+    '--project-root', path.join(projectRoot, 'missing'),
+    '--', process.execPath, commandScript,
+  ], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.notEqual(result.stderr, '');
+  assert.equal(fs.existsSync(path.join(projectRoot, 'ran.txt')), false);
+});
+
+test('command runner bounds a hung telemetry emitter even when it ignores SIGTERM', (context) => {
   const projectRoot = tempProject(context);
   const wrapperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-runner-hang-'));
   context.after(() => fs.rmSync(wrapperRoot, { recursive: true, force: true }));
+  const pidFile = path.join(wrapperRoot, 'emitter.pid');
   fs.copyFileSync(COMMAND_RUNNER, path.join(wrapperRoot, 'run-with-telemetry.sh'));
   fs.writeFileSync(
     path.join(wrapperRoot, 'emit-telemetry-checkpoint.js'),
-    'setInterval(() => {}, 1000);',
+    [
+      "require('node:fs').writeFileSync(require('node:path').join(__dirname, 'emitter.pid'), String(process.pid));",
+      "process.on('SIGTERM', () => {});",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'),
   );
   const marker = path.join(projectRoot, 'hang.txt');
   const commandScript = path.join(projectRoot, 'hang-command.js');
   fs.writeFileSync(commandScript, [
     "'use strict';",
-    "require('node:fs').writeFileSync('hang.txt', 'ran');",
+    "require('node:fs').appendFileSync('hang.txt', 'x');",
+    'process.exit(7);',
     '',
   ].join('\n'));
   const startedAt = Date.now();
@@ -372,8 +406,17 @@ test('command runner bounds a hung telemetry emitter', (context) => {
     },
     timeout: 10_000,
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.readFileSync(marker, 'utf8'), 'ran');
+  if (result.error && fs.existsSync(pidFile)) {
+    // If the wrapper regresses, its timeout kills only Bash, not the emitter.
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  }
+  assert.equal(result.status, 7, result.stderr);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'x');
   assert.ok(Date.now() - startedAt < 3000, 'telemetry hang must stay bounded');
 });
 
@@ -414,6 +457,7 @@ test('tracked checkpoints preserve allowlisted static classifications', (context
     emit: () => {},
     readAiAgent: () => ({}),
   });
+  assert.equal(event.data.eventName, 'gather_app_requirements_completed');
   assert.equal(event.data.eventInfo.additionalInfo, 'with_dataverse');
   const report = lifecycle.reportRun({
     projectRoot,
@@ -641,6 +685,49 @@ test('nested needs-context attempts keep their parent open until resumed', (cont
     state: 'completed',
   });
   assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
+});
+
+test('checkpoint needs_context resumes through an explicit retry without blocking completion', (context) => {
+  const projectRoot = tempProject(context);
+  const telemetry = telemetryContext(projectRoot);
+  const overrides = {
+    env: { POWER_PLATFORM_SKILLS_CONFIG_DIR: telemetry.configDir },
+    createTelemetryContext: () => telemetry,
+    emitLifecycle: () => {},
+  };
+  const run = (...args) => runCommand([...args, '--project-root', projectRoot], overrides);
+  const root = run('--begin', 'create-mobile-app');
+  const step = run(
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id', root.runId, '--parent-span-id', root.spanId,
+  );
+  assert.equal(run(
+    'create-mobile-app|gather_app_requirements|needs_context',
+    '--run-id', root.runId, '--span-id', step.spanId,
+  ).state, 'needs_context');
+  const finishParent = () => run(
+    '--finish', 'completed', '--run-id', root.runId, '--span-id', root.spanId,
+  );
+  assert.equal(finishParent().reason, 'children_pending');
+  const retry = run(
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id', root.runId, '--parent-span-id', root.spanId,
+    '--retry-of', step.spanId,
+  );
+  assert.equal(retry.state, 'started');
+  assert.notEqual(retry.spanId, step.spanId);
+  assert.equal(finishParent().reason, 'children_pending');
+  assert.equal(run(
+    'create-mobile-app|gather_app_requirements|completed',
+    '--run-id', root.runId, '--span-id', retry.spanId,
+  ).state, 'completed');
+  assert.equal(finishParent().state, 'completed');
+  const report = run('--report', '--run-id', root.runId);
+  assert.equal(report.state, 'completed');
+  assert.equal(report.spans.find((span) => span.spanId === step.spanId).state, 'needs_context');
+  const retried = report.spans.find((span) => span.spanId === retry.spanId);
+  assert.equal(retried.retryOfSpanId, step.spanId);
+  assert.equal(retried.attempt, 2);
 });
 
 test('run lock serializes child creation with parent completion across processes', async (context) => {
@@ -964,6 +1051,54 @@ test('verified Dataverse context excludes user identity and token claims', (cont
     recorded,
     /PRIVATE|private@example|signature|user_impersonation|55555555|33333333/,
   );
+});
+
+test('verified Dataverse context requires matching valid tenant GUIDs regardless of case', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const environmentId = '11111111-1111-4111-8111-111111111111';
+  const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const orgId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const environmentUrl = 'https://contoso.crm.dynamics.com';
+  const cases = [
+    [null, null, false],
+    ['malformed', 'malformed', false],
+    [tenantId, 'malformed', false],
+    ['malformed', tenantId, false],
+    [tenantId, null, false],
+    [null, tenantId, false],
+    [tenantId, orgId, false],
+    [tenantId, tenantId, true],
+    [tenantId.toUpperCase(), tenantId, true],
+    [tenantId, tenantId.toUpperCase(), true],
+    [tenantId.toUpperCase(), tenantId.toUpperCase(), true],
+  ];
+  for (const [cachedTenant, claimTenant, expected] of cases) {
+    fs.writeFileSync(path.join(projectRoot, '.resolved-environment.json'), JSON.stringify({
+      environmentId, tenantId: cachedTenant, environmentUrl,
+    }));
+    const root = lifecycle.beginSpan({
+      projectRoot, configDir, skillName: 'create-mobile-app',
+    });
+    const options = {
+      projectRoot, configDir, lifecycle, runId: root.runId, spanId: root.spanId,
+    };
+    const token = `header.${Buffer.from(JSON.stringify({ tid: claimTenant })).toString('base64url')}.signature`;
+    assert.equal(recordVerifiedDataverseOrganization({
+      ...options, environmentUrl, token, whoAmI: { OrganizationId: orgId },
+    }), expected);
+    const filename = path.join(
+      lifecycle.runDirectory(configDir, root.runId),
+      `${root.spanId}.environment.json`,
+    );
+    assert.equal(fs.existsSync(filename), expected);
+    assert.deepEqual(readProjectTelemetryContext(projectRoot, options), expected
+      ? { environmentId, tenantId, orgId }
+      : {});
+    if (expected) {
+      assert.equal(JSON.parse(fs.readFileSync(filename, 'utf8')).tenantId, tenantId);
+    }
+  }
 });
 
 test('project environment rejects malformed cached environment IDs', (context) => {

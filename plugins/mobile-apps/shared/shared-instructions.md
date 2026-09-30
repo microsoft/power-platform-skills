@@ -80,6 +80,11 @@ code; do not append `|| true`. Its command, arguments, stdout, and stderr never
 enter telemetry. For multi-command phases, use the explicit start/finish pair
 and report the aggregate outcome.
 
+Each wrapper telemetry call has an approximately one-second budget, followed by
+TERM and then KILL after a short grace period if needed. `--project-root` also sets
+the real command's working directory. If that directory is unavailable, the
+wrapper fails rather than running the command against a different project.
+
 Direct begin/start/finish telemetry calls are observational and therefore end
 with `|| true`. If they produce no valid IDs, continue the workflow unmeasured;
 never fabricate context or retry telemetry.
@@ -92,7 +97,9 @@ never fabricate context or retry telemetry.
   and `--parent-span-id` without `--span-id`. Retry with a new start and
   `--retry-of "<prior-step-span-id>"`; do not overwrite the previous attempt.
 - When context is needed, close only that attempt with `needs_context` and keep
-  the workflow open for resume. End the skill with
+  the workflow open. Resume a skill with `--resume`; restart a checkpoint with
+  `started` and `--retry-of "<prior-step-span-id>"`, using the same run and parent
+  IDs. Finish the new attempt before completing its parent. End the skill with
   `--finish <completed|failed|blocked|cancelled>` plus its run and skill span
   IDs only after the owning workflow actually ends. `DONE_WITH_CONCERNS`
   remains completed, with concerns surfaced separately.
