@@ -572,6 +572,11 @@ why they need naming here at all.
   set, and `existing` means the build cannot prove it owns the table, so rewriting another app's
   default views is not a safe default. Set **`"enrichDefaultViews": true`** to override that when you
   know the reused table is yours. Author-declared `views[]` are separate and always win.
+- **A view is found by its name on its table, so a name the table already has is that view.** A view
+  named like the platform's own "Active &lt;Plural&gt;", or like any view already on the table, is not
+  created a second time: the build adds the spec's columns to the existing view (removing none) and
+  writes its `description`, but does not reapply its `filters` or `sort` — it warns instead. Give the
+  view its own name to get a separate one.
 
 ## charts[]
 ```jsonc
