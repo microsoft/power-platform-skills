@@ -268,9 +268,31 @@ function siblingHref(projectRoot, fileName) {
   return fs.existsSync(path.join(path.resolve(projectRoot), fileName)) ? `../${fileName}` : '';
 }
 
+/**
+ * An editor deep-link for a local file.
+ *
+ * A page opened over `file://` cannot hand a document to the OS default application - browsers
+ * deliberately refuse, or any site could launch local apps. A registered URL scheme is the one
+ * route that works, and `vscode://file/<path>` is the realistic target here: this plugin is used
+ * from editors that register it. The plain relative link stays beside it for anyone without one.
+ *
+ * Path form per the VS Code URL handler: forward slashes throughout and a leading slash, so a
+ * Windows `C:\app\plan.md` becomes `vscode://file/C:/app/plan.md`.
+ * https://code.visualstudio.com/docs/configure/command-line#_opening-vs-code-with-urls
+ */
+function editorHref(projectRoot, fileName) {
+  const absolute = path.join(path.resolve(projectRoot), fileName);
+  if (!fs.existsSync(absolute)) return '';
+  const forwardSlashed = absolute.replace(/\\/g, '/');
+  const rooted = forwardSlashed.startsWith('/') ? forwardSlashed : `/${forwardSlashed}`;
+  // encodeURI, not encodeURIComponent: the separators must survive as separators.
+  return `vscode://file${encodeURI(rooted)}`;
+}
+
 function render(projectRoot, state) {
   const summary = summarize(state);
   summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
+  summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
   summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
   return renderTemplate({
     templatePath: TEMPLATE_PATH,

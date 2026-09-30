@@ -582,6 +582,13 @@ test('the planner markdown is linked only once it exists on disk', () => {
   const shown = links(runPage(outputPath(root)));
   assert.ok(shown.length >= 1, 'the link appears once the planner has written its output');
   assert.match(shown[0].textContent, /Full screen specs|Read the full plan/);
+
+  // Markdown belongs in an editor, and a browser cannot invoke the OS default app for a link -
+  // an editor URL scheme is the only route that works from a file:// page.
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  assert.match(template, /summary\.planDocEditorHref \|\| summary\.planDocHref/,
+    'prefer the editor link, but never leave a reader without one stranded');
+  assert.match(template, /plan-doc-raw/, 'the plain file link must remain available');
 });
 
 test('the full-size screens are linked under the phone, once they exist', () => {

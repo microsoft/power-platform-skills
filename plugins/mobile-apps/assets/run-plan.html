@@ -169,7 +169,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   background:var(--surface);border:1px solid var(--border);border-radius:999px;
   font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
 .plan-doc:hover{border-color:var(--accent-border);background:var(--accent-bg);}
-.plan-doc span{font-family:var(--mono);font-size:12px;color:var(--text-dim);}
+.plan-doc-raw{font-family:var(--mono);font-size:12px;color:var(--text-dim);text-decoration:none;}
+.plan-doc-raw:hover{color:var(--accent);text-decoration:underline;}
 .bullets{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
 .bullets li{line-height:1.55;}
 .bullets li::marker{color:var(--text-dim);}
@@ -1160,10 +1161,19 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (!container) return;
     container.textContent = '';
     if (!summary.planDocHref) return;
+
+    // Markdown is a document, not a web page: a browser either dumps it as plain text or
+    // downloads it. The editor scheme opens it where it is meant to be read. It is offered
+    // first but not alone - a reader without a handler for it would otherwise hit a dead end,
+    // so the plain file link stays beside it.
     var link = el('a', 'plan-doc');
-    link.setAttribute('href', summary.planDocHref);
+    link.setAttribute('href', summary.planDocEditorHref || summary.planDocHref);
     link.textContent = label;
-    link.appendChild(el('span', null, 'native-app-plan.md'));
+
+    var raw = el('a', 'plan-doc-raw', 'native-app-plan.md');
+    raw.setAttribute('href', summary.planDocHref);
+    raw.setAttribute('title', 'Open as plain text in this browser instead');
+    link.appendChild(raw);
     container.appendChild(link);
   }
 
