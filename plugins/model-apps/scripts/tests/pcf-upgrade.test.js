@@ -405,6 +405,24 @@ test('runUpgrade refuses a dirty git tree before applying changes', () => {
   }
 });
 
+test('dirtyTreeStatus probes git through process-runner with a fixed argv array', () => {
+  const calls = [];
+  const { dirtyTreeStatus } = require('../lib/pcf-upgrade.js');
+  const result = dirtyTreeStatus('D:\\Projects\\controls\\StarRating', {
+    spawnResultSync: (name, args, options) => {
+      calls.push({ name, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, [{
+    name: 'git',
+    args: ['status', '--porcelain', '--', 'D:\\Projects\\controls\\StarRating'],
+    options: { cwd: 'D:\\Projects\\controls\\StarRating', encoding: 'utf8' },
+  }]);
+});
+
 test('runUpgrade refuses apply outside a git work tree unless allowDirty is passed', () => {
   const { runUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-outside-git-'));

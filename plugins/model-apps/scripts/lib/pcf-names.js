@@ -152,8 +152,8 @@ function validateSolutionUniqueName(name) {
   const value = asString(name);
 
   // Dataverse exposes solution.uniquename as the solution identity used by PAC and caps it at 65
-  // characters. The character allow-list also keeps the value shell-safe for the Windows pac.cmd
-  // path, where `pac` must run through cmd.exe.
+  // characters. The character allow-list also keeps the value safe for process-runner's Windows
+  // pac.cmd path, where the batch shim runs under checked cmd.exe arguments.
   // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution#uniquename
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
     return `Solution unique name must start with a letter or underscore and contain only letters, digits, and underscores. ${SOLUTION_UNIQUE_NAME_ALLOWED}`;

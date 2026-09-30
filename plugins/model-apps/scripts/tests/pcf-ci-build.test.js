@@ -221,8 +221,8 @@ test('package smoke runs pac solution init, add-reference, then managed dotnet b
       }
       return { status: 0, stdout: '', stderr: '' };
     },
-    spawnSync: (command, args, opts) => {
-      calls.push([command, args, path.basename(opts.cwd), opts.shell]);
+    spawnResultSync: (command, args, opts) => {
+      calls.push([command, args, path.basename(opts.cwd), opts.encoding]);
       fs.mkdirSync(path.join(opts.cwd, 'bin', 'Release'), { recursive: true });
       writeZip(path.join(opts.cwd, 'bin', 'Release', 'solution.zip'), {
         'solution.xml': '<ImportExportXml><SolutionManifest><Managed>1</Managed><RootComponents><RootComponent type="66" /></RootComponents></SolutionManifest></ImportExportXml>',
@@ -237,7 +237,7 @@ test('package smoke runs pac solution init, add-reference, then managed dotnet b
   assert.deepEqual(calls, [
     ['pac', ['solution', 'init', '--publisher-name', 'Contoso', '--publisher-prefix', 'contoso'], '_solution', 120000],
     ['pac', ['solution', 'add-reference', '--path', projectDir], '_solution', 120000],
-    ['dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], '_solution', false],
+    ['dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], '_solution', 'utf8'],
   ]);
 });
 

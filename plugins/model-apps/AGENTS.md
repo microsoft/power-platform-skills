@@ -639,7 +639,7 @@ Rules that make the scripts safe to run from agents:
 
 - Every CLI starts with `parseArgs(argv)` and `validateFlags(argv, { known, needValue, hints })`. Usage errors print `USAGE`; non-usage failures exit 1 and emit one JSON result object on stdout so callers can parse failures consistently.
 - Scripts are dependency-free CommonJS and run on Node 20 and 22 across the CI matrix.
-- Process execution uses `spawn`/`spawnSync` with argv arrays and `shell:false`, except the documented Windows `pac.cmd` wrapper in `scripts/lib/pac-exec.js`.
+- Process execution goes through `scripts/lib/process-runner.js`, which resolves `az`, `pac`, `npm`, `npx`, `git` and `dotnet` to absolute executables and starts them with `shell:false`; Windows batch shims such as `pac.cmd` run under checked `cmd.exe` arguments inside that runner. PCF's `pac-exec.js` is only a result-shape adapter over the runner.
 - Versions come only from `pcf/compatibility-matrix.json` and lockfiles under `pcf/lock/`; no other PCF toolchain version source is allowed.
 - Dataverse write surfaces use documented APIs. The `customcontrol` table is never written; Learn marks it internal-use only.
 - Raw Dataverse reads are allowed only where the vendored SDK has no modeled method, with a WHY comment naming the missing method such as `RetrieveUnpublished` or `RetrieveDependentComponents`.

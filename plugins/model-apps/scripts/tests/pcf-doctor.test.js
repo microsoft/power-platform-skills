@@ -595,3 +595,20 @@ test('CLI emits JSON and makes pac optional for build but required for push', as
   assert.equal(pushPayload.ok, false);
   assert.equal(byId(pushPayload.toolchain, 'TOOL_PAC_MISSING').severity, 'error');
 });
+
+test('collectToolchain probes dotnet through process-runner instead of bare child_process', () => {
+  const calls = [];
+  const { collectToolchain } = require('../lib/pcf-doctor.js');
+
+  const probes = collectToolchain({}, {
+    runNpm: () => ({ status: 0, stdout: '10.9.9\n', stderr: '' }),
+    runPac: () => ({ status: 0, stdout: 'Microsoft PowerPlatform CLI\nVersion: 1.51.1\n', stderr: '' }),
+    spawnResultSync: (name, args, options) => {
+      calls.push({ name, args, options });
+      return { status: 0, stdout: '8.0.100\n', stderr: '' };
+    },
+  });
+
+  assert.deepEqual(calls, [{ name: 'dotnet', args: ['--version'], options: { encoding: 'utf8' } }]);
+  assert.equal(probes.dotnet, '8.0.100');
+});

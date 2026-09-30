@@ -122,8 +122,8 @@ async function main(argv = process.argv.slice(2)) {
 
   const push = runPac(pacArgs, { cwd: projectDir, timeoutMs: PUSH_TIMEOUT_MS });
   if (timedOut(push)) {
-    // On Windows, pac resolves to pac.cmd and the shared pac executor must use a shell. Killing that
-    // shell on timeout is best-effort and may leave the child MSBuild process running, so report the
+    // On Windows, process-runner starts a pac.cmd batch shim under checked cmd.exe arguments. Killing
+    // that wrapper on timeout is best-effort and may leave the MSBuild child running, so report the
     // diagnostic log path and never claim the push was aborted.
     return emitResult(false, {
       ok: false,

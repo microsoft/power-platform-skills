@@ -6,8 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
-const { spawnSync } = require('node:child_process');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { spawnResultSync } = require('./lib/process-runner.js');
 const { listTemplates, listRecipes, planScaffold, writeScaffold } = require('./lib/pcf-scaffold.js');
 const { loadMatrix, dependencySet } = require('./lib/pcf-matrix.js');
 const { buildControl } = require('./lib/pcf-build.js');
@@ -209,7 +209,7 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   const pathDep = deps.path || path;
   const runNode = deps.runNodeScript || runNodeScript;
   const pac = deps.runPac || runPac;
-  const runCommand = deps.spawnSync || spawnSync;
+  const runCommand = deps.spawnResultSync || spawnResultSync;
   const solutionDir = pathDep.join(projectDir, '_solution');
   const checks = [];
   validatePackagePublisher();
@@ -236,8 +236,6 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   const build = runCommand('dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], {
     cwd: solutionDir,
     encoding: 'utf8',
-    shell: false,
-    windowsHide: true,
   });
   if (!succeeded(build)) return { ok: false, error: `dotnet build failed: ${toolDetail(build)}`, checks };
 

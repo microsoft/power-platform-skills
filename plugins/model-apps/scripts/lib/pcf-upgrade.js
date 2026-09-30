@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync: defaultSpawnSync } = require('node:child_process');
+const { spawnResultSync: defaultSpawnResultSync } = require('./process-runner.js');
 const { checkProject, collectProject, dependencyFamily, hasErrors, pcfprojBuildMode } = require('./pcf-doctor.js');
 const { findControlProject } = require('./pcf-build.js');
 const { dependencySet, loadMatrix } = require('./pcf-matrix.js');
@@ -385,12 +385,10 @@ function collectUpgradeState(projectDir, deps = {}) {
 }
 
 function dirtyTreeStatus(projectDir, deps = {}) {
-  const spawnSync = deps.spawnSync || defaultSpawnSync;
-  const result = spawnSync('git', ['status', '--porcelain', '--', projectDir], {
+  const spawnResultSync = deps.spawnResultSync || defaultSpawnResultSync;
+  const result = spawnResultSync('git', ['status', '--porcelain', '--', projectDir], {
     cwd: projectDir,
     encoding: 'utf8',
-    shell: false,
-    windowsHide: true,
   });
   if (result.status !== 0) {
     const detail = String(result.stderr || result.error || '').trim();

@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync: defaultSpawnSync } = require('node:child_process');
+const { spawnResultSync: defaultSpawnResultSync } = require('./process-runner.js');
 const { loadMatrix, dependencySet, compareVersions, platformLibraryFindings } = require('./pcf-matrix.js');
 const { parseManifest } = require('./pcf-manifest.js');
 const { findControlProject, resolveOutRoot, classifyOutputDirectory, isProcessedManifestOutput } = require('./pcf-build.js');
@@ -610,10 +610,10 @@ function dirExists(fsDep, dir) {
 function collectToolchain(options = {}, deps = {}) {
   const runNpm = deps.runNpm;
   const runPac = deps.runPac;
-  const spawnSync = deps.spawnSync || defaultSpawnSync;
+  const spawnResultSync = deps.spawnResultSync || defaultSpawnResultSync;
   const npm = runNpm(['--version'], { npmCli: options.npmCli });
   const pac = runPac(['help']);
-  const dotnet = spawnSync('dotnet', ['--version'], { shell: false, encoding: 'utf8' });
+  const dotnet = spawnResultSync('dotnet', ['--version'], { encoding: 'utf8' });
   return {
     node: process.version,
     npm: npm && npm.status === 0 ? normalizeRuntimeVersion(npm.stdout) : null,

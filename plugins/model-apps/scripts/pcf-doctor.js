@@ -2,7 +2,7 @@
 'use strict';
 
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnResultSync } = require('./lib/process-runner.js');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { runNpm } = require('./lib/node-tool.js');
@@ -57,7 +57,7 @@ function runMain(argv = process.argv.slice(2)) {
   const matrix = loadMatrix();
   const hosts = splitList(flags.hosts, ['model']);
   const needs = splitList(flags.needs, ['build']);
-  const probes = collectToolchain({ npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined }, { runNpm, runPac, spawnSync });
+  const probes = collectToolchain({ npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined }, { runNpm, runPac, spawnResultSync });
   const toolchain = checkToolchain(probes, matrix, { needs });
   const project = [];
 
