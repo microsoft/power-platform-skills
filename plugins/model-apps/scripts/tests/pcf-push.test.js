@@ -250,6 +250,38 @@ test('push failure emits hints and appends the last 40 build log lines', async (
   assert.equal(payload.logTail[39], 'line-45');
 });
 
+test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the generic one', async () => {
+  const projectDir = makeProject('publish-deadlock');
+
+  // The stdout shape pac printed on a live push: the import succeeded, then the publish-all step
+  // lost a deadlock to another publish running in the same environment.
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: () => ({
+      status: 1,
+      stdout: [
+        'Importing the temporary solution wrapper into the current org: done.',
+        'Publishing All Customizations...',
+        'Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205',
+      ].join('\n'),
+      stderr: '',
+    }),
+  });
+
+  assert.equal(cli.exitCode, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.hints.length, 1);
+  assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
+  assert.match(payload.hints[0], /pcf-inventory\.js --control/);
+  assert.match(payload.hints[0], /re-run the same push/);
+  assert.doesNotMatch(payload.hints[0], /Review the pac pcf push output/);
+});
+
 test('push refusal from process-runner emits one JSON error through the real pac adapter', async () => {
   const projectDir = makeProject('runner-refusal');
   const refusal = Object.assign(new Error('cannot pass "%" to pac.cmd: a Windows batch file cannot receive % unchanged'), { code: 'EARGUMENT' });

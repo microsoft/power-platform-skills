@@ -53,6 +53,17 @@ const HINTS = [
     match: 'is not supported by the platform',
     hint: 'The target platform rejected a platform-library version. Run pcf-doctor.js and pcf-upgrade.js --apply --steps PLATFORM_LIB_VERSION, then see references/pcf-troubleshooting.md.',
   },
+  {
+    // Observed during pac's "Publishing All Customizations..." step, after the import succeeded:
+    //   "Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"
+    // SQL Server error 1205 means the server chose this transaction as a deadlock victim, which on a
+    // shared environment happens when another import or publish is running at the same time. It is
+    // transient, and the control has usually been imported already, so the remedy is to wait and
+    // re-run rather than to change the project.
+    // See: https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-1205-database-engine-error
+    match: 'Sql Number: 1205',
+    hint: 'Dataverse chose this publish as a deadlock victim (SQL 1205), usually because another import or publish was running in the same environment. The control may already be imported: check with pcf-inventory.js --control <name>, wait a minute, then re-run the same push.',
+  },
 ];
 
 function usageError(message) {
