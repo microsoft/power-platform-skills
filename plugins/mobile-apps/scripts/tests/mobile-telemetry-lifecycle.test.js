@@ -23,6 +23,7 @@ const {
 } = require('../emit-telemetry-checkpoint');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+const COMMAND_RUNNER = path.join(PLUGIN_ROOT, 'scripts', 'run-with-telemetry.sh');
 const provisioned = {
   instrumentationKey: 'test-mobile-key',
   collector_url: 'https://example.invalid/OneCollector/1.0/',
@@ -217,7 +218,7 @@ test('lifecycle events filter dynamic customer content before dispatch', (contex
   assert.doesNotMatch(JSON.stringify(filtered), /private|customer|secret|33333333|55555555/);
 });
 
-test('command wrapper preserves exit code without recording command content', (context) => {
+test('command runner preserves exit code and propagates measured span context', (context) => {
   const projectRoot = tempProject(context);
   const telemetry = telemetryContext(projectRoot);
   const root = lifecycle.beginSpan({
@@ -225,8 +226,16 @@ test('command wrapper preserves exit code without recording command content', (c
     configDir: telemetry.configDir,
     skillName: 'create-mobile-app',
   });
-  const emitted = [];
-  const result = runCommand([
+  const capturedEnv = path.join(projectRoot, 'captured-env.json');
+  const env = {
+    ...process.env,
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: telemetry.configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: telemetry.ikeyPath,
+    POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+    POWER_PLATFORM_SKILLS_NODE_BINARY: process.execPath,
+  };
+  const result = spawnSync('bash', [
+    COMMAND_RUNNER,
     '--execute',
     'create-mobile-app|validate_fresh_template',
     '--run-id',
@@ -236,24 +245,29 @@ test('command wrapper preserves exit code without recording command content', (c
     '--project-root',
     projectRoot,
     '--',
-    'private-executable',
-    'customer-secret',
+    process.execPath,
+    '-e',
+    [
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(capturedEnv)}, JSON.stringify({`,
+      '  runId: process.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID,',
+      '  spanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID,',
+      '  parentSpanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID,',
+      '  projectRoot: process.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT,',
+      '}));',
+      'process.exit(7);',
+    ].join('\n'),
   ], {
-    createTelemetryContext: () => telemetry,
-    emitLifecycle: (_telemetry, span) => emitted.push(span),
-    spawnSync: (command, args, options) => {
-      assert.equal(command, 'private-executable');
-      assert.deepEqual(args, ['customer-secret']);
-      assert.equal(options.shell, false);
-      assert.equal(options.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID, root.runId);
-      assert.ok(options.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID);
-      assert.equal(options.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT, projectRoot);
-      return { status: 7 };
-    },
+    encoding: 'utf8',
+    env,
+    timeout: 10_000,
   });
-  assert.equal(result.exitCode, 7);
-  assert.equal(emitted.length, 2);
-  assert.equal(emitted[1].state, 'failed');
+  assert.equal(result.status, 7, result.stderr);
+  const commandEnv = JSON.parse(fs.readFileSync(capturedEnv, 'utf8'));
+  assert.equal(commandEnv.runId, root.runId);
+  assert.match(commandEnv.spanId, /^[0-9a-f-]{36}$/);
+  assert.equal(commandEnv.parentSpanId, root.spanId);
+  assert.equal(commandEnv.projectRoot, projectRoot);
 
   const report = lifecycle.reportRun({
     projectRoot,
@@ -261,7 +275,90 @@ test('command wrapper preserves exit code without recording command content', (c
     runId: root.runId,
   });
   assert.equal(report.supportId, root.runId);
-  assert.doesNotMatch(JSON.stringify(report), /private-executable|customer-secret/);
+  assert.equal(
+    report.spans.find((span) => span.spanId === commandEnv.spanId).state,
+    'failed',
+  );
+  assert.doesNotMatch(JSON.stringify(report), /captured-env|writeFileSync/);
+});
+
+test('command runner executes once when telemetry has syntax or import failures', (context) => {
+  for (const [name, emitter] of [
+    ['syntax', 'this is not valid JavaScript'],
+    ['import', "require('./missing-telemetry-module');"],
+  ]) {
+    const projectRoot = tempProject(context);
+    const wrapperRoot = fs.mkdtempSync(path.join(os.tmpdir(), `mobile-runner-${name}-`));
+    context.after(() => fs.rmSync(wrapperRoot, { recursive: true, force: true }));
+    fs.copyFileSync(COMMAND_RUNNER, path.join(wrapperRoot, 'run-with-telemetry.sh'));
+    fs.writeFileSync(
+      path.join(wrapperRoot, 'emit-telemetry-checkpoint.js'),
+      emitter,
+    );
+    const marker = path.join(projectRoot, `${name}.txt`);
+    const result = spawnSync('bash', [
+      path.join(wrapperRoot, 'run-with-telemetry.sh'),
+      '--execute',
+      'create-mobile-app|validate_fresh_template',
+      '--run-id',
+      '11111111-1111-4111-8111-111111111111',
+      '--parent-span-id',
+      '22222222-2222-4222-8222-222222222222',
+      '--project-root',
+      projectRoot,
+      '--',
+      process.execPath,
+      '-e',
+      `require('fs').appendFileSync(${JSON.stringify(marker)}, 'x'); process.exit(7);`,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_NODE_BINARY: process.execPath,
+      },
+      timeout: 10_000,
+    });
+    assert.equal(result.status, 7, `${name}: ${result.stderr}`);
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'x');
+  }
+});
+
+test('command runner bounds a hung telemetry emitter', (context) => {
+  const projectRoot = tempProject(context);
+  const wrapperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-runner-hang-'));
+  context.after(() => fs.rmSync(wrapperRoot, { recursive: true, force: true }));
+  fs.copyFileSync(COMMAND_RUNNER, path.join(wrapperRoot, 'run-with-telemetry.sh'));
+  fs.writeFileSync(
+    path.join(wrapperRoot, 'emit-telemetry-checkpoint.js'),
+    'setInterval(() => {}, 1000);',
+  );
+  const marker = path.join(projectRoot, 'hang.txt');
+  const startedAt = Date.now();
+  const result = spawnSync('bash', [
+    path.join(wrapperRoot, 'run-with-telemetry.sh'),
+    '--execute',
+    'create-mobile-app|validate_fresh_template',
+    '--run-id',
+    '11111111-1111-4111-8111-111111111111',
+    '--parent-span-id',
+    '22222222-2222-4222-8222-222222222222',
+    '--project-root',
+    projectRoot,
+    '--',
+    process.execPath,
+    '-e',
+    `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');`,
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_NODE_BINARY: process.execPath,
+    },
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'ran');
+  assert.ok(Date.now() - startedAt < 3000, 'telemetry hang must stay bounded');
 });
 
 test('tracked checkpoints preserve allowlisted static classifications', (context) => {

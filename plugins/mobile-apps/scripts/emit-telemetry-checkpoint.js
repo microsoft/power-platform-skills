@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const { spawnSync } = require('node:child_process');
-const { constants } = require('node:os');
-
 const {
   TELEMETRY_STATES,
   TRACKED_SKILL_NAMES,
@@ -151,7 +148,6 @@ function parseOptions(argv) {
     '--begin': 'begin',
     '--finish': 'finish',
     '--resume': 'resume',
-    '--execute': 'execute',
     '--run-id': 'runId',
     '--span-id': 'spanId',
     '--parent-span-id': 'parentSpanId',
@@ -186,96 +182,6 @@ function parseOptions(argv) {
   return result;
 }
 
-function executeCommand(args, overrides = {}) {
-  if (!Array.isArray(args.command) || !args.command.length) {
-    throw new Error('invalid_input');
-  }
-  const payload = `${args.execute}|started`;
-  if (!parseCheckpointPayload(payload)) throw new Error('invalid_input');
-
-  const cwd = args.cwd || process.cwd();
-  let context;
-  try {
-    context = (overrides.createTelemetryContext || telemetry.createTelemetryContext)(
-      {},
-      { cwd, env: overrides.env },
-    );
-  } catch {
-    // A telemetry initialization failure must not suppress the wrapped command.
-  }
-
-  let start;
-  try {
-    if (context && args.runId) {
-      start = emitTrackedCheckpoint(payload, context, { ...args, ...overrides, cwd });
-    }
-  } catch {
-    // The requested command still runs when tracing cannot start.
-  }
-
-  const commandEnv = { ...(overrides.env || process.env) };
-  if (start) {
-    commandEnv.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID = start.runId;
-    commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID = start.spanId;
-    commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID = args.parentSpanId;
-    commandEnv.POWER_PLATFORM_SKILLS_PROJECT_ROOT = cwd;
-  } else {
-    delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID;
-    delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID;
-    delete commandEnv.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID;
-    delete commandEnv.POWER_PLATFORM_SKILLS_PROJECT_ROOT;
-  }
-
-  // An argument array plus inherited stdio preserves the original command
-  // contract; executable, arguments, stdout, and stderr never enter telemetry.
-  let result;
-  try {
-    result = (overrides.spawnSync || spawnSync)(args.command[0], args.command.slice(1), {
-      cwd,
-      env: commandEnv,
-      stdio: 'inherit',
-      shell: false,
-    });
-  } catch {
-    result = { status: 1 };
-  }
-  const exitCode = Number.isInteger(result.status)
-    ? result.status
-    : result.signal && constants.signals[result.signal]
-      ? 128 + constants.signals[result.signal]
-      : 1;
-
-  if (start) {
-    try {
-      const state = ['SIGINT', 'SIGTERM', 'SIGHUP'].includes(result.signal)
-        ? 'cancelled'
-        : exitCode === 0
-          ? 'completed'
-          : 'failed';
-      const span = telemetry.lifecycle.finishSpan({
-        projectRoot: cwd,
-        configDir: context.configDir,
-        runId: start.runId,
-        spanId: start.spanId,
-        state,
-        errorClass: result.error?.code === 'ENOENT'
-          ? 'missing_dependency'
-          : exitCode
-            ? 'unknown'
-            : undefined,
-      });
-      (overrides.emitLifecycle || telemetry.emitLifecycle)(context, span, { cwd });
-    } catch {
-      // Tracing cannot change the wrapped command result.
-    }
-  }
-  return {
-    status: 'executed',
-    exitCode,
-    ...(start ? { supportId: start.runId } : {}),
-  };
-}
-
 function runCommand(argv = process.argv.slice(2), overrides = {}) {
   try {
     const args = parseOptions(argv);
@@ -285,10 +191,8 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
       args.resume,
       args.payload,
       args.report,
-      args.execute,
     ].filter(Boolean);
     if (commands.length !== 1) throw new Error('invalid_input');
-    if (args.execute) return executeCommand(args, overrides);
     if (args.command) throw new Error('invalid_input');
     if (args.payload && !args.runId) {
       return emitCheckpoint(args.payload, {
@@ -357,18 +261,15 @@ if (require.main === module) {
   const result = runCommand();
   if (
     result &&
-    result.status !== 'executed' &&
     (result.schemaVersion === 2 || result.status)
   ) {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   }
-  if (result?.status === 'executed') process.exitCode = result.exitCode;
 }
 
 module.exports = {
   captureSuccessfulDataverseRequest,
   emitCheckpoint,
-  executeCommand,
   parseCheckpointPayload,
   parseOptions,
   runCommand,

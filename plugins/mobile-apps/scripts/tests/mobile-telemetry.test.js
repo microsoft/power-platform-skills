@@ -396,6 +396,7 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
   assert.match(checkpointSection, /frontmatter `name`/);
   assert.match(checkpointSection, /--begin "<skill-name>"/);
   assert.match(checkpointSection, /--finish <completed\|failed\|blocked\|cancelled>/);
+  assert.match(checkpointSection, /run-with-telemetry\.sh/);
   assert.match(checkpointSection, /--execute "<skill-name>\|<checkpoint-name>"/);
   assert.match(checkpointSection, /Support ID: <runId>/);
   for (const state of [

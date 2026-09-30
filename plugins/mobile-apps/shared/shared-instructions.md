@@ -27,7 +27,7 @@ summary when a measured run was created:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
-  --begin "<skill-name>" --project-root "<working_dir>"
+  --begin "<skill-name>" --project-root "<working_dir>" || true
 ```
 
 A nested skill uses the supplied run ID and caller span by adding `--run-id`
@@ -54,11 +54,11 @@ that same span afterward:
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
   "<skill-name>|<checkpoint-name>|started" \
   --run-id "$RUN_ID" --parent-span-id "$SKILL_SPAN_ID" \
-  --project-root "<working_dir>"
+  --project-root "<working_dir>" || true
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
   "<skill-name>|<checkpoint-name>|completed" \
   --run-id "$RUN_ID" --span-id "$STEP_SPAN_ID" \
-  --project-root "<working_dir>"
+  --project-root "<working_dir>" || true
 ```
 
 For one foreground command, prefer the wrapper so timing and outcome come from
@@ -67,15 +67,22 @@ command string. Use a real executable or `node <script>` on Windows, not a
 `.cmd` shim. Do not wrap persistent servers, watchers, or interactive sign-in:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
+bash "${PLUGIN_ROOT}/scripts/run-with-telemetry.sh" \
   --execute "<skill-name>|<checkpoint-name>" --run-id "$RUN_ID" \
   --parent-span-id "$SKILL_SPAN_ID" --project-root "<working_dir>" \
   -- node "<script-path>" "<argument>"
 ```
 
-The wrapper preserves the command's exit code; do not append `|| true`. Its
-command, arguments, stdout, and stderr never enter telemetry. For multi-command
-phases, use the explicit start/finish pair and report the aggregate outcome.
+The dependency-free shell wrapper owns the real command and invokes telemetry as
+a bounded best-effort child. A syntax/import error or hang in the telemetry JS
+cannot suppress or rerun the command. The wrapper preserves the command's exit
+code; do not append `|| true`. Its command, arguments, stdout, and stderr never
+enter telemetry. For multi-command phases, use the explicit start/finish pair
+and report the aggregate outcome.
+
+Direct begin/start/finish telemetry calls are observational and therefore end
+with `|| true`. If they produce no valid IDs, continue the workflow unmeasured;
+never fabricate context or retry telemetry.
 
 - Emit `started` immediately before work, then `completed`, `failed`, `blocked`,
   or `cancelled` as observed. A missing terminal event remains incomplete,
