@@ -1016,7 +1016,7 @@ test('requireSuccessfulPush distinguishes an already-exists collision from a ver
     (e) => {
       assert.strictEqual(e.name, 'BuildHalt');
       assert.strictEqual(e.code, 'already-exists');
-      assert.match(e.message, /delete the \.maker-workspace directory/, 'the halt must name the step that clears it');
+      assert.match(e.message, /delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json/, 'the halt must name the step that clears it, keeping the navigation baseline');
       assert.match(e.message, /halts here again/, 'and say why a plain re-run does not');
       assert.doesNotMatch(e.message, /re-download the app/);
       assert.doesNotMatch(e.message, /adopt it \(fetchArtifact\)/, 'a plain fetch adopts nothing here — it must not be prescribed');

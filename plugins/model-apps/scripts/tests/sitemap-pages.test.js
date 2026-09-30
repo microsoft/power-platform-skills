@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, fetchSitemap, fetchAppsForPages } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -28,6 +28,17 @@ test('sitemapGenPages: one entry per GenPage subarea, XML-entity-decoded title, 
   const byId = new Map(rows.map((r) => [r.pageId.toLowerCase(), r.title]));
   assert.strictEqual(byId.get(GP_OVERVIEW), 'Orders & Overview', 'title entity-decoded (&amp; → &)');
   assert.strictEqual(byId.get(GP_DETAIL), 'Order Detail');
+});
+
+test('decodeXmlEntities: predefined entities and numeric references, in one pass', () => {
+  assert.strictEqual(decodeXmlEntities('Orders &amp; Overview &lt;b&gt; &quot;q&quot; &apos;a&apos;'), 'Orders & Overview <b> "q" \'a\'');
+  // A serializer may spell any character as a numeric reference, decimal or hex.
+  assert.strictEqual(decodeXmlEntities('?a=1&#38;b=2&#x26;c=3&#39;'), "?a=1&b=2&c=3'");
+  assert.strictEqual(decodeXmlEntities('&#x1F600;'), '\u{1F600}');
+  // One pass: a double-encoded sequence decodes once, never twice.
+  assert.strictEqual(decodeXmlEntities('a &amp;lt; b &amp;#38; c'), 'a &lt; b &#38; c');
+  // A reference to no character, or not a reference at all, is left as written.
+  assert.strictEqual(decodeXmlEntities('&#xD800; &#1114112; &nbsp; & alone'), '&#xD800; &#1114112; &nbsp; & alone');
 });
 
 test('sitemapGenPageIds: sorted-unique lower-cased ids; a page attached twice is deduped', () => {

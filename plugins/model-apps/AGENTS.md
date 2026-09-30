@@ -1265,7 +1265,9 @@ push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_
 re-vendor that raises it makes every existing `.maker-workspace` old. Upgrades stay invisible only
 because a plain fetch re-reads a clean old copy (and the build fetches every existing form, view,
 chart and app before editing it); a copy still holding an interrupted build's edits is kept by that
-fetch and refused at push, and the runner then names the operator's remedy (delete the workspace).
+fetch and refused at push, and the runner then names the operator's remedy (reset the workspace but
+keep its `last-applied.json`, the navigation baseline — `RESET_WORKSPACE` in `lib/entity-provision.js`,
+the wording every workspace-reset remedy shares).
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/

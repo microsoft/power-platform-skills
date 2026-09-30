@@ -553,6 +553,13 @@ function makeRunner({ emit, total }) {
   return { run, mapLimit, skip, emit, total };
 }
 
+// How an operator discards a workspace's local copies. Everything in `.maker-workspace` is state the next
+// build re-reads from the environment — except last-applied.json, the record of what was last applied or
+// downloaded. It is what keeps a nav change made in the designer from being reverted by a stale spec
+// (AB#6726727), and no re-run can rebuild it, so deleting the whole folder silently drops that protection.
+// Every remedy that resets the workspace says exactly this.
+const RESET_WORKSPACE = 'delete everything in the .maker-workspace directory (or the --workspace one) except last-applied.json';
+
 // Some SDK refusals end with the SDK call that fixes them — `fetchArtifact(...)` — which an operator of this
 // plugin cannot make. Where the operator's step is known, the halt names it too.
 //
@@ -560,11 +567,11 @@ function makeRunner({ emit, total }) {
 // parsers — one an earlier version of this plugin saved. The build's plain fetch re-reads every CLEAN copy
 // before it edits one, so the refusal is reached only by a copy still holding edits an earlier build never
 // pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The edits
-// were projected from the spec and the re-run re-applies them, so discarding the workspace loses nothing.
-// Pinned against the real bundle in workspace-projection-real-bundle.test.js.
+// were projected from the spec and the re-run re-applies them, and last-applied.json is kept, so resetting
+// the workspace this way loses nothing. Pinned against the real bundle in workspace-projection-real-bundle.test.js.
 function operatorRemedy(err) {
   if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
-    return ' — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). Delete the .maker-workspace directory (or the --workspace one) and re-run: the build re-applies every edit from the spec.';
+    return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE} and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
   }
   return '';
 }
@@ -621,7 +628,7 @@ function requireSuccessfulPush(result, what, warn) {
     // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
     // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: delete the .maker-workspace directory (or the --workspace one), then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: ${RESET_WORKSPACE}, then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
@@ -1368,4 +1375,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

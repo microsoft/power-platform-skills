@@ -18,19 +18,19 @@ const DESC_ATTR    = /\bDescription="([^"]*)"/i;
 // Exact 36-char GUID pattern used for structural validation in `isMalformed`.
 const GUID_36 = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-// Decode the 5 predefined XML entities so a sitemap Title like "Orders &amp; Overview" becomes a usable page
-// NAME ("Orders & Overview") on the download round-trip. Sitemap free-text is XML-ESCAPED by the SDK's
-// safe-DOM factory, so we must reverse it before treating a Title as a name.
-// &amp; is decoded LAST so "a &amp;lt; b" → "a &lt; b" (not "a < b" — double-encoded sequences are rare but
-// ordering matters; only a single decode pass is done intentionally).
+// Decode XML character references so a sitemap Title like "Orders &amp; Overview" becomes a usable page
+// NAME ("Orders & Overview") on the download round-trip, and a Url compares as the SDK reads it. Sitemap
+// free-text is XML-ESCAPED by the SDK's safe-DOM factory, so it must be reversed before a Title is treated as
+// a name — and a serializer may write any character as a numeric reference (`&#38;`, `&#x26;`), not only
+// through the five predefined entities. ONE pass, so a double-encoded "a &amp;lt; b" decodes to "a &lt; b",
+// never "a < b". A reference to no character (out of range, or a surrogate) is left as written.
+const XML_PREDEFINED = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
 function decodeXmlEntities(s) {
-  return String(s)
-    .replace(/&lt;/g,   '<')
-    .replace(/&gt;/g,   '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g,  "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g,  '&'); // &amp; LAST so "&amp;lt;" → "&lt;" not "<"
+  return String(s).replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(lt|gt|amp|quot|apos));/g, (ref, hex, dec, name) => {
+    if (name) return XML_PREDEFINED[name];
+    const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec, 10);
+    return cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : ref;
+  });
 }
 
 function sitemapGenPages(xml) {

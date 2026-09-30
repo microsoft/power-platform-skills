@@ -232,6 +232,30 @@ test('verifySpec: a nav entry missing from the sitemap fails its icon check, bas
   assert.strictEqual(vec(await verifySpec(spec, twice, { baselineSpec })).present, false);
 });
 
+// Only real elements are navigation, and their values are read the way an XML parser reads them.
+test('verifySpec: a kept icon is judged on real SubArea elements, fully XML-decoded', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  const liveOf = (inner) => ({ findTable: async () => null, findColumns: async () => [], sitemapXml: async () => `<SiteMap><Area><Group>${inner}</Group></Area></SiteMap>` });
+  // `extra` goes FIRST: an attribute holding a raw `>` must come before the ones the match needs.
+  const entry = (url, extra = '') => `<SubArea Id="h"${extra} Url="${url}" VectorIcon="$webresource:new_designer.svg" />`;
+  // Commented out, or inside CDATA or a processing instruction, an entry is text — nothing was kept.
+  for (const wrapped of [`<!-- ${entry('https://contoso.example/help?a=1&amp;b=2')} -->`, `<![CDATA[${entry('https://contoso.example/help?a=1&amp;b=2')}]]>`, `<?note ${entry('https://contoso.example/help?a=1&amp;b=2')} ?>`]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(wrapped), { baselineSpec })).present, false, wrapped);
+  }
+  // A numeric reference, either quote style, and a raw `>` inside a value are all the same live entry.
+  for (const live of [
+    entry('https://contoso.example/help?a=1&#38;b=2'),
+    entry('https://contoso.example/help?a=1&#x26;b=2'),
+    "<SubArea Id='h' Url='https://contoso.example/help?a=1&amp;b=2' VectorIcon='$webresource:new_designer.svg' />",
+    entry('https://contoso.example/help?a=1&amp;b=2', ' Description="a > b"'),
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(live), { baselineSpec })).present, true, live);
+  }
+});
+
 // Verify must line the baseline up the way the build does: by the id each dashboard and page resolves
 // to here. A pin the author dropped, while the name still finds the same dashboard, is the same entry.
 test('verifySpec: an icon kept on a dashboard or page entry is judged by the ids resolved here', async () => {

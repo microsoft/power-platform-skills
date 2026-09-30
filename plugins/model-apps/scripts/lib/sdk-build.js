@@ -48,6 +48,7 @@ const {
   pushFailed,
   reportPartialPush,
   errorCodeChain,
+  RESET_WORKSPACE,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -1094,7 +1095,7 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
     reset = false;
   }
   const workspace = reset ? ''
-    : ' First delete the .maker-workspace directory (or the --workspace one): it still holds this run\'s unpushed copy of the app, which a re-run would refuse to overwrite.';
+    : ` First ${RESET_WORKSPACE}: the workspace still holds this run's unpushed copy of the app, which a re-run would refuse to overwrite.`;
   const why = neverPublished
     ? 'the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is'
     : 'the app has an unpublished change to its name, description or routing description (saved in Maker, or by a build whose publish did not complete), and Dataverse refuses another write to those fields until it is published';
@@ -1150,7 +1151,7 @@ async function discardUnrecordedEdits(provision, appId, error, thrown) {
 async function refuseUnpushedAppCopy(provision, appId, name) {
   const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === appId);
   if (listed && listed.isDirty) {
-    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. Delete the .maker-workspace directory (or the --workspace one) and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. To reset it, ${RESET_WORKSPACE} and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
   }
 }
 

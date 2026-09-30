@@ -120,8 +120,8 @@ test('REAL BUNDLE: an old copy holding unpushed edits is kept by a plain fetch a
       assert.strictEqual(err.code, 'ARTIFACT_PROJECTION_STALE', 'with the SDK code kept for the caller');
       assert.match(err.message, /Refusing to push app/, 'the SDK reason stays in the message');
       assert.match(err.message, /earlier version of this plugin/, 'it says where the copy came from');
-      assert.match(err.message, /Delete the \.maker-workspace directory \(or the --workspace one\) and re-run/,
-        'and names the step an operator can take');
+      assert.match(err.message, /To reset it, delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json and re-run/,
+        'and names the step an operator can take, keeping the navigation baseline');
       return true;
     });
   assert.strictEqual(writes.length, 0, 'nothing was written');

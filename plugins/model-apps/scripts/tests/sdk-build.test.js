@@ -757,6 +757,7 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
     assert.match(e.message, /holds edits an earlier run did not push/);
+    assert.match(e.message, /To reset it, delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json and re-run\./, 'the navigation baseline is kept');
     return true;
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
@@ -826,7 +827,7 @@ test('#583 when the workspace copy cannot be reset, the halt names the workspace
   sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /then re-run the build\. First delete the \.maker-workspace directory \(or the --workspace one\)/);
+    assert.match(e.message, /then re-run the build\. First delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json:/);
     return true;
   });
 });

@@ -1648,13 +1648,21 @@ function subareaDashboardHasLauncher(xml, dashId) {
 //   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
 // becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg' }].
 // An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
-// DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets. Attribute
-// values are XML-escaped (a query string's `&` is `&amp;`), so they are decoded before comparison.
+// DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
+// Only ELEMENTS count: a `<SubArea …>` inside a comment, a CDATA section or a processing instruction is
+// text, not navigation, so those are removed first. In what remains a `<SubArea` can only start an element
+// (an attribute value cannot hold a raw `<`), but a value CAN hold a raw `>`, so a start tag is matched
+// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
+// either quote style, before they are compared with the spec's.
 function liveNavEntries(xml) {
   const byKey = new Map();
-  for (const tag of String(xml || '').match(/<SubArea\b[^>]*>/gi) || []) {
-    const attrs = {};
-    for (const m of tag.matchAll(/\s([A-Za-z_][\w.:-]*)="([^"]*)"/g)) attrs[m[1]] = decodeXmlEntities(m[2]);
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  for (const tag of markup.match(/<SubArea\b(?:[^>"']|"[^"]*"|'[^']*')*>/g) || []) {
+    const attrs = Object.create(null);
+    for (const m of tag.matchAll(/\s([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
     const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
     const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
     if (!key) continue;
