@@ -1162,6 +1162,12 @@ reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and
 skill relies on behaviors that must survive. Four test files lock them — run all against every
 rebuilt bundle.
 
+**pcf copy sync.** The pcf plugin copies selected model-apps helpers and the vendored SDK bundle
+because plugin installs are isolated. `scripts/validate-plugin-copies.js` is the source of truth for
+that list and enforces it in both suites plus the every-PR metadata workflow. If you change one of
+those sources, copy the corresponding file into `plugins/pcf` in the same PR; re-vendor in model-apps
+first, then copy the resulting SDK bundle.
+
 **Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
 writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA and subject, whether
 that package had uncommitted changes, and the bundle's own sha256. Two things make this

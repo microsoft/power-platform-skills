@@ -26,6 +26,24 @@ on:
             # source. That guard is only useful if a change to the SOURCE runs it too.
             - "shared/telemetry/**"
             - "shared/skills/**"
+            # pcf copies model-apps/shared files. A PR that edits only pcf's copy still runs
+            # model-apps' sync test and points back to the shared root validator.
+            - "scripts/validate-plugin-copies.js"
+            - "plugins/pcf/scripts/lib/process-runner.js"
+            - "plugins/pcf/scripts/lib/sdk-http-client.js"
+            - "plugins/pcf/scripts/lib/odata.js"
+            - "plugins/pcf/scripts/lib/source-literals.js"
+            - "plugins/pcf/scripts/lib/interaction-mode.js"
+            - "plugins/pcf/scripts/lib/nearest-name.js"
+            - "plugins/pcf/scripts/lib/utf8-stream.js"
+            - "plugins/pcf/scripts/lib/dataverse-auth.js"
+            - "plugins/pcf/scripts/check-auth.js"
+            - "plugins/pcf/scripts/resolve-interaction-mode.js"
+            - "plugins/pcf/scripts/vendor/cds-maker-sdk.cjs"
+            - "plugins/pcf/scripts/vendor/PROVENANCE.json"
+            - "plugins/pcf/scripts/vendor/.gitattributes"
+            - "plugins/pcf/skills/report-issue/report-issue-workflow.md"
+            - "plugins/pcf/skills/report-issue/SKILL.md"
             - ".github/workflows/model-apps-script-tests.yml"
 
 # The jobs only read the checkout; the token needs nothing more, whatever the repository default is.

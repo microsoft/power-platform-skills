@@ -66,3 +66,11 @@ jobs:
 
             - name: validate-no-real-environments
               run: node scripts/validate-no-real-environments.js
+
+            # pcf ships physical copies of model-apps/shared files. Copies must never drift, and this
+            # is the one check that runs whatever the PR touches.
+            - name: test-plugin-copies-validator
+              run: node --test scripts/tests/validate-plugin-copies.test.js
+
+            - name: validate-plugin-copies
+              run: node scripts/validate-plugin-copies.js

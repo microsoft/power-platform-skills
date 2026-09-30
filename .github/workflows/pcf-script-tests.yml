@@ -11,6 +11,7 @@ on:
             - "plugins/pcf/**"
             - "evals/pcf/**"
             - "shared/skills/**"
+            - "scripts/validate-plugin-copies.js"
             - "plugins/model-apps/scripts/lib/process-runner.js"
             - "plugins/model-apps/scripts/lib/sdk-http-client.js"
             - "plugins/model-apps/scripts/lib/odata.js"

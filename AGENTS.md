@@ -111,7 +111,7 @@ cannot change what a test asserts.
 
 ## Plugin Conventions
 
-When a plugin copies code from another plugin, keep an explicit drift test and workflow path filter for the source files. The `pcf` plugin copies model-apps helper libraries and the vendored SDK bundle; changes to those model-apps sources must run pcf tests so the bundled copy stays current.
+When a plugin copies code from another plugin, add it to the `COPY_SETS` in `scripts/validate-plugin-copies.js`. That validator runs on every PR and in both affected plugins' suites, so a source-side or copy-side edit fails until the bundled copy is refreshed.
 
 
 Each plugin follows this structure:
