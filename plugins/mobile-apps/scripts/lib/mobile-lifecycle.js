@@ -263,6 +263,10 @@ function persistSpan(policy, options, context) {
     if (prior.parentSpanId !== parentSpanId || prior.skillName !== options.skillName ||
         prior.checkpointName !== (options.checkpointName || null) ||
         !fs.existsSync(path.join(directory, `${prior.spanId}.end.json`))) throw new Error('invalid_retry');
+    // Both resume and explicit retry hold the run lock here. A consumed attempt
+    // cannot fork another child that would leave the parent pending.
+    if (listSpans(policy, { ...options, runId: run.runId })
+      .some((span) => span.retryOfSpanId === prior.spanId)) throw new Error('invalid_retry');
     attempt = prior.attempt + 1;
   }
   const record = { schemaVersion: 2, runId: run.runId, spanId, parentSpanId: parentSpanId || null,

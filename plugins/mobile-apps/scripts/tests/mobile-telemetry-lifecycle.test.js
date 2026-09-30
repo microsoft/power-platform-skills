@@ -676,12 +676,24 @@ test('nested needs-context attempts keep their parent open until resumed', (cont
   assert.equal(resumed.retryOfSpanId, child.spanId);
   assert.equal(resumed.attempt, 2);
   assert.throws(() => lifecycle.finishSpan(finishRoot), /children_pending/);
+  assert.throws(() => lifecycle.resumeSpan({
+    projectRoot, configDir, runId: root.runId, spanId: child.spanId,
+  }), /invalid_retry/);
 
   lifecycle.finishSpan({
     projectRoot,
     configDir,
     runId: root.runId,
     spanId: resumed.spanId,
+    state: 'needs_context',
+  });
+  const third = lifecycle.resumeSpan({
+    projectRoot, configDir, runId: root.runId, spanId: resumed.spanId,
+  });
+  assert.equal(third.attempt, 3);
+  assert.equal(third.retryOfSpanId, resumed.spanId);
+  lifecycle.finishSpan({
+    projectRoot, configDir, runId: root.runId, spanId: third.spanId,
     state: 'completed',
   });
   assert.equal(lifecycle.finishSpan(finishRoot).state, 'completed');
@@ -730,7 +742,7 @@ test('checkpoint needs_context resumes through an explicit retry without blockin
   assert.equal(retried.attempt, 2);
 });
 
-test('run lock serializes child creation with parent completion across processes', async (context) => {
+test('run lock serializes parent completion and retry creation across processes', async (context) => {
   const projectRoot = tempProject(context);
   const configDir = path.join(projectRoot, 'config');
   const ikeyPath = path.join(configDir, 'ikey.json');
@@ -792,6 +804,46 @@ test('run lock serializes child creation with parent completion across processes
       false,
       'a completed parent must never gain an incomplete child',
     );
+  }
+
+  for (const spanType of ['skill', 'checkpoint']) {
+    const root = lifecycle.beginSpan({
+      projectRoot, configDir, skillName: 'create-mobile-app',
+    });
+    const child = lifecycle.beginSpan({
+      projectRoot, configDir, runId: root.runId, parentSpanId: root.spanId,
+      skillName: 'create-mobile-app',
+      ...(spanType === 'checkpoint' ? { checkpointName: 'gather_app_requirements' } : {}),
+    });
+    const options = { projectRoot, configDir, runId: root.runId };
+    lifecycle.finishSpan({ ...options, spanId: child.spanId, state: 'needs_context' });
+    const args = [
+      ...(spanType === 'skill'
+        ? ['--resume', child.spanId]
+        : [
+          'create-mobile-app|gather_app_requirements|started',
+          '--parent-span-id', root.spanId, '--retry-of', child.spanId,
+        ]),
+      '--run-id', root.runId, '--project-root', projectRoot,
+    ];
+    const results = await Promise.all([runCli(args), runCli(args)]);
+    const attempts = results.map((result) => {
+      assert.equal(result.code, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    });
+    assert.equal(attempts.filter((attempt) => attempt.state === 'started').length, 1);
+    assert.equal(attempts.filter((attempt) => attempt.reason === 'invalid_retry').length, 1);
+    const retry = attempts.find((attempt) => attempt.state === 'started');
+    lifecycle.finishSpan({ ...options, spanId: retry.spanId, state: 'completed' });
+    const repeated = await runCli(args);
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.equal(JSON.parse(repeated.stdout).reason, 'invalid_retry');
+    assert.equal(lifecycle.finishSpan({
+      ...options, spanId: root.spanId, state: 'completed',
+    }).state, 'completed');
+    const report = lifecycle.reportRun(options);
+    assert.equal(report.spans.length, 3);
+    assert.equal(report.state, 'completed');
   }
 });
 

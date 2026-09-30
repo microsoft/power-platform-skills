@@ -37,8 +37,9 @@ Apps CLI flags. Never infer a parent from a process or session ID. On resume,
 use `--resume "<skill-span-id>" --run-id "<run-id>" --project-root "<working_dir>"`
 instead of starting a second run, then replace `SKILL_SPAN_ID` with the newly
 returned span ID. Resume is valid only after `needs_context`; it creates a new
-immutable attempt in the same run. An expired or unavailable context is
-unmeasured, not permission to invent IDs or pair unrelated runs.
+immutable attempt in the same run. Each attempt can have only one retry;
+subsequent pauses or retries must use the newest returned span ID. An expired or
+unavailable context is unmeasured, not permission to invent IDs or pair unrelated runs.
 
 Only steps with this marker directly below the heading emit ordinary checkpoints:
 
