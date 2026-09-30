@@ -10,30 +10,13 @@ const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 
 const agentInfo = require('./telemetry/lib/agent-info');
 const events = require('./telemetry/lib/events');
-const { createLifecycle } = require('./mobile-lifecycle');
+const { lifecycle } = require('./mobile-lifecycle');
 const { fireAndForget, sanitizeData } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
 const { ensureAppInstanceId } = require('./app-identity');
 const { readProjectTelemetryContext } = require('./mobile-telemetry-context');
 const { resolveProcessSessionId } = require('./mobile-telemetry-session');
-const {
-  TELEMETRY_ERROR_CLASSES,
-  TELEMETRY_STATES,
-  TRACKED_SKILL_NAMES,
-  getTelemetryCheckpointNames,
-  isTelemetryStaticInfo,
-} = require('./mobileapp-hook-utils');
-
-const lifecycle = createLifecycle({
-  pluginName: 'mobile-app',
-  trackedSkillNames: new Set(TRACKED_SKILL_NAMES),
-  exemptSkillNames: new Set(['telemetry']),
-  checkpointNames: getTelemetryCheckpointNames,
-  isAdditionalInfo: isTelemetryStaticInfo,
-  terminalStates: new Set(TELEMETRY_STATES.filter((state) => state !== 'started')),
-  errorClasses: new Set(TELEMETRY_ERROR_CLASSES),
-});
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -400,7 +383,10 @@ function emitLifecycle(context, span, opts = {}) {
     : events.buildSkillCompleted(context.eventStreamName, fields);
   event.data.eventName = `${span.spanType === 'skill' ? 'skill' : span.checkpointName}_${span.state}`;
   event.data.severity = ['failed', 'blocked'].includes(span.state) ? 'Error' : 'Info';
-  event.data = sanitizeData(event.data);
+  event.data = sanitizeData(event.data, {
+    projectRoot: opts.cwd,
+    configDir: context.configDir,
+  });
   if (!event.data.pluginName) return null;
   event.time = span.time;
   dispatch(context, event, opts);

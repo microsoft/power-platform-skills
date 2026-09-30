@@ -6,6 +6,13 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const {
+  TELEMETRY_ERROR_CLASSES,
+  TELEMETRY_STATES,
+  TRACKED_SKILL_NAMES,
+  getTelemetryCheckpointNames,
+  isTelemetryStaticInfo,
+} = require('./mobileapp-hook-utils');
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -549,4 +556,14 @@ function createLifecycle(input) {
   });
 }
 
-module.exports = { GUID, createLifecycle, publishOwnedLock };
+const lifecycle = createLifecycle({
+  pluginName: 'mobile-app',
+  trackedSkillNames: new Set(TRACKED_SKILL_NAMES),
+  exemptSkillNames: new Set(['telemetry']),
+  checkpointNames: getTelemetryCheckpointNames,
+  isAdditionalInfo: isTelemetryStaticInfo,
+  terminalStates: new Set(TELEMETRY_STATES.filter((state) => state !== 'started')),
+  errorClasses: new Set(TELEMETRY_ERROR_CLASSES),
+});
+
+module.exports = { GUID, createLifecycle, lifecycle, publishOwnedLock };

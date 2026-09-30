@@ -10,6 +10,8 @@ const path = require('node:path');
 const { FIELD_TYPES, pick } = require('./telemetry/lib/events');
 const { appendLocal, pluginLogDir } = require('./telemetry/lib/local-log');
 const { findAppInstanceId, readTelemetryCluster } = require('./app-identity');
+const { lifecycle } = require('./mobile-lifecycle');
+const { readProjectTelemetryContext } = require('./mobile-telemetry-context');
 const { resolveClusterEnvironment } = require('./telemetry/region/region-resolver');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const {
@@ -29,7 +31,7 @@ const DEFAULT_LOCAL_DIR = path.join(os.homedir(), '.power-platform-skills');
 const RESERVED_META_FIELDS = new Set(['eventName', 'eventType', 'severity']);
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SOURCES = new Set(['prompt', 'pretool', 'checkpoint']);
-const ID_FIELDS = ['appInstanceId', 'environmentId', 'runId', 'spanId', 'parentSpanId'];
+const ID_FIELDS = ['appInstanceId', 'runId', 'spanId', 'parentSpanId'];
 const AGENT_NAMES = new Set([
   'GitHub Copilot',
   'Copilot CLI',
@@ -144,7 +146,7 @@ function readIkeyConfig(env) {
   }
 }
 
-function sanitizeData(data) {
+function sanitizeData(data, options = {}) {
   if (
     !data ||
     data.pluginName !== 'mobile-app' ||
@@ -162,6 +164,8 @@ function sanitizeData(data) {
   }
   delete filtered.errorDescription;
   delete filtered.pacCliVersion;
+  delete filtered.orgId;
+  delete filtered.tenantId;
 
   for (const name of ['pluginVersion', 'nodeVersion', 'aiAgentVersion', 'osVersion']) {
     if (
@@ -189,11 +193,6 @@ function sanitizeData(data) {
     }
   }
   if (!ERROR_CLASSES.has(filtered.errorClass)) delete filtered.errorClass;
-  for (const name of ['orgId', 'tenantId']) {
-    if (typeof filtered[name] !== 'string' || !GUID.test(filtered[name])) {
-      delete filtered[name];
-    }
-  }
   if (
     typeof data.durationMs !== 'number' ||
     !Number.isSafeInteger(data.durationMs) ||
@@ -244,6 +243,27 @@ function sanitizeData(data) {
       eventInfo.timingStatus = source.timingStatus;
     }
     if (source.timingStatus !== 'measured') delete filtered.durationMs;
+
+    // GUID shape alone cannot prove organization attribution. Recheck the local
+    // span/ancestor verification before logging and again when replaying to wire.
+    const verified = options.projectRoot && options.configDir
+      ? readProjectTelemetryContext(options.projectRoot, {
+        configDir: options.configDir,
+        lifecycle,
+        runId: eventInfo.runId,
+        spanId: eventInfo.spanId,
+      })
+      : {};
+    for (const name of ['orgId', 'tenantId']) {
+      if (typeof data[name] === 'string' && verified[name] &&
+          data[name].toLowerCase() === verified[name].toLowerCase()) {
+        filtered[name] = verified[name].toLowerCase();
+      }
+    }
+    if (typeof source.environmentId === 'string' && verified.environmentId &&
+        source.environmentId.toLowerCase() === verified.environmentId.toLowerCase()) {
+      eventInfo.environmentId = verified.environmentId.toLowerCase();
+    }
   }
 
   filtered.eventInfo = eventInfo;
@@ -325,12 +345,16 @@ async function dispatch(raw, env) {
 
   const replaying = Array.isArray(event.replay);
   if (replaying && event.data?.pluginName !== 'mobile-app') return;
-  const data = replaying ? { pluginName: 'mobile-app' } : sanitizeData(event.data);
+  const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
+  const context = {
+    configDir,
+    projectRoot: env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '',
+  };
+  const data = replaying ? { pluginName: 'mobile-app' } : sanitizeData(event.data, context);
   if (!data.pluginName) return;
   const time = typeof event.time === 'string' && Number.isFinite(Date.parse(event.time))
     ? new Date(event.time).toISOString()
     : new Date().toISOString();
-  const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
   if (!replaying) {
     appendLocal({ time, name: cfg.event_stream_name, data }, { configDir });
   }
@@ -368,7 +392,7 @@ async function dispatch(raw, env) {
   if (!iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl) return;
 
   records = records.flatMap((record) => {
-    const filtered = sanitizeData(record.data);
+    const filtered = sanitizeData(record.data, context);
     return filtered.pluginName &&
       typeof record.time === 'string' &&
       Number.isFinite(Date.parse(record.time))

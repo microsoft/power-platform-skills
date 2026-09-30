@@ -299,6 +299,8 @@ The Mobile Apps plugin sends usage and measured workflow telemetry to Microsoft 
 
 Events never include Entra user/object IDs, Dataverse user IDs, prompts, arguments, tool inputs, business records, document contents, file paths, cwd, app/site names, URLs, credentials, usernames, email addresses, hostnames, or raw error descriptions. Organization and environment identifiers are identifying metadata, not anonymous user counts. The same field filtering applies before local logging and transmission.
 
+Before local logging and again before transmission (including replay), the dispatcher retains organization, tenant, and environment IDs only when they match the current project's verified span or ancestor context. A missing, pruned, or mismatched verification record drops those identifiers while preserving the remaining usage event.
+
 Prompt and Skill-tool hooks remain legacy activity observations and can both fire for one visible command. Measured metrics use schema-v2 lifecycle records with explicit run/span IDs instead. A missing terminal event remains incomplete; it is not inferred from a hook return. Each measured run returns a Support ID that can be included in an issue report without exposing project content.
 
 Control the per-user transmission preference with:

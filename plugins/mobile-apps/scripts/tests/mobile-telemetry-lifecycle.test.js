@@ -1153,6 +1153,121 @@ test('verified Dataverse context requires matching valid tenant GUIDs regardless
   }
 });
 
+test('dispatcher revalidates organization attribution before local logging and replay transmission', (context) => {
+  const projectRoot = tempProject(context);
+  const telemetry = telemetryContext(projectRoot);
+  const environmentId = '11111111-1111-4111-8111-111111111111';
+  const tenantId = '22222222-2222-4222-8222-222222222222';
+  const orgId = '44444444-4444-4444-8444-444444444444';
+  const forgedId = '99999999-9999-4999-8999-999999999999';
+  const environmentUrl = 'https://contoso.crm.dynamics.com';
+  const targetPath = path.join(projectRoot, '.resolved-environment.json');
+  const target = { environmentId, tenantId, environmentUrl };
+  fs.writeFileSync(targetPath, JSON.stringify(target));
+  const root = lifecycle.beginSpan({
+    projectRoot, configDir: telemetry.configDir, skillName: 'create-mobile-app',
+  });
+  const stepOptions = {
+    projectRoot, configDir: telemetry.configDir, skillName: 'create-mobile-app',
+    runId: root.runId, parentSpanId: root.spanId,
+  };
+  const step = lifecycle.beginSpan({
+    ...stepOptions, checkpointName: 'select_app_environment',
+  });
+  const sibling = lifecycle.beginSpan({
+    ...stepOptions, checkpointName: 'gather_app_requirements',
+  });
+  const probePath = path.join(projectRoot, 'dispatch-probe.json');
+  const expected = { orgId, tenantId, environmentId };
+  const eventFor = (span, claimed = expected) => {
+    const event = emitLifecycle(telemetry, span, {
+      cwd: projectRoot, emit: () => {}, readAiAgent: () => ({}),
+    });
+    return {
+      ...event,
+      data: {
+        ...event.data,
+        orgId: claimed.orgId,
+        tenantId: claimed.tenantId,
+        eventInfo: { ...event.data.eventInfo, environmentId: claimed.environmentId },
+      },
+    };
+  };
+  const assertIds = (data, ids) => {
+    assert.equal(data.orgId, ids.orgId);
+    assert.equal(data.tenantId, ids.tenantId);
+    assert.equal(data.eventInfo.environmentId, ids.environmentId);
+  };
+  const send = (event, ids, directory = projectRoot, replay = false) => {
+    fs.rmSync(probePath, { force: true });
+    const result = spawnSync(process.execPath, [
+      path.join(PLUGIN_ROOT, 'scripts/lib/mobile-telemetry-dispatcher.js'),
+    ], {
+      cwd: os.tmpdir(),
+      encoding: 'utf8',
+      timeout: 5000,
+      input: JSON.stringify(replay
+        ? { data: { pluginName: 'mobile-app' }, replay: [event] }
+        : event),
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: telemetry.configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: telemetry.ikeyPath,
+        POWER_PLATFORM_SKILLS_PROJECT_ROOT: directory,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const probe = JSON.parse(fs.readFileSync(probePath, 'utf8'));
+    const envelope = JSON.parse(probe.body);
+    assertIds(JSON.parse(envelope.data.customDimensions), ids);
+    assert.equal(envelope.data.tenantId, ids.tenantId);
+    assert.equal(envelope.data.environmentId, ids.environmentId);
+    if (!replay) {
+      const log = path.join(telemetry.configDir, 'telemetry/mobile-app/sessions', root.sessionId, 'events.jsonl');
+      const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+      assertIds(records.at(-1).data, ids);
+    }
+  };
+
+  send(eventFor(step), {});
+  const token = `header.${Buffer.from(JSON.stringify({ tid: tenantId })).toString('base64url')}.signature`;
+  assert.equal(recordVerifiedDataverseOrganization({
+    projectRoot, configDir: telemetry.configDir, lifecycle,
+    runId: root.runId, spanId: step.spanId, environmentUrl, token,
+    whoAmI: { OrganizationId: orgId },
+  }), true);
+
+  const verified = eventFor(step);
+  send(verified, expected);
+  send(verified, expected, projectRoot, true);
+  const forged = eventFor(step, { orgId: forgedId, tenantId: forgedId, environmentId: forgedId });
+  send(forged, {});
+  send(forged, {}, projectRoot, true);
+  send(eventFor(sibling), {});
+  send(verified, {}, '');
+  send(verified, {}, tempProject(context));
+  send({
+    ...verified,
+    data: { ...verified.data, eventInfo: { environmentId } },
+  }, {});
+  send({
+    ...verified,
+    data: { ...verified.data, eventInfo: { ...verified.data.eventInfo, runId: forgedId } },
+  }, {});
+  fs.writeFileSync(targetPath, JSON.stringify({ ...target, environmentId: forgedId }));
+  send(verified, {});
+  send(verified, {}, projectRoot, true);
+  fs.writeFileSync(targetPath, JSON.stringify(target));
+  fs.unlinkSync(path.join(
+    lifecycle.runDirectory(telemetry.configDir, root.runId),
+    `${step.spanId}.environment.json`,
+  ));
+  send(verified, {});
+  send(verified, {}, projectRoot, true);
+});
+
 test('project environment rejects malformed cached environment IDs', (context) => {
   const projectRoot = tempProject(context);
   fs.writeFileSync(path.join(projectRoot, '.resolved-environment.json'), JSON.stringify({
