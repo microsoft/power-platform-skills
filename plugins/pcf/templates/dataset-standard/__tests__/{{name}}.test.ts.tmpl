@@ -65,19 +65,35 @@ test("renders column headers", () => {
     ]);
 });
 
-test("next and previous paging call one request at a time", () => {
+test("next and previous paging stay locked until the framework completes loading", async () => {
     const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
-    const { buttons } = mount(ds);
+    const { buttons, control } = mount(ds);
 
     const nextButton = buttons().find((button) => button.textContent === "Next") as HTMLButtonElement;
     const previousButton = buttons().find((button) => button.textContent === "Previous") as HTMLButtonElement;
 
     nextButton.click();
-    nextButton.click();
+    await Promise.resolve();
+
+    expect(nextButton.disabled).toBe(true);
+    expect(previousButton.disabled).toBe(true);
+
     previousButton.click();
+    nextButton.click();
 
     expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
     expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
+
+    ds.loading = true;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: ds }));
+    expect(nextButton.disabled).toBe(true);
+    expect(previousButton.disabled).toBe(true);
+
+    ds.loading = false;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: ds }));
+
+    expect(nextButton.disabled).toBe(false);
+    expect(previousButton.disabled).toBe(false);
 });
 
 test("updateView does not refresh the dataset", () => {

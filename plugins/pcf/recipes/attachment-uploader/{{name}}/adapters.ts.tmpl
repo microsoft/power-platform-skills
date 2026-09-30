@@ -5,6 +5,13 @@ export interface SelectedAttachmentFile {
     contentBase64: string;
 }
 
+export interface BrowserFilePickerValidation {
+    acceptedMimeTypes: string[];
+    maxBytes: number;
+    fileTooLargeMessage: string;
+    typeNotAllowedMessage: string;
+}
+
 export interface AnnotationPayload extends ComponentFramework.WebApi.Entity {
     filename: string;
     mimetype: string;
@@ -14,7 +21,7 @@ export interface AnnotationPayload extends ComponentFramework.WebApi.Entity {
 }
 
 export interface AttachmentAdapters {
-    pickFile: (accept: string) => Promise<SelectedAttachmentFile | null>;
+    pickFile: (accept: string, validation?: BrowserFilePickerValidation) => Promise<SelectedAttachmentFile | null>;
     createAnnotation: (payload: AnnotationPayload) => Promise<ComponentFramework.LookupValue>;
 }
 
@@ -29,20 +36,31 @@ export function createDataverseNoteClient(webAPI: ComponentFramework.WebApi): Pi
     };
 }
 
-export function createBrowserFilePicker(ownerDocument: Document): Pick<AttachmentAdapters, "pickFile"> {
+export function createBrowserFilePicker(container: HTMLElement): Pick<AttachmentAdapters, "pickFile"> {
     return {
-        pickFile(accept) {
+        pickFile(accept, validation) {
             return new Promise((resolve, reject) => {
+                const ownerDocument = container.ownerDocument;
                 const input = ownerDocument.createElement("input");
+                const cleanup = () => input.remove();
                 input.type = "file";
                 input.accept = accept;
                 input.style.display = "none";
+                input.addEventListener("cancel", () => {
+                    cleanup();
+                    resolve(null);
+                }, { once: true });
                 input.addEventListener("change", () => {
                     void (async () => {
                         const file = input.files?.[0] ?? null;
-                        input.remove();
+                        cleanup();
                         if (!file) {
                             resolve(null);
+                            return;
+                        }
+                        const validationError = validateFileMetadata(file, validation);
+                        if (validationError) {
+                            reject(new Error(validationError));
                             return;
                         }
                         try {
@@ -58,11 +76,21 @@ export function createBrowserFilePicker(ownerDocument: Document): Pick<Attachmen
                         }
                     })();
                 }, { once: true });
-                ownerDocument.body.append(input);
+                container.append(input);
                 input.click();
             });
         },
     };
+}
+
+function validateFileMetadata(file: File, validation: BrowserFilePickerValidation | undefined): string | null {
+    if (!validation) return null;
+    if (file.size > validation.maxBytes) return validation.fileTooLargeMessage;
+    const fileType = file.type.toLowerCase();
+    if (validation.acceptedMimeTypes.length > 0 && !validation.acceptedMimeTypes.includes(fileType)) {
+        return validation.typeNotAllowedMessage;
+    }
+    return null;
 }
 
 function readFileAsBase64(file: File): Promise<string> {

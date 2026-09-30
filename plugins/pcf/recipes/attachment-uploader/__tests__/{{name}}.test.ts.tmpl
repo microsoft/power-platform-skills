@@ -1,4 +1,5 @@
 import { {{name}} } from "../{{name}}";
+import { createBrowserFilePicker } from "../{{name}}/adapters";
 import { IInputs } from "../{{name}}/generated/ManifestTypes";
 import { mockContext, mockProperty, mockWebApi } from "../test/pcf-context";
 
@@ -243,6 +244,27 @@ test("record change before create abandons the stale upload and recovers immedia
     expect(container.textContent).not.toContain("Uploading attachment");
 });
 
+test("editability withdrawn before file selection resolves abandons the stale upload", async () => {
+    const picked = deferred<AdapterFile | null>();
+    const { control, container, context, createRecord, pickFile } = mount();
+    pickFile.mockReturnValue(picked.promise);
+
+    button(container).click();
+    await Promise.resolve();
+    const readOnly = parameters({
+        value: mockProperty<string>(null, undefined, { editable: false }) as IInputs["value"],
+    });
+    control.updateView(withStrings({ ...context, parameters: readOnly } as ComponentFramework.Context<IInputs>));
+
+    expect(button(container).disabled).toBe(true);
+
+    picked.resolve({ name: "stale.txt", type: "text/plain", size: 12, contentBase64: "c3RhbGU=" });
+    await flushPromises();
+
+    expect(createRecord).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("permission");
+});
+
 test("raw file size is capped at the documented direct-create safety boundary", async () => {
     const atCap = mount({ maxFileSizeKb: mockProperty(5120) as IInputs["maxFileSizeKb"] });
     atCap.pickFile.mockResolvedValue({ name: "cap.txt", type: "text/plain", size: 3 * 1024 * 1024, contentBase64: "AA==" });
@@ -272,6 +294,57 @@ test("button accessible name uses visible text without duplicate ids across inst
     expect(new Set(ids).size).toBe(ids.length);
     expect(button(first.container).getAttribute("aria-labelledby")).toBeNull();
     expect(button(second.container).getAttribute("aria-labelledby")).toBeNull();
+});
+
+test("native file picker cancel resolves without leaving inputs outside the container", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const picker = createBrowserFilePicker(host);
+    const picked = picker.pickFile("text/plain");
+    const input = host.querySelector("input[type='file']") as HTMLInputElement;
+
+    expect(input).not.toBeNull();
+    expect(document.body.querySelector("body > input[type='file']")).toBeNull();
+
+    input.dispatchEvent(new Event("cancel"));
+
+    await expect(picked).resolves.toBeNull();
+    expect(host.querySelector("input[type='file']")).toBeNull();
+});
+
+test("native file picker rejects oversize files before FileReader runs", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const originalFileReader = global.FileReader;
+    const readAsDataURL = jest.fn();
+    class ThrowingFileReader extends EventTarget {
+        result: string | ArrayBuffer | null = null;
+        error: DOMException | null = null;
+        readAsDataURL = readAsDataURL;
+    }
+    global.FileReader = ThrowingFileReader as unknown as typeof FileReader;
+    try {
+        const picker = createBrowserFilePicker(host);
+        const picked = picker.pickFile("text/plain", {
+            acceptedMimeTypes: ["text/plain"],
+            maxBytes: 1,
+            fileTooLargeMessage: "Too large",
+            typeNotAllowedMessage: "Wrong type",
+        });
+        const input = host.querySelector("input[type='file']") as HTMLInputElement;
+        Object.defineProperty(input, "files", {
+            configurable: true,
+            value: [new File(["too large"], "big.txt", { type: "text/plain" })],
+        });
+
+        input.dispatchEvent(new Event("change"));
+
+        await expect(picked).rejects.toThrow("Too large");
+        expect(readAsDataURL).not.toHaveBeenCalled();
+        expect(host.querySelector("input[type='file']")).toBeNull();
+    } finally {
+        global.FileReader = originalFileReader;
+    }
 });
 
 

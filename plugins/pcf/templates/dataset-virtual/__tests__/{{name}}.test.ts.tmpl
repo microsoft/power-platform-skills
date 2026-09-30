@@ -79,38 +79,26 @@ test("renders column headers", () => {
     ]);
 });
 
-test("next and previous paging call one request at a time", () => {
+test("next and previous paging stay locked until the framework completes loading", async () => {
     const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
-    const { element } = render(ds);
+    const { control, container, element } = render(ds);
 
     element.props.onNextPage();
-    element.props.onNextPage();
+    await Promise.resolve();
+
     element.props.onPreviousPage();
+    element.props.onNextPage();
 
     expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
     expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
-});
 
-test("paging buttons disable immediately while a page request is in flight", async () => {
-    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
-    let resolveNext!: () => void;
-    ds.paging.loadNextPage = jest.fn(() => new Promise<void>((resolve) => {
-        resolveNext = resolve;
-    }));
-    const { control, container, pagerButtons } = render(ds);
-
-    const nextButton = pagerButtons().find((button) => button.textContent === "Next") as HTMLButtonElement;
-    TestUtils.act(() => {
-        TestUtils.Simulate.click(nextButton);
-    });
-
+    ds.loading = true;
+    ReactDOM.render(control.updateView(mockContext<IInputs>({ sampleDataSet: ds })), container);
+    const pagerButtons = () => Array.from(container.querySelectorAll("button"))
+        .filter((button) => button.textContent === "Previous" || button.textContent === "Next") as HTMLButtonElement[];
     expect(pagerButtons().map((button) => button.disabled)).toEqual([true, true]);
-    expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
 
-    await TestUtils.act(async () => {
-        resolveNext();
-        await Promise.resolve();
-    });
+    ds.loading = false;
     ReactDOM.render(control.updateView(mockContext<IInputs>({ sampleDataSet: ds })), container);
 
     expect(pagerButtons().map((button) => button.disabled)).toEqual([false, false]);

@@ -95,11 +95,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.editable = valueParameter?.security?.editable ?? true;
         this.disabled = context.mode.isControlDisabled;
         const config = this.readConfiguration();
-        if (this.uploading && this.activeOperationSignature !== this.configSignature(config)) {
-            this.operationId += 1;
-            this.uploading = false;
-            this.activeOperationSignature = null;
-        }
+        if (this.uploading && this.activeOperationSignature !== this.operationSignature(config)) this.cancelActiveOperation();
         if (!this.uploading) {
             const nextState = this.evaluateState(config);
             this.state = nextState.state;
@@ -186,6 +182,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
                 return;
             }
 
+            if (this.evaluateState(this.readConfiguration()).state !== "ready") {
+                this.cancelActiveOperation();
+                this.render();
+                return;
+            }
             if (!this.isOperationCurrent(token)) return;
             await this.createAnnotation(this.toAnnotationPayload(file, config));
             if (!this.isOperationCurrent(token)) return;
@@ -247,8 +248,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         return ODATA_IDENTIFIER.test(value);
     }
 
-    private configSignature(config: Configuration): string {
+    private operationSignature(config: Configuration): string {
         return [
+            this.readable ? "readable" : "unreadable",
+            this.editable ? "editable" : "readonly",
+            this.disabled ? "disabled" : "enabled",
             config.recordId ?? "",
             config.entityName,
             config.entitySetName,
@@ -260,7 +264,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private beginOperation(config: Configuration): OperationToken {
         this.operationId += 1;
-        this.activeOperationSignature = this.configSignature(config);
+        this.activeOperationSignature = this.operationSignature(config);
         return { operationId: this.operationId, signature: this.activeOperationSignature };
     }
 
@@ -269,7 +273,13 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
             && this.root != null
             && this.context != null
             && this.operationId === token.operationId
-            && this.configSignature(this.readConfiguration()) === token.signature;
+            && this.operationSignature(this.readConfiguration()) === token.signature;
+    }
+
+    private cancelActiveOperation(): void {
+        this.operationId += 1;
+        this.uploading = false;
+        this.activeOperationSignature = null;
     }
 
     private finishOperation(token: OperationToken, state: RenderState, messageKey: string | null, messageValue: string | null): void {
@@ -315,7 +325,13 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private pickFile(accept: string): Promise<SelectedAttachmentFile | null> {
         if (this.adapters.pickFile) return this.adapters.pickFile(accept);
         if (!this.container) return Promise.resolve(null);
-        return createBrowserFilePicker(this.container.ownerDocument).pickFile(accept);
+        const config = this.readConfiguration();
+        return createBrowserFilePicker(this.container).pickFile(accept, {
+            acceptedMimeTypes: config.acceptedMimeTypes,
+            maxBytes: config.maxBytes,
+            fileTooLargeMessage: this.format(STRINGS.fileTooLarge, String(config.maxKb)),
+            typeNotAllowedMessage: this.getString(STRINGS.typeNotAllowed),
+        });
     }
 
     private createAnnotation(payload: AnnotationPayload): Promise<ComponentFramework.LookupValue> {

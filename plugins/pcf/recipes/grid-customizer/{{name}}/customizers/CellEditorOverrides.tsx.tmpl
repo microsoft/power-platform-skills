@@ -1,30 +1,50 @@
 import * as React from "react";
 import { CellEditorOverrides } from "../types";
 
+interface TextEditorProps {
+    defaultProps: Parameters<NonNullable<CellEditorOverrides["Text"]>>[0];
+    label: string;
+    rendererParams: Parameters<NonNullable<CellEditorOverrides["Text"]>>[1];
+}
+
+function TextEditor({ defaultProps, label, rendererParams }: TextEditorProps): React.ReactElement {
+    const initialValue = defaultProps.charPress ?? (defaultProps.value == null ? "" : String(defaultProps.value));
+    const [value, setValue] = React.useState(initialValue);
+    const publishedCharPress = React.useRef(false);
+
+    React.useEffect(() => {
+        if (!defaultProps.charPress || publishedCharPress.current) return;
+        publishedCharPress.current = true;
+        // Learn warns that grid renderers/editors can be invoked repeatedly, so typed-start
+        // publication happens after mount instead of as a side effect of the editor factory.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/customize-editable-grid-control
+        defaultProps.onChange(defaultProps.charPress);
+        rendererParams.onCellValueChanged(defaultProps.charPress);
+    }, [defaultProps, rendererParams]);
+
+    const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const next = event.currentTarget.value;
+        setValue(next);
+        defaultProps.onChange(next);
+        rendererParams.onCellValueChanged(next);
+    };
+
+    return React.createElement("input", {
+        "aria-label": label,
+        className: "{{nameLower}}-text-editor",
+        value,
+        dir: defaultProps.isRTLMode ? "rtl" : undefined,
+        required: defaultProps.isRequired,
+        type: "text",
+        onBlur: () => rendererParams.stopEditing(false),
+        onChange,
+    });
+}
+
 export const cellEditorOverrides: CellEditorOverrides = {
     Text: (defaultProps, rendererParams) => {
         if (defaultProps.secured) return null;
         const label = rendererParams.colDefs[rendererParams.columnIndex]?.displayName ?? defaultProps.columnDataType ?? "Text";
-        const initialValue = defaultProps.charPress ?? (defaultProps.value == null ? "" : String(defaultProps.value));
-        if (defaultProps.charPress) {
-            defaultProps.onChange(defaultProps.charPress);
-            rendererParams.onCellValueChanged(defaultProps.charPress);
-        }
-        const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-            const next = event.currentTarget.value;
-            defaultProps.onChange(next);
-            rendererParams.onCellValueChanged(next);
-        };
-
-        return React.createElement("input", {
-            "aria-label": label,
-            className: "{{nameLower}}-text-editor",
-            defaultValue: initialValue,
-            dir: defaultProps.isRTLMode ? "rtl" : undefined,
-            required: defaultProps.isRequired,
-            type: "text",
-            onBlur: () => rendererParams.stopEditing(false),
-            onChange,
-        });
+        return React.createElement(TextEditor, { defaultProps, label, rendererParams });
     },
 };

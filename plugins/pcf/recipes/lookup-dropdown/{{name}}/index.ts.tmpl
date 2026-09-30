@@ -38,6 +38,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private strings = FALLBACKS;
     private currentQueryKey = "";
     private loadMessage = "";
+    private latestContext: ComponentFramework.Context<IInputs> | null = null;
 
     private readonly onChange = (): void => {
         if (!this.select) return;
@@ -79,6 +80,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.latestContext = context;
         const lookup = context.parameters.lookupValue;
         const readable = lookup?.security?.readable ?? true;
         const editable = lookup?.security?.editable ?? true;
@@ -124,13 +126,12 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.loadMessage = this.strings[STRINGS.loading];
         const token = ++this.loadToken;
         this.render(context, this.loadMessage, !editable, false);
-        void this.refreshOptions(context, token, !editable);
+        void this.refreshOptions(context, token);
     }
 
     private async refreshOptions(
         context: ComponentFramework.Context<IInputs>,
         token: number,
-        readOnly: boolean,
     ): Promise<void> {
         try {
             const result = await loadLookupOptions(context);
@@ -140,14 +141,21 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
                 ? this.strings[STRINGS.moreRows]
                 : this.options.length ? "" : this.strings[STRINGS.noOptions];
             this.loadMessage = message;
-            this.render(context, message, readOnly, false);
+            this.renderLatest(message, false);
         } catch {
             if (token !== this.loadToken) return;
             this.options = mergeSelected([], this.selected);
             this.loadMessage = this.strings[STRINGS.unavailable];
-            this.render(context, this.strings[STRINGS.unavailable], readOnly, false);
+            this.renderLatest(this.strings[STRINGS.unavailable], false);
         }
 
+    }
+
+    private renderLatest(message: string, hidden: boolean): void {
+        const context = this.latestContext;
+        if (!context) return;
+        const editable = context.parameters.lookupValue?.security?.editable ?? true;
+        this.render(context, message, !editable, hidden);
     }
 
     public getOutputs(): IOutputs {
@@ -164,6 +172,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.select = null;
         this.status = null;
         this.notifyOutputChanged = null;
+        this.latestContext = null;
     }
 
     private render(context: ComponentFramework.Context<IInputs>, message: string, readOnly: boolean, hidden: boolean): void {

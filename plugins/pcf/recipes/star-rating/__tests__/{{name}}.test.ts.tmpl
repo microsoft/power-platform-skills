@@ -81,10 +81,11 @@ test("clicking a different star notifies once and returns the chosen whole numbe
     expect(radios(container).map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "false", "false", "true", "false"]);
 });
 
-test("arrow keys and Home End move the roving selected radio", () => {
+test("arrow keys, Space, Home and End move or select the roving radio", () => {
     const { control, container, notify } = mount({ value: mockProperty(3) as IInputs["value"] });
 
     pressRadio(container, 2, "ArrowRight");
+    pressRadio(container, 0, "Space");
     pressRadio(container, 3, "Home");
     pressRadio(container, 0, "End");
     pressRadio(container, 4, "ArrowLeft");
@@ -92,6 +93,15 @@ test("arrow keys and Home End move the roving selected radio", () => {
     expect(notify).toHaveBeenCalledTimes(4);
     expect(control.getOutputs()).toEqual({ value: 4 });
     expect(radios(container).map((item) => item.tabIndex)).toEqual([-1, -1, -1, 0, -1]);
+});
+
+test("Space checks the focused radio", () => {
+    const { control, container, notify } = mount({ value: mockProperty(3) as IInputs["value"] });
+
+    pressRadio(container, 0, "Space");
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(control.getOutputs()).toEqual({ value: 1 });
 });
 
 test("left and right arrow behavior reverses in RTL", () => {

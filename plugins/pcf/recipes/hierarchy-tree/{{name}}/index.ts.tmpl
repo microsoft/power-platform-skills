@@ -45,7 +45,8 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private nextButton: HTMLButtonElement | null = null;
     private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: DataSet | null = null;
-    private pagingRequest: Promise<void> | null = null;
+    private pagingRequestPending = false;
+    private pagingRequestObservedLoading = false;
     private expanded = new Set<string>();
     private initializedExpansion = new Set<string>();
     private visibleItems: VisibleTreeItem[] = [];
@@ -90,6 +91,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     public updateView(context: ComponentFramework.Context<IInputs>): void {
         this.context = context;
         this.dataSet = context.parameters[DATA_SET_NAME] as DataSet | undefined || null;
+        if (this.pagingRequestPending) {
+            if (this.dataSet?.loading) this.pagingRequestObservedLoading = true;
+            else if (this.pagingRequestObservedLoading) this.clearPagingRequest();
+        }
         this.render();
     }
 
@@ -108,7 +113,8 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.nextButton = null;
         this.context = null;
         this.dataSet = null;
-        this.pagingRequest = null;
+        this.pagingRequestPending = false;
+        this.pagingRequestObservedLoading = false;
         this.expanded.clear();
         this.initializedExpansion.clear();
     }
@@ -122,20 +128,29 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     };
 
     private requestPage(direction: "next" | "previous"): void {
-        if (!this.dataSet || this.pagingRequest) return;
+        if (!this.dataSet || this.pagingRequestPending) return;
         const paging = this.dataSet.paging;
         const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
         if (!canLoad) return;
 
-        // Learn documents dataset paging calls as serial: a second load request while one is in
-        // flight can race the host's updateView callback. Keep one promise per control instance.
+        // Paging methods return void; completion is delivered by a later updateView after the
+        // framework finishes loading the page, so the lock cannot be released on a microtask.
         // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/paging
-        this.pagingRequest = Promise.resolve(direction === "next" ? paging.loadNextPage() : paging.loadPreviousPage())
-            .finally(() => {
-                this.pagingRequest = null;
-                this.render();
-            });
+        this.pagingRequestPending = true;
+        this.pagingRequestObservedLoading = false;
+        try {
+            if (direction === "next") paging.loadNextPage();
+            else paging.loadPreviousPage();
+        } catch (error) {
+            this.clearPagingRequest();
+            throw error;
+        }
         this.render();
+    }
+
+    private clearPagingRequest(): void {
+        this.pagingRequestPending = false;
+        this.pagingRequestObservedLoading = false;
     }
 
     private render(): void {
@@ -365,7 +380,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         } else if (event.key === "Enter" && item.node) {
             openRecord(this.dataSet, item.node.record);
             event.preventDefault();
+        } else {
+            return;
         }
+        event.stopPropagation();
     }
 
     private isRTL(): boolean {
@@ -475,7 +493,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     private updatePaging(dataSet: DataSet | null): void {
-        const busy = this.pagingRequest !== null;
+        const busy = this.pagingRequestPending || Boolean(dataSet?.loading);
         if (this.previousButton) this.previousButton.disabled = busy || !dataSet?.paging.hasPreviousPage;
         if (this.nextButton) this.nextButton.disabled = busy || !dataSet?.paging.hasNextPage;
     }

@@ -8,7 +8,8 @@ type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
 export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
     private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
-    private pagingRequest: Promise<void> | null = null;
+    private pagingRequestPending = false;
+    private pagingRequestObservedLoading = false;
 
     public init(): void {
         // Virtual controls render by returning React elements from updateView; the host owns the root.
@@ -17,11 +18,15 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
         this.context = context;
         this.dataSet = context.parameters.sampleDataSet;
+        if (this.pagingRequestPending) {
+            if (this.dataSet?.loading) this.pagingRequestObservedLoading = true;
+            else if (this.pagingRequestObservedLoading) this.clearPagingRequest();
+        }
         return React.createElement({{name}}View, {
             cssClass: "{{cssClass}}",
             messageClass: "{{cssMessageClass}}",
             dataSet: this.dataSet,
-            busy: this.pagingRequest !== null,
+            busy: this.pagingRequestPending || this.dataSet.loading,
             actionHeader: this.stringResource("Action_Header_Key", "Actions"),
             openRecordLabel: this.stringResource("Open_Record_Label_Key", "Open {0}"),
             onNextPage: this.loadNextPage,
@@ -37,30 +42,41 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     public destroy(): void {
         this.context = null;
         this.dataSet = null;
+        this.pagingRequestPending = false;
+        this.pagingRequestObservedLoading = false;
     }
 
-    private readonly loadNextPage = (): Promise<void> => {
-        return this.requestPage("next");
+    private readonly loadNextPage = (): void => {
+        this.requestPage("next");
     };
 
-    private readonly loadPreviousPage = (): Promise<void> => {
-        return this.requestPage("previous");
+    private readonly loadPreviousPage = (): void => {
+        this.requestPage("previous");
     };
 
-    private requestPage(direction: "next" | "previous"): Promise<void> {
-        if (!this.dataSet || this.pagingRequest) return Promise.resolve();
+    private requestPage(direction: "next" | "previous"): void {
+        if (!this.dataSet || this.pagingRequestPending) return;
         const paging = this.dataSet.paging;
         const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
-        if (!canLoad) return Promise.resolve();
+        if (!canLoad) return;
 
-        // Dataset paging APIs ask the framework to load a page asynchronously; keep one request in
-        // flight so repeated clicks cannot queue duplicate page loads.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/paging
-        this.pagingRequest = Promise.resolve(direction === "next" ? paging.loadNextPage() : paging.loadPreviousPage())
-            .finally(() => {
-                this.pagingRequest = null;
-            });
-        return this.pagingRequest;
+        // Paging methods return void; completion is delivered by a later updateView after the
+        // framework finishes loading the page, so the lock cannot be released on a microtask.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/paging
+        this.pagingRequestPending = true;
+        this.pagingRequestObservedLoading = false;
+        try {
+            if (direction === "next") paging.loadNextPage();
+            else paging.loadPreviousPage();
+        } catch (error) {
+            this.clearPagingRequest();
+            throw error;
+        }
+    }
+
+    private clearPagingRequest(): void {
+        this.pagingRequestPending = false;
+        this.pagingRequestObservedLoading = false;
     }
 
     private readonly openRecord = (record: DataSetRecord): void => {

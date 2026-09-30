@@ -16,6 +16,17 @@ function hierarchyDataSet(options = {}) {
     ], options) as IInputs["sampleDataSet"];
 }
 
+function deepHierarchyDataSet(options = {}) {
+    return mockDataSet({
+        root: { primaryName: "Root", parentRecord: null },
+        child: { primaryName: "Child", parentRecord: { id: "root", name: "Root", entityType: "account" } as unknown as string },
+        grandchild: { primaryName: "Grandchild", parentRecord: { id: "child", name: "Child", entityType: "account" } as unknown as string },
+    }, [
+        { name: "primaryName", displayName: "Name" },
+        { name: "parentRecord", displayName: "Parent" },
+    ], options) as IInputs["sampleDataSet"];
+}
+
 function mount(dataSet?: IInputs["sampleDataSet"]) {
     const control = new {{name}}();
     const container = document.createElement("div");
@@ -106,20 +117,34 @@ test("loading, empty and dataset error states are explicit", () => {
     expect(mount(hierarchyDataSet({ error: true, errorMessage: "Access denied" })).container.textContent).toContain("Access denied");
 });
 
-test("paging requests are serialized and never refresh from updateView", () => {
+test("paging requests stay locked until the framework completes loading and never refresh from updateView", async () => {
     const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
     const { container, control } = mount(dataSet);
     const next = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Next") as HTMLButtonElement;
     const previous = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Previous") as HTMLButtonElement;
 
     next.click();
-    next.click();
+    await Promise.resolve();
+
+    expect(next.disabled).toBe(true);
+    expect(previous.disabled).toBe(true);
+
     previous.click();
+    next.click();
     control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
 
     expect(dataSet.paging.loadNextPage).toHaveBeenCalledTimes(1);
     expect(dataSet.paging.loadPreviousPage).not.toHaveBeenCalled();
     expect(dataSet.refresh).not.toHaveBeenCalled();
+    dataSet.loading = true;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
+    expect(next.disabled).toBe(true);
+    expect(previous.disabled).toBe(true);
+
+    dataSet.loading = false;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
+    expect(next.disabled).toBe(false);
+    expect(previous.disabled).toBe(false);
 });
 
 test("two control instances keep independent expansion state", () => {
@@ -204,4 +229,19 @@ test("enter opens record nodes but not the synthetic parent-not-loaded group", (
     visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(dataSet.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "child" }));
+});
+
+test("nested tree item keyboard handling does not bubble to ancestors", () => {
+    const dataSet = deepHierarchyDataSet();
+    const { container } = mount(dataSet);
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[1].focus();
+    visibleTreeItems()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(dataSet.openDatasetItem).toHaveBeenCalledTimes(1);
+    expect(dataSet.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "child" }));
+
+    visibleTreeItems()[1].focus();
+    visibleTreeItems()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("GrandchildOpen");
 });

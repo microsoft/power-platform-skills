@@ -167,6 +167,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
                 return 1;
             case "End":
                 return this.max;
+            case "Space":
+            case " ":
+            case "Spacebar":
+                return rating;
             default:
                 return null;
         }
