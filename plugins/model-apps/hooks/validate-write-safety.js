@@ -47,6 +47,8 @@ if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISAB
   process.exit(0);
 }
 
+const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
+
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
 }
@@ -137,9 +139,7 @@ function extractWritePaths(toolName, toolInput) {
   return [];
 }
 
-let inputData = '';
-process.stdin.on('data', (c) => { inputData += c; });
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   if (SKIP) {
     debug('MODEL_APPS_SKIP_WRITE_GUARD=1 — bypassing');
     process.exit(0);
@@ -180,5 +180,8 @@ process.stdin.on('end', () => {
   }
 
   debug(`OK ${toolName} ${extractWritePaths(toolName, toolInput).join(',')}`);
+  process.exit(0);
+}).catch((err) => {
+  debug(`stdin read failed: ${err.message}`);
   process.exit(0);
 });

@@ -221,6 +221,10 @@ node run-layer-1.js --tier full     # 9 full evals
 node run-layer-1.js --tier stress   # 3 stress evals
 ```
 
+A tier runs the fixtures that exist for its evals. The committed fixtures cover only some evals (none
+of the stress ones), so a tier with no captured fixture reports `no fixtures matched the filter` and
+exits 2; point `--fixtures <dir>` at your own captures to run it.
+
 ### Filter by eval id (debugging)
 
 ```bash

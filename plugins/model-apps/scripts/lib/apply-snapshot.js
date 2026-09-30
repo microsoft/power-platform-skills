@@ -105,14 +105,6 @@ function identityMatches(envelope, live) {
   return { ok: true, reason: 'identity matches' };
 }
 
-function hasDebt(envelope) {
-  return isEnvelope(envelope) && envelope.debt.length > 0;
-}
-
-function listDebt(envelope) {
-  return isEnvelope(envelope) ? envelope.debt.slice() : [];
-}
-
 // Record a debt: an artifact whose intended state could NOT be safely applied incrementally (an
 // unsupported edit, a removal, a chart/command/dashboard/web-resource-content change). While ANY debt is
 // present the snapshot can never become eligible. Deduped by (artifactType|identity|reason) so re-running
@@ -222,8 +214,6 @@ module.exports = {
   parseEnvelope,
   serializeEnvelope,
   identityMatches,
-  hasDebt,
-  listDebt,
   addDebt,
   clearDebtMatching,
   markIneligible,

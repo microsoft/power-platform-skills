@@ -1599,6 +1599,21 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+test('app-shell: a live sitemap target absent from the gate approval halts before the app push', async () => {
+  const spec = makeSpec();
+  const existingSitemap = { areas: [{ groups: [{ subAreas: [
+    { entity: 'new_customer', title: 'Customers' },
+    { entity: 'new_ticket', title: 'Tickets' },
+    { entity: 'new_late', title: 'Late table' },
+  ] }] }] };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap });
+  await assert.rejects(
+    runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'], authorizedSitemapRemovals: new Set(['entity:new_ticket']) }),
+    (err) => err && /entity:new_late/.test(err.message) && /appeared after the run's approval/.test(err.message)
+  );
+  assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'app'), 'the app is not pushed after an unapproved sitemap removal appears');
+});
+
 // Descriptions must survive the BUILD, not just the def builder. A def-builder unit test cannot see
 // a phase that constructs its own createArtifact payload inline and forgets to forward the field —
 // which is exactly what both of these did before they were wired.
@@ -2245,7 +2260,8 @@ test('form reconcile: an explicit-layout edit REMOVES a field dropped from the s
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   // Fields are removed via removeElement (retired removeField); pointer encodes field position
   const removals = find(calls, 'removeElement');
-  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0'], 'only the cell for new_obsolete (row 2) is removed');
+  // The cell goes, then the row it left holding nothing (a blank <row/> would otherwise stay behind).
+  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0', '/tabs/0/columns/0/sections/0/rows/2'], 'only new_obsolete (row 2) and the row it emptied are removed');
 });
 
 test('form reconcile: an AUTO layout is additive — a deployed field not in the spec is NOT pruned (Maker adds survive)', async () => {
@@ -3057,6 +3073,67 @@ test('form reconcile: an explicit layout still prunes BY DEFAULT (prune:false is
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   assert.ok(find(calls, 'removeElement').length > 0, 'default explicit-layout pruning regressed');
+});
+
+test('form reconcile: authorized removals prune only fields approved when the run started', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set(['new_tier'])]]), warn: (m) => warnings.push(m) });
+  // new_tier's cell, then the row it left empty; new_manual's cell and row stay.
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
+  assert.ok(warnings.some((w) => /new_manual/.test(w) && /not among the removals authorized when this run started/.test(w)), 'the kept field is reported');
+});
+
+test('form reconcile: authorized-removal form ids are normalized before fencing', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['{FORM-EXISTING}', new Set(['new_tier'])]]) });
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_manual' }]);
+});
+
+test('form reconcile: an empty authorized set keeps mid-run fields on a form seen by the gate', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set()]]), warn: (m) => warnings.push(m) });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'newly appeared field is fenced off');
+  assert.ok(warnings.some((w) => /new_manual/.test(w)), 'kept field is reported');
+});
+
+test('form reconcile: a supplied authorized-removals map fences forms absent from it', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'forms outside a supplied map are fenced with an empty approval set');
+});
+
+test('form reconcile: a supplied map fences a form id absent from the gate snapshot', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_late'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'a form absent from the gate-time map is fenced with an empty set');
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_late' }]);
+});
+
+test('form reconcile: no authorized-removals map prunes as before', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.ok(find(calls, 'removeElement').length > 0, 'legacy behavior remains when the gate did not supply a fence');
 });
 
 test('form build: a BigInt column is never added to a form by the auto layout', async () => {
@@ -5440,7 +5517,7 @@ test('form topology: WIDENING a section grid leaves its existing rows untouched'
 // cannot express that reservation — and the authored-rowspan restriction does not help, because
 // the span belongs to the fetched MAKER form, not to the spec. Refusing is the recoverable
 // outcome; silently rearranging a maker's form is not.
-test('form topology: a narrowing that the rows already fit is applied without moving any cell', async () => {
+test('form topology: a narrowing whose carried spacer would overflow keeps the old grid', async () => {
   const spec = makeSpec();
   spec.entities[0].columns.push(
     { schemaName: 'new_code', displayName: 'Code', type: 'Text' },
@@ -5464,15 +5541,16 @@ test('form topology: a narrowing that the rows already fit is applied without mo
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
   const res = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(String(m)) });
 
-  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
-  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  assert.ok(!calls.some((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form'),
+    `no form write may be issued; got ${JSON.stringify(calls.filter((c) => c.args && c.args[0] === 'form').map((c) => c.name))}`);
+  const finalForm = await sdk.getArtifact('form', 'form-existing');
   const sec = finalForm.tabs[0].columns[0].sections[0];
   const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => (c.control && c.control.fieldName) || '(spacer)'));
   assert.deepStrictEqual(shape,
     [['new_name'], ['(spacer)', 'new_tier'], ['new_code', 'new_note']],
-    `no cell may move — every row already fits the narrower grid; got ${JSON.stringify(shape)}`);
-  assert.strictEqual(Number(sec.columns), 2, 'the narrower grid IS applied: nothing about it needs a reflow');
-  assert.deepStrictEqual(res.skipped.layout, [], 'nothing was refused, so nothing is reported as skipped');
+    `no cell may move when the narrowing is skipped; got ${JSON.stringify(shape)}`);
+  assert.strictEqual(Number(sec.columns), 4, 'the old grid is kept because row 2 needs one reserved plus two own columns');
+  assert.ok(res.skipped.layout.some((m) => /narrowing it/.test(m)), `the refusal must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
 });
 
 // When the rows would NOT fit the narrower grid, the width must not be written either. Writing it

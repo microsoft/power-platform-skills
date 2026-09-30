@@ -213,7 +213,20 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'unknown --page-id as a create and would make a new page and report it as an update.',
       });
     }
-    const known = await enumerate();
+    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
+    // The existence and membership listings are independent reads, each its own pac process of about
+    // five seconds, so they run together. Measured live: a pair run one after the other averaged
+    // 10.6 s and an overlapped pair 5.6 s, and all 20 overlapped listings succeeded. The VERDICTS are
+    // still reached in the original order (existence first), so a given failure is reported as it
+    // was before, and a listing that throws surfaces only when its verdict is reached: a page that
+    // does not exist is reported as absent even if the app listing also broke.
+    const settle = (fn) => Promise.resolve().then(fn).then((value) => ({ value }), (error) => ({ failed: true, error }));
+    const [existence, membership] = await Promise.all([
+      settle(enumerate),
+      enumeratePages ? settle(() => enumeratePages(flags['app-id'], { includeUnpublished: true })) : null,
+    ]);
+    if (existence.failed) throw existence.error;
+    const known = existence.value;
     if (!known || known.ok !== true) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} exists before updating it `
@@ -226,6 +239,39 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         error: `page ${flags['page-id']} does not exist in this environment — refusing to "update" it. `
           + 'pac would create a NEW unplaced page and report it as an update. Check the id, or drop '
           + '--page-id to create a page deliberately.',
+      });
+    }
+    // EXISTENCE is not enough for an update: pac accepts a real page id together with ANY app id
+    // and then writes the page under that app context, which renames it and attaches its table
+    // bindings to the wrong app. The app-scoped list is sitemap/navigation membership, so prove the
+    // page is actually placed in THIS app before the binding probe downloads content or upload writes.
+    if (!enumeratePages) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} — this pac `
+          + 'wrapper exposes no app-scoped page listing. Refusing to upload, because updating a '
+          + 'page through the wrong app id would rename it and attach its tables to that app.',
+      });
+    }
+    if (membership.failed) throw membership.error;
+    const appPages = membership.value;
+    if (!appPages || appPages.ok !== true) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `
+          + `(${(appPages && appPages.error) || 'unknown reason'})`,
+      });
+    }
+    const pages = Array.isArray(appPages.pages) ? appPages.pages : [];
+    if (!pages.length) {
+      return emit(false, {
+        error: `app ${flags['app-id']} has no generative pages, or could not be found — cannot verify `
+          + `that page ${flags['page-id']} belongs to it`,
+      });
+    }
+    const pageInApp = pages.some((p) => String(p && p.pageId || '').toLowerCase() === String(flags['page-id']).toLowerCase());
+    if (!pageInApp) {
+      return emit(false, {
+        error: `page ${flags['page-id']} is not in app ${flags['app-id']}'s navigation — updating it `
+          + 'with this app id would rename it and attach its tables to that app; use the id of the app the page belongs to',
       });
     }
   }
@@ -269,6 +315,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below.
       if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
         throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
+      }
+      if (Array.isArray(cfg.dataSources)) {
+        const bad = cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+        if (bad !== undefined) {
+          throw new Error('config.json dataSources must be an array of non-empty table logical names');
+        }
       }
       preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
     } catch (e) {

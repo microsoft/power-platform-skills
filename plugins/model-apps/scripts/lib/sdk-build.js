@@ -78,6 +78,7 @@ const {
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
+const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -1642,6 +1643,40 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
 }
 
 // --- orchestrator ----------------------------------------------------------------------
+function normalizeFormId(value) {
+  return String(value || '').trim().replace(/^\{+|\}+$/g, '').toLowerCase();
+}
+
+function authorizedFormRemovalEntry(map, formId, createdThisRun) {
+  if (!(map instanceof Map)) return { fenced: false, authorized: null, normalizedFormId: normalizeFormId(formId) };
+  const normalized = normalizeFormId(formId);
+  if (map.has(normalized)) return { fenced: true, authorized: map.get(normalized), normalizedFormId: normalized };
+  for (const [key, value] of map) {
+    if (normalizeFormId(key) === normalized) return { fenced: true, authorized: value, normalizedFormId: normalized };
+  }
+  if (createdThisRun && createdThisRun.has(normalized)) return { fenced: false, authorized: null, normalizedFormId: normalized };
+  return { fenced: true, authorized: new Set(), normalizedFormId: normalized };
+}
+
+function sitemapTargetsForFence(container) {
+  // Use the destructive-op classifier's target vocabulary so the preflight record and the engine fence
+  // cannot drift (entity:<logical>, url:<url>). Required lazily to avoid a module-load cycle: op-diff
+  // reaches sdk-build through sdk-teardown, while this helper runs only after sdk-build is initialized.
+  return require('./op-diff.js').sitemapTargets(container);
+}
+
+async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, authorized, phase) {
+  if (!(authorized instanceof Set)) return;
+  await provision.fetchArtifact('app', appId, { overwrite: true });
+  const live = await provision.getArtifact('app', appId) || {};
+  const want = new Set(sitemapTargetsForFence(nextSiteMap || {}));
+  const dropped = sitemapTargetsForFence(live.siteMap || {}).filter((target) => !want.has(target));
+  const unauthorized = dropped.filter((target) => !authorized.has(target));
+  if (unauthorized.length) {
+    throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true });
+  }
+}
+
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
@@ -1679,7 +1714,8 @@ async function runSdkBuild(spec, opts = {}) {
     };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [] } };
+  const createdFormsThisRun = new Set();
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1931,17 +1967,23 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
-  // Resolve a `/tabs/T/columns/C/sections/S/rows/R` pointer to the row object. Deliberately narrow —
-  // it exists only so the reconcile can tell whether a cell move emptied the row it came from.
-  const jsonPointerRow = (formJson, pointer) => {
-    const t = String(pointer).split('/').filter(Boolean);
-    // ['tabs', T, 'columns', C, 'sections', S, 'rows', R]
-    if (t.length !== 8 || t[0] !== 'tabs' || t[2] !== 'columns' || t[4] !== 'sections' || t[6] !== 'rows') return null;
-    const tab = (formJson.tabs || [])[Number(t[1])];
-    const col = tab && (tab.columns || [])[Number(t[3])];
-    const sec = col && (col.sections || [])[Number(t[5])];
-    return (sec && (sec.rows || [])[Number(t[7])]) || null;
+  // Remove the rows a cell's departure left holding nothing: its own row, and the rows its row-span
+  // covered. An empty `<row/>` renders as a blank line, and one would accumulate per pruned or
+  // relocated field. `strandedRows` keeps a row that a row-spanning cell above still reserves (it is
+  // occupied, not empty) and never looks at a row this departure did not touch, so an empty row that
+  // was already on the form stays. Shared by the prune pass and both move paths.
+  const removeStrandedRows = async (formId, sectionPointer, rowIndex, span) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const section = sectionAt(form, sectionPointer);
+    if (!section) return;
+    // Bottom-up, so each removal leaves the earlier indexes valid without a re-read.
+    for (const i of strandedRows(section.rows || [], rowIndex, span)) {
+      await provision.removeElement('form', formId, `${sectionPointer}/rows/${i}`);
+    }
   };
+  // The departing cell's rowspan, read BEFORE it leaves: once it is gone, the rows it covered can only
+  // be found from this number.
+  const departingSpan = (form, location) => Number((cellAt(form, location) || {}).rowspan) || 1;
 
   // Move each anchored field so it immediately follows its anchor (`fieldOptions[x].after`).
   //
@@ -2013,17 +2055,12 @@ async function runSdkBuild(spec, opts = {}) {
 
       let index = to.cellIndex + 1;
       if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
+      const span = departingSpan(form, from);
       await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });
-      // Moving the only cell out of a row leaves an empty `<row/>`, which renders as a blank line and
-      // would accumulate one per anchored field. Row indices are unchanged by a cell move (cells
-      // move between rows; the row count does not change), so the source row is still where it was.
-      if (from.rowCellCount === 1 && from.rowPointer !== to.rowPointer) {
-        const after = await provision.getArtifact('form', formId) || {};
-        const stranded = jsonPointerRow(after, from.rowPointer);
-        if (stranded && (stranded.cells || []).length === 0) {
-          await provision.removeElement('form', formId, from.rowPointer);
-        }
-      }
+      // The rows the move left holding nothing go (see removeStrandedRows). Row indices are unchanged
+      // by a cell move (cells move between rows; the row count does not change), so the source rows
+      // are still where they were.
+      if (from.rowPointer !== to.rowPointer) await removeStrandedRows(formId, from.sectionPointer, from.rowIndex, span);
     }
   };
 
@@ -2278,7 +2315,7 @@ async function runSdkBuild(spec, opts = {}) {
             // apply sees the width already applied and has nothing to do.
             const width = Number(patch.columns);
             reflow = false;
-            if (!(live.rows || []).every((r) => rowWidth((r && r.cells) || []) <= width)) {
+            if (!fitsGrid(live.rows || [], width)) {
               delete patch.columns;
               reportLayoutSkip(`form section '${live.name || pointer}' keeps its ${live.columns}-column grid: narrowing it `
                 + `to ${width} would overflow rows that cannot be re-flowed without moving a cell into a row-spanning `
@@ -2404,6 +2441,25 @@ async function runSdkBuild(spec, opts = {}) {
     return false;
   };
   const rowWidth = (cells) => (cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
+  const maxRowspan = (rows) => Math.max(1, ...(rows || []).flatMap((r) => ((r && r.cells) || []).map((c) => Number(c.rowspan) || 1)));
+  const rowReservationAt = (rows, rowIndex) => {
+    const padded = (rows || []).slice();
+    while (padded.length <= rowIndex) padded.push({ cells: [] });
+    const occupancy = rowOccupancy(padded)[rowIndex];
+    return occupancy ? occupancy.reserved : 0;
+  };
+  const fitsWithCellAtRow = (rows, rowIndex, cell, width) => {
+    const row = ((rows || [])[rowIndex]) || { cells: [] };
+    return cellFitsInRow(row, cell, width, rowReservationAt(rows, rowIndex));
+  };
+  const firstAppendRowThatFits = (rows, cell, width) => {
+    const start = Math.max(0, (rows || []).length - 1);
+    const limit = (rows || []).length + maxRowspan(rows);
+    for (let rowIndex = start; rowIndex <= limit; rowIndex += 1) {
+      if (fitsWithCellAtRow(rows, rowIndex, cell, width)) return rowIndex;
+    }
+    return Math.max(0, (rows || []).length);
+  };
   // Whether any cell — a field or an empty spacer — comes after (rowIndex, cellIndex) in reading order.
   const cellFollows = (rows, rowIndex, cellIndex) => (rows || []).some((r, ri) => ri >= rowIndex
     && ((r && r.cells) || []).some((_, ci) => ri > rowIndex || ci > cellIndex));
@@ -2478,8 +2534,15 @@ async function runSdkBuild(spec, opts = {}) {
     const row = rows[location.rowIndex];
     const beforeCells = (row && row.cells) || [];
     const afterCells = beforeCells.map((c, i) => (i === location.cellIndex ? { ...c, ...patch } : c));
-    const overflows = rowsFromCells(afterCells, sec.columns).length > 1;
-    const unsafe = reflowBreaksReservation(rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r)));
+    const afterRows = rows.map((r, i) => (i === location.rowIndex ? { ...r, cells: afterCells } : r));
+    const patchedCell = afterCells[location.cellIndex] || live;
+    const occupiedUntil = location.rowIndex + Math.max(1, Number(patchedCell && patchedCell.rowspan) || 1) - 1;
+    const paddedAfterRows = afterRows.slice();
+    while (paddedAfterRows.length <= occupiedUntil) paddedAfterRows.push({ cells: [] });
+    const occupancy = rowOccupancy(paddedAfterRows);
+    const overflows = occupancy.slice(location.rowIndex, occupiedUntil + 1)
+      .some((row) => row && row.used > (Number(sec.columns) || 1));
+    const unsafe = reflowBreaksReservation(afterRows);
     if (overflows && unsafe) {
       if (rowWidth(afterCells) > rowWidth(beforeCells)) {
         // A WIDENING into an overflow: skipped whole, not half-applied. Applying it without the
@@ -2553,7 +2616,8 @@ async function runSdkBuild(spec, opts = {}) {
   // two single-width fields per row. The reconcile path used to ignore that entirely — every ADDED
   // field became its own single-cell row and every MOVED field was appended to the last row whatever
   // its width — so the same spec deployed a different shape depending only on whether the form
-  // already existed. `cellFitsInRow` is the create path's own rule, shared rather than restated.
+  // already existed. The effective-capacity check below is the create path's width rule plus
+  // any columns still reserved by row-spanning cells above the target row.
   //
   // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
   // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
@@ -2563,10 +2627,14 @@ async function runSdkBuild(spec, opts = {}) {
   const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
-    const lastIndex = rows.length - 1;
-    if (lastIndex >= 0 && cellFitsInRow(rows[lastIndex], wantCell, section.columns)) {
-      await provision.updateElement('form', formId, sectionPointer + '/rows/' + lastIndex,
-        { cells: [...(rows[lastIndex].cells || []), wantCell] });
+    const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
+    while ((section.rows || []).length < rowIndex) {
+      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
+      section.rows = [...(section.rows || []), { cells: [] }];
+    }
+    if (rowIndex < rows.length) {
+      await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
+        { cells: [...(rows[rowIndex].cells || []), wantCell] });
       return;
     }
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
@@ -2633,13 +2701,13 @@ async function runSdkBuild(spec, opts = {}) {
     // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
     // which silently skips the move (the `if (!row) return` guard below).
     const priorRowCount = targetRows.length;
-    let rowIndex = priorRowCount - 1;
-    if (rowIndex < 0 || !cellFitsInRow(targetRows[rowIndex], wantCell, targetSection.columns)) {
-      // Either the section this run just created has no row yet, or the last row is full. The SDK
-      // accepts a row with an empty cells array and serializes it correctly, so seed one and target
-      // it. `addElement` appends, so the new row's index is the PRE-add length.
+    let rowIndex = firstAppendRowThatFits(targetRows, wantCell, targetSection.columns);
+    while (rowIndex >= priorRowCount && ((targetSection.rows || []).length <= rowIndex)) {
+      // Either the section this run just created has no row yet, or all existing rows whose carried
+      // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an
+      // empty cells array and serializes it correctly, so seed rows until the chosen target exists.
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      rowIndex = priorRowCount;
+      targetSection.rows = [...(targetSection.rows || []), { cells: [] }];
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2647,17 +2715,11 @@ async function runSdkBuild(spec, opts = {}) {
     if (!from || !liveTarget) return;
     const row = ((sectionAt(form, liveTarget) || {}).rows || [])[rowIndex];
     if (!row) return;
+    const span = departingSpan(form, from);
     await provision.moveElement('form', formId, from.cellPointer, liveTarget + '/rows/' + rowIndex + '/cells', { index: (row.cells || []).length });
-    // Moving the only cell out of a row leaves an empty `<row/>` that renders as a blank line and
-    // would accumulate one per relocated field. Row indices are unchanged by a cell move, so the
-    // source row is still where it was.
-    if (from.rowCellCount === 1) {
-      const after = await provision.getArtifact('form', formId) || {};
-      const stranded = jsonPointerRow(after, from.rowPointer);
-      if (stranded && (stranded.cells || []).length === 0) {
-        await provision.removeElement('form', formId, from.rowPointer);
-      }
-    }
+    // The rows the move left holding nothing go (see removeStrandedRows). Row indices are unchanged by
+    // a cell move, so the source rows are still where they were.
+    await removeStrandedRows(formId, from.sectionPointer, from.rowIndex, span);
 
     // Converge the span NOW, in the destination, so it is clamped and packed against the section the
     // cell actually landed in rather than the one it left. Re-resolve the location: the move (and a
@@ -2726,8 +2788,18 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
+      const { fenced, authorized, normalizedFormId } = authorizedFormRemovalEntry(opts.authorizedFormRemovals, formId, createdFormsThisRun);
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
+        if (fenced && (!authorized || !authorized.has(logical))) {
+          // The preflight gate records the exact live field list the maker approved before this run.
+          // If a later form read sees more fields, deleting them would exceed that approval (another
+          // maker may have added the field while this build was starting), so keep the field and make
+          // the skipped destructive change visible on the build result.
+          result.skipped.unauthorizedRemovals.push({ formId: normalizedFormId, form: def.name, field: logical });
+          reportLayoutSkip(`form ${def.name}: kept field '${logical}' because it was not among the removals authorized when this run started. Another maker may have added it; re-run to review it.`);
+          continue;
+        }
         const pruneForm = await provision.getArtifact('form', formId) || {};
         const loc = findFieldCellLocation(pruneForm, logical);
         // Pruning can empty a section too, so it feeds the vacated set on the same terms as a move.
@@ -2736,7 +2808,14 @@ async function runSdkBuild(spec, opts = {}) {
           if (sec && sec.name) vacatedSections.add(String(sec.name).toLowerCase());
         }
         const ptr = loc ? loc.cellPointer : findFieldCellPointer(pruneForm, logical);
-        if (ptr) await provision.removeElement('form', formId, ptr);
+        if (ptr) {
+          // Read the span first: getArtifact can hand back the live artifact, so the cell is gone from
+          // `pruneForm` once removeElement returns.
+          const span = loc ? departingSpan(pruneForm, loc) : 1;
+          await provision.removeElement('form', formId, ptr);
+          // Pruning a field must not leave a blank line where it was (see removeStrandedRows).
+          if (loc) await removeStrandedRows(formId, loc.sectionPointer, loc.rowIndex, span);
+        }
       }
     }
     // Reclaim a section the layout VACATED (#581). A generated section name encodes position
@@ -2873,7 +2952,7 @@ async function runSdkBuild(spec, opts = {}) {
   // before deleting ours so the table can be torn down — note that is a delete-enabler, NOT a perfect
   // restore of pre-build activation state (a form that was inactive before this build may be left
   // active after teardown).
-  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers) => {
+  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers, siblingFormIds = []) => {
     // Deactivating the OTHER main forms is only safe once OUR form is the entity default: if the
     // isdefault promote failed we must NOT deactivate the others, or the entity could be left with its
     // (now-deactivated) stock form still the default and no active default — a bricked form experience.
@@ -2890,7 +2969,27 @@ async function runSdkBuild(spec, opts = {}) {
       const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
       if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return promoted;
+    if (!promoted) return promoted;
+    if (typeof provision.queryRecords === 'function') {
+      for (const siblingId of siblingFormIds || []) {
+        if (!siblingId || String(siblingId) === String(formId)) continue;
+        try {
+          const rows = await provision.queryRecords('systemform', {
+            select: ['formid', 'isdefault'],
+            filter: `formid eq ${siblingId}`,
+            top: 1,
+          });
+          const sibling = rows && rows[0];
+          if (sibling && sibling.isdefault === true) {
+            await provision.updateRecord('systemform', String(sibling.formid || siblingId), { isdefault: false });
+          }
+        } catch (err) {
+          const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
+          if (typeof opts.warn === 'function') opts.warn(`could not clear the previous default Main form for '${entityLogical}': ${reason}`);
+        }
+      }
+    }
+    if (!deactivateOthers) return promoted;
     if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
@@ -2942,6 +3041,7 @@ async function runSdkBuild(spec, opts = {}) {
     let id;
     if (type === 'form') {
       id = await createFormShell(def);
+      createdFormsThisRun.add(normalizeFormId(id));
       await addSubgrids(id, def.__subgrids);
     } else {
       id = (await provision.createArtifact(type, def)).id;
@@ -3139,9 +3239,12 @@ async function runSdkBuild(spec, opts = {}) {
     // table is an environment-wide side effect.
     const promotedEntities = new Set();
     const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    const mainIdsByEntity = new Map(); // entity -> spec-declared Main form ids for sibling demotion
     defs.forEach((d, i) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
+      if (!mainIdsByEntity.has(key)) mainIdsByEntity.set(key, []);
+      if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
       const current = mainByEntity.get(key);
       // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
       if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
@@ -3157,7 +3260,7 @@ async function runSdkBuild(spec, opts = {}) {
       // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
       // bookkeeping below — a build that could not set the flag must not report a default form it
       // did not set, which is what `result.created.defaultForms` claims.
-      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true, mainIdsByEntity.get(entityLogical) || []);
       if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
@@ -3835,6 +3938,7 @@ async function runSdkBuild(spec, opts = {}) {
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
+          await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
           requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
@@ -3847,6 +3951,8 @@ async function runSdkBuild(spec, opts = {}) {
           // refused above (refuseUnpushedAppCopy): replaying a stale sitemap rewrite detached live pages
           // with no gate and no --allow-destructive, and the copy's routing description may be this very
           // edit, left unpushed, so "unchanged" against it would skip the push the server still needs.
+          const current = await provision.getArtifact('app', existingId) || {};
+          await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
           if (await applyAppAiDescription(provision, spec, existingId)) {
             requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
@@ -4117,6 +4223,7 @@ async function runSdkBuild(spec, opts = {}) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
+          await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
           await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
           // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
           // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
@@ -4836,4 +4943,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

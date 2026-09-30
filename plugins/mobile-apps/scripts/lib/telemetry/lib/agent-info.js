@@ -2,11 +2,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { runNative } = require("./native-exec");
 
 let pacCliVersionCache;
 
-// Reads the PAC CLI version once per process via `pac --version`. Best-effort
+// Reads the PAC CLI version once per process via `pac --version`, started by
+// absolute path from PATH (see native-exec.js). Best-effort
 // and fail-closed: missing executable, timeout, or unparseable output all
 // resolve to "".
 //
@@ -20,7 +21,7 @@ function readPacCliVersion(opts = {}) {
     pacCliVersionCache = "";
     return "";
   }
-  const exec = typeof opts._exec === "function" ? opts._exec : execFileSync;
+  const exec = typeof opts._exec === "function" ? opts._exec : runNative;
   let stdout = "";
   try {
     stdout = exec("pac", ["--version"], {
