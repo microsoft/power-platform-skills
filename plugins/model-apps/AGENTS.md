@@ -639,7 +639,7 @@ Rules that make the scripts safe to run from agents:
 
 - Every CLI starts with `parseArgs(argv)` and `validateFlags(argv, { known, needValue, hints })`. Usage errors print `USAGE`; non-usage failures exit 1 and emit one JSON result object on stdout so callers can parse failures consistently.
 - Scripts are dependency-free CommonJS and run on Node 20 and 22 across the CI matrix.
-- Process execution goes through `scripts/lib/process-runner.js`, which resolves `az`, `pac`, `npm`, `npx`, `git` and `dotnet` to absolute executables and starts them with `shell:false`; Windows batch shims such as `pac.cmd` run under checked `cmd.exe` arguments inside that runner. PCF's `pac-exec.js` is only a result-shape adapter over the runner.
+- Named external CLIs (`az`, `pac`, `npm`/`npx` shims, `git`, `dotnet`) go through `scripts/lib/process-runner.js`, which resolves them to absolute executables and starts them with `shell:false`; Windows batch shims such as `pac.cmd` run under checked `cmd.exe` arguments inside that runner. Resolved JavaScript entry points (for example `npm-cli.js`, `pcf-scripts`, and Jest) run under the current Node as `process.execPath <file>` with an argv array and `shell:false` via `scripts/lib/node-tool.js`; never use `npm run` or `npx` when the JS entry point is known. PCF's `pac-exec.js` is only a result-shape adapter over the runner.
 - Versions come only from `pcf/compatibility-matrix.json` and lockfiles under `pcf/lock/`; no other PCF toolchain version source is allowed.
 - Dataverse write surfaces use documented APIs. The `customcontrol` table is never written; Learn marks it internal-use only.
 - Raw Dataverse reads are allowed only where the vendored SDK has no modeled method, with a WHY comment naming the missing method such as `RetrieveUnpublished` or `RetrieveDependentComponents`.
@@ -770,7 +770,7 @@ scripts/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
-    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
+    process-runner.js          ← how every script starts named external CLIs such as az/pac/npm/npx/git/dotnet: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); resolved JS entry points run under process.execPath through node-tool.js instead
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop

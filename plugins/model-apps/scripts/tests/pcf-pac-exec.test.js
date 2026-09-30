@@ -3,22 +3,29 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const pacExec = require('../lib/pac-exec.js');
 
-test('buildPacInvocation delegates to process-runner and returns its absolute executable invocation', () => {
-  const calls = [];
+test('buildPacInvocation delegates to process-runner with the real Windows batch invocation shape', () => {
+  const env = {
+    Path: 'C:\\tools',
+    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+  };
   const inv = pacExec.buildPacInvocation(['pcf', 'push', '--environment', 'https://contoso.crm.dynamics.com'], {
-    invocation: (name, args, deps) => {
-      calls.push({ name, args, deps });
-      return { file: 'C:\\tools\\pac.cmd', args: ['/d', '/s', '/c', 'pac pcf push'], options: { shell: false } };
-    },
-    env: { PATH: 'C:\\tools' },
+    platform: 'win32',
+    env,
+    exists: (file) => file === 'C:\\tools\\pac.cmd',
+    readFile: () => '@echo off\r\n',
   });
 
-  assert.deepEqual(calls, [{
-    name: 'pac',
-    args: ['pcf', 'push', '--environment', 'https://contoso.crm.dynamics.com'],
-    deps: { env: { PATH: 'C:\\tools' } },
-  }]);
-  assert.deepEqual(inv, { file: 'C:\\tools\\pac.cmd', args: ['/d', '/s', '/c', 'pac pcf push'], options: { shell: false } });
+  assert.deepEqual(inv, {
+    file: 'C:\\Windows\\System32\\cmd.exe',
+    args: ['/d', '/s', '/v:off', '/c', '""C:\\tools\\pac.cmd" pcf push --environment https://contoso.crm.dynamics.com"'],
+    options: {
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' },
+    },
+  });
 });
 
 test('runPac uses process-runner spawnResultSync with cwd, timeout, and utf8 encoding', () => {

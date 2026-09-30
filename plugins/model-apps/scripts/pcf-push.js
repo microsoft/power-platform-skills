@@ -139,6 +139,7 @@ async function main(argv = process.argv.slice(2)) {
       ok: false,
       stage: 'push',
       status: push.status,
+      ...(push.error ? { error: scrubSecrets(errorReason(push.error)) } : {}),
       hints: pushHints(push),
       logTail: readBuildLogTail(projectDir),
       stdout: scrubbedTail(push.stdout, 60),

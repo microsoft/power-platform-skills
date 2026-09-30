@@ -388,14 +388,17 @@ test('runUpgrade refuses a dirty git tree before applying changes', () => {
     const projectDir = path.join(tmp, 'StarRating');
     writeScaffold(renderedProject(), projectDir);
     fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
-    assert.equal(require('node:child_process').spawnSync('git', ['init'], { cwd: projectDir, shell: false }).status, 0);
-    assert.equal(require('node:child_process').spawnSync('git', ['config', 'user.email', 'maker@example.com'], { cwd: projectDir, shell: false }).status, 0);
-    assert.equal(require('node:child_process').spawnSync('git', ['config', 'user.name', 'PCF Maker'], { cwd: projectDir, shell: false }).status, 0);
-    assert.equal(require('node:child_process').spawnSync('git', ['add', '.'], { cwd: projectDir, shell: false }).status, 0);
-    assert.equal(require('node:child_process').spawnSync('git', ['commit', '-m', 'baseline'], { cwd: projectDir, shell: false }).status, 0);
     fs.appendFileSync(path.join(projectDir, 'README.md'), '\nlocal note\n');
 
-    const result = runUpgrade({ project: projectDir, apply: true }, { runNpm: () => { throw new Error('npm install should not run on a dirty tree'); } });
+    const result = runUpgrade({ project: projectDir, apply: true }, {
+      runNpm: () => { throw new Error('npm install should not run on a dirty tree'); },
+      spawnResultSync: (name, args, options) => {
+        assert.equal(name, 'git');
+        assert.deepEqual(args, ['status', '--porcelain', '--', projectDir]);
+        assert.deepEqual(options, { cwd: projectDir, encoding: 'utf8' });
+        return { status: 0, stdout: ' M README.md\n', stderr: '' };
+      },
+    });
 
     assert.equal(result.ok, false);
     assert.match(result.error, /uncommitted changes/);

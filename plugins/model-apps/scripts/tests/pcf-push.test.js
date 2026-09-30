@@ -124,6 +124,28 @@ async function run(argv, overrides = {}) {
   return cli;
 }
 
+function withProcessRunnerStub(stub, fn) {
+  const pacExecPath = require.resolve('../lib/pac-exec.js');
+  const processRunnerPath = require.resolve('../lib/process-runner.js');
+  const priorPacExec = require.cache[pacExecPath];
+  const priorProcessRunner = require.cache[processRunnerPath];
+  delete require.cache[pacExecPath];
+  require.cache[processRunnerPath] = {
+    id: processRunnerPath,
+    filename: processRunnerPath,
+    loaded: true,
+    exports: stub,
+  };
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      delete require.cache[pacExecPath];
+      if (priorPacExec) require.cache[pacExecPath] = priorPacExec;
+      if (priorProcessRunner) require.cache[processRunnerPath] = priorProcessRunner;
+      else delete require.cache[processRunnerPath];
+    });
+}
+
 test.beforeEach(resetWorkspace);
 test.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
 
@@ -226,6 +248,37 @@ test('push failure emits hints and appends the last 40 build log lines', async (
   assert.equal(payload.logTail.length, 40);
   assert.equal(payload.logTail[0], 'line-6');
   assert.equal(payload.logTail[39], 'line-45');
+});
+
+test('push refusal from process-runner emits one JSON error through the real pac adapter', async () => {
+  const projectDir = makeProject('runner-refusal');
+  const refusal = Object.assign(new Error('cannot pass "%" to pac.cmd: a Windows batch file cannot receive % unchanged'), { code: 'EARGUMENT' });
+
+  const cli = await withProcessRunnerStub({
+    spawnResultSync: (name, args, options) => {
+      assert.equal(name, 'pac');
+      assert.deepEqual(args, ['pcf', 'push', '--environment', 'https://contoso.crm.dynamics.com', '--publisher-prefix', 'abc', '--verbosity', 'minimal']);
+      assert.deepEqual(options, { encoding: 'utf8', cwd: projectDir, timeout: 15 * 60 * 1000 });
+      return { status: null, stdout: '', stderr: '', error: refusal, signal: null };
+    },
+  }, () => run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    requires: { './lib/pac-exec': require('../lib/pac-exec.js') },
+  }));
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(cli.stderrText(), '');
+  const lines = cli.stdoutText().trim().split(/\r?\n/);
+  assert.equal(lines.length, 1);
+  const payload = JSON.parse(lines[0]);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.status, 1);
+  assert.match(payload.error, /cannot pass/);
+  assert.match(payload.error, /Windows batch file/);
 });
 
 test('push failure scrubs build log tails before JSON output', async () => {

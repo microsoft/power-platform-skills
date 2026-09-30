@@ -64,6 +64,28 @@ function byId(findings, id) {
   return findings.find((finding) => finding.id === id);
 }
 
+function withProcessRunnerStub(stub, fn) {
+  const pacExecPath = require.resolve('../lib/pac-exec.js');
+  const processRunnerPath = require.resolve('../lib/process-runner.js');
+  const priorPacExec = require.cache[pacExecPath];
+  const priorProcessRunner = require.cache[processRunnerPath];
+  delete require.cache[pacExecPath];
+  require.cache[processRunnerPath] = {
+    id: processRunnerPath,
+    filename: processRunnerPath,
+    loaded: true,
+    exports: stub,
+  };
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      delete require.cache[pacExecPath];
+      if (priorPacExec) require.cache[pacExecPath] = priorPacExec;
+      if (priorProcessRunner) require.cache[processRunnerPath] = priorProcessRunner;
+      else delete require.cache[processRunnerPath];
+    });
+}
+
 test('pcfprojBuildMode reports production only when the property is after Microsoft.Common.props', () => {
   const production = renderedPcfproj();
   const missing = production.replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n');
@@ -567,6 +589,15 @@ test('CLI validates flags before probing and prints usage on errors', async () =
 });
 
 test('CLI emits JSON and makes pac optional for build but required for push', async () => {
+  const processRunnerCalls = [];
+  const processRunner = {
+    spawnResultSync: (name, args, options) => {
+      processRunnerCalls.push({ name, args, options });
+      if (name === 'pac') return { status: 1, stdout: '', stderr: 'pac missing', signal: null };
+      if (name === 'dotnet') return { status: 0, stdout: '8.0.100\n', stderr: '', signal: null };
+      throw new Error(`unexpected process-runner command ${name}`);
+    },
+  };
   const stubs = {
     './lib/node-tool': {
       runNpm: (args, opts) => {
@@ -575,25 +606,32 @@ test('CLI emits JSON and makes pac optional for build but required for push', as
         return { status: 0, stdout: '10.9.9\n', stderr: '' };
       },
     },
-    './lib/pac-exec': {
-      runPac: () => ({ status: 1, stdout: '', stderr: 'pac missing' }),
-    },
-    'node:child_process': {
-      spawnSync: () => ({ status: 0, stdout: '8.0.100\n', stderr: '' }),
-    },
+    './lib/process-runner': processRunner,
   };
 
-  const buildOnly = await runCli(['--needs', 'build', '--npm-cli', 'D:\\tools\\npm-cli.js'], stubs);
+  const buildOnly = await withProcessRunnerStub(processRunner, () => runCli(['--needs', 'build', '--npm-cli', 'D:\\tools\\npm-cli.js'], {
+    ...stubs,
+    './lib/pac-exec': require('../lib/pac-exec.js'),
+  }));
   assert.equal(buildOnly.emitted.exitCode, 0);
   const buildPayload = JSON.parse(buildOnly.emitted.stdout);
   assert.equal(buildPayload.ok, true);
   assert.equal(byId(buildPayload.toolchain, 'TOOL_PAC_MISSING').severity, 'info');
 
-  const push = await runCli(['--needs', 'push', '--npm-cli', 'D:\\tools\\npm-cli.js'], stubs);
+  const push = await withProcessRunnerStub(processRunner, () => runCli(['--needs', 'push', '--npm-cli', 'D:\\tools\\npm-cli.js'], {
+    ...stubs,
+    './lib/pac-exec': require('../lib/pac-exec.js'),
+  }));
   assert.equal(push.emitted.exitCode, 1);
   const pushPayload = JSON.parse(push.emitted.stdout);
   assert.equal(pushPayload.ok, false);
   assert.equal(byId(pushPayload.toolchain, 'TOOL_PAC_MISSING').severity, 'error');
+  assert.deepEqual(processRunnerCalls.map((call) => [call.name, call.args, call.options]), [
+    ['pac', ['help'], { encoding: 'utf8' }],
+    ['dotnet', ['--version'], { encoding: 'utf8' }],
+    ['pac', ['help'], { encoding: 'utf8' }],
+    ['dotnet', ['--version'], { encoding: 'utf8' }],
+  ]);
 });
 
 test('collectToolchain probes dotnet through process-runner instead of bare child_process', () => {
