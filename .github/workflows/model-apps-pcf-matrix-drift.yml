@@ -14,6 +14,9 @@ permissions:
 jobs:
     check-pcf-matrix-drift:
         runs-on: ubuntu-latest
+        # Installs every template and recipe at the latest published versions; the cap turns a hung
+        # install into a failed run instead of holding a runner for the six-hour default.
+        timeout-minutes: 45
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         steps:

@@ -16,9 +16,14 @@ const { runPac } = require('./lib/pac-exec.js');
 const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-names.js');
 
 const USAGE = `Usage:
-  node scripts/pcf-ci-build.js [--all | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]`;
+  node scripts/pcf-ci-build.js [--all | --templates | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]
 
-const KNOWN = ['all', 'template', 'recipe', 'latest', 'keep', 'package', 'npm-cli'];
+  --templates builds every template and no recipes. Recipes only add platform-independent control
+  code on top of a template, so a slow runner (Windows) can cover the scripts' path, shell and npm
+  behavior with the templates while --all covers every recipe elsewhere.`;
+
+const KNOWN = ['all', 'templates', 'template', 'recipe', 'latest', 'keep', 'package', 'npm-cli'];
+const BOOLEAN_FLAGS = ['all', 'templates', 'latest', 'keep', 'package'];
 const NEED_VALUE = ['template', 'recipe', 'npm-cli'];
 const SCRIPT_DIR = __dirname;
 const DEFAULT_ROOT = path.join(SCRIPT_DIR, '..');
@@ -70,7 +75,8 @@ function selectTargets(options, deps = {}) {
   const allRecipes = recipes(deps);
   if (options.template) return [templateTarget(String(options.template), allTemplates)];
   if (options.recipe) return [recipeTarget(String(options.recipe), allRecipes, allTemplates)];
-  if (!options.all) throw new Error('Choose --all, --template <id>, --recipe <id>, or --package.');
+  if (options.templates) return allTemplates.map((template) => targetFromTemplate(template)).sort((a, b) => a.id.localeCompare(b.id));
+  if (!options.all) throw new Error('Choose --all, --templates, --template <id>, --recipe <id>, or --package.');
   return [
     ...allTemplates.map((template) => targetFromTemplate(template)),
     ...allRecipes.filter((recipe) => recipe.status !== 'planned').map((recipe) => targetFromRecipe(recipe, allTemplates)),
@@ -441,10 +447,16 @@ function main(argv = process.argv.slice(2)) {
   });
   if (flagError) usageError(flagError);
   const flags = parsed.flags;
-  const selectors = [Boolean(flags.all), Boolean(flags.template), Boolean(flags.recipe), Boolean(flags.package)].filter(Boolean).length;
-  if (selectors !== 1) usageError('Choose exactly one of --all, --template <id>, --recipe <id>, or --package.');
+  // parseArgs accepts `--flag=value` on any flag, so a boolean flag given a value would otherwise
+  // read as true (`--templates=field-standard` would silently build every template).
+  for (const booleanFlag of BOOLEAN_FLAGS) {
+    if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
+  }
+  const selectors = [Boolean(flags.all), Boolean(flags.templates), Boolean(flags.template), Boolean(flags.recipe), Boolean(flags.package)].filter(Boolean).length;
+  if (selectors !== 1) usageError('Choose exactly one of --all, --templates, --template <id>, --recipe <id>, or --package.');
   const result = runCiBuild({
     all: Boolean(flags.all),
+    templates: Boolean(flags.templates),
     template: flags.template ? String(flags.template) : undefined,
     recipe: flags.recipe ? String(flags.recipe) : undefined,
     latest: Boolean(flags.latest),

@@ -633,7 +633,7 @@ Behavioral spec per script:
 - **`scripts/pcf-push.js`** — wraps `pac pcf push --environment` for developer verification. The skill must obtain consent before calling it because PAC publishes all pending customizations. It validates solution/publisher/control names before passing values to PAC, allows dev bundles only with `--allow-dev-bundle`, and verifies registration unless `--no-verify` is explicit.
 - **`scripts/verify-pcf.js` → `scripts/lib/pcf-dataverse.js` + `pcf-binding-verify.js`** — reads registration and FormXML metadata, then reports metadata evidence (`registered`, `bound(draft)`, `bound(published)`). `--intent` reads the canonical binding target from `bindings[].target` (`column` or `controlId`), with compatibility handling for older flat fields. The `/pcf` skill reports `runtime-not-checked` when no browser or manual runtime check was run. Binding findings use `PCF_BIND_*`; semantic clients are `phone`, `tablet`, `web`, mapped to FormXML factors only in `pcf-binding-verify.js`.
 - **`scripts/pcf-inventory.js` → `scripts/lib/pcf-dataverse.js`** — lists registered controls and optional where-used dependencies such as the bound `SystemForm` rows returned by Dataverse dependency APIs. It warns that dependency results are registered solution dependencies only and are not proof of Liquid or arbitrary text references.
-- **`scripts/pcf-ci-build.js`** — generated-project CI helper. `--all` scaffolds templates and available recipes, runs installs and gates; `--latest` probes published dependency drift; `--package` builds a small package smoke through PAC solution packaging.
+- **`scripts/pcf-ci-build.js`** — generated-project CI helper. `--all` scaffolds templates and available recipes, runs installs and gates; `--templates` does the same for the templates only; `--latest` probes published dependency drift; `--package` builds a small package smoke through PAC solution packaging.
 
 Rules that make the scripts safe to run from agents:
 
@@ -1229,8 +1229,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
   PCF generated-project CI is intentionally split into `.github/workflows/model-apps-pcf-projects.yml`
-  because template/recipe installs need npm registry access; matrix drift runs weekly in
-  `.github/workflows/model-apps-pcf-matrix-drift.yml`.
+  because template/recipe installs need npm registry access. ubuntu builds every template and
+  available recipe (`--all`); Windows builds the templates only (`--templates`), because recipes add
+  platform-independent code on top of a template and one `npm ci` per target made the full set take
+  about an hour there. Matrix drift runs weekly in `.github/workflows/model-apps-pcf-matrix-drift.yml`.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners

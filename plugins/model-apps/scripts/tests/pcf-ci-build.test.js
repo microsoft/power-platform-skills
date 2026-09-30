@@ -116,6 +116,29 @@ test('--all runs every template and available recipe while reporting planned rec
   assert.equal(d.calls.filter((call) => call[0] === 'npm' && call[1][0] === 'ci').length, 5);
 });
 
+test('--templates runs every template and no recipes', () => {
+  const d = deps();
+
+  const result = runCiBuild({ templates: true }, d);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.results.map((item) => item.id), ['dataset-standard', 'field-standard', 'field-virtual']);
+  assert.ok(result.results.every((item) => item.kind === 'template'));
+  // Recipes are not in scope for this selector, so nothing is reported as skipped for them.
+  assert.deepEqual(result.skipped, []);
+  assert.equal(d.calls.filter((call) => call[0] === 'npm' && call[1][0] === 'ci').length, 3);
+});
+
+test('the CLI accepts --templates and still requires exactly one selector', () => {
+  const { spawnSync } = require('node:child_process');
+  const cli = path.join(__dirname, '..', 'pcf-ci-build.js');
+  const both = spawnSync(process.execPath, [cli, '--templates', '--all'], { encoding: 'utf8' });
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /Choose exactly one of --all, --templates, --template <id>, --recipe <id>, or --package\./);
+  const valued = spawnSync(process.execPath, [cli, '--templates=field-standard'], { encoding: 'utf8' });
+  assert.equal(valued.status, 1);
+});
+
 test('--latest installs every matrix package at latest and reports resolved versions', () => {
   const d = deps();
 

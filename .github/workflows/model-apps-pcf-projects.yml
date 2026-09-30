@@ -13,6 +13,9 @@ on:
             - "plugins/model-apps/scripts/pcf-*.js"
             - "plugins/model-apps/scripts/lib/pcf-*.js"
             - "plugins/model-apps/scripts/lib/node-tool.js"
+            # The package smoke starts pac through these two, so a change to either must run it.
+            - "plugins/model-apps/scripts/lib/pac-exec.js"
+            - "plugins/model-apps/scripts/lib/process-runner.js"
             - ".github/workflows/model-apps-pcf-projects.yml"
 
 permissions:
@@ -22,14 +25,24 @@ jobs:
     test-model-apps-pcf-projects:
         name: test-model-apps-pcf-projects (${{ matrix.os }})
         runs-on: ${{ matrix.os }}
+        # A generated project's install and gates take seconds on ubuntu and a few minutes on
+        # Windows; the cap turns a hung install or test into a failed check instead of a job that
+        # holds a runner for the platform's six-hour default.
+        timeout-minutes: 45
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:
-                os:
-                    - ubuntu-latest
-                    - windows-latest
+                # ubuntu builds every template and available recipe. Windows builds the templates
+                # only: a recipe adds platform-independent control code on top of a template, so the
+                # templates already cover the scripts' path, shell and npm behavior there, while one
+                # npm ci per target made the full set take about an hour on a Windows runner.
+                include:
+                    - os: ubuntu-latest
+                      selector: --all
+                    - os: windows-latest
+                      selector: --templates
         steps:
             - name: checkout
               uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -43,13 +56,14 @@ jobs:
                       plugins/model-apps/pcf/lock/standard/package-lock.json
                       plugins/model-apps/pcf/lock/virtual/package-lock.json
 
-            - name: build-all-pcf-templates-and-recipes
+            - name: build-pcf-templates-and-recipes
               shell: bash
-              run: node plugins/model-apps/scripts/pcf-ci-build.js --all
+              run: node plugins/model-apps/scripts/pcf-ci-build.js ${{ matrix.selector }}
 
     package-model-apps-pcf-projects:
         name: package-model-apps-pcf-projects
         runs-on: ubuntu-latest
+        timeout-minutes: 30
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         steps:
