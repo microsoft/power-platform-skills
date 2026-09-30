@@ -54,6 +54,26 @@ const COPY_SETS = [
       source: 'plugins/model-apps/scripts/lib/dataverse-auth.js',
       copy: 'plugins/pcf/scripts/lib/dataverse-auth.js',
       exceptExport: 'emitResult',
+      requiredExports: [
+        'dataverseOrigin',
+        'requireDataverseOrigin',
+        'getAuthToken',
+        'getAuthTokenAsync',
+        'azIdentity',
+        'preflightAuth',
+        'makeRequest',
+        'dataverseRequest',
+        'ensureOk',
+        'parseArgs',
+        'validateFlags',
+        'readAliasedFlag',
+        'readJsonArg',
+        'emitResult',
+      ],
+      requiredDeclarations: [
+        'DATAVERSE_HOST',
+        'authTokenMemo',
+      ],
     },
   },
 ];
@@ -167,14 +187,24 @@ function checkSubset(repoRoot, setName, subset) {
   const findings = [];
   const sourceModule = requireFresh(sourcePath);
   const copyModule = requireFresh(copyPath);
+  for (const name of subset.requiredExports || []) {
+    if (!(name in copyModule)) {
+      findings.push(finding(setName, 'missing-export', name, subset.copy, subsetFix(name)));
+    }
+  }
   for (const name of Object.keys(copyModule).filter((exportName) => exportName !== subset.exceptExport)) {
-    if (String(copyModule[name]) !== String(sourceModule[name])) {
+    if (normalizeText(String(copyModule[name])) !== normalizeText(String(sourceModule[name]))) {
       findings.push(finding(setName, 'export-drift', name, subset.copy, subsetFix(name)));
     }
   }
 
   const sourceDeclarations = topLevelDeclarations(sourcePath);
   const copyDeclarations = topLevelDeclarations(copyPath);
+  for (const name of subset.requiredDeclarations || []) {
+    if (!copyDeclarations.has(name)) {
+      findings.push(finding(setName, 'missing-declaration', name, subset.copy, subsetFix(name)));
+    }
+  }
   for (const [name, declaration] of copyDeclarations) {
     if (sourceDeclarations.get(name) !== declaration) {
       findings.push(finding(setName, 'declaration-drift', name, subset.copy, subsetFix(name)));

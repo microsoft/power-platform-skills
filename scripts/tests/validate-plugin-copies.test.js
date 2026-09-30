@@ -24,16 +24,32 @@ function writeText(root, relPath, content) {
 
 function makeTempRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-copies-'));
+  const exports = [
+    'dataverseOrigin',
+    'requireDataverseOrigin',
+    'getAuthToken',
+    'getAuthTokenAsync',
+    'azIdentity',
+    'preflightAuth',
+    'makeRequest',
+    'dataverseRequest',
+    'ensureOk',
+    'parseArgs',
+    'validateFlags',
+    'readAliasedFlag',
+    'readJsonArg',
+  ];
   const modelAuth = `
 const DATAVERSE_HOST = /^https:\\/\\/contoso\\.crm\\.dynamics\\.com$/;
 let authTokenMemo = null;
+${exports.map((name) => `function ${name}() {\n  return DATAVERSE_HOST.test('https://contoso.crm.dynamics.com') && authTokenMemo === null;\n}`).join('')}
 function shared() {
   return DATAVERSE_HOST.test('https://contoso.crm.dynamics.com');
 }
 function emitResult(result) {
   console.log(JSON.stringify(result));
 }
-module.exports = { shared, emitResult };
+module.exports = { ${exports.join(', ')}, shared, emitResult };
 `.trimStart();
   const pcfAuth = modelAuth.replace(
     /function emitResult\(result\) \{[\s\S]*?\n\}/,
@@ -79,6 +95,14 @@ test('CRLF-only differences pass', () => withTempRepo((root) => {
   assert.equal(result.findings.length, 0);
 }));
 
+test('CRLF-only differences in subset function bodies pass', () => withTempRepo((root) => {
+  const copyPath = path.join(root, COPY_SETS[0].subset.copy);
+  fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(/\n/g, '\r\n'), 'utf8');
+  const result = runCheck(root);
+  assert.equal(result.ok, true);
+  assert.equal(result.findings.length, 0);
+}));
+
 test('verbatim drift is reported', () => withTempRepo((root) => {
   const pair = COPY_SETS[0].verbatim[0];
   writeText(root, pair.copy, 'changed\n');
@@ -110,12 +134,27 @@ test('subset export body drift is reported', () => withTempRepo((root) => {
   const copyPath = path.join(root, COPY_SETS[0].subset.copy);
   fs.writeFileSync(
     copyPath,
-    fs.readFileSync(copyPath, 'utf8').replace('return DATAVERSE_HOST.test', 'return !DATAVERSE_HOST.test'),
+    fs.readFileSync(copyPath, 'utf8').replace(
+      "function shared() {\n  return DATAVERSE_HOST.test('https://contoso.crm.dynamics.com');\n}",
+      "function shared() {\n  return !DATAVERSE_HOST.test('https://contoso.crm.dynamics.com');\n}",
+    ),
     'utf8',
   );
   const result = runCheck(root);
   assert.equal(result.ok, false);
   assert.ok(result.findings.some((finding) => finding.kind === 'export-drift' && finding.source === 'shared'));
+}));
+
+test('removing a required subset export is reported', () => withTempRepo((root) => {
+  const copyPath = path.join(root, COPY_SETS[0].subset.copy);
+  fs.writeFileSync(
+    copyPath,
+    fs.readFileSync(copyPath, 'utf8').replace(/parseArgs, /, ''),
+    'utf8',
+  );
+  const result = runCheck(root);
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some((finding) => finding.kind === 'missing-export' && finding.source === 'parseArgs'));
 }));
 
 test('subset module-level declaration drift is reported', () => withTempRepo((root) => {
@@ -128,6 +167,18 @@ test('subset module-level declaration drift is reported', () => withTempRepo((ro
   const result = runCheck(root);
   assert.equal(result.ok, false);
   assert.ok(result.findings.some((finding) => finding.kind === 'declaration-drift' && finding.source === 'DATAVERSE_HOST'));
+}));
+
+test('removing a required subset module declaration is reported', () => withTempRepo((root) => {
+  const copyPath = path.join(root, COPY_SETS[0].subset.copy);
+  fs.writeFileSync(
+    copyPath,
+    fs.readFileSync(copyPath, 'utf8').replace(/let authTokenMemo = null;\n/, ''),
+    'utf8',
+  );
+  const result = runCheck(root);
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'authTokenMemo'));
 }));
 
 test('pcf emitResult must not match the source and must keep JSON error contract', () => withTempRepo((root) => {
