@@ -437,7 +437,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities/tables, icon web resources,
-  dashboards, solution).
+  dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
+  `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
+  that were never deployed — and writes only the baseline (`last-applied.json`) into it.
   **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
   classic dashboards, icons, and solution round-trip; **forms, views, charts, and commands do NOT yet
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set

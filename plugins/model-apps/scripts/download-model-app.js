@@ -8,6 +8,7 @@
 // Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
@@ -367,13 +368,32 @@ function relationshipsSkippedWarning(skipped) {
   return `${lines.join('\n')}\n`;
 }
 
-async function makeProvision(env, workspaceDir) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
-  await sdk.initWorkspace();
-  return sdk;
+// The SDK a download reads through, on a THROWAWAY workspace that is removed afterwards — never the
+// output folder's `.maker-workspace`, which is the workspace a later build in that folder uses. A
+// download must describe what is DEPLOYED, and reading through that workspace could not promise it: a
+// copy an interrupted build left holding unpushed edits made the SDK throw LOCAL_EDITS_WOULD_BE_LOST
+// once the server had moved (the download failed), and was returned as if it were the app when the
+// server had not (the download silently described edits that were never deployed). Nothing a download
+// fetches is of use to the next build either: its plain fetch replaces a clean copy with the server's.
+//
+// Construction happens INSIDE the guard: the constructor builds the filesystem adapter and can throw,
+// and the caller's `finally` is not reachable until this function returns (as in build-model-app.js).
+// `deps` is a test seam: the bundle's factories, the HTTP client, and the temp-directory calls.
+async function makeDownloadSdk(env, deps = {}) {
+  const workspaceDir = (deps.mkdtempSync || fs.mkdtempSync)(path.join(os.tmpdir(), 'model-app-download-'));
+  const cleanup = () => (deps.rmSync || fs.rmSync)(workspaceDir, { recursive: true, force: true });
+  try {
+    const { createMakerSdk, createNodeWorkspaceStorage } = (deps.createMakerSdk && deps.createNodeWorkspaceStorage)
+      ? deps
+      : require('./vendor/cds-maker-sdk.cjs');
+    const httpClient = deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env);
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+    await sdk.initWorkspace();
+    return { sdk, workspaceDir, cleanup };
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 // Resolve `--app` to an app GUID. Accepts the app's id, its immutable `uniquename`, or — as a
@@ -2283,8 +2303,21 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+async function main(deps = {}) {
+  const argv = deps.argv || process.argv.slice(2);
+  // Test seam: every side effect of main() — the process streams and exit, the result printer, the
+  // auth probe, and the helpers that reach Dataverse or pac — can be replaced. Each call still names the
+  // real function (`io.emitResult(...)`), so a reader, and the source-level contract tests, see which runs.
+  const io = {
+    stderr: deps.stderr || process.stderr,
+    exit: deps.exit || process.exit,
+    emitResult: deps.emitResult || emitResult,
+    preflightAuth: deps.preflightAuth || preflightAuth,
+    makeDownloadSdk: deps.makeDownloadSdk || makeDownloadSdk,
+    makeGenpageCli: deps.makeGenpageCli || makeGenpageCli,
+    runDownload: deps.runDownload || runDownload,
+    validateAppSpec: deps.validateAppSpec || validateAppSpec,
+  };
   const { positional, flags } = parseArgs(argv);
   const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]';
   // `--allow-lossy-download` is a real boolean switch, so it stays out of needValue; everything else
@@ -2294,16 +2327,18 @@ async function main() {
     needValue: ['env', 'app', 'out', 'output'],
   });
   if (flagError) {
-    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
-    process.exit(1);
+    io.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    io.exit(1);
+    return;
   }
   const env = flags.env;
   const appArg = flags.app || positional[0];
   const outArg = flags.out || flags.output;
   const allowLossyDownload = flags['allow-lossy-download'] === true;
   if (!env || !appArg) {
-    process.stderr.write(USAGE + '\n');
-    process.exit(1);
+    io.stderr.write(USAGE + '\n');
+    io.exit(1);
+    return;
   }
   const outDir = path.resolve(outArg || '.');
   fs.mkdirSync(outDir, { recursive: true });
@@ -2313,81 +2348,93 @@ async function main() {
   // not surface as an error here — it degrades to an EMPTY spec: no forms, no views, no columns, and
   // guessed primary attributes, reported as a success. That is AB#6686423's symptom, and this is the
   // gate that stops it being mistaken for a round-trip gap.
-  const auth = await preflightAuth(env);
-  if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+  const auth = await io.preflightAuth(env);
+  if (!auth.ok && !auth.inconclusive) { io.emitResult(false, { ok: false, error: auth.error }); return; }
   // An INCONCLUSIVE probe must not block: it goes through a client with a weaker retry policy than
   // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would
   // have succeeded. Surface it and continue.
-  if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
-  const sdk = await makeProvision(env, path.join(outDir, '.maker-workspace'));
-  const resolved = await resolveAppId(sdk, appArg);
-  if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
-  const appId = resolved.appId;
-  // Narrate a display-name match so the operator learns the app's stable identity: the unique name
-  // is what every later build/teardown must be given, and it survives a rename of the display name.
-  if (resolved.matchedBy === 'displayName') {
-    process.stderr.write(`(resolved display name '${appArg}' to app unique name '${resolved.uniqueName}' — prefer the unique name, it is immutable)\n`);
-  }
+  if (auth.inconclusive) io.stderr.write(`⚠ ${auth.error}\n`);
+  // Results are only RECORDED inside the guarded region and printed in `finally`, after the throwaway
+  // workspace is removed: the real printer ends the process (emitResult calls process.exit), so a
+  // cleanup placed after it never ran — every download used to leave its temp workspace behind.
+  let session;
+  let outcome = null;
+  const finish = (ok, payload) => { outcome = [ok, payload]; };
+  try {
+    session = await io.makeDownloadSdk(env, deps);
+    const sdk = session.sdk;
+    const resolved = await resolveAppId(sdk, appArg);
+    if (resolved.error) { finish(false, { ok: false, error: resolved.error }); return; }
+    const appId = resolved.appId;
+    // Narrate a display-name match so the operator learns the app's stable identity: the unique name
+    // is what every later build/teardown must be given, and it survives a rename of the display name.
+    if (resolved.matchedBy === 'displayName') {
+      io.stderr.write(`(resolved display name '${appArg}' to app unique name '${resolved.uniqueName}' — prefer the unique name, it is immutable)\n`);
+    }
 
-  // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
-  const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
-  const appUnique = appRows && appRows[0] && appRows[0].uniquename;
-  const genpageCli = makeGenpageCli(env);
+    // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
+    const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
+    const appUnique = appRows && appRows[0] && appRows[0].uniquename;
+    const genpageCli = io.makeGenpageCli(env);
 
-  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
-  if (!result.ok) { emitResult(false, result); return; }
+    const result = await io.runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
+    if (!result.ok) { finish(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates } = result;
-  if (droppedSubareas > 0 || dashboardReconstructionError) {
-    const droppedList = (droppedSubareaDetails || [])
-      .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
-      .join(', ');
-    const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
-    // Per-dashboard reasons, when there are any. Naming the subarea without saying WHY it dropped
-    // sends the reader looking at their sitemap when the cause is an unreadable artifact.
-    const causeMessage = (dashboardWarnings && dashboardWarnings.length)
-      ? ` Cause: ${dashboardWarnings.join('; ')}.`
-      : '';
-    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage}${causeMessage} A rebuild from this spec will DROP them from the app nav.`;
-    if (!allowLossyDownload) {
-      process.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
-      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, ...(dashboardWarnings && dashboardWarnings.length ? { dashboardWarnings } : {}) });
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates } = result;
+    if (droppedSubareas > 0 || dashboardReconstructionError) {
+      const droppedList = (droppedSubareaDetails || [])
+        .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
+        .join(', ');
+      const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
+      // Per-dashboard reasons, when there are any. Naming the subarea without saying WHY it dropped
+      // sends the reader looking at their sitemap when the cause is an unreadable artifact.
+      const causeMessage = (dashboardWarnings && dashboardWarnings.length)
+        ? ` Cause: ${dashboardWarnings.join('; ')}.`
+        : '';
+      const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage}${causeMessage} A rebuild from this spec will DROP them from the app nav.`;
+      if (!allowLossyDownload) {
+        io.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
+        finish(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, ...(dashboardWarnings && dashboardWarnings.length ? { dashboardWarnings } : {}) });
+        return;
+      }
+      io.stderr.write(`WARNING: ${message}\n`);
+    }
+    // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
+    // rules become warnings, because refusing to write a description of an app that already exists
+    // leaves the author with no artifact at all (see the pageInput producer rule).
+    const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+    if (!validation.ok) {
+      finish(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
       return;
     }
-    process.stderr.write(`WARNING: ${message}\n`);
+    for (const w of validation.warnings || []) io.stderr.write(`WARNING: ${w}\n`);
+    // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
+    // pages that predate the field (otherwise this download would have hard-failed above and written no
+    // spec at all), but the author has to know a behaviour was chosen for them so they can change it.
+    const defaulted = spec.directEntryDefaulted || [];
+    if (defaulted.length) {
+      io.stderr.write(
+        `WARNING: ${defaulted.length} page(s) declare pageInput but predate directEntry — defaulted to `
+        + `{ "behavior": "emptyState" }: ${defaulted.join(', ')}.\n`
+        + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
+      );
+    }
+    const specPath = path.join(outDir, 'app-spec.json');
+    preserveAuthoredLanguageCode(spec, specPath);
+    fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
+    // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
+    // lines the live sitemap up against — a nav change made in the designer after this download is then
+    // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
+    // environment, so they are recorded as its deployed ids. Best-effort: a spec with no baseline still
+    // builds, and the build then reports each nav change it makes.
+    try {
+      writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique, fromSpec: true });
+    } catch { /* non-fatal */ }
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+  } finally {
+    try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
+    if (outcome) io.emitResult(...outcome);
   }
-  // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
-  // rules become warnings, because refusing to write a description of an app that already exists
-  // leaves the author with no artifact at all (see the pageInput producer rule).
-  const validation = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
-  if (!validation.ok) {
-    emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
-    return;
-  }
-  for (const w of validation.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
-  // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
-  // pages that predate the field (otherwise this download would have hard-failed above and written no
-  // spec at all), but the author has to know a behaviour was chosen for them so they can change it.
-  const defaulted = spec.directEntryDefaulted || [];
-  if (defaulted.length) {
-    process.stderr.write(
-      `WARNING: ${defaulted.length} page(s) declare pageInput but predate directEntry — defaulted to `
-      + `{ "behavior": "emptyState" }: ${defaulted.join(', ')}.\n`
-      + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
-    );
-  }
-  const specPath = path.join(outDir, 'app-spec.json');
-  preserveAuthoredLanguageCode(spec, specPath);
-  fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
-  // lines the live sitemap up against — a nav change made in the designer after this download is then
-  // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
-  // environment, so they are recorded as its deployed ids. Best-effort: a spec with no baseline still
-  // builds, and the build then reports each nav change it makes.
-  try {
-    writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique, fromSpec: true });
-  } catch { /* non-fatal */ }
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
 }
 
 // Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
@@ -2428,4 +2475,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, main };

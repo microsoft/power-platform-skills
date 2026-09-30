@@ -26,6 +26,8 @@ SDK is refreshed.
 - **A teardown no longer stops when Dataverse is busy.** A delete refused with 429 (another
   customization still running) is re-sent like other throttled requests; the solution delete that
   ends a teardown used to fail and leave the solution behind.
+- **Download reads what is deployed.** It no longer reads through the folder's `.maker-workspace`,
+  where a copy an interrupted build left could make it fail or return edits never deployed.
 - **Rebuilding an existing app keeps its navigation as it is** (AB#6726727). Every nav entry was
   rewritten as a new one, so an unrelated edit turned a designer-made dashboard entry's icon into a
   placeholder and dropped its other settings. Entries now keep their id and everything the spec does
