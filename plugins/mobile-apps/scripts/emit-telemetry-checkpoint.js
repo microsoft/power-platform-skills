@@ -214,7 +214,11 @@ function runCommand(argv = process.argv.slice(2), overrides = {}) {
     }
 
     const createContext = overrides.createTelemetryContext || telemetry.createTelemetryContext;
-    const context = createContext({}, { cwd, env: overrides.env });
+    const context = createContext({}, {
+      cwd,
+      env: overrides.env,
+      ...(args.runId ? { readProcessScope: () => '' } : {}),
+    });
     if (!context) return { status: 'disabled' };
     const options = {
       ...args,

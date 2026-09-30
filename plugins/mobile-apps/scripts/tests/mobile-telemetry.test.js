@@ -16,6 +16,7 @@ const {
 const {
   emitCheckpoint: emitCheckpointCommand,
   parseCheckpointPayload,
+  runCommand,
 } = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
@@ -376,6 +377,27 @@ test('tracked checkpoint context skips host process discovery', () => {
     },
   );
   assert.equal(result, null);
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
+test('tracked lifecycle CLI skips host process discovery', () => {
+  let contextOptions;
+  const result = runCommand([
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id',
+    '11111111-1111-4111-8111-111111111111',
+    '--parent-span-id',
+    '22222222-2222-4222-8222-222222222222',
+    '--project-root',
+    '/private-project',
+  ], {
+    createTelemetryContext: (_payload, options) => {
+      contextOptions = options;
+      return null;
+    },
+  });
+  assert.deepEqual(result, { status: 'disabled' });
   assert.equal(contextOptions.cwd, '/private-project');
   assert.equal(contextOptions.readProcessScope(), '');
 });
