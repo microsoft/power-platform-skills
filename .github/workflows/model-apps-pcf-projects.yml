@@ -23,35 +23,18 @@ permissions:
 
 jobs:
     test-model-apps-pcf-projects:
-        name: test-model-apps-pcf-projects (${{ matrix.os }}, ${{ matrix.selector }})
+        name: test-model-apps-pcf-projects (${{ matrix.os }})
         runs-on: ${{ matrix.os }}
-        # ubuntu builds the full set in about five minutes and one Windows template takes roughly four to
-        # nine; the cap turns a hung install or test into a failed check instead of a job that holds a
-        # runner for the platform's six-hour default.
+        # Each generated project takes well under two minutes on either OS once Windows builds on its
+        # local disk (see the build step); the cap turns a hung install or test into a failed check
+        # instead of a job that holds a runner for the platform's six-hour default.
         timeout-minutes: 45
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:
-                # ubuntu builds every template and available recipe in one job. Windows builds each
-                # template in its own job: every generated project pays a full `npm ci`, which is
-                # I/O-bound on a Windows runner, and the four templates built one after another took
-                # 25 minutes on one run and outlasted the 45-minute cap on another. Recipes only add
-                # platform-independent control code on top of a template, so the templates cover the
-                # scripts' path, shell and npm behavior on Windows. pcf-ci-build.test.js fails when a
-                # catalog template has no Windows entry here.
-                include:
-                    - os: ubuntu-latest
-                      selector: --all
-                    - os: windows-latest
-                      selector: --template dataset-standard
-                    - os: windows-latest
-                      selector: --template dataset-virtual
-                    - os: windows-latest
-                      selector: --template field-standard
-                    - os: windows-latest
-                      selector: --template field-virtual
+                os: [ubuntu-latest, windows-latest]
         steps:
             - name: checkout
               uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -69,14 +52,15 @@ jobs:
               shell: bash
               # pcf-ci-build.js generates each project under os.tmpdir(). On a hosted Windows runner the
               # default TEMP is on C:, the OS disk, while runner.temp is on D:, the VM's local temporary
-              # disk, which is faster for npm's many small file writes:
-              # https://learn.microsoft.com/azure/virtual-machines/managed-disks-overview#temporary-disk
-              # os.tmpdir() reads TEMP first on Windows and TMPDIR, then TMP, elsewhere, so ubuntu just
-              # builds under its runner temp directory instead of /tmp.
+              # disk: https://learn.microsoft.com/azure/virtual-machines/managed-disks-overview#temporary-disk
+              # A generated project's `npm ci` and gates are thousands of small file writes, and moving
+              # them to D: cut a Windows template from 213-521 seconds to 29-76. os.tmpdir() reads TEMP
+              # first on Windows and TMPDIR, then TMP, elsewhere, so ubuntu just builds under its runner
+              # temp directory instead of /tmp.
               env:
                   TEMP: ${{ runner.temp }}
                   TMP: ${{ runner.temp }}
-              run: node plugins/model-apps/scripts/pcf-ci-build.js ${{ matrix.selector }}
+              run: node plugins/model-apps/scripts/pcf-ci-build.js --all
 
     package-model-apps-pcf-projects:
         name: package-model-apps-pcf-projects

@@ -205,29 +205,6 @@ test('progress goes to stderr by default, one line per write', () => {
   assert.ok(written.every((chunk) => /^\[pcf-ci-build\] [^\n]+\n$/.test(chunk)), JSON.stringify(written));
 });
 
-// The Windows leg of model-apps-pcf-projects.yml builds each template in its own job, because building
-// them one after another outlasted the job timeout on a slow runner. That job list is static YAML, so a
-// template added to the catalog would silently get no Windows build; this pins the list to the catalog.
-// Text assertions, as in run-tests.test.js, because the repo ships no YAML parser. Entries look like:
-//   - os: windows-latest
-//     selector: --template field-standard
-test('the PCF projects workflow builds everything on ubuntu and each catalog template in its own Windows job', () => {
-  const { listTemplates } = require('../lib/pcf-scaffold.js');
-  const workflowPath = path.resolve(__dirname, '..', '..', '..', '..', '.github', 'workflows', 'model-apps-pcf-projects.yml');
-  const workflow = fs.readFileSync(workflowPath, 'utf8');
-  const entries = [...workflow.matchAll(/^\s*-\s+os:\s+(\S+)\s*\r?\n\s+selector:\s+(.+?)\s*$/gm)]
-    .map((match) => ({ os: match[1], selector: match[2] }));
-
-  assert.deepEqual(entries.filter((entry) => entry.os === 'ubuntu-latest').map((entry) => entry.selector), ['--all']);
-  const windows = entries.filter((entry) => entry.os === 'windows-latest');
-  assert.ok(windows.length > 0, 'the workflow must keep a Windows leg');
-  assert.ok(windows.every((entry) => /^--template \S+$/.test(entry.selector)), `each Windows job builds one template: ${JSON.stringify(windows)}`);
-  assert.deepEqual(
-    windows.map((entry) => entry.selector.slice('--template '.length)).sort(),
-    listTemplates().map((template) => template.id).sort(),
-  );
-});
-
 test('--latest installs every matrix package at latest and reports resolved versions', () => {
   const d = deps();
 
