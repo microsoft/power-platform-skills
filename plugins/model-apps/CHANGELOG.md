@@ -37,8 +37,8 @@ rewrites its navigation, and the vendored SDK is refreshed.
 ### Changed
 
 - **The vendored SDK is refreshed.** A workspace saved by an earlier version is re-read on the next
-  build; a copy an interrupted build left holding unpushed edits halts it with the reset to make. A
-  remedy that asks you to clear `.maker-workspace` now says to stop other runs on it first and to
+  build; a copy an interrupted build left holding unpushed edits halts it and names the step to take.
+  A remedy that asks you to clear `.maker-workspace` now says to stop other runs on it first and to
   keep `last-applied.json` and `destructive-approval.json`.
 - **An explicit `false` for NL grid search or M365** now writes *Off* (`1`) instead of the platform
   default (`0`). A spec that omits `m365` still leaves it at `0`.

@@ -39,8 +39,10 @@ async function freshSdk() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'projection-'));
   tempDirs.push(dir);
   const writes = [];
-  const appRow = () => ({ appmoduleid: APP_ID, appmoduleidunique: '33333333-3333-3333-3333-333333333333', name: 'Probe', uniquename: APP_UNIQUE, description: 'Tickets', componentstate: 0, '@odata.etag': 'W/"1"' });
-  const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': 'W/"1"' });
+  // `state.etag` is the rows' version, read on every call, so a test can move the environment under the SDK.
+  const state = { etag: 'W/"1"' };
+  const appRow = () => ({ appmoduleid: APP_ID, appmoduleidunique: '33333333-3333-3333-3333-333333333333', name: 'Probe', uniquename: APP_UNIQUE, description: 'Tickets', componentstate: 0, '@odata.etag': state.etag });
+  const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': state.etag });
   const httpClient = {
     get: async (url) => {
       const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
@@ -52,11 +54,11 @@ async function freshSdk() {
       }
       if (/\/sitemaps/.test(url)) {
         const multi = /RetrieveUnpublishedMultiple/i.test(url) || /\/sitemaps\?/.test(url);
-        return { status: 200, headers: { etag: 'W/"1"' }, body: multi ? { value: [sitemapRow()] } : sitemapRow() };
+        return { status: 200, headers: { etag: state.etag }, body: multi ? { value: [sitemapRow()] } : sitemapRow() };
       }
       if (/\/appmodules/.test(url)) {
         const multi = /RetrieveUnpublishedMultiple/i.test(url) || /\/appmodules\?/.test(url);
-        return { status: 200, headers: { etag: 'W/"1"' }, body: multi ? { value: [appRow()] } : appRow() };
+        return { status: 200, headers: { etag: state.etag }, body: multi ? { value: [appRow()] } : appRow() };
       }
       return { status: 200, headers: {}, body: { value: [] } };
     },
@@ -67,7 +69,7 @@ async function freshSdk() {
   };
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
   await sdk.initWorkspace();
-  return { sdk, dir, writes };
+  return { sdk, dir, writes, state };
 }
 
 // Stamp the stored copy the way the plugin's previous SDK left it. The vendored SDK that shipped with
@@ -131,6 +133,26 @@ test('REAL BUNDLE: an old copy holding unpushed edits is refused at push, and th
   // after the halt it still holds the interrupted build's edit, for the manual reset to remove.
   assert.strictEqual((await sdk.getArtifact('app', APP_ID)).description, 'Edited by an interrupted build');
 });
+// The other way such a copy surfaces: the environment's copy moved after it was fetched (published or edited
+// in Maker, or the concurrent edit a VERSION_CONFLICT halt kept the copy against), so the build's plain fetch
+// refuses before any push. Measured live on a 2.10.0 workspace. The SDK's advice (`{ overwrite: true }`) is an
+// API call, and clearing the copy straight away would let the same spec overwrite the change — so the halt
+// asks for a look at the change first (it may be another maker's), and only then the usual reset.
+test('REAL BUNDLE: a copy holding unpushed edits over a moved environment halts at the fetch, asking for a review before the reset', async () => {
+  const { sdk, writes, state } = await interruptedCopy();
+  state.etag = 'W/"2"';
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  await assert.rejects(() => runner.run('forms', 'app "Probe"', () => sdk.fetchArtifact('app', APP_ID)), (err) => {
+    assert.ok(err instanceof BuildHalt);
+    assert.strictEqual(err.code, 'LOCAL_EDITS_WOULD_BE_LOST', 'the SDK code is kept');
+    assert.match(err.message, /the environment's copy changed after this workspace copy was fetched/);
+    assert.match(err.message, /A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./,
+      'the review comes before the reset: the copy may be the fence a concurrent-edit halt keeps');
+    return true;
+  });
+  assert.strictEqual(writes.length, 0, 'nothing was written');
+});
+
 test('the runner adds no remedy to an SDK error it has none for', async () => {
   const { SdkError } = require(BUNDLE);
   const runner = makeRunner({ emit: () => {}, total: 1 });
