@@ -722,3 +722,140 @@ test('applyUpgrade writes safe files, runs npm install, and skips install when r
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+function driftedProject(prefix) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const projectDir = path.join(tmp, 'StarRating');
+  writeScaffold(renderedProject(), projectDir);
+  fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+  // A mocked npm install does not create node_modules. Doctor treats that absence as an error,
+  // which would make ok:false even when the selected step itself succeeded.
+  fs.mkdirSync(path.join(projectDir, 'node_modules'), { recursive: true });
+  return { tmp, projectDir };
+}
+
+function countingNpm() {
+  const calls = [];
+  return {
+    calls,
+    runNpm: (args, opts) => {
+      calls.push({ args, cwd: opts && opts.cwd });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  };
+}
+
+test('runUpgrade accepts --steps REINSTALL alone', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const { tmp, projectDir } = driftedProject('pcf-upgrade-reinstall-only-');
+  const npm = countingNpm();
+  try {
+    const before = fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8');
+    const result = runUpgrade({
+      project: projectDir,
+      apply: true,
+      allowDirty: true,
+      steps: ['REINSTALL'],
+    }, { runNpm: npm.runNpm });
+
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.applied, ['REINSTALL']);
+    assert.deepEqual(npm.calls.map((call) => call.args), [['install']]);
+    assert.equal(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8'), before);
+    const reinstall = result.plan.steps.find((step) => step.id === 'REINSTALL');
+    assert.equal(reinstall.requiresStep, null);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runUpgrade records the skipped reinstall when --steps REINSTALL is used with --no-install', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const { tmp, projectDir } = driftedProject('pcf-upgrade-reinstall-skip-');
+  try {
+    const result = runUpgrade({
+      project: projectDir,
+      apply: true,
+      allowDirty: true,
+      steps: ['REINSTALL'],
+      noInstall: true,
+    }, {
+      runNpm: () => {
+        throw new Error('npm install should not run');
+      },
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.applied, []);
+    assert.deepEqual(result.skipped, ['REINSTALL: run npm install in the PCF project']);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('selecting DEPS_TO_MATRIX still reinstalls and publishes requiresStep', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const { tmp, projectDir } = driftedProject('pcf-upgrade-deps-implies-');
+  const npm = countingNpm();
+  try {
+    const result = runUpgrade({
+      project: projectDir,
+      apply: true,
+      allowDirty: true,
+      steps: ['DEPS_TO_MATRIX'],
+    }, { runNpm: npm.runNpm });
+
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.applied, ['DEPS_TO_MATRIX', 'REINSTALL']);
+    assert.equal(npm.calls.length, 1);
+    assert.deepEqual(npm.calls[0].args, ['install']);
+    const deps = result.plan.steps.find((step) => step.id === 'DEPS_TO_MATRIX');
+    const reinstall = result.plan.steps.find((step) => step.id === 'REINSTALL');
+    assert.equal(deps.requiresStep, 'REINSTALL');
+    assert.equal(reinstall.requiresStep, null);
+    assert.ok(result.plan.steps.every((step) => Object.hasOwn(step, 'requiresStep')));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('selecting DEPS_TO_MATRIX and REINSTALL installs once', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const { tmp, projectDir } = driftedProject('pcf-upgrade-no-double-');
+  const npm = countingNpm();
+  try {
+    const result = runUpgrade({
+      project: projectDir,
+      apply: true,
+      allowDirty: true,
+      steps: ['DEPS_TO_MATRIX', 'REINSTALL'],
+    }, { runNpm: npm.runNpm });
+
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.applied, ['DEPS_TO_MATRIX', 'REINSTALL']);
+    assert.equal(npm.calls.length, 1);
+    assert.equal(result.plan.steps.filter((step) => step.id === 'REINSTALL').length, 1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('unknown --steps lists every selectable id including REINSTALL', () => {
+  const { runUpgrade } = require('../lib/pcf-upgrade.js');
+  const { tmp, projectDir } = driftedProject('pcf-upgrade-steps-list-');
+  try {
+    const result = runUpgrade({
+      project: projectDir,
+      apply: true,
+      allowDirty: true,
+      steps: ['NOT_A_STEP'],
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /Unknown --steps value 'NOT_A_STEP'/);
+    assert.match(result.error, /Choose one of: .*REINSTALL/);
+    assert.match(result.error, /DEPS_TO_MATRIX/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

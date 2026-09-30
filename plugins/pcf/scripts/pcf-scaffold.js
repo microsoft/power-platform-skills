@@ -83,7 +83,9 @@ function runMain(argv) {
   const written = writeScaffold(plan, outDir);
 
   if (flags.install) {
-    const install = runNpm(['ci'], { cwd: outDir, npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined });
+    // Install into the physical directory. A linked --out would otherwise make npm ci follow
+    // the link on its own, after the emptiness check had already used a different path.
+    const install = runNpm(['ci'], { cwd: written.resolvedOutDir, npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined });
     if (install.status !== 0) {
       const detail = [install.stderr, install.stdout].filter(Boolean).join('\n').trim();
       throw new Error(`npm ci failed${detail ? `:\n${detail}` : ''}`);
@@ -93,6 +95,8 @@ function runMain(argv) {
   emitResult(true, {
     ok: true,
     outDir,
+    resolvedOutDir: written.resolvedOutDir,
+    findings: written.findings,
     template: String(flags.template),
     recipe: recipe || null,
     recipeTitle: plan.recipe ? plan.recipe.title : recipe || null,

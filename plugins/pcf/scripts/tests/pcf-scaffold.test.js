@@ -869,3 +869,123 @@ test('CLI scaffolds and threads --npm-cli into --install', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function linkDirectory(target, linkPath) {
+  // A junction needs no elevation on Windows; a directory symlink is used elsewhere. This is the
+  // same pattern as the upgrade containment test: macOS temp dirs sit behind /var -> /private/var,
+  // and a caller may scaffold into a linked folder on purpose.
+  fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+test('writeScaffold warns and writes through a directory link to the physical path', () => {
+  const { writeScaffold } = loadScaffold();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-redirect-'));
+  try {
+    const physicalRoot = path.join(tmp, 'physical');
+    const link = path.join(tmp, 'link');
+    fs.mkdirSync(physicalRoot);
+    try {
+      linkDirectory(physicalRoot, link);
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+
+    const requested = path.join(link, 'child');
+    const result = writeScaffold({ files: [{ relPath: 'marker.txt', content: 'ok' }], warnings: [] }, requested);
+    const physical = path.join(fs.realpathSync.native(physicalRoot), 'child');
+
+    assert.equal(result.resolvedOutDir, physical);
+    assert.equal(fs.readFileSync(path.join(physical, 'marker.txt'), 'utf8'), 'ok');
+    const warning = (result.findings || []).find((finding) => finding.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.ok(warning, 'expected PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.equal(warning.severity, 'warning');
+    assert.match(warning.message, new RegExp(escapeRegExp(path.resolve(requested))));
+    assert.match(warning.message, new RegExp(escapeRegExp(physical)));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('writeScaffold refuses a non-empty physical directory reached through a link', () => {
+  const { writeScaffold } = loadScaffold();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-link-nonempty-'));
+  try {
+    const physical = path.join(tmp, 'physical');
+    const link = path.join(tmp, 'link');
+    fs.mkdirSync(physical);
+    fs.writeFileSync(path.join(physical, 'keep.txt'), 'existing');
+    try {
+      linkDirectory(physical, link);
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+
+    const physicalPath = fs.realpathSync.native(physical);
+    assert.throws(() => writeScaffold(renderFieldPlan(), link), (err) => {
+      assert.match(err.message, /exists and is not empty/);
+      assert.match(err.message, new RegExp(escapeRegExp(physicalPath)));
+      return true;
+    });
+    assert.equal(fs.existsSync(path.join(physical, 'StarRating.pcfproj')), false);
+    assert.equal(fs.readFileSync(path.join(physical, 'keep.txt'), 'utf8'), 'existing');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('writeScaffold does not warn when the output path is already physical', () => {
+  const { writeScaffold } = loadScaffold();
+  const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-plain-')));
+  const outDir = path.join(parent, 'child');
+  try {
+    const result = writeScaffold({ files: [{ relPath: 'marker.txt', content: 'ok' }], warnings: [] }, outDir);
+
+    assert.equal(result.resolvedOutDir, outDir);
+    assert.deepEqual(result.findings, []);
+    assert.equal(fs.readFileSync(path.join(outDir, 'marker.txt'), 'utf8'), 'ok');
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('CLI reports resolvedOutDir and a redirect warning when --out goes through a link', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-cli-link-'));
+  try {
+    const physical = path.join(tmp, 'physical');
+    const link = path.join(tmp, 'link');
+    fs.mkdirSync(physical);
+    try {
+      linkDirectory(physical, link);
+    } catch (err) {
+      assert.match(String(err && err.code ? err.code : err), /EPERM|EACCES|privilege|operation/i);
+      return;
+    }
+
+    const outDir = path.join(link, 'child');
+    const cli = path.join(ROOT, 'scripts', 'pcf-scaffold.js');
+    const result = spawnSync(process.execPath, [
+      cli,
+      '--template', 'field-standard',
+      '--namespace', 'Contoso.Controls',
+      '--name', 'StarRating',
+      '--out', outDir,
+    ], { cwd: ROOT, encoding: 'utf8' });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const parsed = JSON.parse(result.stdout);
+    const physicalOut = path.join(fs.realpathSync.native(physical), 'child');
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.outDir, path.resolve(outDir));
+    assert.equal(parsed.resolvedOutDir, physicalOut);
+    const warning = (parsed.findings || []).find((finding) => finding.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.ok(warning, `expected redirect warning in ${result.stdout}`);
+    assert.equal(warning.severity, 'warning');
+    assert.match(warning.message, new RegExp(escapeRegExp(path.resolve(outDir))));
+    assert.match(warning.message, new RegExp(escapeRegExp(physicalOut)));
+    assert.equal(fs.existsSync(path.join(physicalOut, 'StarRating.pcfproj')), true);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

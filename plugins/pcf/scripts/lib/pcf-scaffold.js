@@ -711,31 +711,95 @@ function hasProjectMarkers(dir, deps = {}) {
   return entries.some((entry) => entry.name === 'package.json' || entry.name.endsWith('.pcfproj'));
 }
 
+function realpathNative(fsDep, target) {
+  const realpathSync = fsDep.realpathSync;
+  if (typeof realpathSync !== 'function') return target;
+  // Prefer the OS realpath. Node's non-native realpath can rewrite a path that is already
+  // physical, which would hide a genuine junction redirect or invent one.
+  const native = realpathSync.native;
+  if (typeof native === 'function') return native.call(fsDep, target);
+  return realpathSync.call(fsDep, target);
+}
+
+function sameDirectory(left, right, pathDep = path) {
+  const normalize = (value) => pathDep.normalize(String(value));
+  // realpathSync.native returns on-disk casing. On Windows that can differ from the caller's
+  // spelling of an otherwise physical path. A casing-only difference is not a link redirect.
+  if (process.platform === 'win32') return normalize(left).toLowerCase() === normalize(right).toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+function resolvePhysicalOutDir(outDir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const requested = pathDep.resolve(String(outDir));
+  const missing = [];
+  let current = requested;
+  while (!fsDep.existsSync(current)) {
+    const parent = pathDep.dirname(current);
+    if (parent === current) {
+      throw new Error(`Output directory '${requested}' has no existing ancestor to resolve.`);
+    }
+    missing.push(pathDep.basename(current));
+    current = parent;
+  }
+  let ancestor;
+  try {
+    ancestor = realpathNative(fsDep, current);
+  } catch (err) {
+    throw new Error(`Output directory '${requested}' could not be resolved: ${err && err.message ? err.message : err}`);
+  }
+  // Realpath the nearest existing ancestor, then rejoin segments that do not exist yet.
+  // Checking the caller's spelling and writing through it follows a junction only as a side
+  // effect and never says so. macOS temp dirs sit behind /var -> /private/var, and users
+  // scaffold into linked folders on purpose, so a link is allowed — but the emptiness check
+  // and every write must use this one physical path, or a non-empty target can look new.
+  const resolvedOutDir = missing.length === 0 ? ancestor : pathDep.join(ancestor, ...missing.reverse());
+  return { requested, resolvedOutDir };
+}
+
+function redirectFinding(requested, resolvedOutDir) {
+  return {
+    code: 'PCF_SCAFFOLD_OUT_REDIRECTED',
+    severity: 'warning',
+    message: `Output directory '${requested}' resolves to '${resolvedOutDir}'. Scaffold checks and writes use the physical path.`,
+  };
+}
+
+function outputDirLabel(requested, resolvedOutDir) {
+  if (sameDirectory(requested, resolvedOutDir)) return `'${resolvedOutDir}'`;
+  return `'${requested}' (physical path '${resolvedOutDir}')`;
+}
+
 function writeScaffold(plan, outDir, deps = {}) {
   const fsDep = deps.fs || fs;
   const pathDep = deps.path || path;
+  const { requested, resolvedOutDir } = resolvePhysicalOutDir(outDir, deps);
   for (const file of plan.files) {
-    assertSafeRelPath(file.relPath, outDir, deps);
+    assertSafeRelPath(file.relPath, resolvedOutDir, deps);
   }
-  if (fsDep.existsSync(outDir)) {
-    if (hasProjectMarkers(outDir, deps)) {
-      throw new Error(`Output directory '${outDir}' already contains a PCF project.`);
+  if (fsDep.existsSync(resolvedOutDir)) {
+    if (hasProjectMarkers(resolvedOutDir, deps)) {
+      throw new Error(`Output directory ${outputDirLabel(requested, resolvedOutDir)} already contains a PCF project.`);
     }
-    if (safeReaddir(outDir, deps).length > 0) {
-      throw new Error(`Output directory '${outDir}' exists and is not empty.`);
+    if (safeReaddir(resolvedOutDir, deps).length > 0) {
+      throw new Error(`Output directory ${outputDirLabel(requested, resolvedOutDir)} exists and is not empty.`);
     }
   } else {
-    fsDep.mkdirSync(outDir, { recursive: true });
+    fsDep.mkdirSync(resolvedOutDir, { recursive: true });
   }
 
   const written = [];
   for (const file of plan.files) {
-    const target = pathDep.join(outDir, file.relPath);
+    const target = pathDep.join(resolvedOutDir, file.relPath);
     fsDep.mkdirSync(pathDep.dirname(target), { recursive: true });
     fsDep.writeFileSync(target, file.content);
-    written.push(target);
+    // Keep the caller's spelling in the file list. Callers join the requested outDir, and
+    // resolvedOutDir is the field that names where the bytes actually landed.
+    written.push(pathDep.join(requested, file.relPath));
   }
-  return { written };
+  const findings = sameDirectory(requested, resolvedOutDir) ? [] : [redirectFinding(requested, resolvedOutDir)];
+  return { written, resolvedOutDir, findings };
 }
 
 module.exports = {

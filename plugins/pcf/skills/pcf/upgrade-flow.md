@@ -23,6 +23,7 @@ Use this flow for an existing PCF project. It keeps upgrade automation narrow an
    node "${PLUGIN_ROOT}/scripts/pcf-upgrade.js" --project <dir> --apply --steps PLATFORM_LIB_VERSION
    ```
    Do not pass a value to `--apply`; the CLI rejects `--apply <id>` and `--apply=<id>`.
+   REINSTALL is a selectable step when the plan contains it. Each automatic step has `requiresStep`. `DEPS_TO_MATRIX` sets `requiresStep` to `REINSTALL` because pinning `package.json` without refreshing `package-lock.json` leaves a stale lockfile. Selecting `DEPS_TO_MATRIX` includes that required step even when `--steps` omits it, and listing both still installs once. Selecting `REINSTALL` alone runs only the reinstall, or records the skipped `npm install` command when `--no-install` is set. An unknown `--steps` value lists every selectable id, including `REINSTALL` when the plan contains it.
 6. If `--no-install` is used, run the reinstall command the result names, usually `npm install` in the PCF project.
 7. Run `pcf-gates.js`, redeploy with `deploy-flow.md`, rebind if needed, and verify.
 8. Before redeploying over an existing registration, run `lint-pcf.js --manifest <current> --against <previous manifest>` when the previous manifest is available from source control or an exported baseline. If no baseline exists, record that compatibility was not compared instead of claiming a backwards-compatible upgrade.

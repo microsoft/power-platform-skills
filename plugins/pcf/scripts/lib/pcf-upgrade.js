@@ -12,6 +12,13 @@ const { runNpm: defaultRunNpm } = require('./node-tool.js');
 const BEST_PRACTICES = 'references/pcf-best-practices.md';
 const UPGRADE_FLOW = 'skills/pcf/upgrade-flow.md';
 const SAFE_APPLY = new Set(['DEPS_TO_MATRIX', 'BUILDMODE_PRODUCTION', 'PLATFORM_LIB_VERSION', 'REINSTALL']);
+// Pinning package.json without refreshing package-lock.json leaves the lockfile stale, so
+// DEPS_TO_MATRIX cannot be applied alone. requiresStep is the visible pairing; scopePlan
+// includes the required step. REINSTALL has no requirement, so --steps REINSTALL runs only
+// the reinstall.
+const STEP_REQUIRES = {
+  DEPS_TO_MATRIX: 'REINSTALL',
+};
 
 function planUpgrade(state, matrix = loadMatrix(), options = {}) {
   const hosts = options.hosts || ['model'];
@@ -57,7 +64,14 @@ function planUpgrade(state, matrix = loadMatrix(), options = {}) {
     });
   }
 
-  return { steps, manual };
+  return { steps: steps.map(stampRequiresStep), manual };
+}
+
+function stampRequiresStep(step) {
+  return {
+    ...step,
+    requiresStep: Object.hasOwn(STEP_REQUIRES, step.id) ? STEP_REQUIRES[step.id] : null,
+  };
 }
 
 function packageJsonStep(state, matrix, family) {
@@ -514,22 +528,32 @@ function runUpgrade(options = {}, deps = {}) {
   };
 }
 
+function selectableStepIds(plan) {
+  const available = new Set((plan.steps || []).map((step) => step.id));
+  // SAFE_APPLY order, not plan order, so the error list is stable and includes REINSTALL
+  // whenever the plan contains it. REINSTALL used to be applied only as a side effect of
+  // DEPS_TO_MATRIX, which made the plan list an id --steps then rejected.
+  return [...SAFE_APPLY].filter((id) => available.has(id));
+}
+
 function scopePlan(plan, steps) {
   const requested = Array.isArray(steps) ? steps.filter(Boolean) : [];
   if (requested.length === 0) return plan;
-  const available = new Set((plan.steps || []).map((step) => step.id));
-  const autoIds = new Set([...SAFE_APPLY].filter((id) => id !== 'REINSTALL'));
+  const byId = new Map((plan.steps || []).map((step) => [step.id, step]));
+  const selectable = selectableStepIds(plan);
   for (const id of requested) {
-    if (!autoIds.has(id) || !available.has(id)) {
-      throw new Error(`Unknown --steps value '${id}'. Choose one of: ${[...new Set((plan.steps || []).map((step) => step.id).filter((id) => autoIds.has(id)))].join(', ') || '(none)'}.`);
+    if (!SAFE_APPLY.has(id) || !byId.has(id)) {
+      throw new Error(`Unknown --steps value '${id}'. Choose one of: ${selectable.join(', ') || '(none)'}.`);
     }
   }
-  const requestedSet = new Set(requested);
-  const stepsOut = (plan.steps || []).filter((step) => requestedSet.has(step.id));
-  const selectedIds = new Set(stepsOut.map((step) => step.id));
-  if (selectedIds.has('DEPS_TO_MATRIX') && (plan.steps || []).some((step) => step.id === 'REINSTALL')) {
-    stepsOut.push((plan.steps || []).find((step) => step.id === 'REINSTALL'));
+  const selectedIds = new Set(requested);
+  for (const id of [...selectedIds]) {
+    const required = byId.get(id) && byId.get(id).requiresStep;
+    if (required && byId.has(required) && !selectedIds.has(required)) selectedIds.add(required);
   }
+  // Plan order, not request order: file edits stay ahead of the implied reinstall, and a
+  // step the caller named and a step requiresStep added are emitted once.
+  const stepsOut = (plan.steps || []).filter((step) => selectedIds.has(step.id));
   return { ...plan, steps: stepsOut };
 }
 
