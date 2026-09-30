@@ -21,7 +21,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
-const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
@@ -771,7 +771,10 @@ function isTransientHalt(err) {
   return (
     status === 429 ||
     status === 503 ||
-    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg)
+    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
+    // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
+    // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
+    SQL_DEADLOCK_VICTIM.test(msg)
   );
 }
 

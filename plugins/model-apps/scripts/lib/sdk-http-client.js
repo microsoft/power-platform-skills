@@ -12,6 +12,22 @@
 // throw purely on a non-2xx HTTP status.
 const { dataverseOrigin, getAuthToken, makeRequest } = require('./dataverse-auth.js');
 
+// How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
+// it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
+//   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
+//   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
+// Only the SQL number identifies it; the code and message text are shared with every other SQL error.
+// The vendored SDK recognizes the same marker for its own re-send of reads, app creates and PublishXml.
+const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b/i;
+// At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
+const DEADLOCK_RESENDS = 3;
+
+/** True when a raw transport response says SQL rolled this request back as a deadlock victim. */
+function isSqlDeadlockVictim(res) {
+  if (!res || res.statusCode !== 500 || res.body === undefined || res.body === null) return false;
+  return SQL_DEADLOCK_VICTIM.test(typeof res.body === 'string' ? res.body : JSON.stringify(res.body));
+}
+
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
@@ -127,7 +143,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
-    const noRetry = (method_ === 'DELETE' && !isMetadataDelete) || isBatch;
+    const recordDelete = method_ === 'DELETE' && !isMetadataDelete;
+    const noRetry = recordDelete || isBatch;
     const isWrite = method_ !== 'GET';
     // A CONDITIONAL write that got NO answer (a timeout or a dropped connection) is never re-sent.
     // It may still commit — and if it does, the re-send carries a token the first attempt already
@@ -179,6 +196,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(backoffMs(attempt));
         continue;
       }
+      // A record DELETE is otherwise never re-sent (see noRetry). A SQL deadlock VICTIM is the one
+      // exception, because the server has ANSWERED, and the answer is that it rolled this request's
+      // transaction back: nothing is still in flight to race the concurrent-delete guard, and nothing
+      // was deleted. Measured live, a teardown's process-flow delete failed exactly this way and was
+      // clean on a re-run. A `$batch` stays excluded: its failure can be ambiguous, and the SDK
+      // settles a change set's outcome itself.
+      if (recordDelete && attempt < DEADLOCK_RESENDS && isSqlDeadlockVictim(res)) {
+        await sleep(1000 * 2 ** attempt);
+        continue;
+      }
       return {
         status: res.statusCode,
         headers: res.headers || {},
@@ -208,4 +235,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM };

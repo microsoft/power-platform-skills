@@ -399,8 +399,8 @@ The App Spec field `languageCode` pins the same value across runs. It now covers
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
 1033 take the authoring language as an option.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
-concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
+Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
+deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`

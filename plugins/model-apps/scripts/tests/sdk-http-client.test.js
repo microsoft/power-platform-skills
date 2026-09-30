@@ -147,6 +147,41 @@ test('does NOT retry a RECORD delete on a network error either (single delete, n
   assert.strictEqual(calls, 1, 'exactly one record DELETE was sent (no network-error retry)');
 });
 
+// A record delete that LOST A SQL DEADLOCK is the exception: the server answered that it rolled the
+// transaction back, so nothing is in flight to race and nothing was deleted. Captured live on a
+// teardown's process-flow delete.
+const DEADLOCK_500 = { statusCode: 500, headers: {}, body: JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } }) };
+test('DOES re-send a RECORD delete that lost a SQL deadlock (1205), at most three times, 1 s / 2 s / 4 s', async () => {
+  const slept = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 2 ? DEADLOCK_500 : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+  const res = await http.delete('https://org.crm.dynamics.com/api/data/v9.0/workflows(1)');
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(calls.length, 3);
+  assert.deepStrictEqual(slept, [1000, 2000]);
+
+  const { request: always, calls: calls2 } = fakeTransport(DEADLOCK_500);
+  const slept2 = [];
+  const http2 = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: always, sleep: async (ms) => { slept2.push(ms); } });
+  const gaveUp = await http2.delete('https://org.crm.dynamics.com/api/data/v9.0/workflows(1)');
+  assert.strictEqual(gaveUp.status, 500, 'after the last re-send the deadlock surfaces unchanged');
+  assert.strictEqual(calls2.length, 4, 'four attempts in all');
+  assert.deepStrictEqual(slept2, [1000, 2000, 4000]);
+});
+
+test('a 500 that is NOT a deadlock victim, or a $batch, still gets exactly one record delete', async () => {
+  for (const body of ['', JSON.stringify({ error: { message: 'Sql error: Generic SQL error. Sql Number: 12050' } }), JSON.stringify({ error: { message: 'The transaction was rolled back or committed' } })]) {
+    const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await http.delete('https://org.crm.dynamics.com/api/data/v9.0/workflows(1)');
+    assert.strictEqual(calls.length, 1, `not re-sent for ${JSON.stringify(body)}`);
+  }
+  const { request, calls } = fakeTransport(DEADLOCK_500);
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await http.postRaw('https://org.crm.dynamics.com/api/data/v9.0/$batch', '--b\r\n', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  assert.strictEqual(calls.length, 1, 'a change set settles its own outcome in the SDK');
+});
+
 test('DOES retry a METADATA delete (EntityDefinitions) on a network error — async-idempotent, gets cosmetic 404', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 404, headers: {}, body: '' }

@@ -29,6 +29,9 @@ rewrites its navigation.
   as the platform default rather than on.
 - **`appShell` keys the build does not read are errors** ([#631]). A `title` on an area or group (they
   take `label`) used to deploy an untitled one while lint, the build and `--verify` passed.
+- **A SQL deadlock no longer fails a delete or a build.** A record delete that SQL rolled back as a
+  deadlock victim is re-sent (up to three times), and a build that halts on one runs again like one
+  that halts on a SQL timeout; a teardown used to stop on it.
 
 ### Changed
 
