@@ -135,6 +135,7 @@ function setPhone(state, update) {
   }
   if (update.screens !== undefined) state.phone.screens = update.screens;
   if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
+  if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
   if (update.qrUrl !== undefined) state.phone.qrUrl = update.qrUrl;
 
   state.updatedAt = new Date().toISOString();
@@ -388,6 +389,14 @@ if (require.main === module) {
         // Inlined as a data URI: the plan is opened over file://, where a relative <img> works
         // but a moved or deleted PNG leaves a broken image in a document meant to outlive the run.
         update.qrImage = `data:image/png;base64,${fs.readFileSync(options.qrImage).toString('base64')}`;
+        // A link to the file as well, for opening the code full size in its own tab. A data:
+        // URI cannot be used for that - browsers block top-level navigation to one - so this
+        // has to be a real path. It is relative to `docs/`, and disappears once `.expo/` is
+        // cleaned, at which point the inlined copy above is still there.
+        const qrPath = path.resolve(options.qrImage);
+        const relative = path.relative(docsDir(root), qrPath);
+        // POSIX separators: this becomes an href, not a filesystem path.
+        update.qrHref = relative.split(path.sep).join('/');
       }
       const written = save(root, setPhone(state, update));
       process.stdout.write(`${JSON.stringify({ status: 'ok', stage: state.phone.stage, plan: written })}\n`);

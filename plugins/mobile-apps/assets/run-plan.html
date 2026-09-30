@@ -162,6 +162,12 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   color:var(--warn);cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;}
 .input-banner-close:hover{background:rgba(202,80,16,.22);}
 @keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+.store-row{display:flex;gap:8px;justify-content:center;margin-top:6px;}
+.store-btn{display:flex;flex-direction:column;gap:1px;padding:7px 14px;border-radius:10px;
+  background:#1f1f1f;color:#fff;text-decoration:none;line-height:1.2;min-width:118px;}
+.store-btn:hover{background:#000;}
+.store-kicker{font-size:9px;opacity:.75;letter-spacing:.02em;}
+.store-name{font-size:13px;font-weight:600;}
 .rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
   text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
 .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
@@ -637,16 +643,52 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * carousel already shows these screens in the phone frame, so a tab that steals focus while
    * the user is reading the plan is an interruption rather than information.
    */
+  /**
+   * Power Apps Developer — the app that scans the Metro QR and runs the build on a device.
+   * Locale-neutral forms: the plan is a file people share, and a hard-coded storefront would
+   * bounce a reader in another market through a redirect or an unavailable page.
+   */
+  var STORE_LINKS = [
+    { kicker: 'Download on the', name: 'App Store', href: 'https://apps.apple.com/app/id6753083462' },
+    { kicker: 'Get it on', name: 'Google Play', href: 'https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp' }
+  ];
+
   function railPreviewLink() {
     var container = document.getElementById('railPreviewLink');
     if (!container) return;
     container.textContent = '';
-    if (!summary.screenPreviewHref) return;
-    var link = el('a', 'rail-link', 'Open screens full size \u2197');
-    link.setAttribute('href', summary.screenPreviewHref);
-    link.setAttribute('target', '_blank');
-    link.setAttribute('rel', 'noopener');
-    container.appendChild(link);
+
+    function add(href, label) {
+      if (!href) return;
+      var link = el('a', 'rail-link', label);
+      link.setAttribute('href', href);
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener');
+      container.appendChild(link);
+    }
+
+    add(summary.screenPreviewHref, 'Open screens full size \u2197');
+    // The QR is already drawn in the phone; this is for scanning it larger, and it links the
+    // PNG rather than the inlined data URI because browsers block top-level navigation to a
+    // data: URL. It drops away once `.expo/` is cleaned, leaving the inlined copy.
+    add(phone.qrHref, 'Open QR code full size \u2197');
+
+    // The QR stage is the end of the run, and a code is useless without the app that reads it.
+    // Only shown here: offering a store download while the app is still being generated would
+    // send the user off to install something they cannot use yet.
+    if (phone.stage !== 'qr') return;
+    var stores = el('div', 'store-row');
+    STORE_LINKS.forEach(function (store) {
+      var button = el('a', 'store-btn');
+      button.setAttribute('href', store.href);
+      button.setAttribute('target', '_blank');
+      // noopener/noreferrer: these are the only links in the plan that leave the machine.
+      button.setAttribute('rel', 'noopener noreferrer');
+      button.appendChild(el('span', 'store-kicker', store.kicker));
+      button.appendChild(el('span', 'store-name', store.name));
+      stores.appendChild(button);
+    });
+    container.appendChild(stores);
   }
 
   function renderPhone() {

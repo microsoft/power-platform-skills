@@ -632,6 +632,93 @@ test('the create skill renders the screen preview but never opens it', () => {
   assert.match(skill, /Render `_plan_preview\.html`/);
 });
 
+test('the QR is drawn in the phone and linked for scanning full size', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-qr-'));
+  const state = initState(root, { appName: 'QR', dataPlatform: 'dataverse' });
+  // What the `phone --stage qr --qr-image` CLI path produces: the code inlined for the phone,
+  // plus a relative path for opening the file itself.
+  setPhone(state, {
+    stage: 'qr',
+    qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+    qrHref: '../.expo/metro-qr.png',
+    qrUrl: 'exp://192.168.1.4:8081',
+  });
+  save(root, state);
+
+  const { elements, thrown } = runPage(outputPath(root));
+  assert.deepEqual(thrown.map((e) => e.message), []);
+
+  const links = [];
+  (function walk(node) {
+    if (String(node.className).split(' ').includes('rail-link')) links.push(node);
+    node.children.forEach(walk);
+  })(elements.get('railPreviewLink'));
+  assert.equal(links.length, 1, 'the QR gets a link under the phone');
+  assert.match(links[0].textContent, /QR code full size/);
+
+  // The link must be the file, not the inlined copy: browsers block top-level navigation to a
+  // data: URL, so linking the data URI would silently do nothing.
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  assert.match(template, /add\(phone\.qrHref,/);
+  assert.doesNotMatch(template, /add\(phone\.qrImage,/);
+
+  // And it is still drawn inside the phone, which is what survives `.expo/` being cleaned.
+  const screen = elements.get('deviceScreen');
+  const imgs = [];
+  (function walk(node) {
+    if (node.tagName === 'IMG') imgs.push(node);
+    node.children.forEach(walk);
+  })(screen);
+  assert.equal(imgs.length, 1, 'the QR image stays in the phone frame');
+
+  // A QR is useless without the app that reads it, and this is the end of the run.
+  const stores = [];
+  (function walk(node) {
+    if (String(node.className).split(' ').includes('store-btn')) stores.push(node);
+    node.children.forEach(walk);
+  })(elements.get('railPreviewLink'));
+  assert.equal(stores.length, 2, 'both stores are offered at the QR stage');
+  assert.match(stores.map((b) => b.children.map((c) => c.textContent).join(' ')).join(' | '),
+    /App Store[\s\S]*Google Play/);
+});
+
+test('the store links are only offered once the app can actually be used', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-store-'));
+  const state = initState(root, { appName: 'Early', dataPlatform: 'dataverse' });
+  save(root, state);
+
+  const stores = [];
+  (function walk(node) {
+    if (String(node.className).split(' ').includes('store-btn')) stores.push(node);
+    node.children.forEach(walk);
+  })(runPage(outputPath(root)).elements.get('railPreviewLink'));
+  // Sending someone to install a player while their app is still being generated hands them
+  // something they cannot use yet.
+  assert.deepEqual(stores, [], 'no store links during the build');
+
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  // These are the only links in the plan that leave the machine.
+  assert.match(template, /rel', 'noopener noreferrer'/);
+  // Locale-neutral: the plan is a file people share across markets.
+  assert.doesNotMatch(template, /apps\.apple\.com\/[a-z]{2}\//);
+});
+
+test('the skill points at the plan instead of opening the QR in a window', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  // The plan draws the QR and links it, so a window opening over a run the user is watching
+  // adds nothing. Asserted on runnable commands, not prose - the prose states the rule and
+  // would trip a naive whole-file match.
+  for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
+    assert.ok(
+      !/(open|xdg-open|Start-Process|start "")\s+"?\$METRO_QR/.test(block[1]),
+      `a runnable command still opens the QR: ${block[1].trim().slice(0, 70)}`,
+    );
+  }
+  assert.match(skill, /do \*\*not\*\* open the PNG/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.
