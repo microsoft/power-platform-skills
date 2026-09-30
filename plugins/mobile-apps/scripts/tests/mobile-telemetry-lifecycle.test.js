@@ -12,6 +12,7 @@ const {
   emitLifecycle,
   lifecycle,
 } = require('../lib/mobile-telemetry');
+const { publishOwnedLock } = require('../lib/mobile-lifecycle');
 const { sanitizeData } = require('../lib/mobile-telemetry-dispatcher');
 const {
   readProjectTelemetryContext,
@@ -722,6 +723,35 @@ test('run lock times out instead of writing through another process lock', (cont
   } finally {
     fs.rmSync(lockPath, { force: true });
   }
+});
+
+test('lock publication treats transient EEXIST as contention after release', (context) => {
+  const directory = tempProject(context);
+  const lockPath = path.join(directory, '.lifecycle.lock');
+  const pendingPaths = [];
+  const fakeFs = {
+    writeFileSync(filename, contents, options) {
+      pendingPaths.push(filename);
+      fs.writeFileSync(filename, contents, options);
+    },
+    linkSync() {
+      // Simulate another process winning and releasing before this catch runs.
+      throw Object.assign(new Error('already existed'), { code: 'EEXIST' });
+    },
+    rmSync(filename, options) {
+      fs.rmSync(filename, options);
+    },
+  };
+  assert.equal(
+    publishOwnedLock(
+      lockPath,
+      '11111111-1111-4111-8111-111111111111',
+      { fs: fakeFs },
+    ),
+    false,
+  );
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.ok(pendingPaths.every((filename) => !fs.existsSync(filename)));
 });
 
 test('run lock recovers when its recorded owner process is dead', (context) => {

@@ -14,6 +14,10 @@ const DEFAULT_LOCK_RETRY_MS = 10;
 const LOCK_DIRECTORY = '.lifecycle.lock';
 const LOCK_RECOVERY_DIRECTORY = '.lifecycle.lock.recovery';
 
+function filesystem(options) {
+  return options.fs || fs;
+}
+
 function normalizePolicy(input) {
   if (!input || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.pluginName || '')) {
     throw new TypeError('Lifecycle telemetry requires a valid plugin name');
@@ -124,22 +128,25 @@ function releaseOwnedLock(lockPath, token) {
   }
 }
 
-function publishOwnedLock(lockPath, token) {
+function publishOwnedLock(lockPath, token, options = {}) {
+  const fileSystem = filesystem(options);
   const temporaryPath = `${lockPath}.${process.pid}.${token}.pending`;
   try {
-    fs.writeFileSync(temporaryPath, JSON.stringify(lockOwner(token)), {
+    fileSystem.writeFileSync(temporaryPath, JSON.stringify(lockOwner(token)), {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
     });
-    fs.linkSync(temporaryPath, lockPath);
+    fileSystem.linkSync(temporaryPath, lockPath);
     return true;
   } catch (error) {
-    if (fs.existsSync(lockPath)) return false;
+    // EEXIST proves another owner won publication. That owner may release the
+    // path before this catch runs, so a follow-up existsSync check is racy.
+    if (error.code === 'EEXIST') return false;
     throw error;
   } finally {
     try {
-      fs.rmSync(temporaryPath, { force: true });
+      fileSystem.rmSync(temporaryPath, { force: true });
     } catch {
       // A pending file is never treated as the stable lock.
     }
@@ -196,7 +203,7 @@ function acquireRunLock(directory, options = {}) {
   const startedAt = Date.now();
 
   while (true) {
-    if (publishOwnedLock(lockPath, token)) {
+    if (publishOwnedLock(lockPath, token, options)) {
       return () => releaseOwnedLock(lockPath, token);
     }
     if (tryRecoverRunLock(directory, options)) continue;
@@ -538,4 +545,4 @@ function createLifecycle(input) {
   });
 }
 
-module.exports = { GUID, createLifecycle };
+module.exports = { GUID, createLifecycle, publishOwnedLock };
