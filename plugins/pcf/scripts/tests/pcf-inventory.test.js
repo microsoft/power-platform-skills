@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
@@ -169,7 +170,9 @@ test('pcf-inventory rejects values on boolean flags before creating an SDK', asy
 
 test('pcf-inventory output includes controls from every SDK-paginated customcontrol page', async () => {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(bundlePath);
-  const workspace = fs.mkdtempSync(path.join(__dirname, 'pcf-inventory-workspace-'));
+  // Under os.tmpdir(), not the plugin tree: tests run in parallel, and pcf-matrix.test.js walks the
+  // whole plugin root, so a workspace created and deleted here could vanish mid-walk (ENOENT).
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-inventory-workspace-'));
   workspaceDirs.push(workspace);
   const reads = [];
   const httpClient = {

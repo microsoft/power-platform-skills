@@ -96,7 +96,7 @@ Run `node --test scripts/tests/model-apps-copies.test.js` after changing any cop
 
 ## Working with /model-apps:app-builder
 
-Cross-plugin integration is a hand-off at the skill level. When the pcf plugin is installed, a model-apps agent invokes `/pcf:pcf` and passes a `pcf-intent.json`; otherwise it tells the user to install the pcf plugin. There is never a script-level call because plugins install separately. Binding a registered control from an App Spec goes through the Dataverse SDK by control name, which both plugins vendor.
+Any integration with `/model-apps:app-builder` stays at the skill level. With both plugins installed, an agent can invoke `/pcf:pcf` and pass it a `pcf-intent.json`; when pcf is missing, it tells the user to install the pcf plugin. Never add a script-level call in either direction: plugins install separately, so neither can rely on the other's files. Anything model-apps needs to know about a registered control, such as its name for a binding, comes from Dataverse through the SDK both plugins vendor, not from pcf's scripts.
 
 ## Docs sync
 
