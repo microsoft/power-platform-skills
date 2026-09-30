@@ -141,43 +141,21 @@ test('the protected layout auth gate is unconditional', () => {
   assert.match(layout, /<Redirect href="\/login" \/>/);
 });
 
-test('generated config files are optional so the app bundles before they exist', () => {
-  // Verified empirically: with no power.config.json and no connectorSchemas, `expo start --web`
-  // serves the app (HTTP 200) and the bundle compiles. A static `import` fails to resolve in
-  // Metro regardless of @ts-ignore; a literal require() inside try/catch is treated as optional.
-  for (const file of ['template/app/_layout.tsx', 'template/app/login.tsx']) {
-    const source = read(file);
-    assert.doesNotMatch(source, /^import powerConfig from/m, `${file} must not statically import power.config.json`);
-    assert.match(source, /require\('\.\.\/power\.config\.json'\)/, `${file} must require it optionally`);
-    assert.match(source, /Cannot find module/, `${file} must only swallow a missing-module error`);
-  }
-  // A variable id fails Metro transform with "Invalid call", so the repetition is load-bearing.
-  // Strip comments first: the explanation above quotes the bad form, and matching prose would
-  // fail on the very text that documents why the code is written this way.
-  const code = read('template/app/_layout.tsx')
-    .split('\n')
-    .filter((line) => !/^\s*(\*|\/\/)/.test(line))
-    .join('\n');
-  assert.doesNotMatch(code, /require\([^'"]/, 'every require id must be a literal');
-});
 
-test('root layout types the provider props from the provider, not by hand', () => {
+
+test('the template keeps the @ts-ignore boundaries the skill forbids removing', () => {
+  // `/create-mobile-app` Step 5 says: "Do NOT remove the two `// @ts-ignore` lines. They keep
+  // `tsc` green pre-`npx power-apps init`." Converting them to optional requires once broke the
+  // Step 6.6 scaffold gate in every generated app with TS2322, because the hand-written
+  // replacement types were narrower than PowerAppsProvider's props.
   const layout = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'template', 'app', '_layout.tsx'), 'utf8',
   );
+  const login = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'template', 'app', 'login.tsx'), 'utf8',
+  );
 
-  // Restating these by hand is how the scaffold gate broke: `schemaMap` is
-  // `Record<string, ConnectorSchema>`, and declaring it `Record<string, unknown>` compiles
-  // locally right up to the point the value reaches PowerAppsProvider, then fails TS2322 in
-  // every generated app. Deriving from ComponentProps cannot drift from the host package.
-  assert.match(layout, /type ProviderProps = ComponentProps<typeof PowerAppsProvider>/);
-  for (const prop of ['powerConfig', 'schemaMap', 'offlineProfile']) {
-    assert.match(
-      layout,
-      new RegExp(`let ${prop}: ProviderProps\\['${prop}'\\]`),
-      `${prop} must take its type from the provider`,
-    );
-  }
-  // The bodies of the optional requires must not reintroduce a loose type either.
-  assert.doesNotMatch(layout, /schemaMap\??: Record<string, unknown>/);
+  assert.match(layout, /\/\/ @ts-ignore[^\n]*power\.config\.json[\s\S]*?import powerConfig from '\.\.\/power\.config\.json'/);
+  assert.match(layout, /\/\/ @ts-ignore[^\n]*connectorSchemas[\s\S]*?import \{ schemaMap \} from '\.\.\/src\/generated\/connectorSchemas'/);
+  assert.match(login, /\/\/ @ts-ignore[^\n]*power\.config\.json[\s\S]*?import powerConfig from '\.\.\/power\.config\.json'/);
 });

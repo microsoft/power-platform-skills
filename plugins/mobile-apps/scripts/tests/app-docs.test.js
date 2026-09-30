@@ -506,6 +506,16 @@ test('the plan never reloads over a reader, and never resets their place', () =>
   // And it stops altogether once the build is finished.
   assert.match(template, /if \(!summary\.settled\)/);
 
+  // A bare reload() may serve the cached copy: a file:// page has no cache headers, and each
+  // rewrite lands as a new inode at the same path via an atomic rename. The animation could
+  // therefore persist until a hard refresh, so the refresh goes through a changing URL.
+  assert.doesNotMatch(template, /(?<!\/\/.*)\blocation\.reload\(\)/,
+    'a plain reload can be served from the file:// cache');
+  assert.match(template, /location\.replace\(fresh\)/);
+  assert.match(template, /\?t=' \+ Date\.now\(\)/, 'the reload URL must differ every time');
+  // replace(), not assign(): this fires every few seconds and must not fill the back button.
+  assert.doesNotMatch(template, /location\.assign\(/);
+
   // sessionStorage throws in some privacy modes; the page must still render.
   const guarded = template.match(/sessionStorage\.(get|set)Item/g) || [];
   const tries = template.match(/try \{/g) || [];

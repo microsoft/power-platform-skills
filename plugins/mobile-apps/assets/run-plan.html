@@ -1525,7 +1525,15 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       if (Date.now() - lastInteraction < QUIET_MS) return;
       if (document.hidden) return;
       try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
-      location.reload();
+      // A plain reload() is not enough. This page is opened over file://, so it carries no
+      // cache headers, and `render-template.js` publishes each rewrite with an atomic rename -
+      // a new inode at the same path. Browsers are free to serve the copy they already have,
+      // which is why the build animation could persist until a hard refresh. Reloading through
+      // a URL that differs every time is the only lever a file:// page has.
+      var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
+      // replace(), not assign(): this fires every few seconds, and each one would otherwise be
+      // a back-button entry the reader has to escape.
+      location.replace(fresh);
     }, RELOAD_MS);
   }
 })();
