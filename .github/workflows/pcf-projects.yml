@@ -1,37 +1,36 @@
 # PCF project CI is deliberately separate from model-apps-script-tests.yml.
 # These jobs need npm registry access for generated project installs; isolating
 # them keeps a transient registry outage from failing the dependency-free unit
-# matrix for unrelated model-apps changes.
-name: model-apps-pcf-projects
+# matrix for unrelated pcf changes.
+name: pcf-projects
 
 on:
     pull_request:
         branches:
             - main
         paths:
-            - "plugins/model-apps/pcf/**"
-            - "plugins/model-apps/scripts/pcf-*.js"
-            - "plugins/model-apps/scripts/lib/pcf-*.js"
-            - "plugins/model-apps/scripts/lib/node-tool.js"
+            - "plugins/pcf/**"
+            - "plugins/pcf/scripts/pcf-*.js"
+            - "plugins/pcf/scripts/lib/pcf-*.js"
+            - "plugins/pcf/scripts/lib/node-tool.js"
             # The package smoke starts pac through these two, so a change to either must run it.
-            - "plugins/model-apps/scripts/lib/pac-exec.js"
-            - "plugins/model-apps/scripts/lib/process-runner.js"
-            - ".github/workflows/model-apps-pcf-projects.yml"
+            - "plugins/pcf/scripts/lib/pac-exec.js"
+            - "plugins/pcf/scripts/lib/process-runner.js"
+            - ".github/workflows/pcf-projects.yml"
 
 permissions:
     contents: read
 
 jobs:
-    test-model-apps-pcf-projects:
-        name: test-model-apps-pcf-projects (${{ matrix.os }})
+    test-pcf-projects:
+        name: test-pcf-projects (${{ matrix.os }})
         runs-on: ${{ matrix.os }}
         # Each generated project takes well under two minutes on either OS once Windows builds on its
         # local disk (see the build step); the cap turns a hung install or test into a failed check
         # instead of a job that holds a runner for the platform's six-hour default.
         timeout-minutes: 45
         env:
-            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
-        strategy:
+                    strategy:
             fail-fast: false
             matrix:
                 os: [ubuntu-latest, windows-latest]
@@ -45,8 +44,8 @@ jobs:
                   node-version: 20
                   cache: npm
                   cache-dependency-path: |
-                      plugins/model-apps/pcf/lock/standard/package-lock.json
-                      plugins/model-apps/pcf/lock/virtual/package-lock.json
+                      plugins/lock/standard/package-lock.json
+                      plugins/lock/virtual/package-lock.json
 
             - name: build-pcf-templates-and-recipes
               shell: bash
@@ -60,15 +59,14 @@ jobs:
               env:
                   TEMP: ${{ runner.temp }}
                   TMP: ${{ runner.temp }}
-              run: node plugins/model-apps/scripts/pcf-ci-build.js --all
+              run: node plugins/pcf/scripts/pcf-ci-build.js --all
 
-    package-model-apps-pcf-projects:
-        name: package-model-apps-pcf-projects
+    package-pcf-projects:
+        name: package-pcf-projects
         runs-on: ubuntu-latest
         timeout-minutes: 30
         env:
-            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
-        steps:
+                    steps:
             - name: checkout
               uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -78,8 +76,8 @@ jobs:
                   node-version: 20
                   cache: npm
                   cache-dependency-path: |
-                      plugins/model-apps/pcf/lock/standard/package-lock.json
-                      plugins/model-apps/pcf/lock/virtual/package-lock.json
+                      plugins/lock/standard/package-lock.json
+                      plugins/lock/virtual/package-lock.json
 
             - name: setup-dotnet
               uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -97,4 +95,4 @@ jobs:
 
             - name: package-pcf-managed-solutions
               shell: bash
-              run: node plugins/model-apps/scripts/pcf-ci-build.js --package
+              run: node plugins/pcf/scripts/pcf-ci-build.js --package

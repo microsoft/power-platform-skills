@@ -38,7 +38,10 @@ const ROOT = path.resolve(__dirname, '..');
 const SCAN_PATHS = [path.join('plugins', 'model-apps', 'agents')];
 
 // Skills whose main loop owns the interaction, checked for the mirror-image defect below.
-const SKILL_SCAN_PATHS = [path.join('plugins', 'model-apps', 'skills')];
+const SKILL_SCAN_PATHS = [
+  path.join('plugins', 'model-apps', 'skills'),
+  path.join('plugins', 'pcf', 'skills'),
+];
 
 // Tools that require a human on the other end of the conversation.
 const INTERACTIVE_TOOLS = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'];

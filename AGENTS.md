@@ -39,12 +39,12 @@ change, not just the ones you add.
 
 **CI enforcement (partial).** `node scripts/validate-no-real-environments.js` (wired into the
 `validate-repository-metadata` workflow) fails the build when a real Dataverse host, tenant, or
-previously-removed identifier appears under `plugins/model-apps/**` or `evals/model-apps/**`. It
+previously-removed identifier appears under `plugins/model-apps/**`, `evals/model-apps/**`, `plugins/pcf/**`, or `evals/pcf/**`. It
 matches on *shape* — `org<8 hex>` is what Dataverse auto-generates, so it is rejected even though it
 starts with the otherwise-allowed word `org` — rather than only re-catching known strings. Run it
 locally after touching eval fixtures or any file that quotes an environment URL.
 
-The scan is **scoped to model-apps only**, and this is a real gap rather than an oversight: other
+The scan is **scoped to model-apps and pcf only**, and this is a real gap rather than an oversight: other
 plugins still carry pre-existing references of this class (for example real `org<8 hex>` orgs cited
 in power-pages provenance comments), so widening the scan today would fail unrelated PRs. Scrub a
 plugin first, then add it to `SCAN_PATHS`. The guard also cannot see the *local part* of a UPN, so
@@ -93,7 +93,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules, not behavior.
 
 **Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
-`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles).
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`; `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the `shared/` sources it bundles).
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift
@@ -109,6 +109,9 @@ telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
 cannot change what a test asserts.
 
 ## Plugin Conventions
+
+When a plugin copies code from another plugin, keep an explicit drift test and workflow path filter for the source files. The `pcf` plugin copies model-apps helper libraries and the vendored SDK bundle; changes to those model-apps sources must run pcf tests so the bundled copy stays current.
+
 
 Each plugin follows this structure:
 
