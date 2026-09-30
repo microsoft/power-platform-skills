@@ -6,7 +6,17 @@ const os = require('node:os');
 const path = require('node:path');
 const { resolvePackageBin, resolveNpmCli, runNodeScript, runNpm } = require('../lib/node-tool.js');
 
-function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-nt-')); }
+// The suite runs on every PR and every local check, so a scratch dir left behind leaks one per run
+// into the machine's temp folder. Every dir tmp() creates is removed when this file finishes.
+const createdDirs = [];
+function tmp() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-nt-'));
+  createdDirs.push(d);
+  return d;
+}
+test.after(() => {
+  for (const d of createdDirs) fs.rmSync(d, { recursive: true, force: true });
+});
 
 test('resolvePackageBin reads a string bin', () => {
   const d = tmp();

@@ -8,9 +8,19 @@ const path = require('node:path');
 
 const { runCiBuild, packageSmokeTargets, inspectSolutionZip, runPackageSmoke } = require('../pcf-ci-build.js');
 
+// The suite runs on every PR and every local check, so a scratch root left behind leaks one per test
+// into the machine's temp folder. Every root tmpRoot() creates, including the ones handed to the
+// runner as its injected os.tmpdir() and the one the --keep test deliberately preserves, is removed
+// when this file finishes.
+const createdRoots = [];
 function tmpRoot() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-ci-build-test-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-ci-build-test-'));
+  createdRoots.push(root);
+  return root;
 }
+test.after(() => {
+  for (const root of createdRoots) fs.rmSync(root, { recursive: true, force: true });
+});
 
 function deps(overrides = {}) {
   const calls = [];
