@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
@@ -116,13 +118,48 @@ test('verify-pcf rejects unknown --clients values before creating an SDK', async
       makePcfSdk: async () => { madeSdk = true; },
     },
     './lib/pcf-binding-verify': { verifyBinding: () => ({ ok: true, status: 'bound', issues: [], cells: [] }) },
-  });
+    });
 
-  assert.equal(cli.exitCode, 1);
-  assert.match(cli.stderrText(), /--clients contains unknown value 'console'/);
-  assert.match(cli.stderrText(), /web,phone,tablet/);
+    assert.equal(cli.exitCode, 1);
+    assert.match(cli.stderrText(), /--clients contains unknown value 'console'/);
+    assert.match(cli.stderrText(), /web,phone,tablet/);
   assert.equal(madeSdk, false);
   assert.equal(cli.stdoutText(), '');
+});
+
+test('verify-pcf rejects intent bindings whose client list normalizes to empty before creating an SDK', async () => {
+  let madeSdk = false;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-verify-empty-clients-'));
+  const intentPath = path.join(dir, 'pcf-intent.json');
+  fs.writeFileSync(intentPath, JSON.stringify({
+    schemaVersion: 1,
+    component: { namespace: 'Contoso.Controls', name: 'StarRating', type: 'field' },
+    bindings: [{
+      table: 'new_review',
+      form: 'Main',
+      target: { column: 'new_rating' },
+      clients: [' '],
+    }],
+  }));
+  try {
+    const cli = await run([
+      '--env', 'https://contoso.crm.dynamics.com',
+      '--control', 'new_Contoso.Controls.StarRating',
+      '--intent', `@${intentPath}`,
+    ], {
+      './lib/pcf-dataverse': {
+        makePcfSdk: async () => { madeSdk = true; },
+      },
+      './lib/pcf-binding-verify': { verifyBinding: () => ({ ok: true, status: 'bound', issues: [], cells: [] }) },
+    });
+
+    assert.equal(cli.exitCode, 1);
+    assert.match(cli.stderrText(), /intent binding clients must include at least one of: web,phone,tablet/);
+    assert.equal(madeSdk, false);
+    assert.equal(cli.stdoutText(), '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('verify-pcf validates every repeated --param before creating an SDK', async () => {

@@ -115,6 +115,10 @@ test('parseManifest reports missing or malformed XML control roots', () => {
   assertHas({ errors: parseManifest('<manifest><control></manifest>').errors, warnings: [] }, 'PCF_NO_CONTROL', 'error');
 });
 
+test('lintManifest reports a missing constructor attribute instead of reading Object.prototype.constructor', () => {
+  assertHas(lint(m({ constructor: undefined }, '<resources><code path="index.ts" /></resources>')), 'PCF_ATTR_MISSING', 'error');
+});
+
 const lintCases = [
   ['PCF_ATTR_MISSING', m({ namespace: undefined }, '<resources><code path="index.ts" /></resources>'), 'error', ['model']],
   ['PCF_VERSION_FORMAT', m({ version: '1.0' }, '<resources><code path="index.ts" /></resources>'), 'error', ['model']],
@@ -196,6 +200,15 @@ test('diffManifests does not warn when a changed manifest bumps the version', ()
   const after = parseManifest(m({ version: '1.0.1' }, '<property name="optional" usage="input" of-type="SingleLine.Text" /><resources><code path="index.ts" /></resources>')).model;
 
   assert.deepEqual(diffManifests(before, after).compatible, []);
+});
+
+test('diffManifests reports a breaking change when a property type-group removes a supported type', () => {
+  const before = parseManifest(m({}, '<type-group name="numbers"><type>Whole.None</type><type>Currency</type></type-group><property name="value" usage="bound" of-type-group="numbers" /><resources><code path="index.ts" /></resources>')).model;
+  const after = parseManifest(m({ version: '1.0.1' }, '<type-group name="numbers"><type>SingleLine.Text</type></type-group><property name="value" usage="bound" of-type-group="numbers" /><resources><code path="index.ts" /></resources>')).model;
+
+  const diff = diffManifests(before, after);
+
+  assert.ok(diff.breaking.some((finding) => finding.code === 'PCF_DIFF_TYPE_CHANGED' && /Whole\.None|Currency/.test(finding.message)));
 });
 
 test('diffManifests warns when the manifest version decreases', () => {

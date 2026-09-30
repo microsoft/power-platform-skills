@@ -139,6 +139,32 @@ test('verifyBinding verifies all requested clients and static parameter shape', 
   assert.deepEqual(result.issues, []);
 });
 
+test('verifyBinding treats an empty normalized client list as unverifiable binding evidence', () => {
+  const formxml = `<form><tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="new_rating" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_rating" uniqueid="{11111111-1111-4111-8111-111111111111}" /></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+  <controlDescriptions>
+    <controlDescription forControl="{11111111-1111-4111-8111-111111111111}">
+      <customControl id="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" />
+      <customControl formFactor="0" name="MscrmControls.Field.TextBox" />
+      <customControl formFactor="1" name="MscrmControls.Field.TextBox" />
+      <customControl formFactor="2" name="new_Contoso.Controls.Other"><parameters><value>new_other</value></parameters></customControl>
+    </controlDescription>
+  </controlDescriptions></form>`;
+
+  const result = verifyBinding(formxml, {
+    controlName: 'new_Contoso.Controls.StarRating',
+    column: 'new_rating',
+    clients: [' '],
+    parameters: { value: { column: 'new_rating' } },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'error');
+  assertIssue(result, 'PCF_BIND_CLIENTS_EMPTY', 'error');
+  assertIssue(result, 'PCF_BIND_CLIENT_MISSING', 'error');
+});
+
 test('verifyBinding reports case-only forControl joins as info while still binding', () => {
   const result = verifyBinding(xml('forcontrol-case-mismatch.xml'), {
     controlName: 'new_Contoso.Controls.StarRating',

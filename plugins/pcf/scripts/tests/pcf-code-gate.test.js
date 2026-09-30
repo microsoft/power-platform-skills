@@ -162,6 +162,10 @@ test('scanSource reports direct API URLs in strings and templates but not JSX te
   assert.deepEqual(scanFile('src/index.tsx', 'export const Help = () => <span>"/api/data/" docs</span>;'), []);
 });
 
+test('scanSource scans executable template substitutions for unsupported APIs', () => {
+  assertCode(scan('const label = `account ${Xrm.WebApi.retrieveRecord("account", id)}`;'), 'PCF_CODE_XRM', 'error');
+});
+
 test('scanSource turns lexer failures into unparseable warnings', () => {
   const findings = scanSource('src/broken.ts', 'const x = 1;', {
     controlType: 'standard',
@@ -195,6 +199,10 @@ test('featureCoherence turns lexer failures into unparseable warnings', () => {
 
 test('featureCoherence ignores WebAPI words that appear only in comments or strings', () => {
   assert.deepEqual(featureCoherence(manifest(), [{ file: FILE, text: '// context.webAPI.retrieveRecord\nconst s = "context.webAPI";' }], ['model']), []);
+});
+
+test('featureCoherence scans executable template substitutions for undeclared WebAPI use', () => {
+  assertCode(featureCoherence(manifest(), [{ file: FILE, text: 'const label = `account ${context.webAPI.retrieveRecord("account", id)}`;' }], ['model']), 'PCF_FEATURE_UNDECLARED', 'error');
 });
 
 test('featureCoherence reports undeclared Utility use and passes when declared', () => {
@@ -257,7 +265,7 @@ test('featureCoherence rejects dotted guards in conditions containing OR while k
   assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
   assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || (context.device && typeof context.device.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
   assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if ((context.device && typeof context.device.captureImage === "function") || fallback) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
-  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
 });
 
 test('featureCoherence accepts parenthesized and composed method guards', () => {

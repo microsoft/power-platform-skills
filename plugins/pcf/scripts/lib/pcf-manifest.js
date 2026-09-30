@@ -333,8 +333,9 @@ function diffManifests(before, after) {
       breaking.push(finding('PCF_DIFF_PROPERTY_REMOVED', 'error', `Property '${name}' was removed.`, `Keep '${name}' or release a new major control identity.`));
       continue;
     }
-    if (typeKey(beforeProp) !== typeKey(afterProp)) {
-      breaking.push(finding('PCF_DIFF_TYPE_CHANGED', 'error', `Property '${name}' changed type.`, `Keep '${name}' on type ${typeKey(beforeProp)} or add a new property.`));
+    const removedTypes = removedPropertyTypes(beforeProp, before, afterProp, after);
+    if (removedTypes.length > 0) {
+      breaking.push(finding('PCF_DIFF_TYPE_CHANGED', 'error', `Property '${name}' removed previously supported type(s): ${removedTypes.join(', ')}.`, `Keep '${name}' compatible with ${propertyTypes(beforeProp, before).join(', ')} or add a new property.`));
     }
     if (beforeProp.usage !== afterProp.usage) {
       breaking.push(finding('PCF_DIFF_USAGE_CHANGED', 'error', `Property '${name}' changed usage from '${beforeProp.usage}' to '${afterProp.usage}'.`, 'Keep property usage stable for existing controls.'));
@@ -354,6 +355,12 @@ function diffManifests(before, after) {
 
 function typeKey(prop) {
   return prop.ofType || `group:${prop.ofTypeGroup || ''}`;
+}
+
+function removedPropertyTypes(beforeProp, beforeModel, afterProp, afterModel) {
+  const beforeTypes = new Set(propertyTypes(beforeProp, beforeModel));
+  const afterTypes = new Set(propertyTypes(afterProp, afterModel));
+  return [...beforeTypes].filter((type) => !afterTypes.has(type));
 }
 
 function hasMeaningfulChange(before, after) {

@@ -129,7 +129,11 @@ function verifyBinding(formxml, expected) {
     }
   }
 
-  const clients = normalizeClients(expect.clients);
+  const clientSelection = normalizeClients(expect.clients);
+  const clients = clientSelection.clients;
+  if (clientSelection.emptyExplicit) {
+    issues.push(finding('PCF_BIND_CLIENTS_EMPTY', 'error', 'The requested client list is empty after trimming, so binding evidence cannot prove the requested control.'));
+  }
   if (described.entries.length > 0) {
     for (const client of clients) {
       const factor = FORMXML_CLIENT_FACTORS[client];
@@ -251,8 +255,9 @@ function firstChild(el, name) {
 }
 
 function normalizeClients(clients) {
-  const raw = Array.isArray(clients) && clients.length ? clients : ['web'];
-  return [...new Set(raw.map((client) => String(client).trim()).filter(Boolean))];
+  if (!Array.isArray(clients)) return { clients: ['web'], emptyExplicit: false };
+  const normalized = [...new Set(clients.map((client) => String(client).trim()).filter(Boolean))];
+  return { clients: normalized.length ? normalized : ['web'], emptyExplicit: normalized.length === 0 };
 }
 
 function sameGuid(a, b) {

@@ -25,6 +25,13 @@ test('parses a manifest and ignores resources inside a comment block', () => {
   assert.deepEqual(childElements(res).map((e) => e.name), ['code']);
 });
 
+test('attribute dictionaries do not inherit Object prototype members', () => {
+  const root = parseXml('<control namespace="Contoso.Controls" />');
+
+  assert.equal(attr(root, 'constructor'), undefined);
+  assert.equal(attr(root, 'toString'), undefined);
+});
+
 test('decodes entities and keeps CDATA raw; attribute lookup can be case-insensitive', () => {
   const root = parseXml('<a X="1 &amp; 2"><b><![CDATA[<raw>&amp;]]></b><c>&#x41;&#66;&lt;</c></a>');
   assert.equal(attr(root, 'x', { caseInsensitive: true }), '1 & 2');

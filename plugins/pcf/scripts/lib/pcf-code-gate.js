@@ -1,6 +1,6 @@
 'use strict';
 
-const { blankLiterals, expressionPosition } = require('./source-literals.js');
+const { blankLiterals, blankNonCodePreservingTemplateExpressions, expressionPosition } = require('./source-literals.js');
 
 const BEST_PRACTICES = 'https://learn.microsoft.com/power-apps/developer/component-framework/code-components-best-practices';
 const FEATURE_USAGE = 'https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/feature-usage';
@@ -66,7 +66,7 @@ const SOURCE_RULES = [
   },
 ];
 
-function scanSource(file, text, { controlType, lex = blankLiterals } = {}) {
+function scanSource(file, text, { controlType, lex = blankNonCodePreservingTemplateExpressions } = {}) {
   const src = String(text || '');
   const lexed = lexSource(file, src, lex);
   if (lexed.finding) return [lexed.finding];
@@ -138,7 +138,7 @@ function addRefreshInUpdateViewFindings(findings, file, src, mask) {
   }
 }
 
-function featureCoherence(manifestModel, sources, hosts = [], { lex = blankLiterals } = {}) {
+function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCodePreservingTemplateExpressions } = {}) {
   const declared = new Set((manifestModel.features || []).map((feature) => feature.name).filter(Boolean));
   const used = new Set();
   const findings = [];
@@ -352,7 +352,10 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     const rawCondition = text.slice(openParen + 1, closeParen);
     const maskCondition = mask.slice(openParen + 1, closeParen);
     const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
-    if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) return true;
+    if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) {
+      if (!maskCondition.includes('||')) return true;
+      continue;
+    }
 
     // Dotted guards dereference the namespace before checking the method, so this heuristic accepts
     // them only in pure-AND conditions. Any `||` in the balanced condition can make the namespace

@@ -126,7 +126,7 @@ function parseXml(text) {
     const tagLine = line;
     advance(1);
     const name = readName('Expected element name');
-    const attrs = {};
+    const attrs = Object.create(null);
     let selfClosing = false;
 
     while (i < text.length) {
@@ -254,7 +254,7 @@ function findFirst(el, pred) {
 
 function attr(el, name, { caseInsensitive = false } = {}) {
   if (!el) return undefined;
-  if (!caseInsensitive) return el.attrs[name];
+  if (!caseInsensitive) return Object.prototype.hasOwnProperty.call(el.attrs, name) ? el.attrs[name] : undefined;
   const wanted = name.toLowerCase();
   for (const [key, value] of Object.entries(el.attrs)) {
     if (key.toLowerCase() === wanted) return value;

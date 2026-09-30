@@ -165,7 +165,7 @@ function normalizeBinding(binding) {
     table: binding.table,
     form: binding.form,
     target,
-    clients: Array.isArray(binding.clients) ? binding.clients : parseClients(binding.clients),
+    clients: Array.isArray(binding.clients) ? parseIntentClients(binding.clients) : parseClients(binding.clients),
     parameters: binding.parameters,
   };
 }
@@ -189,6 +189,15 @@ function parseClients(value) {
     if (!ALLOWED_CLIENTS.has(client)) usageError(`--clients contains unknown value '${client}' - ${CLIENTS_HINT}`);
   }
   return clients.length ? clients : undefined;
+}
+
+function parseIntentClients(value) {
+  const clients = value.map((client) => String(client).trim()).filter(Boolean);
+  if (clients.length === 0) usageError(`intent binding clients must include at least one of: ${CLIENTS_HINT.replace('allowed values: ', '')}`);
+  for (const client of clients) {
+    if (!ALLOWED_CLIENTS.has(client)) usageError(`intent binding clients contains unknown value '${client}' - ${CLIENTS_HINT}`);
+  }
+  return [...new Set(clients)];
 }
 
 function parseRepeatedParams(argv) {
