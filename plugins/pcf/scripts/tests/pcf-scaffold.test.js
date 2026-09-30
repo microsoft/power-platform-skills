@@ -451,6 +451,55 @@ test('CLI --list shows recipe status and --recipe output names the recipe', () =
   assert.equal(calls.at(-1).recipe, 'field-overlay');
 });
 
+test('CLI rejects valued boolean scaffold switches before listing or writing', () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const cli = path.join(ROOT, 'scripts', 'pcf-scaffold.js');
+  const realAuth = require('../lib/dataverse-auth.js');
+  const dataverseAuth = {
+    ...realAuth,
+    emitResult: () => {
+      throw new Error('emitResult should not run for usage errors');
+    },
+  };
+
+  for (const flag of ['--list=false', '--install=false']) {
+    let sideEffect = false;
+    const argv = flag === '--list=false'
+      ? [flag]
+      : ['--template', 'field-standard', '--namespace', 'Contoso.Controls', '--name', 'StarRating', '--out', 'project', flag];
+    const harness = loadCli(cli, {
+      argv,
+      requires: {
+        './lib/pcf-scaffold': {
+          listTemplates: () => { sideEffect = true; return []; },
+          listRecipes: () => { sideEffect = true; return []; },
+          planScaffold: () => {
+            sideEffect = true;
+            return { files: [], warnings: [], recipe: null };
+          },
+          writeScaffold: () => {
+            sideEffect = true;
+            return { written: [] };
+          },
+        },
+        './lib/dataverse-auth': dataverseAuth,
+        './lib/node-tool': { runNpm: () => ({ status: 0, stdout: '', stderr: '' }) },
+      },
+    });
+
+    try {
+      harness.main(argv);
+    } catch (err) {
+      if (!String(err && err.message).startsWith('process.exit(')) throw err;
+    }
+
+    assert.equal(harness.exitCode, 1, flag);
+    assert.match(harness.stderrText(), /--(?:list|install) does not take a value/, flag);
+    assert.equal(harness.stdoutText(), '', flag);
+    assert.equal(sideEffect, false, flag);
+  }
+});
+
 test('listTemplates rejects malformed template metadata before exposing the catalog', () => {
   const { listTemplates } = loadScaffold();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-template-meta-'));

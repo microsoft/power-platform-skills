@@ -4,6 +4,7 @@
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { runNpm } = require('./lib/node-tool.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 const {
   listTemplates,
   listRecipes,
@@ -58,6 +59,8 @@ function runMain(argv) {
   if (flagError) usageError(flagError);
 
   const { flags } = parsed;
+  const booleanError = booleanFlagError(flags, ['install', 'list']);
+  if (booleanError) usageError(booleanError);
   if (flags.list) {
     return emitResult(true, { ok: true, templates: listTemplates(), recipes: listRecipes() });
   }

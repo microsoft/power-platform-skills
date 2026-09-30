@@ -205,6 +205,33 @@ test('forwards --incremental with publisher prefix and skips read-back when --no
   assert.deepEqual(receipt.registered, { ok: false, reason: 'not verified' });
 });
 
+test('rejects valued boolean deployment switches before project discovery or push', async () => {
+  for (const [flag, value] of [['--allow-dev-bundle', 'false'], ['--no-verify', 'false'], ['--incremental', 'false']]) {
+    let discovered = false;
+    const cli = await run([
+      '--project', 'D:\\tmp\\pcf-project',
+      '--env', 'https://contoso.crm.dynamics.com',
+      '--publisher-prefix', 'abc',
+      `${flag}=${value}`,
+    ], {
+      requires: {
+        './lib/pcf-build': {
+          findControlProject: () => {
+            discovered = true;
+            return { error: 'project discovery should not run' };
+          },
+        },
+      },
+    });
+
+    assert.equal(cli.exitCode, 1, flag);
+    assert.match(cli.stderrText(), new RegExp(`${flag} does not take a value`), flag);
+    assert.equal(cli.stdoutText(), '', flag);
+    assert.equal(discovered, false, flag);
+    assert.equal(cli.calls.some((call) => call[0] === 'runPac'), false, flag);
+  }
+});
+
 test('rejects both solution and publisher-prefix as a usage error before push', async () => {
   const projectDir = makeProject('both-selectors');
   const cli = await run([

@@ -518,6 +518,32 @@ test('write-pcf-plan emits JSON and exits 1 when the intent JSON is invalid', as
   }
 });
 
+test('write-pcf-plan emits schema JSON instead of throwing for schema-invalid intent shapes', async () => {
+  const cases = [
+    ['null root', null],
+    ['null property entry', exampleIntent({ properties: [null] })],
+    ['null binding entry', exampleIntent({ bindings: [null] })],
+  ];
+  for (const [name, intent] of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-invalid-shape-'));
+    try {
+      const intentPath = path.join(dir, 'pcf-intent.json');
+      fs.writeFileSync(intentPath, JSON.stringify(intent));
+
+      const cli = await runCli(['--intent', `@${intentPath}`]);
+
+      assert.equal(cli.exitCode, 1, name);
+      const payload = JSON.parse(cli.stdoutText());
+      assert.equal(payload.ok, false, name);
+      assert.equal(payload.out, null, name);
+      assert.ok(payload.findings.some((finding) => finding.code === 'PCF_INTENT_SCHEMA'), name);
+      assert.match(payload.error, /intent schema is invalid/i, name);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('write-pcf-plan rejects a positional intent path without --intent', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-positional-'));
   try {

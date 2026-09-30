@@ -5,6 +5,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { findControlProject, buildControl, bundleFindings } = require('./lib/pcf-build.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 
 const USAGE = `Usage:
   node scripts/pcf-build.js --project <dir> [--mode production|development] [--no-clean]`;
@@ -46,6 +47,8 @@ function runMain(argv) {
   if (flagError) usageError(flagError);
 
   const { flags } = parsed;
+  const booleanError = booleanFlagError(flags, ['no-clean']);
+  if (booleanError) usageError(booleanError);
   if (!flags.project) usageError('--project is required');
   const mode = flags.mode ? String(flags.mode) : 'production';
   if (!['production', 'development'].includes(mode)) usageError("--mode must be 'production' or 'development'");

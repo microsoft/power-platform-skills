@@ -11,6 +11,7 @@ const { findControlProject } = require('./lib/pcf-build.js');
 const { pcfprojBuildMode } = require('./lib/pcf-doctor.js');
 const { makePcfSdk, findCustomControl, solutionPrefix } = require('./lib/pcf-dataverse.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 
 const USAGE = `Usage:
   node scripts/pcf-push.js --project <dir> --env <url> (--solution <uniqueName> | --publisher-prefix <p>) [--incremental] [--verbosity minimal|normal|detailed|diagnostic] [--allow-dev-bundle] [--no-verify]
@@ -85,6 +86,8 @@ async function main(argv = process.argv.slice(2)) {
   if (flagError) usageError(flagError);
 
   const flags = parsed.flags;
+  const booleanError = booleanFlagError(flags, ['incremental', 'allow-dev-bundle', 'no-verify']);
+  if (booleanError) usageError(booleanError);
   if (!flags.project) usageError('--project is required');
   if (!flags.env) usageError('--env is required');
   const hasSolution = flags.solution !== undefined;

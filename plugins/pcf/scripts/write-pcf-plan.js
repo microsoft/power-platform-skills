@@ -20,6 +20,15 @@ function emitPlanResult(ok, payload) {
 }
 
 function main() {
+  try {
+    return runMain();
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitPlanResult(false, { ok: false, error: String(err && err.message ? err.message : err) });
+  }
+}
+
+function runMain() {
   const argv = process.argv.slice(2);
   const { flags } = parseArgs(argv);
   const flagError = validateFlags(argv, {
@@ -48,6 +57,16 @@ function main() {
   }
 
   const schemaErrors = validateIntent(intent);
+  const lint = schemaErrors.map((message) => ({
+    code: 'PCF_INTENT_SCHEMA',
+    severity: 'error',
+    message,
+    fix: 'Fix pcf-intent.json so it matches schemaVersion 1 before rendering the plan.',
+  }));
+  if (schemaErrors.length > 0) {
+    emitPlanResult(false, { ok: false, out: null, findings: lint, error: 'PCF intent schema is invalid.' });
+    return;
+  }
   let manifestModel;
   if (flags.manifest) {
     const manifestPath = path.resolve(flags.manifest.startsWith('@') ? flags.manifest.slice(1) : flags.manifest);
@@ -64,15 +83,7 @@ function main() {
     }
   }
 
-  const lint = schemaErrors.map((message) => ({
-    code: 'PCF_INTENT_SCHEMA',
-    severity: 'error',
-    message,
-    fix: 'Fix pcf-intent.json so it matches schemaVersion 1 before rendering the plan.',
-  }));
-  if (schemaErrors.length === 0) {
-    lint.push(...lintBindingIntent(intent, { manifestModel }));
-  }
+  lint.push(...lintBindingIntent(intent, { manifestModel }));
 
   const markdown = renderPlanMarkdown(intent, { lint });
   const outPath = flags.out

@@ -14,11 +14,6 @@ const { runSync } = require('./lib/process-runner.js');
 const path = require('path');
 const fs = require('fs');
 
-const MARKETPLACE_PATHS = [
-  'marketplace.json',
-  '.plugin/marketplace.json',
-  '.claude-plugin/marketplace.json',
-];
 const PLUGIN_MANIFEST_PATHS = [
   '.plugin/plugin.json',
   '.claude-plugin/plugin.json',
@@ -63,15 +58,8 @@ function firstExistingPath(root, relativePaths) {
   return null;
 }
 
-function readFirstJson(root, relativePaths) {
-  const filePath = firstExistingPath(root, relativePaths);
-  if (!filePath) return null;
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-}
-
-function readMarketplaceName(gitRoot) {
-  const marketplace = readFirstJson(gitRoot, MARKETPLACE_PATHS);
-  return marketplace?.name || null;
+function readMarketplaceName() {
+  return null;
 }
 
 function readJsonFromGit(ref, relativePaths, cwd) {
@@ -109,13 +97,6 @@ if (require.main === module) {
     // prompt) and then compared against a manifest path that does not exist there, so the notice
     // could never fire. A marketplace install is a plain copy, not a clone, so `rev-parse` fails
     // there and the script exits silently, as it does on any other error.
-    const gitRoot = runSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: pluginRoot,
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-
     // The plugin's path inside the repository, as git itself computes it (e.g. "plugins/pcf/").
     // Deriving it with path.relative(gitRoot, pluginRoot) broke whenever the two spelled the same folder
     // differently: git reports the long Windows name (C:/Users/runneradmin/...) while __dirname can carry
@@ -145,7 +126,7 @@ if (require.main === module) {
 
     if (compareSemver(localVersion, remotePlugin.version) > 0) {
       const pluginName = localPlugin.name || 'pcf';
-      const marketplaceName = readMarketplaceName(gitRoot);
+      const marketplaceName = readMarketplaceName();
       console.log(
         formatUpdateMessage(pluginName, localVersion, remotePlugin.version, marketplaceName)
       );

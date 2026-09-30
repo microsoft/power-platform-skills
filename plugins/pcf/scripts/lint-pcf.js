@@ -6,6 +6,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags } = require('./lib/dataverse-auth.js');
 const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { parseManifest, lintManifest, diffManifests, findManifests } = require('./lib/pcf-manifest.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 
 const USAGE = `Usage: node scripts\\lint-pcf.js (--manifest <file> | --project <dir>) [--hosts model,pages] [--against <old manifest>] [--strict]
 
@@ -29,6 +30,8 @@ function runMain() {
     hints: { hosts: 'comma-separated host list: model,pages' },
   });
   if (flagError) return usage(flagError);
+  const booleanError = booleanFlagError(flags, ['strict']);
+  if (booleanError) return usage(booleanError);
 
   if ((flags.manifest && flags.project) || (!flags.manifest && !flags.project)) {
     return usage('pass exactly one of --manifest <file> or --project <dir>');
@@ -43,6 +46,13 @@ function runMain() {
 
   const matrix = loadMatrix();
   const manifests = flags.manifest ? [path.resolve(flags.manifest)] : findManifests(path.resolve(flags.project));
+  if (manifests.length === 0) {
+    return emitJson(false, {
+      ok: false,
+      results: [],
+      error: `No ControlManifest.Input.xml files were found under ${path.resolve(flags.project)}.`,
+    });
+  }
   const againstPath = flags.against ? path.resolve(flags.against) : null;
   const before = againstPath ? parseFile(againstPath) : null;
   const results = manifests.map((manifest) => {

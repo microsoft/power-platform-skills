@@ -245,6 +245,32 @@ test('pcf-build emits JSON on stdout when a non-usage runtime failure is thrown'
   assert.match(cli.stderrText(), /boom from build/);
 });
 
+test('pcf-build rejects valued --no-clean before project discovery', async () => {
+  let discovered = false;
+  const cli = loadCli(cliPath, {
+    argv: ['--project', 'D:\\tmp\\pcf-project', '--no-clean=false'],
+    requires: {
+      './lib/pcf-build': {
+        findControlProject: () => {
+          discovered = true;
+          return { error: 'project discovery should not run' };
+        },
+      },
+    },
+  });
+
+  try {
+    await cli.main();
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText(), /--no-clean does not take a value/);
+  assert.equal(cli.stdoutText(), '');
+  assert.equal(discovered, false);
+});
+
 test('pcf-build reports ok false when bundle findings contain errors even if buildControl returned ok true', async () => {
   const cli = loadCli(cliPath, {
     argv: ['--project', 'D:\\tmp\\pcf-project'],

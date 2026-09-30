@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
@@ -27,6 +28,29 @@ test('lint-pcf rejects unknown flags with usage and a did-you-mean hint', async 
   assert.match(cli.stderrText(), /did you mean --manifest/i);
   assert.match(cli.stderrText(), /Usage: node scripts[/\\]lint-pcf\.js/i);
   assert.equal(cli.stdoutText(), '');
+});
+
+test('lint-pcf rejects valued --strict before reading manifests', async () => {
+  const cli = await run(['--manifest', 'D:\\tmp\\ControlManifest.Input.xml', '--strict=false']);
+
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderrText(), /--strict does not take a value/);
+  assert.equal(cli.stdoutText(), '');
+});
+
+test('lint-pcf fails with structured JSON when a project contains no manifests', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-lint-empty-project-'));
+  try {
+    const cli = await run(['--project', dir]);
+
+    assert.equal(cli.exitCode, 1);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.ok, false);
+    assert.deepEqual(payload.results, []);
+    assert.match(payload.error, /No ControlManifest\.Input\.xml files were found/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('lint-pcf emits JSON and exits 1 for a virtual manifest targeting Pages', async () => {
