@@ -187,7 +187,10 @@ test('preview preferences keep deferred Gate 4 markdown-only', () => {
   assert.match(brandedPreview, /\/design-system` owns rendering of `_plan_preview\.html`/);
   const skippedDesign = section(design, '#### Branch B', '**Preview timing:**');
   assert.match(skippedDesign, /\*\*Render `_plan_preview\.html`\*\*/);
-  assert.match(skippedDesign, /Print the preview path; open in browser only if `<visual_companion> = yes`/);
+  // Was "open in browser only if visual_companion = yes". The build plan now shows these
+  // screens in its phone frame and links out to the file, so nothing opens a tab mid-run.
+  assert.match(skippedDesign, /Do not open it in a browser/);
+  assert.doesNotMatch(skippedDesign, /xdg-open|Start-Process/);
 });
 
 test('offline completion summary reflects the bundled native host runtime', () => {

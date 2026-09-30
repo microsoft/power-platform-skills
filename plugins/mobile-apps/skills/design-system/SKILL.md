@@ -472,7 +472,7 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 **Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace default token values with the locked `brand/tokens.ts` values (palette, typography, spacing, radius).
 
-**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open browser. Proceed to Sub-step 7.
+**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Proceed to Sub-step 7.
 
 **Paths (a) and (b):** Ask:
 ```
@@ -489,7 +489,13 @@ Re-render screen preview with your brand tokens?
 - **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
 - **(c)** → skip, proceed to Sub-step 7
 
-Overwrites `_plan_preview.html` with branded versions. Opens browser.
+Overwrites `_plan_preview.html` with branded versions.
+
+**Opening it in a browser depends on how this skill was invoked.** In orchestrator mode
+(`CODE_APPS_NATIVE_ORCHESTRATING=1`), do **not** open it: `/create-mobile-app` is showing the same
+screens in its build plan's phone frame and links out to this file, so a second tab interrupts a
+run the user is already watching. Print the path instead. Run standalone, open it as usual — the
+user asked for a preview and has nothing else to look at.
 
 ---
 

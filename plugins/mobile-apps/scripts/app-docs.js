@@ -257,15 +257,21 @@ function capabilityLabels(state) {
 // the app root and the plan is written into `docs/`, so one level up is the whole path.
 const PLAN_DOC = 'native-app-plan.md';
 
-function planDocHref(projectRoot) {
-  // Linked only when it is really there: the planner writes it at Step 3, so a plan rendered
-  // before then would otherwise carry a link that 404s in the user's browser.
-  return fs.existsSync(path.join(path.resolve(projectRoot), PLAN_DOC)) ? `../${PLAN_DOC}` : '';
+// The full-size screen mockups `/design-system` renders. The carousel shows the same blocks in a
+// phone frame; this is the link out to them at full width.
+const SCREEN_PREVIEW = '_plan_preview.html';
+
+// Both sit beside the app root and the plan is written into `docs/`, so one level up is the
+// whole path. Linked only when really present: each is written partway through the run, so an
+// unconditional link would 404 in the user's browser for the phases before it exists.
+function siblingHref(projectRoot, fileName) {
+  return fs.existsSync(path.join(path.resolve(projectRoot), fileName)) ? `../${fileName}` : '';
 }
 
 function render(projectRoot, state) {
   const summary = summarize(state);
-  summary.planDocHref = planDocHref(projectRoot);
+  summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
+  summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
   return renderTemplate({
     templatePath: TEMPLATE_PATH,
     outputPath: outputPath(projectRoot),

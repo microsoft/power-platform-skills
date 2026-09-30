@@ -584,6 +584,47 @@ test('the planner markdown is linked only once it exists on disk', () => {
   assert.match(shown[0].textContent, /Full screen specs|Read the full plan/);
 });
 
+test('the full-size screens are linked under the phone, once they exist', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-preview-'));
+  const state = initState(root, { appName: 'Preview', dataPlatform: 'dataverse' });
+  save(root, state);
+
+  const railLink = (page) => {
+    const found = [];
+    (function walk(node) {
+      if (String(node.className).split(' ').includes('rail-link')) found.push(node);
+      node.children.forEach(walk);
+    })(page.elements.get('railPreviewLink'));
+    return found;
+  };
+
+  // `/design-system` writes it at Step 6.75; before that the link would 404.
+  assert.deepEqual(railLink(runPage(outputPath(root))), [], 'no link before the file exists');
+
+  fs.writeFileSync(path.join(root, '_plan_preview.html'), '<html></html>');
+  save(root, state);
+  const shown = railLink(runPage(outputPath(root)));
+  assert.equal(shown.length, 1, 'the link appears once the preview is rendered');
+  assert.match(shown[0].textContent, /full size/i);
+});
+
+test('the create skill renders the screen preview but never opens it', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // The plan shows these screens in its phone frame and links out to the file, so a browser tab
+  // opening mid-run interrupts a user who is already watching the plan.
+  for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
+    assert.ok(
+      !/_plan_preview\.html/.test(block[1]),
+      `a runnable command still touches the screen preview: ${block[1].trim().slice(0, 80)}`,
+    );
+  }
+  // It must still be rendered - the carousel takes its markup from those blocks.
+  assert.match(skill, /Render `_plan_preview\.html`/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

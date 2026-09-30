@@ -577,7 +577,7 @@ planning degradation; it never relaxes `/add-dataverse` reconciliation.
 
 Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — automatically open `_plan_preview.html` in the browser at Step 6.75, after the design choice. Gate 4 remains markdown-only regardless of this preference. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
+- `<visual_companion> = yes` — render `_plan_preview.html` at Step 6.75, after the design choice. It is **not** opened in a browser during a create run: the build plan shows the same screens in its phone frame and links out to the file. The flag still governs whether a later standalone `/preview-screens` or `/edit-app` re-plan opens it. Gate 4 remains markdown-only regardless. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
@@ -1782,7 +1782,7 @@ If the user picked path (c) Skip in the cost picker, the skill returns immediate
 
 #### Branch A — `brand/` files exist (user picked path a, b, or d)
 
-This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
+`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel; the rendered file is linked underneath it rather than opened.
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 
@@ -1793,13 +1793,11 @@ The user skipped the design system but still deserves to see their screens befor
 
 2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
 
-3. **Print the preview path; open in browser only if `<visual_companion> = yes`:**
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
+3. **Do not open it in a browser.** The build plan already shows these screens in its phone
+   frame and links out to the full-size file underneath, so a second tab opening mid-run
+   interrupts the user rather than telling them anything new. Print the path and continue:
+
+   > `→ Full-size screens at <working_dir>/_plan_preview.html (also linked under the phone in the build plan).`
 
 4. **Auto-continue — no prompt.** The user already approved the applicable planning gates; the preview does not introduce another approval gate. Print one line and proceed:
 

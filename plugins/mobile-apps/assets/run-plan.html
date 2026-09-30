@@ -162,6 +162,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   color:var(--warn);cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;}
 .input-banner-close:hover{background:rgba(202,80,16,.22);}
 @keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+.rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
+  text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
+.rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
 .plan-doc{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 14px;
   background:var(--surface);border:1px solid var(--border);border-radius:999px;
   font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
@@ -429,6 +432,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <div class="device-screen" id="deviceScreen"></div>
   </div>
   <div class="rail-caption" id="railCaption"></div>
+  <div id="railPreviewLink"></div>
 </aside>
 </div>
 
@@ -627,7 +631,25 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       + (error && error.message ? ' \u2014 ' + error.message : '') + '.'));
   }
 
+  /**
+   * Link out to the full-size mockups instead of opening them in a browser tab mid-run. The
+   * carousel already shows these screens in the phone frame, so a tab that steals focus while
+   * the user is reading the plan is an interruption rather than information.
+   */
+  function railPreviewLink() {
+    var container = document.getElementById('railPreviewLink');
+    if (!container) return;
+    container.textContent = '';
+    if (!summary.screenPreviewHref) return;
+    var link = el('a', 'rail-link', 'Open screens full size \u2197');
+    link.setAttribute('href', summary.screenPreviewHref);
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noopener');
+    container.appendChild(link);
+  }
+
   function renderPhone() {
+    railPreviewLink();
     var screen = document.getElementById('deviceScreen');
     var title = document.getElementById('railTitle');
     var caption = document.getElementById('railCaption');
