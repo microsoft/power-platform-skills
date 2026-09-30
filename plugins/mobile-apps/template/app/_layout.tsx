@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
@@ -9,6 +10,14 @@ import authConfig from '../auth.config.json';
 import tamaguiConfig from '../tamagui.config';
 
 declare const require: (id: string) => unknown;
+
+/**
+ * Taken from the provider's own props rather than restated here. `schemaMap` is
+ * `Record<string, ConnectorSchema>`, not `Record<string, unknown>`; typing it loosely compiles
+ * until the value reaches the provider and then fails the scaffold gate with TS2322. Deriving it
+ * means this file cannot drift from the host package across an upgrade.
+ */
+type ProviderProps = ComponentProps<typeof PowerAppsProvider>;
 
 function isMissingModule(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('Cannot find module');
@@ -25,26 +34,26 @@ function isMissingModule(error: unknown): boolean {
  * id with "Invalid call ... require(id)", so these cannot be folded into a shared helper that
  * takes the id as a parameter - the repetition is load-bearing.
  */
-let powerConfig: Record<string, unknown> = {};
+let powerConfig: ProviderProps['powerConfig'] = {};
 try {
-  powerConfig = require('../power.config.json') as Record<string, unknown>;
+  powerConfig = require('../power.config.json') as ProviderProps['powerConfig'];
 } catch (error: unknown) {
   if (!isMissingModule(error)) throw error;
 }
 
-let schemaMap: Record<string, unknown> = {};
+let schemaMap: ProviderProps['schemaMap'] = {};
 try {
   const generated = require('../src/generated/connectorSchemas') as {
-    schemaMap?: Record<string, unknown>;
+    schemaMap?: ProviderProps['schemaMap'];
   };
   schemaMap = generated.schemaMap ?? {};
 } catch (error: unknown) {
   if (!isMissingModule(error)) throw error;
 }
 
-let offlineProfile: Record<string, unknown> | undefined;
+let offlineProfile: ProviderProps['offlineProfile'];
 try {
-  offlineProfile = require('../offline-profile.json') as Record<string, unknown>;
+  offlineProfile = require('../offline-profile.json') as ProviderProps['offlineProfile'];
 } catch (error: unknown) {
   if (!isMissingModule(error)) throw error;
   offlineProfile = undefined;

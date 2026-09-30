@@ -160,3 +160,24 @@ test('generated config files are optional so the app bundles before they exist',
     .join('\n');
   assert.doesNotMatch(code, /require\([^'"]/, 'every require id must be a literal');
 });
+
+test('root layout types the provider props from the provider, not by hand', () => {
+  const layout = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'template', 'app', '_layout.tsx'), 'utf8',
+  );
+
+  // Restating these by hand is how the scaffold gate broke: `schemaMap` is
+  // `Record<string, ConnectorSchema>`, and declaring it `Record<string, unknown>` compiles
+  // locally right up to the point the value reaches PowerAppsProvider, then fails TS2322 in
+  // every generated app. Deriving from ComponentProps cannot drift from the host package.
+  assert.match(layout, /type ProviderProps = ComponentProps<typeof PowerAppsProvider>/);
+  for (const prop of ['powerConfig', 'schemaMap', 'offlineProfile']) {
+    assert.match(
+      layout,
+      new RegExp(`let ${prop}: ProviderProps\\['${prop}'\\]`),
+      `${prop} must take its type from the provider`,
+    );
+  }
+  // The bodies of the optional requires must not reintroduce a loose type either.
+  assert.doesNotMatch(layout, /schemaMap\??: Record<string, unknown>/);
+});
