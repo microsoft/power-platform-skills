@@ -117,7 +117,7 @@ Live-verified binding facts:
 - A designer-shaped FormXML binding with a custom-control cell class id, matching `uniqueid`/`forControl`, a fallback `<customControl id>`, and all three client factors survived draft and published reads after targeted publish.
 - A web-only declaration (`formFactor="2"`) was rejected at form write with `Custom control declaration for form factor(s) 0,1 is missing...`; `PCF_BIND_FACTOR_UNDECLARED` is an error and every binding must declare phone, tablet and web factors.
 - A bound control cannot be deleted until the binding is removed and the artifact is published.
-- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, including the bound `SystemForm` dependency row for a form-bound control, with a text-search fallback for forms. Inventory still warns that registered dependencies are not proof of Liquid or arbitrary text references.
+- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, including the bound `SystemForm` dependency row for a form-bound control. `pcf-inventory.js --where-used` reports only these registered rows; it does not search form or Liquid text. Its output warns that registered dependencies are not proof of Liquid or arbitrary text references, and that an empty result is not "safe to delete".
 
 ## Power Pages journeys
 
@@ -133,7 +133,7 @@ Automated coverage ships at three levels:
 - The offline eval harness under `evals/model-apps/pcf/` grades intent, manifest, source, FormXML, doctor, upgrade and generated-project facts. See [`../../../evals/model-apps/pcf/EVAL_GUIDE.md`](../../../evals/model-apps/pcf/EVAL_GUIDE.md).
 - CI includes the existing model-apps script-test workflow, the PCF generated-project workflow [`.github/workflows/model-apps-pcf-projects.yml`](../../../.github/workflows/model-apps-pcf-projects.yml), and the matrix drift workflow [`.github/workflows/model-apps-pcf-matrix-drift.yml`](../../../.github/workflows/model-apps-pcf-matrix-drift.yml). Each model-apps job that can run telemetry-emitting code sets `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1`.
 
-The generated-project workflow builds all templates and available recipes on Ubuntu, and all templates on Windows (recipes add platform-independent code on top of a template), with Node 20. It also runs a packaging smoke that requires PAC CLI plus .NET SDK. Each job has a time limit, so a hung install fails the check instead of holding a runner.
+The generated-project workflow builds all templates and available recipes on Ubuntu and Windows, with Node 20. On Windows the projects are generated on the runner's local temporary disk, because installs on the OS disk were several times slower. It also runs a packaging smoke that requires PAC CLI plus .NET SDK. Each job has a time limit, so a hung install fails the check instead of holding a runner.
 
 ## Status
 
