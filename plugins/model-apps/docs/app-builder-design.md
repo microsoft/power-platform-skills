@@ -356,7 +356,7 @@ gated by `--apply` alone (`teardown-model-app.js:62-95`).
 
 - **Read-only classification, reusing existing logic** — not a duplicate differ. Diff the spec
   against discovered artifacts via the same reconciliation the build uses (and the SDK's generic
-  `diffArtifact`), so the preview can't drift from build behavior.
+  `diffArtifact`), so the planner can't drift from build behavior.
 - **v1 scope = the realistically detectable destructive ops** (do **not** claim table/column/form
   *deletion* classification — the build has no such delete path today):
   - **unexpected app collision** (see below);

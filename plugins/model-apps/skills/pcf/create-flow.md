@@ -50,13 +50,13 @@ Read `scripts/lib/pcf-intent.js` as the contract. Minimal valid example:
 
 Defaults: binding `clients` means clients that must use this control; omitted means web. FormXML factors are still all three, as described in `bind-flow.md`.
 
-## 3. Render and approve the intent summary
+## 3. Render and approve the plan
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/write-pcf-plan.js" --intent @pcf-intent.json [--manifest ControlManifest.Input.xml] [--out pcf-plan.md]
 ```
 
-Show the rendered summary. In attended runs use plan mode; in unattended runs log the approval default only when the request supplied enough safe detail. If the intent lint reports a Pages or binding error, fix intent before scaffold.
+Show the plan. In attended runs use plan mode; in unattended runs log the approval default only when the request supplied enough safe detail. If the intent lint reports a Pages or binding error, fix intent before scaffold.
 
 ## 4. Scaffold
 

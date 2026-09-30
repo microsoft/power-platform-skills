@@ -114,7 +114,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   to prevent confusion must not *contain* the name it guards against — see
   `scripts/write-page-plan.js` for why the app-builder page plan is not `genpage-*`.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
-  warnings }`): errors block approval (e.g. the relationship-name-vs-lookup-name
+  warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
@@ -582,7 +582,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (sample data, publish, generated icons) stay `▢` unprobed and are counted separately in the
   summary. The probe reuses the build's OWN discovery helpers (`findExistingTable`,
   `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
-  implementation, so the rendered preview cannot disagree with what the apply then does; it is read-only, and
+  implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
   `--no-live-plan` restores the offline, spec-only listing.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
@@ -673,7 +673,7 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-customapi-builder.md ← Single owner of the custom-api gate; discovers bound Custom APIs, writes ## Custom API Bindings + actions.json (create & edit flows)
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
-  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when generated requirements include ## Custom API Bindings)
+  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
   page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
@@ -734,8 +734,8 @@ scripts/
   pcf-ci-build.js              ← /pcf: generated-template/recipe CI and package-smoke runner
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
-  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before planner output is written, then verify the written plan targets the pages the approval named
-  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names from the single ## Pages table are safe write targets (lib/page-file-targets.js)
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
+  check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
@@ -839,8 +839,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into planner or edit-planner prompts. |
-| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into planner or edit-planner prompts. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
 
@@ -909,13 +909,13 @@ once here and only the per-feature specifics are tabled below:
 3. **Deploy** — the SKILL phase **re-probes** the flag and treats an absent/malformed bindings
    section as *no bindings*, so a plan authored while the flag was ON cannot deploy after it goes OFF.
 4. **ALM** — solution packaging honours the flag (or documents why it needs no gate).
-5. **Codegen** — `genpage-page-builder` emits feature code **only** when generated requirements carry an actual
+5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
 | | `connectors` | `custom-api` | `custom-telemetry` |
 |---|---|---|---|
 | **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not generated requirements |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
 | **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
 | **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
 | **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
@@ -923,12 +923,12 @@ once here and only the per-feature specifics are tabled below:
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
-the generated plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
+the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
 difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
 binding table both yield `none`, because the page-builder only needs to know how many bindings it
 may call — which keeps the dispatch stable when the flag is eventually removed.
 
-`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no generated plan
+`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
 checklist above are N/A, and its Phase 4.7 "deploy phase" is nothing but the re-probe that
 produces the dispatch line. It also carries a second gate the other flags do not have: even

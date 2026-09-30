@@ -66,13 +66,13 @@ For repair work, read [../../references/pcf-troubleshooting.md](../../references
 
 Ask only the missing decisions: host(s), field vs dataset, template family, properties, required features, target solution/publisher, binding target, clients, and Pages journey. For new controls follow [create-flow.md](create-flow.md).
 
-Write `pcf-intent.json` with schema version 1, then render the intent summary:
+Write `pcf-intent.json` with schema version 1, then render the plan:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/write-pcf-plan.js" --intent @pcf-intent.json [--manifest ControlManifest.Input.xml] [--out pcf-plan.md]
 ```
 
-In attended mode, show the rendered summary in plan mode and continue only after approval. In unattended mode, treat a green summary plus explicit non-destructive defaults as approved and log that default.
+In attended mode, show the rendered plan in plan mode and continue only after approval. In unattended mode, treat a green plan plus explicit non-destructive defaults as approved and log that default.
 
 ## Phase 2 — scaffold
 

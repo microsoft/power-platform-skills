@@ -43,7 +43,7 @@ Libraries are split by concern:
 - `pcf-build.js` executes the project-local `pcf-scripts` binary through `process.execPath`.
 - `pcf-dataverse.js` performs read-only verification/inventory through the vendored SDK plus documented raw Dataverse reads for surfaces the SDK does not model.
 - `pcf-binding-verify.js` validates model-driven FormXML binding shape.
-- `pcf-intent.js` validates the skill's machine-readable intent and renders the approval summary.
+- `pcf-intent.js` validates the skill's machine-readable intent and renders the plan.
 - `pcf-doctor.js` and `pcf-upgrade.js` diagnose and repair common project drift.
 
 ## Compatibility matrix

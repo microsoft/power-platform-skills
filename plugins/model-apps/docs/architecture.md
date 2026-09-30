@@ -52,9 +52,9 @@ build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
 
 The orchestrator dispatches planner/builder work via `Task` and waits for the agent
 to return, rather than reimplementing it. The one documented exception is the
-**single-page fast path** (SKILL Phase 5b): when generated requirements have exactly one page, the
+**single-page fast path** (SKILL Phase 5b): when the plan has exactly one page, the
 orchestrator inlines the page-builder workflow instead of paying for a subagent.
-The generated plan document is the contract either way: planner output creates it; subsequent
+The plan document is the contract either way: the planner writes it; subsequent
 phases (and other agents) read it.
 
 ## /genpage — edit flow
@@ -115,7 +115,7 @@ The deployed artifact is just `<page>.tsx`. Everything else is local-dev
 scaffolding that helps the developer keep iterating without re-running the
 full skill.
 
-## /genpage — generated plan document contract
+## /genpage — the plan document as a contract
 
 The planner writes `genpage-plan.md` once. Every later phase reads it; nothing
 else passes state.
