@@ -228,6 +228,19 @@ test('command runner preserves exit code and propagates measured span context', 
     skillName: 'create-mobile-app',
   });
   const capturedEnv = path.join(projectRoot, 'captured-env.json');
+  const commandScript = path.join(projectRoot, 'capture-runner-env.js');
+  fs.writeFileSync(commandScript, [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    "fs.writeFileSync('captured-env.json', JSON.stringify({",
+    '  runId: process.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID,',
+    '  spanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID,',
+    '  parentSpanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID,',
+    '  projectRoot: process.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT,',
+    '}));',
+    'process.exit(7);',
+    '',
+  ].join('\n'));
   const env = {
     ...process.env,
     POWER_PLATFORM_SKILLS_CONFIG_DIR: telemetry.configDir,
@@ -247,17 +260,7 @@ test('command runner preserves exit code and propagates measured span context', 
     projectRoot,
     '--',
     process.execPath,
-    '-e',
-    [
-      "const fs = require('fs');",
-      `fs.writeFileSync(${JSON.stringify(capturedEnv)}, JSON.stringify({`,
-      '  runId: process.env.POWER_PLATFORM_SKILLS_MOBILE_RUN_ID,',
-      '  spanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SPAN_ID,',
-      '  parentSpanId: process.env.POWER_PLATFORM_SKILLS_MOBILE_SKILL_SPAN_ID,',
-      '  projectRoot: process.env.POWER_PLATFORM_SKILLS_PROJECT_ROOT,',
-      '}));',
-      'process.exit(7);',
-    ].join('\n'),
+    commandScript,
   ], {
     encoding: 'utf8',
     env,
@@ -297,6 +300,14 @@ test('command runner executes once when telemetry has syntax or import failures'
       emitter,
     );
     const marker = path.join(projectRoot, `${name}.txt`);
+    const commandScript = path.join(projectRoot, `${name}-command.js`);
+    fs.writeFileSync(commandScript, [
+      "'use strict';",
+      "require('node:fs').appendFileSync(" +
+        `${JSON.stringify(`${name}.txt`)}, 'x');`,
+      'process.exit(7);',
+      '',
+    ].join('\n'));
     const result = spawnSync('bash', [
       path.join(wrapperRoot, 'run-with-telemetry.sh'),
       '--execute',
@@ -309,8 +320,7 @@ test('command runner executes once when telemetry has syntax or import failures'
       projectRoot,
       '--',
       process.execPath,
-      '-e',
-      `require('fs').appendFileSync(${JSON.stringify(marker)}, 'x'); process.exit(7);`,
+      commandScript,
     ], {
       encoding: 'utf8',
       env: {
@@ -334,6 +344,12 @@ test('command runner bounds a hung telemetry emitter', (context) => {
     'setInterval(() => {}, 1000);',
   );
   const marker = path.join(projectRoot, 'hang.txt');
+  const commandScript = path.join(projectRoot, 'hang-command.js');
+  fs.writeFileSync(commandScript, [
+    "'use strict';",
+    "require('node:fs').writeFileSync('hang.txt', 'ran');",
+    '',
+  ].join('\n'));
   const startedAt = Date.now();
   const result = spawnSync('bash', [
     path.join(wrapperRoot, 'run-with-telemetry.sh'),
@@ -347,8 +363,7 @@ test('command runner bounds a hung telemetry emitter', (context) => {
     projectRoot,
     '--',
     process.execPath,
-    '-e',
-    `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');`,
+    commandScript,
   ], {
     encoding: 'utf8',
     env: {
