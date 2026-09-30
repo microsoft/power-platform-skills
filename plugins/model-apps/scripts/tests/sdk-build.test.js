@@ -757,7 +757,7 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
     assert.match(e.message, /holds edits an earlier run did not push/);
-    assert.match(e.message, /To reset it, delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json and re-run\./, 'the navigation baseline is kept');
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./, 'the baseline and the approval record are kept');
     return true;
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
@@ -827,7 +827,7 @@ test('#583 when the workspace copy cannot be reset, the halt names the workspace
   sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /then re-run the build\. First delete everything in the \.maker-workspace directory \(or the --workspace one\) except last-applied\.json:/);
+    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json\./);
     return true;
   });
 });
@@ -1009,6 +1009,28 @@ test('#583 any other thrown push error propagates unchanged, and resets the copy
   };
   await assert.rejects(runSdkBuild(routingSpec(), { sdk: dropped.sdk, apply: true, phases: appShellPhases }), (e) => /socket hang up/.test(e.message));
   assert.strictEqual(appCalls(dropped.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+// The vendored SDK refuses to push a copy an earlier plugin version projected and an interrupted build
+// left holding unpushed edits (workspace-projection-real-bundle.test.js pins the real refusal). The build's
+// runner resets that copy itself — the approval record and the navigation baseline are not touched — and
+// the halt says a re-run is all that is left.
+test('a push refused for an earlier version\u2019s workspace copy is reset by the build itself', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (t, id) => {
+    if (t !== 'app') return push(t, id);
+    calls.push({ name: 'pushArtifact', args: [t, id] });
+    throw Object.assign(new Error(`Refusing to push app '${id}': its workspace copy was produced by projection version 3, but this SDK produces version 5.`), { code: 'ARTIFACT_PROJECTION_STALE' });
+  };
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'ARTIFACT_PROJECTION_STALE', e.message);
+    assert.match(e.message, /The build has reset it to the environment's copy; re-run it, and it re-applies every edit from the spec\./);
+    return true;
+  });
+  const resets = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
+  assert.ok(resets.length >= 1, 'the refused copy is reset');
+  assert.ok(calls.indexOf(resets[resets.length - 1]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the refused push');
 });
 
 test('#583 a returned push failure resets the copy, but a concurrent edit keeps it as the fence', async () => {

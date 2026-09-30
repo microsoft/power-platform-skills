@@ -49,6 +49,7 @@ const {
   reportPartialPush,
   errorCodeChain,
   RESET_WORKSPACE,
+  projectionRecovery,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -1095,7 +1096,7 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
     reset = false;
   }
   const workspace = reset ? ''
-    : ` First ${RESET_WORKSPACE}: the workspace still holds this run's unpushed copy of the app, which a re-run would refuse to overwrite.`;
+    : ` First reset the workspace, which still holds this run's unpushed copy of the app (a re-run would refuse to overwrite it): ${RESET_WORKSPACE}.`;
   const why = neverPublished
     ? 'the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is'
     : 'the app has an unpublished change to its name, description or routing description (saved in Maker, or by a build whose publish did not complete), and Dataverse refuses another write to those fields until it is published';
@@ -1151,7 +1152,7 @@ async function discardUnrecordedEdits(provision, appId, error, thrown) {
 async function refuseUnpushedAppCopy(provision, appId, name) {
   const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === appId);
   if (listed && listed.isDirty) {
-    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. To reset it, ${RESET_WORKSPACE} and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. To reset it, ${RESET_WORKSPACE}, and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
   }
 }
 
@@ -1760,7 +1761,9 @@ async function runSdkBuild(spec, opts = {}) {
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
-  const runner = makeRunner({ emit, total: plan.length });
+  // A push of a workspace copy an earlier plugin version left holding unpushed edits is refused by the SDK
+  // (ARTIFACT_PROJECTION_STALE); the runner then resets that one copy itself, and the halt says so.
+  const runner = makeRunner({ emit, total: plan.length, recover: projectionRecovery(provision) });
   const sol = spec.solution;
 
   // 1. Solution (idempotent; header-less provisioning client).

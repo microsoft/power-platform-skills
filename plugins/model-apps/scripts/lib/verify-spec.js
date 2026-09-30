@@ -1649,25 +1649,38 @@ function subareaDashboardHasLauncher(xml, dashId) {
 // becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg' }].
 // An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
 // DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
-// Only ELEMENTS count: a `<SubArea …>` inside a comment, a CDATA section or a processing instruction is
-// text, not navigation, so those are removed first. In what remains a `<SubArea` can only start an element
-// (an attribute value cannot hold a raw `<`), but a value CAN hold a raw `>`, so a start tag is matched
-// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
-// either quote style, before they are compared with the spec's.
+// Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
+// name — not `SubArea-Archived`) directly under `SiteMap/Area/Group`. A SubArea anywhere else is kept by
+// the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA section or a
+// processing instruction is text — so those three are removed first, and the remaining tags are walked
+// with an element stack. A value may hold a raw `>`, so a tag is matched quote by quote. Values are fully
+// XML-decoded (`&amp;`, and numeric references such as `&#38;`), in either quote style, before they are
+// compared with the spec's.
+const NAV_PATH = ['SiteMap', 'Area', 'Group'];
 function liveNavEntries(xml) {
   const byKey = new Map();
   const markup = String(xml || '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
     .replace(/<\?[\s\S]*?\?>/g, '');
-  for (const tag of markup.match(/<SubArea\b(?:[^>"']|"[^"]*"|'[^']*')*>/g) || []) {
-    const attrs = Object.create(null);
-    for (const m of tag.matchAll(/\s([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
-    const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
-    const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
-    if (!key) continue;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon });
+  const open = [];
+  for (const [, closing, name, body, selfClosing] of markup.matchAll(/<(\/?)([A-Za-z_][\w.:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g)) {
+    if (closing) {
+      const at = open.lastIndexOf(name);
+      if (at >= 0) open.length = at;
+      continue;
+    }
+    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
+      const attrs = Object.create(null);
+      for (const m of body.matchAll(/\s([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
+      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
+      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
+      if (key) {
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon });
+      }
+    }
+    if (!selfClosing) open.push(name);
   }
   return byKey;
 }

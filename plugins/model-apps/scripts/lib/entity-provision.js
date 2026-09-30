@@ -522,7 +522,9 @@ async function mapLimit(items, limit, fn) {
 // A Runner owns the emit/counter/BuildHalt machinery so both consumers produce the
 // identical { phase, status, label, n, total } event stream. `total` is supplied by the
 // consumer (each computes its own plan length), so counting stays consumer-scoped.
-function makeRunner({ emit, total }) {
+// `recover(err)` (optional) may repair what a failed step left behind and return what the halt should
+// say about it; when it returns nothing, the halt names the operator's own step where one is known.
+function makeRunner({ emit, total, recover }) {
   let n = 0;
   const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
     const myN = (n += 1);
@@ -546,19 +548,29 @@ function makeRunner({ emit, total }) {
         return undefined;
       }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
+      let repaired = '';
+      if (typeof recover === 'function') {
+        try { repaired = (await recover(err)) || ''; } catch { repaired = ''; }
+      }
+      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${repaired || operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
   return { run, mapLimit, skip, emit, total };
 }
 
-// How an operator discards a workspace's local copies. Everything in `.maker-workspace` is state the next
-// build re-reads from the environment — except last-applied.json, the record of what was last applied or
-// downloaded. It is what keeps a nav change made in the designer from being reverted by a stale spec
-// (AB#6726727), and no re-run can rebuild it, so deleting the whole folder silently drops that protection.
-// Every remedy that resets the workspace says exactly this.
-const RESET_WORKSPACE = 'delete everything in the .maker-workspace directory (or the --workspace one) except last-applied.json';
+// How an operator resets a workspace by hand, where the build cannot do it itself. Most of `.maker-workspace`
+// is state a re-run rebuilds — the SDK's copies are re-read from the environment, and without the
+// changed-only snapshot the next `--changed-only` run just does a full build — but two files record things
+// the environment cannot give back:
+//   - last-applied.json, what was last applied or downloaded: the baseline that keeps a nav change made in
+//     the designer from being reverted by a stale spec (AB#6726727);
+//   - destructive-approval.json, the removals a maker approved: without it the next --allow-destructive
+//     authorizes whatever that run finds, not what was shown.
+// And the changed-only snapshot can hold a RUNNING teardown's registration and a build's lease, which are
+// that run's guard against a concurrent one: deleting them under a live run removes it. Every remedy that
+// resets the workspace says exactly this.
+const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-workspace directory (or the --workspace one), then delete everything in it except last-applied.json and destructive-approval.json';
 
 // Some SDK refusals end with the SDK call that fixes them — `fetchArtifact(...)` — which an operator of this
 // plugin cannot make. Where the operator's step is known, the halt names it too.
@@ -566,16 +578,36 @@ const RESET_WORKSPACE = 'delete everything in the .maker-workspace directory (or
 // ARTIFACT_PROJECTION_STALE: the SDK refuses to push a workspace copy projected by a different version of its
 // parsers — one an earlier version of this plugin saved. The build's plain fetch re-reads every CLEAN copy
 // before it edits one, so the refusal is reached only by a copy still holding edits an earlier build never
-// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The edits
-// were projected from the spec and the re-run re-applies them, and last-applied.json is kept, so resetting
-// the workspace this way loses nothing. Pinned against the real bundle in workspace-projection-real-bundle.test.js.
+// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The build
+// resets that copy itself (projectionRecovery); this is what the halt says when it could not.
 function operatorRemedy(err) {
   if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
-    return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE} and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
+    return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE}, and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
   }
   return '';
 }
 
+// The build's `recover` for ARTIFACT_PROJECTION_STALE: reset the refused copy to the environment's —
+// `fetchArtifact` with `overwrite`, the very step the SDK's message names — instead of asking for a manual
+// reset. Only that artifact's files change (under the SDK's own per-artifact lock); the approval record, the
+// navigation baseline and every lease are left alone. The discarded edits were projected from the spec, so
+// the re-run re-applies them. The SDK names the artifact in its message, e.g.
+//   Refusing to push form '0f2c…': its workspace copy was produced by projection version 3, but this SDK …
+// (pinned against the real bundle in workspace-projection-real-bundle.test.js). Returns '' for any other
+// error, or when the reset itself fails — the halt then names the manual reset.
+function projectionRecovery(provision) {
+  return async (err) => {
+    if (!err || err.code !== 'ARTIFACT_PROJECTION_STALE' || !provision || typeof provision.fetchArtifact !== 'function') return '';
+    const named = /Refusing to push (\w+) '([^']+)'/.exec(String(err.message || ''));
+    if (!named) return '';
+    try {
+      await provision.fetchArtifact(named[1], named[2], { overwrite: true });
+    } catch {
+      return '';
+    }
+    return ` — that ${named[1]}'s workspace copy was saved by an earlier version of this plugin and still held edits no build pushed (an interrupted build, say). The build has reset it to the environment's copy; re-run it, and it re-applies every edit from the spec.`;
+  };
+}
 // Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see
 // requireSuccessfulPush below for which, and why both spellings of the commit flag are read). Shared so
 // every caller that reacts to a failed push decides "failed" exactly as the halt does.
@@ -628,7 +660,7 @@ function requireSuccessfulPush(result, what, warn) {
     // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
     // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: ${RESET_WORKSPACE}, then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again. To reset it, ${RESET_WORKSPACE}, and re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
@@ -1375,4 +1407,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, projectionRecovery, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

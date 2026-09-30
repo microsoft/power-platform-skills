@@ -245,6 +245,19 @@ test('verifySpec: a kept icon is judged on real SubArea elements, fully XML-deco
   for (const wrapped of [`<!-- ${entry('https://contoso.example/help?a=1&amp;b=2')} -->`, `<![CDATA[${entry('https://contoso.example/help?a=1&amp;b=2')}]]>`, `<?note ${entry('https://contoso.example/help?a=1&amp;b=2')} ?>`]) {
     assert.strictEqual(vec(await verifySpec(spec, liveOf(wrapped), { baselineSpec })).present, false, wrapped);
   }
+  // Nor is an element the SDK does not model as navigation: another name that starts the same way, or a
+  // SubArea anywhere but directly under SiteMap/Area/Group (the SDK keeps those as opaque XML).
+  const url = 'https://contoso.example/help?a=1&amp;b=2';
+  for (const other of [
+    `<SubArea-Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubArea:Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<Descriptions>${entry(url)}</Descriptions>`,
+    `<SubArea Id="outer" Entity="account">${entry(url)}</SubArea>`,
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(other), { baselineSpec })).present, false, other);
+  }
+  // ...while the real entry after such a sibling is still found: the walk returns to the Group level.
+  assert.strictEqual(vec(await verifySpec(spec, liveOf(`<Descriptions><Description LCID="1033" Description="x" /></Descriptions>${entry(url)}`), { baselineSpec })).present, true);
   // A numeric reference, either quote style, and a raw `>` inside a value are all the same live entry.
   for (const live of [
     entry('https://contoso.example/help?a=1&#38;b=2'),
