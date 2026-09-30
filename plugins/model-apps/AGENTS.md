@@ -265,7 +265,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   SDK's language (other languages' titles are kept). Every dashboard entry carries exactly
   `Url="/workplace/home_dashboards.aspx"` — the designer writes it on every dashboard entry and
   recognizes one only by the whole Url, and the runtime keys the dashboard glyph on it with a
-  case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`). With a
+  case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`, which
+  reads only real nav entries — a `SubArea` directly under `SiteMap/Area/Group`, never one in a comment
+  or elsewhere — as the kept-icon check below does). With a
   **baseline** — `.maker-workspace/last-applied.json`, written by a successful apply and by download,
   stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
   title/icon that the spec has not changed since, but the designer has, is kept and reported rather

@@ -416,11 +416,13 @@ function makeAllPresentReader(spec) {
 
   // Build a sitemap XML fragment covering the entity subareas declared in appShell. The page/icon
   // checks in verifySpec only fire for implemented pages (source.kind==='tsx') — intent-only specs
-  // skip them — so omitting GenPage XML is safe for our offline-only fixtures.
-  const tags = [];
+  // skip them — so omitting GenPage XML is safe for our offline-only fixtures. Nested the way Dataverse
+  // stores a sitemap: verifySpec reads nav entries only as a SubArea directly under SiteMap/Area/Group.
+  const areasXml = [];
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
-    if (a.icon) tags.push(`<Area Icon="${lc(a.icon)}"/>`);
+    const groupsXml = [];
     for (const g of a.groups || []) {
+      const tags = [];
       for (const sa of g.subAreas || []) {
         const attrs = [];
         if (sa.entity) attrs.push(`Entity="${lc(sa.entity)}"`);
@@ -432,9 +434,11 @@ function makeAllPresentReader(spec) {
         if (sa.icon) attrs.push(`Icon="${lc(sa.icon)}"`);
         tags.push(`<SubArea ${attrs.join(' ')}/>`);
       }
+      groupsXml.push(`<Group>${tags.join('')}</Group>`);
     }
+    areasXml.push(`<Area${a.icon ? ` Icon="${lc(a.icon)}"` : ''}>${groupsXml.join('')}</Area>`);
   }
-  const xml = `<SiteMap>${tags.join('')}</SiteMap>`;
+  const xml = `<SiteMap>${areasXml.join('')}</SiteMap>`;
 
   // Business rules and BPFs are both `workflows` rows, and verifySpec reads them with a raw OData
   // filter rather than by name — so an "all present" reader has to answer that query specifically.

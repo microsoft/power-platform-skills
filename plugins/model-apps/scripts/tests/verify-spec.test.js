@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement, parseFetchXml, liveNavEntries } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
@@ -168,6 +168,50 @@ test('verifySpec: a dashboard nav entry must carry the launcher Url', async () =
   // Not wired at all: the wiring check fails, and there is no second check to double-count it.
   const unwired = await verifySpec(spec, reader('<SubArea Id="x" Entity="account" />'));
   assert.strictEqual(launcher(unwired), undefined);
+});
+
+// Only a real nav entry — a SubArea directly under SiteMap/Area/Group — can carry the launcher Url for its
+// dashboard. A `<SubArea …>` in a comment, a CDATA section, a processing instruction or anywhere else is
+// no entry, so a decoy there carrying the Url must not pass the real entry that lacks it.
+test('verifySpec: a SubArea that is no nav entry cannot satisfy the dashboard launcher check', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const readerOf = (xml) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => xml,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const decoy = `<SubArea Id="decoy" Url="/workplace/home_dashboards.aspx" DefaultDashboard="${DASH}" />`;
+  const damaged = `<SubArea Id="ops" DefaultDashboard="{${DASH.toUpperCase()}}" />`;
+  for (const xml of [
+    `<SiteMap><Area><Group>${damaged}<!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${damaged}<![CDATA[${decoy}]]></Group></Area></SiteMap>`,
+    `<?decoy ${decoy}?><SiteMap><Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap>${decoy}<Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}<Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group><SubArea Id="outer" Entity="account">${decoy}</SubArea>${damaged}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /placeholder icon/, xml);
+    assert.strictEqual(subareaDashboardHasLauncher(xml, DASH), false, xml);
+  }
+  // Only a decoy wires it, or the walk cannot read the sitemap at all: no nav entry to fault for a missing
+  // Url, so the check fails with what is actually wrong.
+  for (const xml of [
+    `<SiteMap><Area><Group><!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}</Area></SiteMap>`,
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${decoy}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /no nav entry points at it/, xml);
+  }
+  // The real entry passes with children of its own and its Url read XML-decoded, as the runtime reads it.
+  const real = `<SiteMap><Area><Group><SubArea Id="ops" Url="&#47;workplace/home_dashboards.aspx" DefaultDashboard="{${DASH.toUpperCase()}}"><Titles><Title LCID="1033" Title="Ops" /></Titles></SubArea></Group></Area></SiteMap>`;
+  assert.strictEqual(launcher(await verifySpec(spec, readerOf(real))).present, true);
+  assert.strictEqual(subareaDashboardHasLauncher(real, DASH), true);
 });
 
 test('verifySpec: a pinned dashboardId verifies a dashboard renamed since the download', async () => {

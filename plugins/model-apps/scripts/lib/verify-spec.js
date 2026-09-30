@@ -818,8 +818,14 @@ async function verifySpec(spec, read, opts = {}) {
           // wrote over designer-made entries, which the check above passed.
           if (wired) {
             const launcher = subareaDashboardHasLauncher(xml, own.id);
-            add('subarea-dashboard-launcher', sa.title || sa.dashboard, launcher,
-              launcher ? '' : `its nav entry has no Url="${DASHBOARD_LAUNCHER_URL}", so the app shows a placeholder icon for it and the designer does not treat it as a dashboard entry — a rebuild restores it`);
+            // Wired, but by a `<SubArea …>` that is no nav entry (in a comment, outside
+            // SiteMap/Area/Group), or in a sitemap the walk cannot read: there is no entry to fault
+            // for a missing Url, so say what is actually wrong.
+            const detail = launcher ? ''
+              : dashboardNavEntries(xml, own.id).length
+                ? `its nav entry has no Url="${DASHBOARD_LAUNCHER_URL}", so the app shows a placeholder icon for it and the designer does not treat it as a dashboard entry — a rebuild restores it`
+                : 'no nav entry points at it: the SubArea that does is not directly under SiteMap/Area/Group (or is inside a comment), or the sitemap XML could not be read';
+            add('subarea-dashboard-launcher', sa.title || sa.dashboard, launcher, detail);
           }
         }
         if (sa.icon) {
@@ -1692,27 +1698,28 @@ function subareaHasDashboard(xml, dashId) {
   return false;
 }
 
-// True when a SubArea pointing at `dashId` also carries the dashboard launcher Url, e.g.
+// The live nav entries pointing at dashboard `dashId`, read by the nav-entry walk (liveNavEntries below):
+// only a `SubArea` element directly under SiteMap/Area/Group counts, never one in a comment, a CDATA
+// section, a processing instruction or elsewhere in the document. None when the walk cannot account for
+// the sitemap (fail-closed), so nothing unreadable can vouch for an entry.
+function dashboardNavEntries(xml, dashId) {
+  const live = liveNavEntries(xml);
+  return (live && live.get(subAreaTargetKey({ type: 'DashBoard', dashboardId: dashId }))) || [];
+}
+
+// True when a nav entry pointing at `dashId` also carries the dashboard launcher Url, e.g.
 //   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" …>
-// Attributes can come in any order, so each start tag is matched whole and then read attribute by
-// attribute; the Url test is the runtime's own (the launcher path anywhere in the Url).
+// Read through the walk rather than by matching `<SubArea …>` start tags in the raw text, which would take
+// a decoy in a comment or outside navigation carrying the Url as the entry. The Url is compared
+// XML-decoded, as the runtime and the designer read it (isDashboardLauncherUrl, sitemap-merge.js).
 function subareaDashboardHasLauncher(xml, dashId) {
-  const norm = (s) => String(s).replace(/[{}]/g, '').toLowerCase();
-  const target = norm(dashId);
-  const tags = String(xml || '').match(/<SubArea\b[^>]*>/gi) || [];
-  for (const tag of tags) {
-    const dash = /\bDefaultDashboard="([^"]*)"/i.exec(tag);
-    if (!dash || norm(dash[1]) !== target) continue;
-    const url = /\bUrl="([^"]*)"/i.exec(tag);
-    if (url && isDashboardLauncherUrl(url[1])) return true;
-  }
-  return false;
+  return dashboardNavEntries(xml, dashId).some((e) => isDashboardLauncherUrl(e.url));
 }
 
 // The live nav entries in sitemap XML, by navigation target (subAreaTargetKey, sitemap-merge.js) — the
-// identity a rebuild matches live entries by — each with its icons. For example
+// identity a rebuild matches live entries by — each with its icons and Url. For example
 //   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
-// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg' }].
+// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
 // An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
 // DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
 // Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
@@ -1754,7 +1761,7 @@ function liveNavEntries(xml) {
       const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
       if (key) {
         if (!byKey.has(key)) byKey.set(key, []);
-        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon });
+        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
       }
     }
     if (!selfClosing) open.push(name);
