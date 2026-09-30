@@ -1,0 +1,14 @@
+{
+  "commit": "0f263094d8fe3acd74049a6dfa336932682f8324",
+  "subject": "AB#39863285 Configure executive summary block UX",
+  "dirtySdkPackage": 0,
+  "libBuiltAt": "2026-09-28T20:54:48.427Z",
+  "newestSrcAt": "2026-09-28T18:13:56.883Z",
+  "libIsStale": false,
+  "nostub": false,
+  "esbuildVersion": "0.28.1",
+  "nodeVersion": "v20.20.2",
+  "builtAt": "2026-09-28T20:57:40.665Z",
+  "bundleSha256": "83939ecfb8c1e936c322ad71bfb60394e9ccbbe0a729452ed8f5f4eee9ce72f7",
+  "bundleBytes": 790605
+}

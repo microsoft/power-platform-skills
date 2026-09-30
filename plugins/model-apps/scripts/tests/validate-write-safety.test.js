@@ -124,18 +124,6 @@ for (const marker of ['app-spec.json', 'model-app-plan.md']) {
   });
 }
 
-for (const marker of ['pcf-intent.json', 'pcf-plan.md']) {
-  test(`pcf marker ${marker} in a working subdir activates the guard (exit 1)`, () => {
-    fs.rmSync(path.join(cwd, 'genpage-plan.md'), { force: true });
-    const wd = path.join(cwd, 'my-control');
-    fs.mkdirSync(wd);
-    fs.writeFileSync(path.join(wd, marker), '{}\n', 'utf8');
-    const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
-    const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
-    assert.equal(runHook(payload).status, 1);
-  });
-}
-
 test('tmpdir scratch writes are allowed (exit 0)', () => {
   const payload = {
     tool_name: 'Write',

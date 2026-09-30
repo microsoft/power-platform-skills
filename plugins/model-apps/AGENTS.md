@@ -4,8 +4,8 @@ This file provides guidance to AI Agents when working with the **model-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building Power Apps for **model-driven apps**. Three **authoring** skills do the work
-(plus `/report-issue` and `/telemetry` — five user-invocable skills in total):
+A plugin for building Power Apps for **model-driven apps**. Two **authoring** skills do the work
+(plus `/report-issue` and `/telemetry` — four user-invocable skills in total):
 
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
@@ -13,18 +13,15 @@ A plugin for building Power Apps for **model-driven apps**. Three **authoring** 
 - **`/app-builder`** — build and edit a **whole model-driven app** (tables, columns,
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
-- **`/pcf`** — build, test, diagnose, upgrade, deploy, bind, verify and inventory PCF code
-  components for model-driven apps and Power Pages.
 
-**The three authoring skills are independent entry points — none requires another.** Use `/genpage`
-to add pages to an app that already exists; use `/app-builder` to build or edit a whole app; use
-`/pcf` for code components.
+**The two authoring skills are independent entry points — neither requires the other.** Use `/genpage`
+to add pages to an app that already exists; use `/app-builder` to build or edit a whole app.
 `/app-builder` does *reuse* `genpage-page-builder` to generate its page `.tsx` (Phase 1.5), but that
 is an implementation detail of code generation, not a dependency: `/genpage` never invokes
 `/app-builder`, and `/app-builder` never invokes the `/genpage` skill. They install together (the
-marketplace copies the whole plugin directory), but **any authoring skill can be invoked without
-another, and none leaves state another depends on**. Keep it that way — shared **agents and libraries** are
-fine, a skill-to-skill call is not, and no skill may write a file another treats as authoritative
+marketplace copies the whole plugin directory), but **either can be invoked without the other, and
+neither leaves state the other depends on**. Keep it that way — shared **agents and libraries** are
+fine, a skill-to-skill call is not, and neither may write a file the other treats as authoritative
 (this is why `write-page-plan.js` emits `app-builder-page-plan.md`, not `genpage-plan.md`).
 
 Plus **`/report-issue`** to file bugs against this repo. Dataverse mutation flows through the
@@ -50,7 +47,6 @@ able to tell what moved from the docs alone):
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
 | [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
-| [`docs/pcf-design.md`](docs/pcf-design.md) | `/pcf` **design record** — shipped PCF scope, architecture, matrix update procedure, templates/recipes, gates/evidence, deploy, binding, Pages and CI | You change `/pcf` behavior, templates, recipes, compatibility policy, deploy/verify flow, or PCF CI |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract (always-present fields) | You change the App Spec shape or validation |
 | [`references/app-spec-schema-advanced.md`](references/app-spec-schema-advanced.md) | The conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants) — split out so the always-read contract stays small | You change one of those features |
@@ -614,50 +610,6 @@ build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / 
 quick-create table flag now ships via `entities[].quickCreate` / an authored `QuickCreate` form —
 auto-generating the Quick Create form's field layout is the remaining follow-up).
 
-
-## pcf — code components (PCF)
-
-`/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories Power Apps component framework code components for model-driven apps and Power Pages. The authoring flow runs in the main conversation loop, not a `Task` subagent, because plan approval, environment consent, binding choices and runtime-verification choices are interactive. Unattended mode uses `scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes an environment write. The flow diagram lives in [`docs/architecture.md`](docs/architecture.md) → `## /pcf — flow`; the public design record is [`docs/pcf-design.md`](docs/pcf-design.md).
-
-Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`references/pcf-best-practices.md`](references/pcf-best-practices.md), [`references/pcf-testing.md`](references/pcf-testing.md), [`references/pcf-deploy.md`](references/pcf-deploy.md), [`references/pcf-power-pages.md`](references/pcf-power-pages.md), [`references/pcf-recipes.md`](references/pcf-recipes.md), and [`references/pcf-troubleshooting.md`](references/pcf-troubleshooting.md).
-
-Behavioral spec per script:
-
-- **`scripts/write-pcf-plan.js` → `scripts/lib/pcf-intent.js`** — validates `pcf-intent.json`, lints binding intent (`PCF_INTENT_*`) and renders `pcf-plan.md`. It is the only writer for the readable PCF summary; do not hand-author that summary after the intent changes.
-- **`scripts/pcf-scaffold.js` → `scripts/lib/pcf-scaffold.js`** — lists templates/recipes and renders selected projects from `pcf/templates/`, `pcf/shared/`, `pcf/recipes/`, the compatibility matrix and committed lock sets. Generated `package.json` files include the `pcf-scripts` npm commands `build`, `clean`, `rebuild`, `lint`, `lint:fix`, `start`, `start:watch`, `refreshTypes` and `test`, including the build/clean hooks that `pac pcf push` expects. It validates namespace/name/path containment before writing, optionally runs `npm install`, and emits JSON.
-- **`scripts/lint-pcf.js` → `scripts/lib/pcf-manifest.js` + `pcf-matrix.js`** — parses `ControlManifest.Input.xml`, enforces manifest and host policy (`PCF_*`, `PCF_PAGES_*`, `PCF_PLATFORM_LIB_*`, `PCF_FLUENT_*`), and optionally diffs against a previous manifest (`PCF_DIFF_*`).
-- **`scripts/pcf-gates.js`** — one-command gate: manifest, source, lint, test and production build. Gate finding families include manifest/source codes above plus `PCF_TEST_*` and `PCF_BUILD_*`; `--skip` is only for an explicitly irrelevant gate and must be explained by the skill.
-- **`scripts/pcf-build.js` → `scripts/lib/pcf-build.js`** — finds one `.pcfproj`, cleans by default, invokes the project-local `pcf-scripts` bin through `process.execPath`, checks `PcfBuildMode`, bundle size and unexplained outputs (`PCF_BUILD_*`, `PCF_BUNDLE_*`, `PCF_OUT_*`). `PcfBuildMode` only takes effect after the `Microsoft.Common.props` import.
-- **`scripts/pcf-doctor.js` → `scripts/lib/pcf-doctor.js`** — checks local tools and project health for the requested needs. Finding ids use `TOOL_*` and `PROJ_*`, plus matrix/host findings reused from manifest policy.
-- **`scripts/pcf-upgrade.js` → `scripts/lib/pcf-upgrade.js`** — plans and optionally applies bounded repairs: dependency alignment, build-mode placement and platform-library declaration alignment. Step ids include `DEPS_TO_MATRIX`, `REINSTALL`, `BUILDMODE_PRODUCTION`, `PLATFORM_LIB_VERSION`, and manual migration ids for non-automatic changes. It refuses dirty trees unless `--allow-dirty` is explicit.
-- **`scripts/pcf-push.js`** — wraps `pac pcf push --environment` for developer verification. The skill must obtain consent before calling it because PAC publishes all pending customizations. It validates solution/publisher/control names before passing values to PAC, allows dev bundles only with `--allow-dev-bundle`, and verifies registration unless `--no-verify` is explicit.
-- **`scripts/verify-pcf.js` → `scripts/lib/pcf-dataverse.js` + `pcf-binding-verify.js`** — reads registration and FormXML metadata, then reports metadata evidence (`registered`, `bound(draft)`, `bound(published)`). `--intent` reads the canonical binding target from `bindings[].target` (`column` or `controlId`), with compatibility handling for older flat fields. The `/pcf` skill reports `runtime-not-checked` when no browser or manual runtime check was run. Binding findings use `PCF_BIND_*`; semantic clients are `phone`, `tablet`, `web`, mapped to FormXML factors only in `pcf-binding-verify.js`.
-- **`scripts/pcf-inventory.js` → `scripts/lib/pcf-dataverse.js`** — lists registered controls and optional where-used dependencies such as the bound `SystemForm` rows returned by Dataverse dependency APIs. It warns that dependency results are registered solution dependencies only and are not proof of Liquid or arbitrary text references.
-- **`scripts/pcf-ci-build.js`** — generated-project CI helper. `--all` scaffolds templates and available recipes, runs installs and gates; `--templates` does the same for the templates only; `--latest` probes published dependency drift; `--package` builds a small package smoke through PAC solution packaging.
-
-Rules that make the scripts safe to run from agents:
-
-- Every CLI starts with `parseArgs(argv)` and `validateFlags(argv, { known, needValue, hints })`. Usage errors print `USAGE`; non-usage failures exit 1 and emit one JSON result object on stdout so callers can parse failures consistently.
-- Scripts are dependency-free CommonJS and run on Node 20 and 22 across the CI matrix.
-- Named external CLIs (`az`, `pac`, `npm`/`npx` shims, `git`, `dotnet`) go through `scripts/lib/process-runner.js`, which resolves them to absolute executables and starts them with `shell:false`; Windows batch shims such as `pac.cmd` run under checked `cmd.exe` arguments inside that runner. Resolved JavaScript entry points (for example `npm-cli.js`, `pcf-scripts`, and Jest) run under the current Node as `process.execPath <file>` with an argv array and `shell:false` via `scripts/lib/node-tool.js`; never use `npm run` or `npx` when the JS entry point is known. PCF's `pac-exec.js` is only a result-shape adapter over the runner.
-- Versions come only from `pcf/compatibility-matrix.json` and lockfiles under `pcf/lock/`; no other PCF toolchain version source is allowed.
-- Dataverse write surfaces use documented APIs. The `customcontrol` table is never written; Learn marks it internal-use only.
-- Raw Dataverse reads are allowed only where the vendored SDK has no modeled method, with a WHY comment naming the missing method such as `RetrieveUnpublished` or `RetrieveDependentComponents`.
-
-Finding-id families:
-
-| Family | Owner | Meaning |
-| --- | --- | --- |
-| `PCF_INTENT_*` | `pcf-intent.js` | Skill intent and binding-plan errors. |
-| `PCF_*`, `PCF_PAGES_*` | `pcf-manifest.js` | Manifest, host and compatibility policy. |
-| `PCF_DIFF_*` | `pcf-manifest.js` | Breaking or risky manifest changes. |
-| `PCF_PLATFORM_LIB_*`, `PCF_FLUENT_*` | `pcf-matrix.js` | Platform-library declaration policy. |
-| `PCF_CODE_*`, `PCF_VIRTUAL_*` | `pcf-code-gate.js` | Source patterns that are unsupported or require declaration. |
-| `PCF_BUILD_*`, `PCF_BUNDLE_*`, `PCF_OUT_*` | `pcf-build.js` | Build mode, bundle and output hygiene. |
-| `PCF_BIND_*` | `pcf-binding-verify.js` | FormXML binding, client factor and parameter evidence. |
-| `TOOL_*`, `PROJ_*` | `pcf-doctor.js` | Local toolchain and project-health diagnostics. |
-| `DEPS_TO_MATRIX`, `BUILDMODE_PRODUCTION`, `PLATFORM_LIB_VERSION`, etc. | `pcf-upgrade.js` | Upgrade plan steps. |
-
 ## Local Development
 
 Test this plugin locally:
@@ -684,7 +636,6 @@ docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
   app-builder-capabilities.md       ← /app-builder capabilities (what ships today, with evidence)
   app-builder-design.md        ← /app-builder design record (Part I staged flow · Part II --changed-only)
-  pcf-design.md                ← /pcf design record (scope, architecture, matrix, gates, deploy, binding, CI)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-connector-builder.md ← Orchestrator-invoked connector gate/discovery; writes connector bindings
@@ -706,22 +657,8 @@ references/                    ← Shared reference docs
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
-  pcf-best-practices.md        ← PCF coding, lifecycle, security and public-repo rules
-  pcf-deploy.md                ← PCF push, packaging and release guidance
-  pcf-hosts.md                 ← PCF host matrix, platform-library and binding facts
-  pcf-power-pages.md           ← Power Pages journeys for PCF controls
-  pcf-recipes.md               ← Rendered PCF recipe catalog and certification labels
-  pcf-testing.md               ← PCF evidence levels and testing guidance
-  pcf-troubleshooting.md       ← PCF symptom → checks → fixes
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
 samples/                       ← Example .tsx files (13 samples) plus app-builder spec samples
-pcf/                          ← PCF templates, recipes, lock sets, shared files and pipeline examples
-  compatibility-matrix.json    ← PCF toolchain/host/dependency source of truth
-  lock/standard|virtual/       ← Committed dependency snapshots used by scaffolds/CI
-  templates/                   ← field/dataset × standard/virtual project templates
-  recipes/                     ← star-rating, hierarchy-tree, lookup-dropdown, contextual-grid, grid-customizer, attachment-uploader
-  shared/                      ← Shared scaffold support files (.gitignore, test harness, eslint/jest/tsconfig)
-  pipelines/                   ← Example GitHub Actions and Azure DevOps package/import pipelines
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
@@ -749,17 +686,6 @@ scripts/
   ai-preflight.js              ← app-builder: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
-  write-pcf-plan.js            ← /pcf: validates pcf-intent.json and renders pcf-plan.md
-  pcf-scaffold.js              ← /pcf: lists/renders matrix-pinned templates and recipes
-  lint-pcf.js                  ← /pcf: manifest lint and manifest-diff CLI
-  pcf-gates.js                 ← /pcf: manifest/source/lint/test/build gate runner
-  pcf-build.js                 ← /pcf: project-local pcf-scripts build runner
-  pcf-doctor.js                ← /pcf: local tool/project diagnostic CLI
-  pcf-upgrade.js               ← /pcf: bounded repair planner/applier
-  pcf-push.js                  ← /pcf: consent-gated pac pcf push wrapper
-  verify-pcf.js                ← /pcf: registration and FormXML binding verifier
-  pcf-inventory.js             ← /pcf: registered control inventory and where-used dependencies
-  pcf-ci-build.js              ← /pcf: generated-template/recipe CI and package-smoke runner
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
@@ -770,7 +696,7 @@ scripts/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
-    process-runner.js          ← how every script starts named external CLIs such as az/pac/npm/npx/git/dotnet: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); resolved JS entry points run under process.execPath through node-tool.js instead
+    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
@@ -818,17 +744,6 @@ scripts/
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
-    pcf-matrix.js              ← /pcf compatibility matrix loader and host/platform-library policy
-    pcf-manifest.js            ← /pcf manifest parse/lint/diff primitives
-    pcf-code-gate.js           ← /pcf source scanner and feature-coherence gate
-    pcf-scaffold.js            ← /pcf template/recipe renderer
-    pcf-build.js               ← /pcf pcf-scripts build wrapper and bundle checks
-    pcf-doctor.js              ← /pcf toolchain and project health checks
-    pcf-upgrade.js             ← /pcf upgrade planner/applier
-    pcf-dataverse.js           ← /pcf read-only Dataverse registration/form/dependency helpers
-    pcf-binding-verify.js      ← /pcf FormXML binding verifier and client-factor constants
-    pcf-intent.js              ← /pcf intent validation and plan rendering
-    pcf-names.js               ← /pcf namespace/control/publisher/solution/version validators
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
     utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
@@ -853,7 +768,6 @@ skills/
     verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
   report-issue/                ← Bug-report skill (bundled shared workflow)
   telemetry/                   ← /model-apps:telemetry on|off|status control skill
-  pcf/                         ← PCF code-component skill (create, doctor, upgrade, deploy, bind, verify, inventory)
 ```
 
 ## Skills
@@ -862,7 +776,6 @@ skills/
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
 | `/app-builder` | Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
-| `/pcf` | Build, test, diagnose, upgrade, deploy, bind, verify and inventory PCF code components for model-driven apps and Power Pages |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
 | `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 
@@ -1094,9 +1007,9 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Fail closed:** telemetry never changes a script's exit code; emission is
   fire-and-forget via a detached dispatcher child. See `shared/telemetry/README.md`.
 
-## Development Standards (generative pages)
+## Development Standards
 
-- **React 17 + TypeScript** — all generated page code
+- **React 17 + TypeScript** — all generated code
 - **Fluent UI V9** — `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat`)
 - **Single file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
@@ -1104,17 +1017,6 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
-
-
-## PCF standards
-
-- **Versions only from the matrix** — update `pcf/compatibility-matrix.json` and `pcf/lock/<set>/` together; do not hard-code PCF toolchain versions in scripts, templates or docs.
-- **Gates before deploy** — `pcf-gates.js` must pass before `pcf-push.js` unless the user explicitly accepts a scoped skip and the final report names it.
-- **Documented APIs only** — no host DOM shortcuts, raw `window.parent`, undeclared feature use, or undocumented `context` internals.
-- **Grid customizer marker** — the Power Apps grid customizer extension pattern may call `fireEvent` only from `customizerBridge.ts(x)` carrying `pcf-extension-pattern: grid-customizer`.
-- **Record context through inputs** — do not use `Xrm`, `context.page`, or `context.mode.contextInfo`; pass `entityId` and `entityName` as maker-configured properties when a recipe needs the current record.
-- **Template/recipe health** — every committed PCF template and available recipe must pass `pcf-gates.js` through `pcf-ci-build.js --all`.
-- **Power Pages claims** — label designed-for vs certified separately; do not claim Pages runtime certification without runtime evidence recorded in recipe metadata.
 
 ## CLI argument contract
 
@@ -1228,22 +1130,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   workflow itself, across ubuntu × windows × macos and Node 20 × 22.
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
-  PCF generated-project CI is intentionally split into `.github/workflows/model-apps-pcf-projects.yml`
-  because template/recipe installs need npm registry access. ubuntu and Windows both build every
-  template and available recipe (`--all`). The build step points `TEMP`/`TMP` at `runner.temp` so
-  Windows generates projects on the runner's local temporary disk (D:) rather than the OS disk (C:):
-  every project is a full `npm ci` plus gates, and on C: one Windows template took 213–521 s against
-  29–76 s on D:, so the full set took about an hour there. `pcf-ci-build.js` prints each step's
-  start, end and duration to stderr, so a slow step shows in the log before the job ends. Matrix
-  drift runs weekly in `.github/workflows/model-apps-pcf-matrix-drift.yml`.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
   (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below.
-- PCF local generated-project check (from repo root): `node plugins/model-apps/scripts/pcf-ci-build.js --all`.
-- PCF package smoke (from repo root, requires PAC CLI + .NET SDK): `node plugins/model-apps/scripts/pcf-ci-build.js --package`.
-- PCF matrix drift probe (from repo root): `node plugins/model-apps/scripts/pcf-ci-build.js --all --latest`.
-- PCF evals (from repo root): `node evals/model-apps/pcf/run-pcf.js --tier smoke`, `node evals/model-apps/pcf/run-pcf.js --tier full`, and `node --test evals/model-apps/pcf/tests/*.test.js`.
 
 **The vendored SDK lives in a separate repo.** The Dataverse mechanics are in
 `power-platform-ux` (Azure DevOps `msazure/OneAgile`), package `packages/cds-maker-sdk`. This plugin
@@ -1420,20 +1310,3 @@ intent facts), `app` (sitemap facts + nav graph), `verify` (`verifySpec` reconci
 # From repo root:
 node evals/model-apps/app-builder/run-app-builder.js
 ```
-
-### /pcf — offline structural and generated-project harness
-
-The `/pcf` eval harness lives under `evals/model-apps/pcf/` and has two offline layers:
-
-- **Layer S — structural facts** for intent, manifest, source, FormXML, doctor and upgrade cases.
-- **Layer G — generated-output grading** that reuses the manifest/source gates against captured or synthetic projects. Build/lint/test are skipped unless dependencies are present.
-
-Run from the repo root:
-
-```bash
-node evals/model-apps/pcf/run-pcf.js --tier smoke
-node evals/model-apps/pcf/run-pcf.js --tier full
-node --test evals/model-apps/pcf/tests/*.test.js
-```
-
-See [`evals/model-apps/pcf/EVAL_GUIDE.md`](../../evals/model-apps/pcf/EVAL_GUIDE.md) for fixture rules, the captured-agent corpus procedure, and the stage-to-oracle table.

@@ -679,7 +679,7 @@ function readJsonArg(raw) {
 /**
  * Writes a result to stdout and exits.
  *   ok=true → JSON payload to stdout, exit 0
- *   ok=false + Error → JSON `{ ok:false, error }` to stdout plus message to stderr, exit 1
+ *   ok=false + Error → message to stderr, exit 1
  *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
@@ -690,9 +690,7 @@ function emitResult(ok, payload) {
     process.exit(0);
   }
   if (payload instanceof Error) {
-    const errorPayload = { ok: false, error: payload.message || String(payload) };
-    process.stdout.write(JSON.stringify(errorPayload) + '\n');
-    process.stderr.write(errorPayload.error + '\n');
+    process.stderr.write(payload.message + '\n');
   } else if (payload !== null && typeof payload === 'object') {
     // Structured failure. Emit the payload to stdout so callers can parse it, and exit 1 so shells
     // still treat it as a failure.

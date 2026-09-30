@@ -1,0 +1,626 @@
+#!/usr/bin/env node
+
+// Subset of model-apps' scripts/lib/dataverse-auth.js for the pcf plugin.
+// Marketplace installs copy only one plugin directory, so pcf needs the auth/request core
+// and CLI helpers locally; model-driven metadata/language helpers stay in model-apps.
+// Retained function bodies match model-apps except emitResult, which intentionally keeps
+// the pcf CLI contract: Error payloads also emit { ok:false, error } JSON on stdout.
+const { nearestName } = require('./nearest-name.js');
+const { execFileAsync, runSync } = require('./process-runner.js');
+
+// Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
+// scripts/lib/validation-helpers.js, plus the non-numbered `crm<ring>` labels such as crmtest):
+//   Commercial/GCC: <org>[.api].crm<region>.dynamics.com   e.g. contoso.crm.dynamics.com, contoso.crm4.dynamics.com
+//   GCC High:       <org>[.api].crm.microsoftdynamics.us
+//   DoD:            <org>[.api].crm.appsplatform.us
+//   China:          <org>[.api].crm.dynamics.cn
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/discovery-service#global-discovery-service
+const DATAVERSE_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?(?:crm[a-z0-9]*\.dynamics\.com|crm\.microsoftdynamics\.us|crm\.appsplatform\.us|crm\.dynamics\.cn)$/;
+
+/**
+ * The canonical origin of a Dataverse environment URL, or null when the value is anything else.
+ *
+ * Every Dataverse call starts here: the result is the `--resource` a token is requested for, the base
+ * every request URL is built on, and the only origin a token is ever sent to. So the RAW text is
+ * checked, not a parsed-and-reserialised URL: it must be literally `https://` + a host of letters,
+ * digits, dots and hyphens, optionally followed by slashes. Parsing first would not do: the URL
+ * parser accepts characters in a path, and in some hosts, that must never reach a command line.
+ * @returns {string|null} e.g. "https://contoso.crm.dynamics.com"
+ */
+function dataverseOrigin(value) {
+  if (typeof value !== 'string') return null;
+  const m = /^https:\/\/([A-Za-z0-9.-]+)\/*$/i.exec(value.trim());
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  return DATAVERSE_HOST.test(host) ? `https://${host}` : null;
+}
+
+function requireDataverseOrigin(value) {
+  const origin = dataverseOrigin(value);
+  if (!origin) {
+    throw new Error(
+      `'${value}' is not a Dataverse environment URL. Pass the environment's https origin only, `
+        + 'for example https://contoso.crm.dynamics.com (no path, query, port or credentials).'
+    );
+  }
+  return origin;
+}
+
+/**
+ * Gets an Azure CLI access token for the given Dataverse environment URL.
+ * Returns null if `az` is missing, the user isn't logged in, the resource is unreachable, or the
+ * value is not a Dataverse environment origin (then no process is started at all).
+ * @param {string} envUrl - e.g. "https://contoso.crm.dynamics.com"
+ * @param {object} [opts]
+ * @param {boolean} [opts.fresh=false] bypass the process memo and replace it with a new token
+ * @param {Function} [opts.exec=runSync] test seam for the Azure CLI subprocess
+ * @returns {string|null}
+ */
+const authTokenMemo = new Map();
+
+function getAuthToken(envUrl, opts = {}) {
+  const resource = dataverseOrigin(envUrl);
+  if (!resource) return null;
+  const exec = opts.exec || runSync;
+  if (!opts.fresh && authTokenMemo.has(resource)) {
+    return authTokenMemo.get(resource);
+  }
+  try {
+    const out = exec(
+      'az',
+      ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
+      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    const token = out.trim() || null;
+    // `az account get-access-token` is expensive on a cold Windows process, but an immediate
+    // re-call returns the same MSAL-cached token (see the ensureOk 401 note below). Reusing that
+    // non-null token within this Node process removes repeated CLI cold-starts without changing
+    // Dataverse semantics; a caller that just saw a 401 passes `{ fresh: true }` to replace it.
+    if (token) authTokenMemo.set(resource, token);
+    else authTokenMemo.delete(resource);
+    return token;
+  } catch {
+    if (opts.fresh) authTokenMemo.delete(resource);
+    return null;
+  }
+}
+
+function getAuthTokenAsync(envUrl, opts = {}) {
+  const resource = dataverseOrigin(envUrl);
+  if (!resource) return Promise.resolve(null);
+  const exec = opts.execFile || execFileAsync;
+  if (!opts.fresh && authTokenMemo.has(resource)) {
+    return Promise.resolve(authTokenMemo.get(resource));
+  }
+  return new Promise((resolve) => {
+    try {
+      exec(
+        'az',
+        ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
+        { encoding: 'utf8', timeout: 30000, windowsHide: true },
+        (error, stdout) => {
+          if (error) {
+            if (opts.fresh) authTokenMemo.delete(resource);
+            resolve(null);
+            return;
+          }
+          const token = String(stdout || '').trim() || null;
+          // Shares the synchronous helper's memo deliberately: check-auth can pre-warm the token
+          // without blocking the event loop, and later synchronous Dataverse callers in the same
+          // process still avoid a second Azure CLI cold start.
+          if (token) authTokenMemo.set(resource, token);
+          else authTokenMemo.delete(resource);
+          resolve(token);
+        }
+      );
+    } catch {
+      if (opts.fresh) authTokenMemo.delete(resource);
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * Reads the Azure CLI identity that will supply the Dataverse token. Best-effort and never throws —
+ * it exists to make a failure explicable, so it must not become a failure of its own.
+ * @returns {{user: string, tenantId: string}|null}
+ */
+function azIdentity(deps = {}) {
+  try {
+    const out = (deps.exec || runSync)(
+      'az',
+      ['account', 'show', '--query', '{user:user.name,tenantId:tenantId}', '-o', 'json'],
+      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    const parsed = JSON.parse(out);
+    return parsed && parsed.user ? { user: parsed.user, tenantId: parsed.tenantId || '(unknown)' } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AB#6686427 — prove, before any real work, that the ambient Azure CLI context can actually talk to
+ * the requested org.
+ *
+ * The skill flow selects a PAC profile, but every script here authenticates through the
+ * INDEPENDENTLY active `az` account. In a normal multi-tenant workflow `pac auth` and `az login`
+ * legitimately point at different tenants: `pac org who` succeeds, `az` mints a token for the wrong
+ * tenant, and Dataverse answers 401. That reads as a permission problem, so the user goes looking at
+ * security roles and PAC profiles instead of at `az account show`.
+ *
+ * `WhoAmI` is the probe because it is the cheapest authenticated call and needs no privilege beyond
+ * being a valid user of the org — so a 401 here is about IDENTITY, not about what that identity may
+ * do. That distinction is the whole value: a 403 or a 5xx is deliberately NOT blamed on the tenant,
+ * because misattributing those would send the user down exactly the wrong path, which is the bug
+ * this fixes, mirrored.
+ *
+ * Dependencies are injected for tests. Returns `{ ok: true, identity }` or `{ ok: false, error }`
+ * and never throws — it is a diagnostic.
+ * WhoAmI: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
+ */
+async function preflightAuth(envUrl, deps = {}) {
+  const getToken = deps.getToken || getAuthToken;
+  const request = deps.request || dataverseRequest;
+  const readIdentity = deps.azIdentity || azIdentity;
+
+  // Memoized, because reading it costs an `az` subprocess and BOTH the success path (to report which
+  // identity was accepted) and the 401 path (to name the one that was rejected) want it. Without the
+  // cache the 401 path could read it twice.
+  let identityRead = false;
+  let cachedIdentity = null;
+  const who = () => {
+    if (!identityRead) {
+      identityRead = true;
+      try { cachedIdentity = readIdentity(); } catch { cachedIdentity = null; }
+    }
+    return cachedIdentity;
+  };
+
+  // Normalize to the validated ORIGIN and use it from here on. Validating one string and then
+  // requesting with another is how a check becomes decorative.
+  const origin = dataverseOrigin(envUrl);
+  if (!origin) {
+    return {
+      ok: false,
+      error: `refusing to authenticate against '${envUrl}': the environment must be a Dataverse https:// ORIGIN `
+        + '(scheme + host only, no path, query or fragment). A bearer token is attached to this request, so a '
+        + 'non-HTTPS, path-bearing or malformed target is rejected before any token is acquired.',
+    };
+  }
+
+  let token = null;
+  try { token = getToken(origin); } catch { token = null; }
+  if (!token) {
+    return {
+      ok: false,
+      error: `no Azure CLI access token could be obtained for ${origin}. This is a sign-in problem, not a `
+        + `permissions one — run \`az login\` (add \`--tenant <id>\` if this org lives in another tenant), then retry.`,
+    };
+  }
+
+  let res;
+  try {
+    // Headers are requested because a 401's `WWW-Authenticate` is the only thing that distinguishes a
+    // Conditional Access / CAE claims challenge from a plain wrong-identity rejection.
+    // The token acquired above is HANDED OVER rather than re-fetched: `dataverseRequest` would
+    // otherwise shell out to `az account get-access-token` a second time for the same origin, and
+    // that call cold-starts the Azure CLI runtime — seconds, on the path a user is waiting on.
+    res = await request(origin, 'GET', 'WhoAmI', null, { includeHeaders: true, token });
+  } catch (e) {
+    // A transport failure says nothing about identity, so it must not be reported as one — and must
+    // not BLOCK. See the `inconclusive` contract below.
+    return { ok: false, inconclusive: true, error: `the identity check could not reach ${origin}: ${(e && e.message) || e}` };
+  }
+
+  const status = res && (res.status !== undefined ? res.status : res.statusCode);
+  if (status >= 200 && status < 300) {
+    return { ok: true, identity: who() || { user: '(unknown)', tenantId: '(unknown)' }, userId: res.data && (res.data.UserId || res.data.userId) };
+  }
+
+  if (status === 401) {
+    // A 401 is NOT proof of tenant divergence. Conditional Access and Continuous Access Evaluation
+    // return 401 with `WWW-Authenticate: ... error="insufficient_claims"`, and a revoked token or a
+    // disabled user land here too — none of which `az login --tenant` fixes. Naming tenant divergence
+    // as a certainty would be the same misattribution this bug is about, pointed somewhere new.
+    // See: https://learn.microsoft.com/en-us/entra/identity-platform/claims-challenge
+    const authenticate = String((res.headers && (res.headers['www-authenticate'] || res.headers['WWW-Authenticate'])) || '');
+    if (/insufficient_claims|claims=/i.test(authenticate)) {
+      return {
+        ok: false,
+        error: `Dataverse returned a CLAIMS CHALLENGE for ${origin} (401 with \`${authenticate.slice(0, 160)}\`). This is a `
+          + 'Conditional Access / CAE requirement, not a wrong-tenant problem — re-authenticate so the requested claims '
+          + 'are satisfied (for example an interactive `az login`); switching tenant will not help.',
+      };
+    }
+    const id = who();
+    const whoText = id
+      ? `The token is being issued to '${id.user}' in tenant ${id.tenantId}.`
+      : 'The active Azure CLI identity could not be read, so the token source is unknown.';
+    return {
+      ok: false,
+      error: `Dataverse rejected the Azure CLI token for ${origin} (WhoAmI returned 401). ${whoText} `
+        + 'The most likely cause is that these scripts authenticate through the ACTIVE Azure CLI account rather than '
+        + `the selected PAC profile, so \`pac org who\` can succeed while this fails — run \`az login --tenant <the `
+        + `tenant that owns ${origin}>\` and retry. A revoked token or a disabled account would also land here.`,
+    };
+  }
+
+  // INCONCLUSIVE, never blocking. This probe goes through `dataverseRequest`, which retries fewer
+  // statuses and fewer times than the `createAzHttpClient` the real work uses (that one also retries
+  // 504 and backs off longer). So a transient 429/5xx the caller's own client would ride out can fail
+  // HERE — and turning that into a hard stop would make a diagnostic the reason a previously working
+  // download fails. Report it, do not block: only a definitive verdict (bad URL, no token, or a 401)
+  // is worth refusing to start over. The server's own message is preserved because a 403 usually
+  // explains itself (IP firewall, licensing, missing role) and discarding it hides the real cause.
+  const serverMsg = res && res.data && (res.data.error?.message || (typeof res.data === 'string' ? res.data : null));
+  return {
+    ok: false,
+    inconclusive: true,
+    error: `the identity check against ${envUrl} returned HTTP ${status}${serverMsg ? ` — ${serverMsg}` : ''}, which is not an `
+      + 'authentication failure — proceeding anyway; if the run then fails, investigate that response rather than the Azure CLI tenant.',
+  };
+}
+
+/**
+ * Makes a raw HTTPS request and resolves with `{ statusCode, body, headers? }` or `{ error }`.
+ * @param {object} options
+ * @param {string} options.url
+ * @param {string} [options.method='GET']
+ * @param {object} [options.headers={}]
+ * @param {string} [options.body=null]
+ * @param {boolean} [options.includeHeaders=false]
+ * @param {number} [options.timeout=60000]
+ * @returns {Promise<{statusCode: number, body: string, headers?: object} | {error: string}>}
+ */
+function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000 }) {
+  return new Promise((resolve) => {
+    const https = require('https');
+    const http = require('http');
+    const u = new URL(url);
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(
+      {
+        method,
+        headers,
+        hostname: u.hostname,
+        port: u.port || undefined,
+        path: u.pathname + u.search,
+        timeout,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const data = Buffer.concat(chunks).toString('utf8');
+          const result = { statusCode: res.statusCode, body: data };
+          if (includeHeaders) result.headers = res.headers;
+          resolve(result);
+        });
+      }
+    );
+    req.on('error', (e) => resolve({ error: e.message }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ error: 'Request timed out' });
+    });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Makes a Dataverse Web API request with built-in auth, retry, and JSON handling.
+ * Retries up to 2 times: refreshes token on 401, backs off on 429/500/502/503.
+ * @param {string} envUrl - Dataverse environment URL (no trailing slash needed)
+ * @param {string} method - GET, POST, PATCH, DELETE
+ * @param {string} apiPath - Path after /api/data/v9.2/ (e.g. "EntityDefinitions")
+ * @param {object|string|null} [body=null] - Request body (object → JSON.stringify)
+ * @param {object} [opts={}]
+ * @param {boolean} [opts.includeHeaders=false] - Include response headers in result
+ * @param {object} [opts.extraHeaders={}] - Extra request headers (e.g. Prefer)
+ * @param {number} [opts.timeout=60000]
+ * @returns {Promise<{status: number, data: any, headers?: object}>}
+ */
+async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {}) {
+  // The validated origin, never the caller's text, is what the token is requested for and sent to.
+  const cleanUrl = requireDataverseOrigin(envUrl);
+  const url = `${cleanUrl}/api/data/v9.2/${apiPath}`;
+  const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
+  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
+  // Test seams, matching `preflightAuth`'s injection style. Without them the token-reuse behaviour
+  // below could only be exercised against a live Azure CLI and a real org.
+  const acquireToken = opts.getToken || getAuthToken;
+  const send = opts.request || makeRequest;
+
+  // `token` lets a caller that has ALREADY acquired one hand it over instead of paying for a second
+  // `az account get-access-token`, which cold-starts the Azure CLI's Python runtime (seconds, not
+  // milliseconds, on Windows). `preflightAuth` is the case that matters: it deliberately fetches a
+  // token first so it can tell "not signed in" apart from "signed in but rejected" — two genuinely
+  // different diagnoses — and would otherwise fetch the very same token twice in a row.
+  // The 401 refresh path below still re-acquires from the CLI, because a preset token that has just
+  // been rejected is exactly the thing that must not be retried.
+  let token = presetToken || acquireToken(cleanUrl, { fresh: false });
+  if (!token) {
+    throw new Error(`Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`);
+  }
+
+  const maxRetries = 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      ...extraHeaders,
+    };
+    if (bodyStr) headers['Content-Type'] = 'application/json; charset=utf-8';
+
+    const res = await send({ url, method, headers, body: bodyStr, includeHeaders, timeout });
+
+    if (res.error) {
+      if (attempt < maxRetries) continue;
+      throw new Error(`Request failed: ${res.error}`);
+    }
+
+    if (res.statusCode === 401 && attempt < maxRetries) {
+      token = acquireToken(cleanUrl, { fresh: true });
+      if (!token) throw new Error("Token refresh failed. Run 'az login' again.");
+      continue;
+    }
+
+    if ([429, 500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      continue;
+    }
+
+    let data = null;
+    if (res.body) {
+      try { data = JSON.parse(res.body); } catch { data = res.body; }
+    }
+    const out = { status: res.statusCode, data };
+    if (includeHeaders) out.headers = res.headers;
+    return out;
+  }
+  throw new Error('Unreachable retry loop');
+}
+
+/**
+ * Throws if the response is not 2xx. Returns the response untouched on success.
+ * Pulls Dataverse's structured error message out of `data.error.message` when present.
+ *
+ * AB#6686424 — a surviving 401 names the identity whose token was refused. Both auth paths already
+ * retry a 401 once, and that retry is NOT the gap: measured, `az account get-access-token` serves
+ * from the MSAL cache, so an immediate re-call returns a byte-identical token. A retry therefore
+ * cannot fix a token rejected for WHO it belongs to — only one that expired in a narrow window. The
+ * reporter's own workaround was `az login`, i.e. AB#6686427's cause. So what a terminal 401 needs is
+ * not another attempt but an explanation, or the reader goes looking at Dataverse security roles.
+ *
+ * Scoped to 401 only. A 403 is a genuine privilege problem and a 4xx/5xx is something else entirely;
+ * attaching identity advice to those would send the reader to `az login` for something it cannot fix.
+ * The identity is read lazily so a successful call never shells out to `az`.
+ */
+function ensureOk(res, context, deps = {}) {
+  if (res.status >= 200 && res.status < 300) return res;
+  // A 401 from Dataverse frequently carries NO body at all, so `data` is null and interpolating it
+  // yields the literal "HTTP 401 — null". Found by live verification; the unit fixtures all supplied
+  // a message, so nothing caught it.
+  const raw = res?.data?.error?.message || (typeof res.data === 'string' ? res.data : (res.data == null ? null : JSON.stringify(res.data)));
+  const msg = raw || '(no response body)';
+  if (res.status === 401) {
+    const readIdentity = deps.azIdentity || azIdentity;
+    let id = null;
+    try { id = readIdentity(); } catch { id = null; }
+    const whoText = id
+      ? `The token was issued to '${id.user}' in tenant ${id.tenantId}.`
+      : 'The active Azure CLI identity could not be read.';
+    throw new Error(
+      `${context} failed: HTTP 401 — ${msg}. ${whoText} These scripts authenticate through the ACTIVE `
+      + 'Azure CLI account, not the selected PAC profile, so this is an identity problem rather than a '
+      + 'Dataverse privilege issue — run `az login --tenant <the tenant that owns this org>` and retry.'
+    );
+  }
+  throw new Error(`${context} failed: HTTP ${res.status} — ${msg}`);
+}
+
+/**
+ * Builds a Dataverse verbose Label object.
+ * @param {string} text
+ * @param {number} [lang=1033]
+ */
+function label(text, lang = 1033) {
+  return {
+    '@odata.type': 'Microsoft.Dynamics.CRM.Label',
+    LocalizedLabels: [{ '@odata.type': 'Microsoft.Dynamics.CRM.LocalizedLabel', Label: text, LanguageCode: lang }],
+  };
+}
+
+function parseArgs(argv) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      const body = arg.slice(2);
+      const eq = body.indexOf('=');
+      if (eq !== -1) {
+        flags[body.slice(0, eq)] = body.slice(eq + 1);
+        continue;
+      }
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        flags[body] = true;
+      } else {
+        flags[body] = next;
+        i++;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { positional, flags };
+}
+
+/**
+ * Validates a CLI's raw argv against its declared flag contract.
+ * Returns a usage-error message, or null when the argv is acceptable.
+ *
+ * WHY this is shared rather than per-CLI: parseArgs accepts ANY `--name`, and an unrecognised flag
+ * both (a) disappears silently and (b) swallows the following token. On a phase-selecting build
+ * that combination is dangerous rather than merely untidy — measured on build-model-app.js,
+ * `--stage ui` plans 3 steps while the one-letter typo `--stagee ui` plans all 9 and still exits 0,
+ * so a caller who believed they had scoped an apply to the UI phases gets a full data-model apply
+ * against a live environment with no diagnostic. Every CLI in this directory had that hole; only
+ * lint-app-spec.js had grown its own guard, and a per-CLI guard is one each new CLI can forget.
+ *
+ * @param {string[]} argv          process.argv.slice(2)
+ * @param {object}   contract
+ * @param {Iterable<string>} contract.known      every flag this CLI accepts, without the leading --
+ * @param {Iterable<string>} contract.needValue  the subset that must carry a value
+ * @param {Object<string,string>} [contract.hints]  per-flag text appended to a missing-value error,
+ *        for flags whose accepted values are a closed set worth naming ("one of: design, plan, …").
+ *        A generic "requires a value" is correct but strictly less useful than one that says what
+ *        the value may be, and that detail should not be lost when a CLI adopts this helper.
+ * @returns {string|null}
+ */
+function validateFlags(argv, { known, needValue = [], hints = {} } = {}) {
+  const knownSet = known instanceof Set ? known : new Set(known);
+  const needValueSet = needValue instanceof Set ? needValue : new Set(needValue);
+  // A value-bearing flag that is not also accepted is a contradiction in the CLI's own declaration,
+  // and the likeliest cause is a rename applied to one list but not the other. Fail loudly at the
+  // call site rather than silently never enforcing the value requirement.
+  for (const n of needValueSet) {
+    if (!knownSet.has(n)) throw new Error(`validateFlags: '${n}' is in needValue but not in known`);
+  }
+
+  // Read names from argv rather than Object.keys(parseArgs(argv).flags): assigning to
+  // flags['__proto__'] goes through the inherited setter and never becomes an own property, so
+  // `--__proto__ deploy` would escape an own-keys allow-list AND swallow the next token.
+  const passed = [];
+  for (const a of argv) {
+    if (typeof a !== 'string' || !a.startsWith('--')) continue;
+    passed.push(a.slice(2).split('=')[0]);
+  }
+
+  // Unknown flags are reported BEFORE missing values, because an unknown flag consumes the next
+  // token: `--stagee ui --workspace` leaves --workspace looking value-less, and reporting that
+  // instead would name a symptom and hide the typo that caused it.
+  const unknown = [...new Set(passed.filter((k) => !knownSet.has(k)))];
+  if (unknown.length > 0) {
+    const parts = unknown.map((k) => {
+      const near = nearestName(k, knownSet);
+      return near && near !== k ? `--${k} (did you mean --${near}?)` : `--${k}`;
+    });
+    return `unknown flag(s): ${parts.join(', ')}`;
+  }
+
+  // parseArgs yields boolean `true` for a bare `--flag`, and '' for `--flag=` or `--flag ""`. For a
+  // value-taking flag all three are a caller who asked for something and did not say what; none may
+  // fall through to a default, which is how a bare `--only` became "select every phase".
+  const { flags } = parseArgs(argv);
+  for (const name of needValueSet) {
+    const v = flags[name];
+    if (v === undefined) continue; // absent is fine — whether it is REQUIRED is the caller's call
+    if (v === true || (typeof v === 'string' && !v.trim())) {
+      const hint = hints[name];
+      return `--${name} requires a value${hint ? ` — ${hint}` : ''}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Read a flag that has both kebab-case and camelCase spellings, rejecting a conflicting pair.
+ *
+ * `flags[kebab] ?? flags[camel]` silently prefers one and discards the other, which is the wrong
+ * answer when the two disagree — the user passed both and believes one is in effect, so guessing
+ * either way produces a build they did not ask for with no indication why.
+ *
+ * Comparison is on the TRIMMED string. Surrounding whitespace in a shell argument is never
+ * meaningful (`--language-code " 1031"` and `--languageCode 1031` are the same request), so
+ * treating it as a conflict would reject a pair the user got right.
+ *
+ * Value-domain equivalence is deliberately NOT collapsed: `1031` and `01031` stay a conflict even
+ * though both normalize to the same LCID downstream. This helper is domain-agnostic — it has no way
+ * to know whether a caller's flag is a number, a name, or an id where `007` differs from `7` — and
+ * the two outcomes are not symmetric. A false conflict is a loud error the user fixes in seconds; a
+ * wrong guess is a silent, wrong build. So it errs toward the loud one.
+ */
+function readAliasedFlag(flags, kebab, camel) {
+  const a = flags[kebab];
+  const b = flags[camel];
+  const same = (x, y) => String(x).trim() === String(y).trim();
+  if (a !== undefined && b !== undefined && !same(a, b)) {
+    throw new Error(`--${kebab} '${a}' and --${camel} '${b}' disagree — pass only one`);
+  }
+  return a !== undefined ? a : b;
+}
+
+/** Reads a JSON value either inline or from a file via @path syntax. */
+function readJsonArg(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== 'string') return raw;
+  if (raw.startsWith('@')) {
+    const fs = require('fs');
+    return JSON.parse(fs.readFileSync(raw.slice(1), 'utf8'));
+  }
+  return JSON.parse(raw);
+}
+
+/**
+ * Writes a result to stdout and exits.
+ *   ok=true → JSON payload to stdout, exit 0
+ *   ok=false + Error → JSON `{ ok:false, error }` to stdout plus message to stderr, exit 1
+ *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
+ *                       details like `errors: [...]`), short note to stderr, exit 1
+ *   ok=false + string → string to stderr, exit 1
+ */
+function emitResult(ok, payload) {
+  if (ok) {
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.exit(0);
+  }
+  if (payload instanceof Error) {
+    const errorPayload = { ok: false, error: payload.message || String(payload) };
+    process.stdout.write(JSON.stringify(errorPayload) + '\n');
+    process.stderr.write(errorPayload.error + '\n');
+  } else if (payload !== null && typeof payload === 'object') {
+    // Structured failure. Emit the payload to stdout so callers can parse it, and exit 1 so shells
+    // still treat it as a failure.
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    if (Array.isArray(payload.errors)) {
+      // A genuine PARTIAL failure (bulk insert with some rows rejected): the count is the useful
+      // summary and the detail is per-row on stdout.
+      process.stderr.write(`Operation completed with ${payload.errors.length} error(s); see stdout JSON\n`);
+    } else if (typeof payload.error === 'string' && payload.error.trim()) {
+      // A single, already-explained failure — an auth preflight rejection, an unresolvable app id.
+      // These carry a message written specifically to tell the operator what to DO, so print IT.
+      // The old branch printed "completed with unknown error(s)" for every one of them, burying the
+      // diagnostic under boilerplate that is both less informative and actively misleading: nothing
+      // "completed", and the error is not unknown.
+      process.stderr.write(payload.error.trim() + '\n');
+    } else {
+      process.stderr.write('Operation failed with an unstructured error; see stdout JSON\n');
+    }
+  } else {
+    process.stderr.write(String(payload) + '\n');
+  }
+  process.exit(1);
+}
+
+module.exports = {
+  dataverseOrigin,
+  requireDataverseOrigin,
+  getAuthToken,
+  getAuthTokenAsync,
+  azIdentity,
+  preflightAuth,
+  makeRequest,
+  dataverseRequest,
+  ensureOk,
+  parseArgs,
+  validateFlags,
+  readAliasedFlag,
+  readJsonArg,
+  emitResult,
+};

@@ -13,8 +13,7 @@
  * SCOPING (global-install safety): this plugin's hooks are installed globally, so
  * this guard must NOT constrain writes in unrelated projects. It therefore only
  * enforces during an active model-apps authoring session — detected by a session
- * marker (`genpage-plan.md`, app-builder's `app-spec.json` / `model-app-plan.md`,
- * or pcf's `pcf-intent.json` / `pcf-plan.md`)
+ * marker (`genpage-plan.md`, or app-builder's `app-spec.json` / `model-app-plan.md`)
  * at or one level under the cwd. With no marker present the hook is a clean no-op
  * (exit 0), so a globally-installed model-apps plugin never blocks ordinary
  * out-of-cwd writes.
@@ -101,17 +100,13 @@ function isPathSafe(targetPath, cwd) {
  *   - genpage      -> genpage-plan.md            (skills/genpage/SKILL.md Phase 0)
  *   - app-builder  -> app-spec.json / model-app-plan.md (skills/app-builder/SKILL.md
  *                     Phase 0 — the working dir holds both)
- *   - pcf          -> pcf-intent.json / pcf-plan.md (skills/pcf/SKILL.md Phase 1 —
- *                     these are the machine intent and approved human-readable plan)
  * app-builder matters here for the same reason genpage does: its generate-pages phase
  * dispatches PARALLEL page-builder workers that write page `.tsx` files, which is
- * exactly the runaway-sub-agent write this guard flags. pcf matters because scaffolded
- * code components and recipes can write many project files after approval, and a bad
- * target path should be surfaced to the user. Shallow, bounded, and
+ * exactly the runaway-sub-agent write this guard flags. Shallow, bounded, and
  * fail-open: any error → false (treat as "not a model-apps session" and do NOT warn),
  * because a hook must never interfere with unrelated work.
  */
-const SESSION_MARKERS = ['genpage-plan.md', 'app-spec.json', 'model-app-plan.md', 'pcf-intent.json', 'pcf-plan.md'];
+const SESSION_MARKERS = ['genpage-plan.md', 'app-spec.json', 'model-app-plan.md'];
 
 function isModelAppsSession(cwd) {
   try {
@@ -165,7 +160,7 @@ readUtf8Stream(process.stdin).then((inputData) => {
   // (genpage or app-builder), so a globally-installed model-apps plugin never blocks
   // writes in unrelated projects.
   if (!isModelAppsSession(cwd)) {
-    debug('no model-apps session marker at/under cwd — not a model-apps session, allowing');
+    debug('no genpage-plan.md / app-spec.json / model-app-plan.md at/under cwd — not a model-apps session, allowing');
     process.exit(0);
   }
 
